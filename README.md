@@ -33,14 +33,14 @@ re-execute**:
 This is the **seed** of the open core: the frozen evidence-format specification
 draft (`SPEC_EVIDENCE_FORMAT.md`) and the working standalone verifier. The full
 extraction (registry verifiers, RFC 3161 anchoring tools, packaging, security
-review) is the object of pending grant applications (NLnet, Ethereum Foundation
-ESP — see the parent project). No users yet; no claims beyond what the test
-suite proves.
+review) is **planned for the September 2026 NLnet call** (opens 3 Sep 2026) and a
+future Ethereum Foundation ESP inquiry — see the parent project. No proposal has
+been submitted yet. No users yet; no claims beyond what the test suite proves.
 
 ## Quick start
 
 ```bash
-python3 opencore/verifier.py <ledger.jsonl>     # verifies a hash-chained ledger
+python3 verifier.py <ledger.jsonl>     # verifies a hash-chained ledger
 ```
 
 Exit code 0 = chain intact; non-zero = the file tells you where it broke.
