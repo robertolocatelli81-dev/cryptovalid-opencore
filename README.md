@@ -35,12 +35,22 @@ re-execute**:
 
 ## Status (honest)
 
-This is the **seed** of the open core: the frozen evidence-format specification
-draft (`SPEC_EVIDENCE_FORMAT.md`) and the working standalone verifier. The full
-extraction (registry verifiers, RFC 3161 anchoring tools, packaging, security
-review) is the object of pending grant applications (NLnet, Ethereum Foundation
-ESP — see the parent project). No users yet; no claims beyond what the test
-suite proves.
+Delivered and tested — the CI badge above is green on every push:
+
+- append-only **hash-chained ledgers** + a **standalone stdlib verifier**, defined by
+  **conformance test vectors** (`spec/vectors/`) so any language can prove interoperability;
+- **Ed25519-signed** records (`signer.py`) and a signed, **auditor-ready evidence pack**
+  (`evidence_pack.py`) that a third party verifies offline, vendor-free;
+- **RFC 3161** timestamping — cryptographically verified against a real public TSA;
+- a **self-updating regulatory profile** (MiCA / EU AI Act / DORA / GDPR) that carries provenance
+  and flags stale mappings for human review;
+- **adversarially hardened**: an independent red-team pass found and closed real gaps (truncation,
+  manifest re-forge, timestamp forgery, cross-language JSON canonicalisation) — each with a regression test.
+
+Honest caveats, unchanged: **no users yet**; this is **not** an HSM, **not** an accredited certification,
+and **not** legal advice — it proves *what / when / order / who-signed + non-alteration*, not the truth of
+the recorded facts. Broader packaging and an independent security audit are the object of a pending NLnet
+application.
 
 ## Quick start
 
