@@ -1,0 +1,47 @@
+# CryptoValid Open Core — CI that DEMONSTRATES the gate.
+# Green on an intact ledger; RED on a tampered one. Signed evidence + auditor pack, end-to-end,
+# with nothing but this repository (no vendor, no account). SPDX-License-Identifier: AGPL-3.0-or-later
+name: verify-evidence
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install optional signing dependency (the hash verifier itself is stdlib-only)
+        run: pip install cryptography
+
+      - name: Unit tests (signer + evidence pack)
+        run: |
+          python3 test_signer.py
+          python3 test_evidence_pack.py
+
+      - name: Gate — an INTACT ledger passes (exit 0)
+        run: python3 verifier.py examples/sample_ledger.jsonl
+
+      - name: Gate — a TAMPERED ledger MUST fail the build
+        run: |
+          if python3 verifier.py examples/sample_ledger_tampered.jsonl; then
+            echo "::error::tampered ledger passed verification — the gate is broken"
+            exit 1
+          fi
+          echo "tampered ledger correctly rejected (verifier exited non-zero) — gate works"
+
+      - name: End-to-end — sign, verify, pack, verify pack (vendor-free)
+        run: |
+          python3 signer.py keygen "$RUNNER_TEMP/ci.key"
+          python3 signer.py sign examples/sample_ledger.jsonl "$RUNNER_TEMP/signed.jsonl" "$RUNNER_TEMP/ci.key"
+          python3 verifier.py "$RUNNER_TEMP/signed.jsonl"                 # hash chain PASS
+          python3 signer.py verify "$RUNNER_TEMP/signed.jsonl"           # signatures PASS
+          python3 evidence_pack.py build "$RUNNER_TEMP/pack" "$RUNNER_TEMP/signed.jsonl" --subject "CI demo"
+          python3 evidence_pack.py verify "$RUNNER_TEMP/pack"            # bundle PASS (valid: true)
