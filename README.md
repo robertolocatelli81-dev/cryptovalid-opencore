@@ -3,6 +3,8 @@
 
 # CryptoValid Open Core
 
+[![verify-evidence](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml/badge.svg)](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml)
+
 **Verifiable compliance evidence for internet services — free software.**
 
 This directory is the **AGPL-3.0 carve-out** of the OMEGA Ecosystem, decided by
