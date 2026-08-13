@@ -40,18 +40,39 @@ Optional fields (verified when present):
 | `signer` | hex | Ed25519 public key (32 bytes hex) of the recording party |
 | `tsa_token` | base64 | RFC 3161 timestamp token over `self_hash` |
 
-## 3. Canonicalisation and hashing
+## 3. Canonicalisation and hashing (NORMATIVE — interoperability depends on it)
 
 Canonical form of an entry = JSON serialisation of the object **without**
-`self_hash` (and without `signature` where the profile says so), with
-`sort_keys=true` and separators `(",", ":")` — no whitespace, keys sorted.
+`self_hash`, `signature`, `signer`, with **exactly** these rules (so any language
+produces identical bytes — a single differing byte breaks the hash):
+
+- keys sorted lexicographically (`sort_keys`), applied **recursively**;
+- separators `(",", ":")` — no insignificant whitespace;
+- **ASCII-escaped output** (`ensure_ascii=true`): every non-ASCII character is a
+  `\uXXXX` escape. This removes the `é` vs `é` ambiguity across languages.
+
+To keep the bytes deterministic, a conforming ledger **MUST NOT** contain, anywhere
+in an entry:
+- **floating-point numbers** — represent decimals as strings (e.g. `"400000.00"`)
+  or integers. (`1.0` vs `1` vs `1e0` are not interoperable.)
+- **duplicate object keys** — a strict parser MUST reject them.
+- non-UTF-8 bytes.
 
 `self_hash = HEX( H(canonical_bytes) )` where `H` is **SHA-256** (profile
 `sha256`, default) or **SHA3-256** (profile `sha3_256`). A ledger uses ONE
 profile throughout; verifiers MUST auto-detect by recomputing entry 0.
+(A future minor version may adopt RFC 8785 JCS; the constrained profile above is a
+strict subset that stdlib `json` already produces, chosen to stay vendor-free.)
 
 Chain rule: `entry[i].prev_hash == entry[i-1].self_hash`; `entry[0].prev_hash`
 is `"0" * 64`. Genesis is not special-cased beyond that.
+
+**Replay binding (recommended).** The signature covers `self_hash`, which covers
+`{idx, ts, data, prev_hash}` — this binds an entry to its POSITION within a chain but
+not to a chain IDENTITY. To prevent a signed entry being replayed into a different
+ledger, entries SHOULD carry a `ledger_id` (a random 128-bit hex) inside `data` of
+entry 0 (and it is thus covered by every entry's `prev_hash` transitively). Verifiers
+MAY require a single consistent `ledger_id` per file.
 
 ## 4. Evidence payload (`data`) conventions
 

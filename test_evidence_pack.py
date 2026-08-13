@@ -76,10 +76,46 @@ class TestEvidencePack(unittest.TestCase):
         self.assertFalse(evidence_pack.verify_pack(self.pack)["manifest_ok"])
 
     def test_rfc3161_optional_honest(self):
-        info = evidence_pack.build_pack([self.signed], self.pack)   # nessuna TSA
+        evidence_pack.build_pack([self.signed], self.pack)          # nessuna TSA
         r = evidence_pack.verify_pack(self.pack)
-        self.assertFalse(r["rfc3161_anchored"])
+        self.assertFalse(r["rfc3161"]["claimed"])
         self.assertTrue(r["valid"])             # assenza di RFC3161 non invalida (firme+hash bastano)
+
+    # ── regressioni degli attacchi NEMESIS (devono restare CHIUSI) ─────────────────────────────
+    def test_attack_truncation_caught(self):
+        evidence_pack.build_pack([self.signed], self.pack)
+        p = os.path.join(self.pack, "signed.jsonl")
+        rows = [x for x in open(p) if x.strip()][:1]               # tronco: 2 -> 1 entry
+        with open(p, "w") as f:
+            f.writelines(rows)
+        r = evidence_pack.verify_pack(self.pack)
+        self.assertFalse(r["valid"])                               # troncamento rilevato
+        self.assertFalse(r["ledgers"][0]["untruncated"])
+
+    def test_attack_manifest_reforge_on_signed_caught(self):
+        import hashlib
+        evidence_pack.build_pack([self.signed], self.pack, sign_key=self.key)  # manifest FIRMATO
+        mp = os.path.join(self.pack, "MANIFEST.json")
+        m = json.load(open(mp))
+        self.assertTrue(evidence_pack.verify_pack(self.pack)["manifest_authenticated"])
+        m["subject"] = "FALSIFICATO"                               # attaccante cambia + ricalcola digest
+        core = {k: v for k, v in m.items() if k not in
+                ("manifest_digest_sha256", "rfc3161_timestamp", "manifest_signature", "manifest_signer")}
+        m["manifest_digest_sha256"] = hashlib.sha256(
+            json.dumps(core, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        json.dump(m, open(mp, "w"))
+        r = evidence_pack.verify_pack(self.pack)
+        self.assertFalse(r["manifest_authenticated"])              # firma non combacia col nuovo digest
+        self.assertFalse(r["valid"])                               # re-forge su pack firmato = invalido
+
+    def test_attack_bogus_rfc3161_not_verified(self):
+        evidence_pack.build_pack([self.signed], self.pack)
+        mp = os.path.join(self.pack, "MANIFEST.json")
+        m = json.load(open(mp))
+        m["rfc3161_timestamp"] = {"anchored": True, "tsa": "http://fake", "tsr_b64": "AAAA"}
+        json.dump(m, open(mp, "w"))
+        r = evidence_pack.verify_pack(self.pack)
+        self.assertFalse(r["rfc3161"]["verified"])                 # token spazzatura NON verificato
 
     def test_unsigned_ledger_pack_ok(self):
         evidence_pack.build_pack([self.ledger], self.pack)          # ledger NON firmato

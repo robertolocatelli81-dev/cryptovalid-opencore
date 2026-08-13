@@ -92,6 +92,29 @@ no account, no vendor. Tamper any file and it drops to `valid: false`. RFC 3161 
 This is the difference from closed GRC evidence tools: **your evidence is a bundle anyone can re-execute
 to verify — forever, offline, without trusting us.**
 
+Build a pack with `--sign-key <keyfile>` to **authenticate the manifest** (recommended): it binds the
+subject, the file digests, and each ledger's entry count + head hash. `verify_pack` reports
+`manifest_authenticated`.
+
+## Threat model (honest — hardened after adversarial review)
+
+Adversarial testing (NEMESIS + an independent LLM red-team) found and CLOSED real gaps:
+
+- **Truncation / branching:** a bare hash chain does not prevent dropping trailing entries or forking a
+  new history after any point. A **signed manifest** commits each ledger's entry count and head hash, so
+  `verify_pack` detects truncation. *Bare ledgers still need a signed manifest (or an external anchor) for
+  this — documented, not hidden.*
+- **Manifest re-forge:** an unsigned manifest is integrity-checked, **not authenticated** — its metadata is
+  trustworthy only if `manifest_authenticated` is true. A tampered signed manifest → `valid: false`.
+- **RFC 3161:** the timestamp token is now **cryptographically verified** (status Granted + message imprint
+  == manifest digest), proved against a real DigiCert TSA. A forged token → `rfc3161.verified: false`.
+- **Cross-language integrity:** canonicalisation is pinned (ASCII-escaped, no floats, unique keys — see
+  §3 of the spec) with a dedicated conformance vector, so a Go/Rust/JS verifier computes the same hashes.
+- **Replay across ledgers:** carry a `ledger_id` in `data` (see spec §3) to bind entries to one chain.
+
+Honest scope unchanged: the format proves *what/when/order/who-signed + non-alteration*, **not the truth
+of the recorded facts**, and is **not** an HSM or a legal-compliance certification.
+
 ## An open standard (not just a tool)
 
 A verifiable-evidence *feature* is copyable; an *adopted format* is not. CryptoValid is defined by
