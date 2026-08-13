@@ -26,6 +26,12 @@ jobs:
           python3 test_signer.py
           python3 test_evidence_pack.py
 
+      - name: Conformance — the reference verifier MUST match every test vector
+        run: python3 conformance.py
+
+      - name: Regulatory profiles — flag stale mappings (self-updating discipline)
+        run: python3 refresh_regulatory.py --check-urls || echo "::warning::some regulatory mappings need human review"
+
       - name: Gate — an INTACT ledger passes (exit 0)
         run: python3 verifier.py examples/sample_ledger.jsonl
 

@@ -1,0 +1,52 @@
+{
+ "last_checked_utc": "2026-08-13T16:43:27Z",
+ "needs_review": [],
+ "note": "Maps evidence to EU regulatory milestones so a ledger entry can declare which requirement it supports (data.regulatory_ref = <id>). Provenance-carrying and self-updating via refresh_regulatory.py, which re-checks source reachability, stamps last_checked_utc, and FLAGS stale entries for human review. HONEST SCOPE: this is a mapping with provenance, NOT legal advice and NOT a claim of compliance; a stale entry is flagged, never silently trusted.",
+ "profile_version": "2026-08-13",
+ "regulations": [
+  {
+   "as_of": "2026-08-13",
+   "effective_utc": "2026-07-01",
+   "id": "MiCA",
+   "milestone": "transitional period end (CASP authorisation required)",
+   "name": "Markets in Crypto-Assets Regulation (EU) 2023/1114",
+   "needs_review": false,
+   "notes": "EU-wide 1 Jul 2026 (ESMA statement). Some member states ended earlier: NL/FI/LV/HU/SI 30 Jun 2025, SE 30 Sep 2025.",
+   "source_url": "https://www.esma.europa.eu/",
+   "status": "in_force"
+  },
+  {
+   "as_of": "2026-08-13",
+   "effective_utc": "2027-12-02",
+   "id": "AI-Act-AnnexIII",
+   "milestone": "high-risk obligations apply",
+   "name": "EU AI Act (Regulation (EU) 2024/1689) - high-risk, standalone Annex III",
+   "needs_review": false,
+   "notes": "Deferred via the AI (Digital) Omnibus. Annex I (AI embedded in regulated products) -> 2028-08-02.",
+   "source_url": "https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai",
+   "status": "deferred"
+  },
+  {
+   "as_of": "2026-08-13",
+   "effective_utc": "2025-01-17",
+   "id": "DORA",
+   "milestone": "application",
+   "name": "Digital Operational Resilience Act (EU) 2022/2554",
+   "needs_review": false,
+   "notes": "Applies to financial entities and their ICT third-party providers.",
+   "source_url": "https://www.eiopa.europa.eu/digital-operational-resilience-act-dora_en",
+   "status": "in_force"
+  },
+  {
+   "as_of": "2026-08-13",
+   "effective_utc": "2018-05-25",
+   "id": "GDPR",
+   "milestone": "application",
+   "name": "General Data Protection Regulation (EU) 2016/679",
+   "needs_review": false,
+   "notes": "Audit trails and provenance fields support accountability (Art. 5(2)).",
+   "source_url": "https://eur-lex.europa.eu/eli/reg/2016/679/oj",
+   "status": "in_force"
+  }
+ ]
+}

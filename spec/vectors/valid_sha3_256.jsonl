@@ -1,0 +1,2 @@
+{"idx": 0, "ts": "2026-08-13T10:00:00Z", "data": {"kind": "kyc", "subject": "C2"}, "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000", "self_hash": "ba9eaf5e2891dce3dc29a7b969f2ec031989ac226e2c94395c953a8edbd9e156"}
+{"idx": 1, "ts": "2026-08-13T10:01:00Z", "data": {"kind": "decision", "subject": "C2"}, "prev_hash": "ba9eaf5e2891dce3dc29a7b969f2ec031989ac226e2c94395c953a8edbd9e156", "self_hash": "70c0f01231f213c5acecbbd6e6e40d0fc694dfe2357d5507b27cba7c4034ede8"}

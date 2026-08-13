@@ -91,3 +91,30 @@ no account, no vendor. Tamper any file and it drops to `valid: false`. RFC 3161 
 
 This is the difference from closed GRC evidence tools: **your evidence is a bundle anyone can re-execute
 to verify — forever, offline, without trusting us.**
+
+## An open standard (not just a tool)
+
+A verifiable-evidence *feature* is copyable; an *adopted format* is not. CryptoValid is defined by
+**conformance test vectors** (`spec/vectors/` + `spec/CONFORMANCE.md`), so a verifier in **any language**
+proves interoperability by reproducing the same verdicts:
+
+```bash
+python3 conformance.py            # exit 0 = the reference verifier conforms (5/5 vectors)
+```
+
+Implement it in Go/Rust/JS, match the vectors, and open a PR to the conformance table — the format becomes
+a shared standard, not one vendor's tool. Full spec: [`SPEC_EVIDENCE_FORMAT.md`](SPEC_EVIDENCE_FORMAT.md).
+
+## Self-updating regulatory profiles
+
+`spec/regulatory_profiles.json` maps evidence to EU requirements (MiCA, EU AI Act, DORA, GDPR) with
+`status`, `effective_utc`, `source_url` and an `as_of` date. A ledger entry may set
+`data.regulatory_ref = "<id>"` to declare what it supports.
+
+```bash
+python3 refresh_regulatory.py --check-urls   # re-checks sources, flags stale entries; exit 1 = needs review
+```
+
+**Honest scope:** it keeps the mapping fresh and provenance-honest and **flags** stale entries for a human
+to re-verify against the primary source — it does not auto-interpret law. Outdated regulatory status is
+never allowed to pass silently.

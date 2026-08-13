@@ -1,10 +1,12 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — specification draft v0.1 (2026-08-08)
+# CryptoValid Evidence Format — candidate standard v0.2 (2026-08-13)
 
-License: AGPL-3.0-or-later (see LICENSE). Status: **draft** — v1.0 freeze is a
-deliverable of the pending grant work. Comments welcome.
+License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
+TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
+interoperability. This is the moat that a copyable feature is not: a shared, adopted format. Comments and
+independent implementations welcome (open a PR to the conformance table).
 
 ## Design goals
 
@@ -83,11 +85,33 @@ forces a boolean where reality had none.
    and the receipt's own SHA-256 (receipt-of-receipt, deterministic: timestamp
    excluded).
 
-Reference implementation: `verifier.py` (steps 1–4 + receipt; 5–6 are grant
-deliverables for the standalone tool — they exist today in the parent project).
+Reference implementation: `verifier.py` (steps 1–4 + receipt, stdlib-only); `signer.py` (step 5,
+Ed25519); `evidence_pack.py` (step 6, RFC 3161 — verified today against a real DigiCert TSA). Steps 5–6
+are OPTIONAL profiles; their absence never weakens steps 1–4.
 
 ## 6. Versioning
 
 The spec is versioned semver-style. Ledgers MAY carry
-`{"spec": "cryptovalid-evidence/0.1"}` inside `data` of entry 0. Breaking
+`{"spec": "cryptovalid-evidence/0.2"}` inside `data` of entry 0. Breaking
 changes bump major; verifiers state the versions they support.
+
+## 7. Conformance (normative)
+
+The standard is defined by the conformance test vectors in `spec/vectors/`. A verifier conforms iff,
+for every vector, it reproduces the vector's `normative` block (verdict, chain integrity, detected
+algorithm, entry count, and the sets of failing indices for hash and linkage). See `CONFORMANCE.md`.
+Run `python3 conformance.py` (exit 0 = conformant). Independent implementations (Go, Rust, JS, …) claim
+conformance the same way and are listed in the conformance table.
+
+## 8. Regulatory profiles (self-updating, provenance-carrying)
+
+A ledger entry MAY declare which EU requirement it supports:
+`data.regulatory_ref = "<id>"` where `<id>` is an entry in `spec/regulatory_profiles.json`
+(e.g. `MiCA`, `AI-Act-AnnexIII`, `DORA`, `GDPR`). Each profile carries `status`, `effective_utc`,
+`source_url` and an `as_of` date.
+
+`refresh_regulatory.py` keeps the profiles HONEST: it re-checks source reachability, stamps
+`last_checked_utc`, and FLAGS any entry older than the staleness window for human re-verification
+against its PRIMARY source (exit 1 if anything needs review). **Honest scope:** the mapping is
+provenance-carrying and self-monitoring, NOT legal advice and NOT a compliance claim; a stale entry is
+flagged, never silently trusted — the format never lets outdated regulatory status pass unnoticed.
