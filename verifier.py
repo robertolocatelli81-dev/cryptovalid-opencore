@@ -44,8 +44,10 @@ SUPPORTED_ALGOS = ("sha256", "sha3_256")
 
 
 def canonical_payload(entry: Dict) -> bytes:
-    """Stringa canonica dell'entry senza self_hash: serve a ricomputare self_hash."""
-    d = {k: v for k, v in entry.items() if k != "self_hash"}
+    """Stringa canonica dell'entry per ricomputare self_hash. Esclude self_hash E le attestazioni
+    aggiunte DOPO (signature/signer): il self_hash impegna il CONTENUTO, la firma impegna il self_hash.
+    Così un ledger firmato supera comunque la verifica di hash stdlib-only, senza toccare le firme."""
+    d = {k: v for k, v in entry.items() if k not in ("self_hash", "signature", "signer")}
     return json.dumps(d, sort_keys=True, separators=(",", ":")).encode()
 
 
