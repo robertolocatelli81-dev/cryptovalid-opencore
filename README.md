@@ -69,3 +69,23 @@ python3 opencore/signer.py verify  ledger.signed.jsonl                 # signatu
 - **Optional layer, honest scope:** the core hash verifier stays **stdlib-only**; signatures need the
   `cryptography` package. Absence of signatures never weakens the hash chain. Keys are software keys on
   a file (not an HSM). Tests: `python3 opencore/test_signer.py`.
+
+## Auditor-ready evidence pack
+
+Assembling evidence for an auditor is the regtech time-sink. `evidence_pack.py` turns one or more
+ledgers into a **self-verifying bundle** (MANIFEST with per-file SHA-256 + per-ledger hash/signature
+verdicts + signer keys + an optional RFC 3161 timestamp, a human `SUMMARY.md`, and the ledgers).
+A third party re-checks **everything** with nothing but this repository:
+
+```bash
+python3 opencore/evidence_pack.py build  pack_dir/  ledger.signed.jsonl  --subject "audit CUST-001"
+python3 opencore/evidence_pack.py verify pack_dir/
+```
+
+`verify` returns `valid: true` only if every file digest matches the manifest, the manifest is
+self-consistent, and every ledger passes its hash chain **and** (if signed) its signatures — no server,
+no account, no vendor. Tamper any file and it drops to `valid: false`. RFC 3161 anchoring is optional
+(needs `openssl` + a TSA); its absence never invalidates the pack. Tests: `python3 opencore/test_evidence_pack.py`.
+
+This is the difference from closed GRC evidence tools: **your evidence is a bundle anyone can re-execute
+to verify — forever, offline, without trusting us.**
