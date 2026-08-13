@@ -1,0 +1,45 @@
+CryptoValid Open Core
+Copyright (C) 2026 Roberto Locatelli
+
+This program is free software: licensed under the GNU Affero General Public
+License, version 3 or (at your option) any later version (AGPL-3.0-or-later).
+See the LICENSE file in this directory for the full text.
+
+-------------------------------------------------------------------------------
+AUTHORSHIP & ORIGIN
+-------------------------------------------------------------------------------
+Author and sole copyright holder: Roberto Locatelli, 2026.
+
+This directory is the AGPL-3.0 carve-out of the OMEGA Ecosystem, relicensed by
+its author on 2026-08-08. Everything OUTSIDE this directory remains under the
+Business Source License 1.1 (source-available; see the repository root).
+
+-------------------------------------------------------------------------------
+ATTRIBUTION REQUIREMENT (AGPL-3.0 §5, §7, §13)
+-------------------------------------------------------------------------------
+If you copy, modify or redistribute this software you MUST:
+  - retain this NOTICE, the copyright lines, and the license;
+  - keep the source available under the AGPL to anyone you convey it to;
+  - if you run a modified version as a NETWORK SERVICE, offer your complete
+    modified source to that service's users under the AGPL (§13).
+
+-------------------------------------------------------------------------------
+PRIOR ART & HONEST SCOPE
+-------------------------------------------------------------------------------
+Hash-chained, append-only ledgers with signed records and standalone
+verification are an ESTABLISHED pattern (e.g. Trillian / transparency.dev,
+paragonie/Chronicle, and others). CryptoValid Open Core is an INDEPENDENT
+implementation and does NOT claim to have invented that mechanism. Its specific
+contribution is a small, vendor-free, auditor-readable evidence format and
+verifier aimed at EU regulatory-compliance activities (MiCA, AI Act), with
+provenance fields and optional RFC 3161 anchoring. The format proves what was
+recorded, when, in which order, and that it was not altered afterwards — NOT the
+truth of the recorded facts themselves.
+
+-------------------------------------------------------------------------------
+AUTHORSHIP TIMELINE
+-------------------------------------------------------------------------------
+The development history is recorded in this repository's public git log and
+independently timestamped via OpenTimestamps (.ots receipts in the parent
+project). These establish the authorship timeline; they do not restrict the
+freedoms granted by the AGPL.

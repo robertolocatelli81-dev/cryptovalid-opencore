@@ -1,3 +1,6 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- Copyright (C) 2026 Roberto Locatelli -->
+
 # CryptoValid Evidence Format — specification draft v0.1 (2026-08-08)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **draft** — v1.0 freeze is a
