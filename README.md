@@ -65,6 +65,9 @@ Delivered and tested — the CI badge above is green on every push:
   and flags stale mappings for human review;
 - **adversarially hardened**: an independent red-team pass found and closed real gaps (truncation,
   manifest re-forge, timestamp forgery, cross-language JSON canonicalisation) — each with a regression test;
+- **high-frequency ingestion** (`cryptovalid_ingest.py`): segmented hash-chained ledgers with
+  Merkle-STH sealing (chained across segments, KMS/HSM-signable), batched fsync, fail-closed
+  crash recovery — throughput measured by the bench, never quoted as a fixed claim;
 - **KMS/HSM signing backends** (`cryptovalid_kms.py`): the Ed25519 private key can live in a
   **PKCS#11 HSM** (tested end-to-end against SoftHSM2; YubiHSM 2 exposes the same mechanism),
   **AWS KMS** (`ECC_NIST_EDWARDS25519`, exercised against the API contract — a live signature
@@ -211,6 +214,39 @@ TSA — point `--tsa` at an eIDAS **qualified** TSP for a *qualified* token, the
 certificate against the **EU List of Trusted Lists** (ETSI TS 119 612, service type `TSA/QTST`) — verified end-to-end against real Trusted Lists (a non-qualified TSA is correctly rejected). The linear hash-chain stays the interoperable core; Merkle is **additive**. Domain separation:
 `0x00` leaves, `0x01` nodes. Third-party verification needs only
 `(entry, index, tree_size, audit_path, root)`. Tests: `python3 test_merkle.py`.
+
+## High-frequency ingestion (Art. 12 logs at scale)
+
+`cryptovalid_ingest.py` turns a high-rate event stream into this same evidence format —
+nothing new to verify, just more of it, faster:
+
+- **segments** (`ledger-000000.jsonl`, …): each one an ordinary hash-chained ledger the
+  stdlib verifier accepts unchanged — an auditor needs one file, not the archive;
+- **sealing**: each segment gets an RFC 6962 **STH sidecar**, hash-chained to the previous
+  STH (removing or reordering *interior* segments is detectable), optionally **Ed25519-signed
+  via any KMS/HSM backend** above, and ready for a single RFC 3161 timestamp per batch;
+- **HEAD manifest** (`<prefix>.head.json`, rewritten at every seal): commits to the segment
+  *count* and the last STH — a bare STH chain, like any bare hash chain, cannot see its own
+  **tail** being truncated or extended (same limit the threat model states for entries).
+  Honest scope: the HEAD closes the tail gap only when **signed** and verified against a
+  **pinned public key**; an unsigned HEAD can be rewritten by whoever rewrites the archive.
+  Anchor the HEAD hash via RFC 3161 for third-party time;
+- **batched fsync** (the durability unit is the flush; `batch_size=1` for per-event
+  durability) and **fail-closed crash recovery**: a torn trailing line is truncated and
+  reported; a *tampered* history refuses to resume;
+- `verify_archive()` / `python3 cryptovalid_ingest.py verify <dir>` re-checks every sealed
+  segment: hash chain, Merkle root vs sidecar, STH chain, signatures.
+
+```bash
+python3 cryptovalid_ingest.py bench  /tmp/cv-bench --n 50000   # throughput MEASURED on your machine
+python3 cryptovalid_ingest.py verify /tmp/cv-bench --prefix bench
+```
+
+**Honest numbers:** throughput depends on machine/filesystem/batch — the bench measures it
+where you run it (reference dev box: ~25k events/s at batch 256 with per-batch fsync; your
+number is the one that counts). Timestamps come from the **host clock**: pair sealed STHs
+with RFC 3161 tokens for independent time. Tests: `python3 test_ingest.py` (tamper, torn-tail
+recovery, concurrency, signed-STH negative controls).
 
 ## Self-updating regulatory profiles
 
