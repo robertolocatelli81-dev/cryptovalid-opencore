@@ -33,6 +33,25 @@ re-execute**:
   server, no vendor — a third party replays the chain and reaches the same
   hashes, or the verification fails. Trust is replaced by verification.
 
+## Where this fits (honest scope of the demand)
+
+The broad *compliance-automation* market (evidence-collection dashboards) is owned by SaaS
+incumbents and is **not** the target — their model is *trust the vendor's database*. CryptoValid
+targets the narrower, regulation-driven case where evidence must survive **without** trusting any
+vendor:
+
+- **EU AI Act** high-risk systems must keep automatic logs (Art. 12) for **≥ 6 months** (Art. 19);
+  the high-risk obligations become enforceable on **2 August 2026**.
+- For records to be **admissible** in judicial or regulatory proceedings, each event should be
+  timestamped with an **eIDAS *qualified* timestamp** and made immutable by a **third party
+  independent of both provider and deployer** — cryptographic measures, not access controls.
+
+That is exactly this format's shape: offline third-party verification (`verifier.py`), a
+qualified-TSP-ready **Signed Tree Head** (see *Merkle proofs* below), and tamper-evidence that
+fails loudly. **Honest limits:** this is an *emerging* segment (not proven revenue); the *qualified*
+timestamp needs a real QTSP integration; and general-purpose "crypto-ledger" demand is genuinely
+weak (cf. AWS retiring QLDB). The wedge is **court-admissible AI/records evidence, not a database**.
+
 ## Status (honest)
 
 Delivered and tested — the CI badge above is green on every push:
@@ -137,6 +156,26 @@ python3 conformance.py            # exit 0 = the reference verifier conforms (5/
 
 Implement it in Go/Rust/JS, match the vectors, and open a PR to the conformance table — the format becomes
 a shared standard, not one vendor's tool. Full spec: [`SPEC_EVIDENCE_FORMAT.md`](SPEC_EVIDENCE_FORMAT.md).
+
+## Merkle proofs (optional extension, RFC 6962)
+
+`cryptovalid_merkle.py` builds an **RFC 6962** Merkle tree over the same canonical entries,
+adding what a linear chain cannot do efficiently:
+
+- **inclusion proofs** — verify one entry in `O(log n)` without recomputing the whole chain;
+- **consistency proofs** — cryptographic proof that a newer ledger *append-only extends* an older one;
+- a **Signed Tree Head** (`{tree_size, root_sha256}`) — submit `root_sha256` to a **qualified TSP**
+  (eIDAS EU Trusted List) for a *qualified* RFC 3161 timestamp (the admissibility requirement above).
+
+```bash
+python3 cryptovalid_merkle.py sth    examples/sample_ledger.jsonl   # {tree_size, root_sha256}
+python3 cryptovalid_merkle.py prove  examples/sample_ledger.jsonl 1 # audit path for entry 1
+python3 cryptovalid_merkle.py verify examples/sample_ledger.jsonl 1 # INCLUSION VALID
+```
+
+The linear hash-chain stays the interoperable core; Merkle is **additive**. Domain separation:
+`0x00` leaves, `0x01` nodes. Third-party verification needs only
+`(entry, index, tree_size, audit_path, root)`. Tests: `python3 test_merkle.py`.
 
 ## Self-updating regulatory profiles
 
