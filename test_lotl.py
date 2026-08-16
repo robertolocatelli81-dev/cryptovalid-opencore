@@ -34,6 +34,14 @@ class TestLOTL(unittest.TestCase):
         fpr = hashlib.sha256(b"QUALIFIED-QTST-CERT").hexdigest()
         self.assertTrue(bool({fpr} & {fpr}))
         self.assertFalse(bool({fpr} & set()))
+    def test_member_state_filter_uses_tld_not_substring(self):
+        # bug trovato 2026-08-16 nella validazione QTSP live: 'ES' matchava
+        # 'fil-ES-' dentro qualunque URL (crc.bg/filES, messervicES.cyber.gouv.fr…)
+        self.assertEqual(L._ms_of_url("https://crc.bg/files/_en/TSL_BG.xml"), "BG")
+        self.assertEqual(L._ms_of_url("https://messervices.cyber.gouv.fr/visas/tl.xml"), "FR")
+        self.assertEqual(L._ms_of_url("https://tsl.digital.gob.es/TSL.xml"), "ES")
+        self.assertNotIn(L._ms_of_url("https://crc.bg/files/_en/TSL_BG.xml"), {"ES", "NL"})
+
     def test_lotl_pointers_skip_self(self):
         lotl = b"<x><TSLLocation>https://ec.europa.eu/tools/lotl/eu-lotl.xml</TSLLocation>" \
                b"<TSLLocation>https://tsl.belgium.be/tsl-be-v6.xml</TSLLocation></x>"

@@ -57,6 +57,14 @@ def qtst_fingerprints(tl_xml: bytes):
                     fprs.add(fp)
     return fprs
 
+def _ms_of_url(url: str) -> str:
+    """Member-state hint dal TLD dell'host della Trusted List (crc.bg -> BG).
+    Hint approssimato (il codice vero è SchemeTerritory nel puntatore LOTL): una TL
+    ospitata su dominio .eu/.com non matcherebbe — il filtro è SOLO un'ottimizzazione
+    opzionale di velocità; senza filtro si scarica tutto (default, copertura piena)."""
+    return url.split("/")[2].split(".")[-1].upper()
+
+
 def load_qualified_fingerprints(member_states=None, cache_path=None, timeout=45, log=lambda *_: None):
     """Build the set of qualified-TSA cert fingerprints from the EU LOTL.
     member_states: optional iterable of 2-letter codes to restrict fetching (else all)."""
@@ -66,9 +74,9 @@ def load_qualified_fingerprints(member_states=None, cache_path=None, timeout=45,
     lotl = _get(LOTL_URL, timeout)
     ptrs = lotl_pointers(lotl)
     fprs, coverage = set(), []
+    wanted = {m.upper() for m in member_states} if member_states else None
     for url in ptrs:
-        cc = url.split("/")[2].split(".")[-1].upper()  # rough hint; real code = SchemeTerritory
-        if member_states and not any(url for ms in member_states if ms.lower() in url.lower()):
+        if wanted and _ms_of_url(url) not in wanted:
             continue
         try:
             tl = _get(url, timeout); n0 = len(fprs); fprs |= qtst_fingerprints(tl)
