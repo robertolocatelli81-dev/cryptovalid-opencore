@@ -136,3 +136,17 @@ A ledger entry MAY declare which EU requirement it supports:
 against its PRIMARY source (exit 1 if anything needs review). **Honest scope:** the mapping is
 provenance-carrying and self-monitoring, NOT legal advice and NOT a compliance claim; a stale entry is
 flagged, never silently trusted — the format never lets outdated regulatory status pass unnoticed.
+
+## 6. Optional Merkle extension (RFC 6962) — efficient inclusion & consistency
+
+For large ledgers, `cryptovalid_merkle.py` builds an **RFC 6962** Merkle tree over the
+canonical form of each entry (§3), giving:
+
+- **inclusion proofs** — verify one entry in `O(log n)` (audit path), no full-chain recompute;
+- **consistency proofs** — cryptographic proof that a newer ledger *append-only extends* an older one;
+- a **Signed Tree Head** (`{tree_size, root_sha256}`) — the `root_sha256` is the value to submit
+  to a **qualified TSP** (eIDAS EU Trusted List) for a *qualified* RFC 3161 timestamp.
+
+This is an **optional, additive** layer: the linear hash-chain (§2, §3) remains the interoperable
+core; Merkle proofs are computed on demand and verified by any third party with
+`(entry, index, tree_size, audit_path, root)`. Domain separation: `0x00` leaves, `0x01` nodes.
