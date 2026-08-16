@@ -84,6 +84,25 @@ def token_contains_digest(token_der: bytes, digest: bytes) -> bool:
     """Pragmatic check: the token's messageImprint carries our digest (the OCTET STRING is present)."""
     return _tlv(0x04, digest) in token_der
 
+def verify_cms_signature(token_der: bytes):
+    """Firma CMS del token valida? (openssl cms -verify -noverify: verifica la FIRMA
+    col certificato embedded, NON la catena di trust — la qualificazione della catena
+    è il lavoro della LOTL, per impronta). Ritorna True/False, o None se openssl manca.
+    Serve a respingere blob forgiati che contengono il digest senza essere CMS firmati."""
+    import shutil, subprocess, tempfile
+    if not shutil.which("openssl"):
+        return None
+    with tempfile.NamedTemporaryFile(delete=False) as tf:
+        tf.write(token_der); tp = tf.name
+    try:
+        p = subprocess.run(["openssl", "cms", "-verify", "-noverify", "-inform", "DER",
+                            "-in", tp, "-out", os.devnull],
+                           capture_output=True, timeout=30)
+        return p.returncode == 0
+    finally:
+        os.unlink(tp)
+
+
 def verify_with_openssl(token_der: bytes, digest_data: bytes):
     """Full RFC 3161 verification via `openssl ts` (signature + TSA cert), if openssl is installed."""
     import shutil, subprocess, tempfile

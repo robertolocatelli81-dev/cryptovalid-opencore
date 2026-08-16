@@ -241,8 +241,19 @@ nothing new to verify, just more of it, faster:
 - **batched fsync** (the durability unit is the flush; `batch_size=1` for per-event
   durability) and **fail-closed crash recovery**: a torn trailing line is truncated and
   reported; a *tampered* history refuses to resume;
-- `verify_archive()` / `python3 cryptovalid_ingest.py verify <dir>` re-checks every sealed
-  segment: hash chain, Merkle root vs sidecar, STH chain, signatures.
+- **automatic RFC 3161 anchoring** (`tsa_url=`): every seal live-timestamps the STH canonical
+  hash (token in `<segment>.sth.tsr` + honest metadata receipt), optionally LOTL-certified as
+  eIDAS-qualified (`lotl_check=True`, cached) — validated live against a real QTSP (Izenpe).
+  Best-effort by design: a TSA/network failure never blocks ingestion (it lands in the receipt
+  and in a verify warning) and runs outside the writer lock (a slow TSA never stalls appends).
+  Verification of tokens is two-layer and fail-closed: **CMS signature** (openssl, `-noverify`:
+  the chain-to-QTST question belongs to the LOTL match) + **digest binding** to the STH — a
+  forged blob or an unbound token fails; without openssl, acceptance degrades to binding-only
+  with an explicit warning. The LOTL cache lives in `~/.cache/cryptovalid/`, never inside the
+  archive (a co-located cache could be poisoned to fake the qualified verdict);
+- `verify_archive()` / `python3 cryptovalid_ingest.py verify <dir> [--lotl --lotl-ms ES]`
+  re-checks every sealed segment: hash chain, Merkle root vs sidecar, STH chain, signatures,
+  HEAD manifest, and RFC 3161 token binding (LOTL qualification opt-in, needs network).
 
 ```bash
 python3 cryptovalid_ingest.py bench  /tmp/cv-bench --n 50000   # throughput MEASURED on your machine

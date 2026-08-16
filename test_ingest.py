@@ -218,6 +218,207 @@ class TestSignedSth(unittest.TestCase):
         self.assertFalse(any("unsigned" in x for x in r["warnings"]))
 
 
+import shutil
+import subprocess
+_OPENSSL = shutil.which("openssl")
+
+
+class TestAutoAnchorTSA(unittest.TestCase):
+    """Aggancio automatico TSA nel seal: fake TSA iniettata che firma CMS VERI
+    (chiave usa-e-getta openssl) — così passa il check di firma come un token reale.
+    Il protocollo RFC 3161 vero è coperto da test_tsa.py e dal live gated sotto."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cms_dir = tempfile.mkdtemp()
+        if _OPENSSL:
+            # EC P-256 (non Ed25519: openssl cms -sign non lo supporta, "no default digest")
+            subprocess.run([_OPENSSL, "req", "-x509", "-newkey", "ec",
+                            "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                            "-keyout", f"{cls.cms_dir}/k.pem", "-out", f"{cls.cms_dir}/c.pem",
+                            "-days", "1", "-subj", "/CN=FakeTestTSA"],
+                           check=True, capture_output=True)
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+
+    @classmethod
+    def _sign_cms(cls, content: bytes) -> bytes:
+        """CMS SignedData REALE (firma valida, cert usa-e-getta) sul contenuto dato.
+        Senza openssl: blob nudo (il verify accetta su digest-binding con warning)."""
+        if not _OPENSSL:
+            return b"\x30\x10" + content
+        with tempfile.NamedTemporaryFile(dir=cls.cms_dir, suffix=".bin", delete=False) as f:
+            f.write(content); cp = f.name
+        tok = cp + ".der"
+        subprocess.run([_OPENSSL, "cms", "-sign", "-in", cp, "-binary", "-nodetach",
+                        "-outform", "DER", "-inkey", f"{cls.cms_dir}/k.pem",
+                        "-signer", f"{cls.cms_dir}/c.pem", "-out", tok],
+                       check=True, capture_output=True)
+        with open(tok, "rb") as f:
+            return f.read()
+
+    @classmethod
+    def _fake_tsa_ok(cls, digest, url, timeout=30):
+        # token finto: CMS vero il cui contenuto porta il digest (04 20 || digest)
+        return True, cls._sign_cms(b"FAKE-TSTINFO" + b"\x04\x20" + digest + b"TAIL"), b""
+
+    def test_seal_writes_token_and_verify_counts_it(self):
+        w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
+        w._request_timestamp = self._fake_tsa_ok
+        for i in range(40):
+            w.append({"i": i})
+        sth = w.seal(); w.close(seal=False)
+        seg = os.path.join(self.d, sth["segment"])
+        self.assertTrue(os.path.exists(seg + ".sth.tsr"))
+        meta = json.load(open(seg + ".sth.tsr.json"))
+        self.assertTrue(meta["granted"] and meta["digest_bound"])
+        self.assertEqual(meta["sth_canonical_sha256"], ing._sth_canonical_hash(sth))
+        r = ing.verify_archive(self.d)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["timestamped_segments"], 1)
+        self.assertFalse(any("no_rfc3161_anchor" in x for x in r["warnings"]))
+
+    def test_token_not_bound_to_digest_fails_verify(self):
+        w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
+        # CMS con firma VALIDA ma contenuto senza il digest -> deve cadere sul binding
+        w._request_timestamp = lambda d, u, timeout=30: (True, self._sign_cms(b"NO-DIGEST-HERE"), b"")
+        for i in range(10):
+            w.append({"i": i})
+        w.seal(); w.close(seal=False)
+        r = ing.verify_archive(self.d)
+        self.assertFalse(r["ok"])                   # controllo negativo: token scollegato
+        self.assertIn("tsa_token_digest_mismatch", [f["reason"] for f in r["failures"]])
+
+    @unittest.skipUnless(_OPENSSL, "needs openssl for CMS check")
+    def test_forged_blob_with_digest_fails_cms_check(self):
+        # il buco della review: blob NON-CMS che contiene il digest passava come 'timestamped'
+        w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
+        w._request_timestamp = lambda d, u, timeout=30: (
+            True, b"\x30\x10NOT-A-TIMESTAMP" + b"\x04\x20" + d + b"TAIL", b"")
+        for i in range(10):
+            w.append({"i": i})
+        w.seal(); w.close(seal=False)
+        r = ing.verify_archive(self.d)
+        self.assertFalse(r["ok"])
+        self.assertIn("tsa_token_cms_invalid", [f["reason"] for f in r["failures"]])
+
+    @unittest.skipUnless(_OPENSSL, "needs openssl for CMS check")
+    def test_truncated_token_fails_closed(self):
+        w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
+        w._request_timestamp = self._fake_tsa_ok
+        for i in range(10):
+            w.append({"i": i})
+        sth = w.seal(); w.close(seal=False)
+        tsr = os.path.join(self.d, sth["segment"] + ".sth.tsr")
+        with open(tsr, "r+b") as f:                 # corruzione: tronco a metà
+            f.truncate(os.path.getsize(tsr) // 2)
+        r = ing.verify_archive(self.d)
+        self.assertFalse(r["ok"])
+        self.assertTrue(any(f["reason"].startswith("tsa_token_") for f in r["failures"]))
+
+    def test_lotl_cache_never_colocated_with_archive(self):
+        # il buco ALTA della review: cache LOTL nella dir dell'archivio = avvelenabile
+        import cryptovalid_lotl as lotl
+        seen = {}
+        orig = lotl.load_qualified_fingerprints
+
+        def spy(ms, cache_path=None, **kw):
+            seen["cache_path"] = cache_path
+            return set(), []
+
+        lotl.load_qualified_fingerprints = spy
+        try:
+            w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
+            w._request_timestamp = self._fake_tsa_ok
+            for i in range(10):
+                w.append({"i": i})
+            w.seal(); w.close(seal=False)
+            r = ing.verify_archive(self.d, lotl_check=True, lotl_member_states=["ES"])
+        finally:
+            lotl.load_qualified_fingerprints = orig
+        self.assertIn("cache_path", seen)
+        self.assertFalse(os.path.abspath(seen["cache_path"]).startswith(
+            os.path.abspath(self.d)), "cache LOTL dentro l'archivio: avvelenabile")
+        # e con zero impronte il verdetto resta onesto: nessun qualified, warning presente
+        self.assertEqual(r["eidas_qualified_segments"], 0)
+        self.assertTrue(any("tsa_not_qualified" in x for x in r["warnings"]))
+
+    def test_tsa_failure_never_blocks_ingestion(self):
+        def boom(digest, url, timeout=30):
+            raise OSError("TSA irraggiungibile")
+        w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://down.tsa")
+        w._request_timestamp = boom
+        for i in range(10):
+            w.append({"i": i})
+        sth = w.seal()                              # NON deve sollevare
+        w.close(seal=False)
+        self.assertIsNotNone(sth)
+        self.assertIn("TSA irraggiungibile", w.last_anchor_error)
+        seg = os.path.join(self.d, sth["segment"])
+        self.assertFalse(os.path.exists(seg + ".sth.tsr"))
+        meta = json.load(open(seg + ".sth.tsr.json"))
+        self.assertIn("error", meta)                # l'onestà sta nel receipt
+        r = ing.verify_archive(self.d)
+        self.assertTrue(r["ok"])                    # integrità intatta…
+        self.assertTrue(any("no_rfc3161_anchor" in x for x in r["warnings"]))  # …ma lo dice
+
+    def test_rotation_anchors_every_segment(self):
+        w = ing.Ingestor(self.d, batch_size=8, rotate_entries=20, tsa_url="http://fake.tsa")
+        w._request_timestamp = self._fake_tsa_ok
+        for i in range(60):
+            w.append({"i": i})
+        w.close(seal=False)                         # 3 segmenti pieni già sigillati
+        r = ing.verify_archive(self.d)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["timestamped_segments"], 3)
+
+    def test_slow_tsa_does_not_block_concurrent_appends(self):
+        # regressione trovata in auto-audit: l'ancora girava sotto il lock (anche via
+        # RLock rientrante dalla rotazione dentro append) → TSA lenta = stallo.
+        # Discriminante DETERMINISTICO (la review ha mostrato che una soglia larga
+        # non distingue): cronometro un append MENTRE l'ancora è bloccata su un Event.
+        anchor_started, anchor_release = threading.Event(), threading.Event()
+
+        def blocking_tsa(digest, url, timeout=30):
+            anchor_started.set()
+            anchor_release.wait(5)                  # l'ancora resta "in volo"
+            return self._fake_tsa_ok(digest, url)
+
+        w = ing.Ingestor(self.d, batch_size=4, rotate_entries=8, tsa_url="http://slow.tsa")
+        w._request_timestamp = blocking_tsa
+        filler = threading.Thread(target=lambda: [w.append({"i": i}) for i in range(8)])
+        filler.start()                              # l'8° append innesca seal+ancora
+        try:
+            self.assertTrue(anchor_started.wait(5), "l'ancora non è mai partita")
+            t0 = time.perf_counter()
+            w.append({"concurrent": True})          # DEVE passare mentre l'ancora è bloccata
+            dt = time.perf_counter() - t0
+            self.assertLess(dt, 0.5, f"append bloccato {dt:.2f}s: l'ancora tiene il lock")
+        finally:
+            anchor_release.set()
+            filler.join()
+        w.close()
+        r = ing.verify_archive(self.d)
+        self.assertTrue(r["ok"])
+        self.assertGreaterEqual(r["timestamped_segments"], 1)
+
+    @unittest.skipUnless(os.environ.get("CRYPTOVALID_LIVE_TSA"),
+                         "set CRYPTOVALID_LIVE_TSA=1 for live QTSP anchor test")
+    def test_live_izenpe_qualified_anchor(self):
+        w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://tsa.izenpe.com",
+                         lotl_check=True, lotl_member_states=["ES"])
+        for i in range(20):
+            w.append({"i": i})
+        sth = w.seal(); w.close(seal=False)
+        meta = json.load(open(os.path.join(self.d, sth["segment"] + ".sth.tsr.json")))
+        self.assertTrue(meta["granted"] and meta["digest_bound"])
+        self.assertTrue(meta["eidas_qualified"])    # validato 2026-08-16: Izenpe in TL ES
+        r = ing.verify_archive(self.d, lotl_check=True, lotl_member_states=["ES"])
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["eidas_qualified_segments"], 1)
+
+
 class TestConcurrencyAndThroughput(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()

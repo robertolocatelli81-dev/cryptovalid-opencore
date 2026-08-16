@@ -89,16 +89,50 @@ def _write_json_atomic(path: str, doc: Dict):
     _fsync_dir(os.path.dirname(path) or ".")
 
 
+def _write_bytes_atomic(path: str, data: bytes):
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    _fsync_dir(os.path.dirname(path) or ".")
+
+
+def _default_lotl_cache(member_states) -> str:
+    """Cache LOTL FUORI dall'archivio: una cache co-locata coi dati non fidati è
+    avvelenabile da chi scrive nella dir (fingerprint finti -> qualified finto —
+    trovato dalla review avversariale). ~/.cache è del VERIFICATORE, non dell'archivio."""
+    tag = "-".join(sorted(m.upper() for m in member_states)) if member_states else "all"
+    d = os.path.join(os.path.expanduser("~"), ".cache", "cryptovalid")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, f"lotl_{tag}.json")
+
+
 class Ingestor:
     """Append-only, thread-safe, batched writer of CryptoValid evidence segments."""
 
     def __init__(self, directory: str, prefix: str = "ledger", batch_size: int = 256,
-                 rotate_entries: int = 100_000, fsync: bool = True, backend=None):
+                 rotate_entries: int = 100_000, fsync: bool = True, backend=None,
+                 tsa_url: Optional[str] = None, lotl_check: bool = False,
+                 lotl_member_states=None):
+        """`tsa_url`: se impostato, ogni seal() ancora l'STH con un timestamp RFC 3161
+        LIVE (token in `<segmento>.sth.tsr` + metadata `.sth.tsr.json`). `lotl_check`:
+        certifica anche il token come eIDAS-qualified contro le EU Trusted Lists
+        (rete; cache in `<prefix>.lotl_cache.json`). L'ancoraggio è BEST-EFFORT:
+        un errore TSA/LOTL non blocca mai l'ingestione né tocca l'integrità — resta
+        registrato nei metadata e in `last_anchor_error` (l'onestà sta nel receipt,
+        il fail-closed sta nella verifica: un token presente ma non legato al digest
+        FALLISCE verify_archive)."""
         if batch_size < 1 or rotate_entries < 1:
             raise ValueError("batch_size and rotate_entries must be >= 1")
         self._dir, self._prefix = directory, prefix
         self._batch, self._rotate, self._fsync = batch_size, rotate_entries, fsync
         self._backend = backend
+        self._tsa_url, self._lotl_check = tsa_url, lotl_check
+        self._lotl_ms = lotl_member_states
+        self._request_timestamp = None    # iniettabile nei test; default: cryptovalid_tsa
+        self.last_anchor_error: Optional[str] = None
         self._lock = threading.RLock()
         self._buf: List[str] = []
         self._fh = None
@@ -168,9 +202,12 @@ class Ingestor:
             ref = {"segment": os.path.basename(self._seg_path(self._seq)), "idx": e["idx"]}
             if len(self._buf) >= self._batch:
                 self.flush()
-            if self._idx >= self._rotate:
-                self.seal()
-            return ref
+            due = self._idx >= self._rotate
+        # rotazione FUORI dal lock di append: così l'ancora TSA del seal non blocca
+        # mai gli altri append; min_entries evita seal duplicati da thread concorrenti
+        if due:
+            self.seal(min_entries=self._rotate)
+        return ref
 
     def flush(self):
         with self._lock:
@@ -182,12 +219,13 @@ class Ingestor:
                 self._buf.clear()
 
     # ── sealing ──────────────────────────────────────────────────────────────
-    def seal(self) -> Optional[Dict]:
+    def seal(self, min_entries: int = 1) -> Optional[Dict]:
         """Flush, write the STH sidecar (chained to the previous STH, signed if a
-        backend is configured), and rotate to a fresh segment. No-op when empty."""
+        backend is configured), and rotate to a fresh segment. No-op when the segment
+        has fewer than `min_entries` entries (default: no-op only when empty)."""
         with self._lock:
             self.flush()
-            if self._idx == 0:
+            if self._idx < max(1, min_entries):
                 return None
             path = self._seg_path(self._seq)
             leaves = merkle.leaves_from_ledger(path)
@@ -208,7 +246,42 @@ class Ingestor:
             self._idx, self._prev = 0, GENESIS_PREV
             self._fh = open(self._seg_path(self._seq), "ab")
             _fsync_dir(self._dir)
-            return sth
+        # ancora TSA FUORI dal lock: una TSA lenta (fino a 30s) non deve mai
+        # bloccare gli append concorrenti; l'STH è già sigillato e immutabile
+        if self._tsa_url:
+            self._anchor(path, sth)
+        return sth
+
+    def _anchor(self, seg_path: str, sth: Dict):
+        """Timestamp RFC 3161 automatico dell'STH canonico (l'ancora di tempo TERZA).
+        Best-effort: qualunque errore finisce nei metadata, mai sull'ingestione."""
+        meta: Dict = {"tsa_url": self._tsa_url, "requested_utc": _utc_now(),
+                      "sth_canonical_sha256": _sth_canonical_hash(sth)}
+        try:
+            import cryptovalid_tsa as tsa_mod
+            with self._lock:
+                if self._request_timestamp is None:
+                    self._request_timestamp = tsa_mod.request_timestamp
+            digest = bytes.fromhex(meta["sth_canonical_sha256"])
+            granted, token, _ = self._request_timestamp(digest, self._tsa_url)
+            meta["granted"] = bool(granted)
+            meta["digest_bound"] = bool(granted and token
+                                        and tsa_mod.token_contains_digest(token, digest))
+            if token:
+                _write_bytes_atomic(seg_path + ".sth.tsr", token)
+                meta["token_file"] = os.path.basename(seg_path) + ".sth.tsr"
+            if self._lotl_check and token:
+                import cryptovalid_lotl as lotl
+                fprs, _cov = lotl.load_qualified_fingerprints(
+                    self._lotl_ms, cache_path=_default_lotl_cache(self._lotl_ms))
+                meta["eidas_qualified"] = bool(lotl.is_qualified(token, fprs))
+            with self._lock:
+                self.last_anchor_error = None
+        except Exception as e:  # noqa: BLE001 — l'ancora è best-effort, l'errore va nel receipt
+            meta["error"] = f"{type(e).__name__}: {e}"[:300]
+            with self._lock:
+                self.last_anchor_error = meta["error"]
+        _write_json_atomic(seg_path + ".sth.tsr.json", meta)
 
     def _write_head(self, last_sth: Dict):
         """HEAD manifest: impegna CONTEGGIO segmenti e ultimo STH — chiude il buco
@@ -259,7 +332,8 @@ def _check_signature(doc: Dict, expected_pubkey_hex: Optional[str]) -> Optional[
 
 
 def verify_archive(directory: str, prefix: str = "ledger",
-                   expected_pubkey_hex: Optional[str] = None) -> Dict:
+                   expected_pubkey_hex: Optional[str] = None,
+                   lotl_check: bool = False, lotl_member_states=None) -> Dict:
     """Third-party verification of a whole archive: every sealed segment's hash chain
     (verifier.py rules), Merkle root vs sidecar, STH chain across segments, the HEAD
     manifest (segment count + last STH — the tail-truncation guard), and signatures.
@@ -271,6 +345,8 @@ def verify_archive(directory: str, prefix: str = "ledger",
     warnings: List[str] = []
     signers: set = set()
     signed_count = 0
+    timestamped: List = []            # (nome segmento, token DER) con digest legato
+    cms_unverified = 0                # token accettati SENZA verifica CMS (openssl assente)
     segs = sorted(glob.glob(os.path.join(directory, f"{prefix}-[0-9]*.jsonl")))
     sealed = [s for s in segs if os.path.exists(s + ".sth.json")]
     prev_sth = GENESIS_PREV
@@ -296,6 +372,22 @@ def verify_archive(directory: str, prefix: str = "ledger",
         elif expected_pubkey_hex:
             failures.append({"segment": name, "reason": "sth_unsigned_but_pubkey_expected"})
         prev_sth = _sth_canonical_hash(sth)
+        # ancora RFC 3161 (se presente): due controlli — (1) firma CMS valida via
+        # openssl (respinge blob forgiati; -noverify: la catena al QTST la fa la LOTL),
+        # (2) il messageImprint porta l'hash canonico dell'STH (binding pragmatico)
+        if os.path.exists(s + ".sth.tsr"):
+            import cryptovalid_tsa as tsa_mod
+            with open(s + ".sth.tsr", "rb") as f:
+                token = f.read()
+            cms_ok = tsa_mod.verify_cms_signature(token)
+            if cms_ok is False:
+                failures.append({"segment": name, "reason": "tsa_token_cms_invalid"})
+            elif not tsa_mod.token_contains_digest(token, bytes.fromhex(prev_sth)):
+                failures.append({"segment": name, "reason": "tsa_token_digest_mismatch"})
+            else:
+                timestamped.append((name, token))
+                if cms_ok is None:
+                    cms_unverified += 1
 
     # HEAD manifest: guardia della CODA (conteggio + ultimo STH)
     head_path = os.path.join(directory, f"{prefix}.head.json")
@@ -326,11 +418,31 @@ def verify_archive(directory: str, prefix: str = "ledger",
     if sealed and not expected_pubkey_hex:
         warnings.append("no_pinned_pubkey: signatures (if any) checked against their "
                         "own embedded key, not an expected signer")
+    if sealed and not timestamped:
+        warnings.append("no_rfc3161_anchor: time rests on the HOST clock only "
+                        "(configure tsa_url to anchor each seal externally)")
+    if cms_unverified:
+        warnings.append(f"tsa_cms_unverified: {cms_unverified} token(s) accepted on "
+                        "digest-binding ONLY — install openssl for CMS signature checks")
+
+    # certificazione eIDAS dei token (opt-in: tocca la rete/EU Trusted Lists).
+    # La cache sta FUORI dall'archivio: una cache co-locata è avvelenabile.
+    qualified_count: Optional[int] = None
+    if lotl_check and timestamped:
+        import cryptovalid_lotl as lotl
+        fprs, _cov = lotl.load_qualified_fingerprints(
+            lotl_member_states, cache_path=_default_lotl_cache(lotl_member_states))
+        qualified_count = sum(1 for _n, tok in timestamped if lotl.is_qualified(tok, fprs))
+        if qualified_count < len(timestamped):
+            warnings.append(f"tsa_not_qualified: {len(timestamped) - qualified_count} "
+                            "token(s) from a TSA not in the EU Trusted Lists (QTST)")
 
     return {"ok": bool(sealed) and not failures,
             "segments_verified": len(sealed),
             "unsealed_segments": len(segs) - len(sealed),
             "signed_segments": signed_count, "signers": sorted(signers),
+            "timestamped_segments": len(timestamped),
+            "eidas_qualified_segments": qualified_count,
             "head_present": os.path.exists(head_path), "head_signed": head_signed,
             "warnings": warnings, "failures": failures}
 
@@ -342,11 +454,15 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
     sub = p.add_subparsers(dest="cmd", required=True)
     v = sub.add_parser("verify"); v.add_argument("directory")
     v.add_argument("--prefix", default="ledger"); v.add_argument("--pubkey")
+    v.add_argument("--lotl", action="store_true",
+                   help="certifica i token RFC 3161 come eIDAS-qualified via EU Trusted Lists (rete)")
+    v.add_argument("--lotl-ms", nargs="*", default=None, help="restringi alle member state (es. ES IT)")
     b = sub.add_parser("bench"); b.add_argument("directory")
     b.add_argument("--n", type=int, default=50_000); b.add_argument("--batch", type=int, default=256)
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     if a.cmd == "verify":
-        r = verify_archive(a.directory, a.prefix, a.pubkey)
+        r = verify_archive(a.directory, a.prefix, a.pubkey,
+                           lotl_check=a.lotl, lotl_member_states=a.lotl_ms)
         print(json.dumps(r, indent=1)); return 0 if r["ok"] else 1
     ing = Ingestor(a.directory, prefix="bench", batch_size=a.batch,
                    rotate_entries=a.n + 1)
