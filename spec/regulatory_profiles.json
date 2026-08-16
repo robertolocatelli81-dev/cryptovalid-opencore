@@ -1,5 +1,5 @@
 {
- "last_checked_utc": "2026-08-13T16:43:27Z",
+ "last_checked_utc": "2026-08-13T16:41:51Z",
  "needs_review": [],
  "note": "Maps evidence to EU regulatory milestones so a ledger entry can declare which requirement it supports (data.regulatory_ref = <id>). Provenance-carrying and self-updating via refresh_regulatory.py, which re-checks source reachability, stamps last_checked_utc, and FLAGS stale entries for human review. HONEST SCOPE: this is a mapping with provenance, NOT legal advice and NOT a claim of compliance; a stale entry is flagged, never silently trusted.",
  "profile_version": "2026-08-13",

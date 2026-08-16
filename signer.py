@@ -69,20 +69,49 @@ def keygen(path: str) -> Dict:
     return {"keyfile": path, "public_key_hex": pk.hex()}
 
 
+class _InlineFileBackend:
+    """Fallback legacy quando cryptovalid_kms non è distribuito accanto a signer.py."""
+
+    def __init__(self, keyfile: str):
+        Ed25519PrivateKey, _, _ = _ed()
+        with open(keyfile, encoding="utf-8") as f:
+            self._sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(f.read().strip()))
+
+    def public_key_hex(self) -> str:
+        from cryptography.hazmat.primitives import serialization as ser
+        return self._sk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
+
+    def sign(self, message: bytes) -> bytes:
+        return self._sk.sign(message)
+
+
 def _pubkey_hex(seed_hex: str) -> str:
     Ed25519PrivateKey, _, ser = _ed()
     sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(seed_hex))
     return sk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
 
 
-def sign_ledger(in_path: str, out_path: str, keyfile: str) -> Dict:
+def sign_ledger(in_path: str, out_path: str, keyfile: Optional[str] = None,
+                backend=None) -> Dict:
     """Firma ogni entry di un ledger hash-chained: aggiunge `signature` (Ed25519 sul self_hash) +
-    `signer` (pubblica hex). Il file resta verificabile come hash-chain E ora come firmato."""
-    Ed25519PrivateKey, _, _ = _ed()
-    with open(keyfile, encoding="utf-8") as f:
-        seed = f.read().strip()
-    sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(seed))
-    pk_hex = _pubkey_hex(seed)
+    `signer` (pubblica hex). Il file resta verificabile come hash-chain E ora come firmato.
+
+    `backend` (cryptovalid_kms.SignerBackend) delega la firma a un HSM/KMS dove la chiave
+    privata NON entra in questo processo; `keyfile` resta il percorso legacy (seed su file).
+    Ogni firma è AUTO-VERIFICATA post-firma contro la pubblica dichiarata (controllo
+    positivo nel percorso di produzione: una rotazione chiave a metà ledger fallisce
+    subito, non alla verifica del terzo)."""
+    if backend is None:
+        if not keyfile:
+            raise ValueError("serve un keyfile oppure un backend KMS/HSM (cryptovalid_kms)")
+        try:
+            from cryptovalid_kms import FileKeyBackend
+            backend = FileKeyBackend(keyfile)
+        except ImportError:      # signer.py vendored da solo: percorso legacy inline
+            backend = _InlineFileBackend(keyfile)
+    pk_hex = backend.public_key_hex()
+    _, Ed25519PublicKey, _ = _ed()
+    pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(pk_hex))
     out: List[Dict] = []
     with open(in_path, encoding="utf-8") as f:
         for ln in f:
@@ -92,7 +121,9 @@ def sign_ledger(in_path: str, out_path: str, keyfile: str) -> Dict:
             sh = e.get("self_hash")
             if not sh:
                 raise ValueError("entry senza self_hash: firma un ledger già hash-chained")
-            e["signature"] = base64.b64encode(sk.sign(sh.encode())).decode()
+            sig = backend.sign(sh.encode())
+            pub.verify(sig, sh.encode())   # fail-fast se il backend firma con altra chiave
+            e["signature"] = base64.b64encode(sig).decode()
             e["signer"] = pk_hex
             out.append(e)
     with open(out_path, "w", encoding="utf-8") as f:
@@ -140,13 +171,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="cryptovalid-signer")
     sub = p.add_subparsers(dest="cmd")
     kg = sub.add_parser("keygen"); kg.add_argument("keyfile")
-    sg = sub.add_parser("sign"); sg.add_argument("ledger"); sg.add_argument("out"); sg.add_argument("keyfile")
+    sg = sub.add_parser("sign"); sg.add_argument("ledger"); sg.add_argument("out")
+    sg.add_argument("keyfile", nargs="?"); sg.add_argument(
+        "--backend", help="KMS/HSM backend URI (vedi cryptovalid_kms), es. pkcs11:module=...;token=...;key=...")
     vf = sub.add_parser("verify"); vf.add_argument("ledger"); vf.add_argument("--pubkey")
     a = p.parse_args(argv)
     if a.cmd == "keygen":
         print(json.dumps(keygen(a.keyfile), indent=1)); return 0
     if a.cmd == "sign":
-        print(json.dumps(sign_ledger(a.ledger, a.out, a.keyfile), indent=1)); return 0
+        be = None
+        if getattr(a, "backend", None):
+            if a.keyfile:
+                print("warning: sia keyfile che --backend indicati — uso --backend, "
+                      "il keyfile è ignorato", file=sys.stderr)
+            from cryptovalid_kms import backend_from_uri
+            be = backend_from_uri(a.backend)
+        elif not a.keyfile:
+            p.error("sign richiede un keyfile oppure --backend <uri>")
+        print(json.dumps(sign_ledger(a.ledger, a.out, a.keyfile, backend=be), indent=1)); return 0
     if a.cmd == "verify":
         r = verify_file(a.ledger, a.pubkey)
         print(json.dumps(r, indent=1)); return 0 if r["ok"] else 1

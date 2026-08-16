@@ -18,13 +18,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install optional signing dependency (the hash verifier itself is stdlib-only)
-        run: pip install cryptography
-
-      - name: Unit tests (signer + evidence pack)
+      - name: Install optional deps (hash verifier itself is stdlib-only) + a REAL PKCS#11 HSM bench
         run: |
-          python3 test_signer.py
-          python3 test_evidence_pack.py
+          pip install cryptography
+          sudo apt-get update -qq && sudo apt-get install -y -qq softhsm2 opensc
+
+      - name: Unit tests — every suite in the repo (signer, evidence pack, merkle, TSA, LOTL, KMS/HSM)
+        run: |
+          for t in test_*.py; do
+            echo "== $t"
+            python3 "$t"
+          done
 
       - name: Conformance — the reference verifier MUST match every test vector
         run: python3 conformance.py
@@ -51,3 +55,17 @@ jobs:
           python3 signer.py verify "$RUNNER_TEMP/signed.jsonl"           # signatures PASS
           python3 evidence_pack.py build "$RUNNER_TEMP/pack" "$RUNNER_TEMP/signed.jsonl" --subject "CI demo"
           python3 evidence_pack.py verify "$RUNNER_TEMP/pack"            # bundle PASS (valid: true)
+
+      - name: End-to-end — sign via a REAL HSM (SoftHSM2, non-exportable key) and verify offline
+        run: |
+          export SOFTHSM2_CONF="$RUNNER_TEMP/softhsm2.conf" CRYPTOVALID_PIN=123456
+          mkdir -p "$RUNNER_TEMP/tokens"
+          echo "directories.tokendir = $RUNNER_TEMP/tokens" > "$SOFTHSM2_CONF"
+          softhsm2-util --init-token --free --label ci --pin 123456 --so-pin 654321
+          M=$(ls /usr/lib/softhsm/libsofthsm2.so /usr/lib/*/softhsm/libsofthsm2.so 2>/dev/null | head -1)
+          test -n "$M"   # il modulo PKCS#11 DEVE esserci: fail visibile, non skip
+          B="pkcs11:module=$M;token=ci;key=evidence;pin=env:CRYPTOVALID_PIN"
+          python3 cryptovalid_kms.py keygen-hsm --backend "$B"
+          python3 signer.py sign examples/sample_ledger.jsonl "$RUNNER_TEMP/hsm_signed.jsonl" --backend "$B"
+          python3 verifier.py "$RUNNER_TEMP/hsm_signed.jsonl"            # hash chain PASS (stdlib-only)
+          python3 signer.py verify "$RUNNER_TEMP/hsm_signed.jsonl"       # HSM signatures PASS

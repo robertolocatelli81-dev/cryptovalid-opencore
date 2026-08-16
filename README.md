@@ -64,9 +64,15 @@ Delivered and tested — the CI badge above is green on every push:
 - a **self-updating regulatory profile** (MiCA / EU AI Act / DORA / GDPR) that carries provenance
   and flags stale mappings for human review;
 - **adversarially hardened**: an independent red-team pass found and closed real gaps (truncation,
-  manifest re-forge, timestamp forgery, cross-language JSON canonicalisation) — each with a regression test.
+  manifest re-forge, timestamp forgery, cross-language JSON canonicalisation) — each with a regression test;
+- **KMS/HSM signing backends** (`cryptovalid_kms.py`): the Ed25519 private key can live in a
+  **PKCS#11 HSM** (tested end-to-end against SoftHSM2; YubiHSM 2 exposes the same mechanism),
+  **AWS KMS** (`ECC_NIST_EDWARDS25519`, exercised against the API contract — a live signature
+  needs a real AWS account), or **HashiCorp Vault Transit** (protocol-tested against a stub) —
+  instead of a local key file. Signatures stay standard Ed25519, so the stdlib verifier is unchanged.
 
-Honest caveats, unchanged: **no users yet**; this is **not** an HSM, **not** an accredited certification,
+Honest caveats, unchanged: **no users yet**; this is **not** an HSM itself (it *talks to* one —
+key custody is only as strong as the token/KMS policy behind it), **not** an accredited certification,
 and **not** legal advice — it proves *what / when / order / who-signed + non-alteration*, not the truth of
 the recorded facts. Broader packaging and an independent security audit are the object of a pending NLnet
 application.
@@ -98,8 +104,35 @@ python3 opencore/signer.py verify  ledger.signed.jsonl                 # signatu
 - `signer verify` re-derives `self_hash` from the content too, so it catches content tampering on its
   own: the full chain is *content → self_hash → signature*.
 - **Optional layer, honest scope:** the core hash verifier stays **stdlib-only**; signatures need the
-  `cryptography` package. Absence of signatures never weakens the hash chain. Keys are software keys on
-  a file (not an HSM). Tests: `python3 opencore/test_signer.py`.
+  `cryptography` package. Absence of signatures never weakens the hash chain. By default keys are
+  software keys on a file — production should use a KMS/HSM backend (below). Tests:
+  `python3 opencore/test_signer.py`.
+
+### KMS/HSM key custody (no private key in process memory)
+
+`cryptovalid_kms.py` delegates the signature to a backend where the key is **non-exportable**;
+the evidence format and the verifier do not change. URI-style selection:
+
+```bash
+# PKCS#11 HSM (YubiHSM 2, SoftHSM2, smartcard) — PIN via env, never on argv
+export CRYPTOVALID_PIN=****
+python3 opencore/cryptovalid_kms.py keygen-hsm --backend \
+  "pkcs11:module=/usr/lib/softhsm/libsofthsm2.so;token=cryptovalid;key=evidence;pin=env:CRYPTOVALID_PIN"
+python3 opencore/signer.py sign ledger.jsonl ledger.signed.jsonl --backend "pkcs11:module=...;token=...;key=evidence"
+
+# AWS KMS (KeySpec ECC_NIST_EDWARDS25519, EdDSA supported since 2025-11; needs boto3+credentials)
+python3 opencore/signer.py sign ledger.jsonl out.jsonl --backend "awskms:key_id=alias/cryptovalid;region=eu-south-1"
+
+# HashiCorp Vault Transit (key type ed25519; token from $VAULT_TOKEN; stdlib-only client)
+python3 opencore/signer.py sign ledger.jsonl out.jsonl --backend "vault:url=https://vault:8200;key=cryptovalid"
+```
+
+**Honest bench per backend** (`opencore/test_kms.py`): PKCS#11 is tested **end-to-end against a
+real SoftHSM2 token** (non-exportable key, tamper ⇒ FAIL); AWS KMS is exercised against the exact
+API contract (`MessageType RAW` + `ED25519_SHA_512`) with an injected client — a live signature
+requires a real account; Vault Transit is protocol-tested against a local stub. Removing the key
+from process memory does **not** protect against a compromised host asking the HSM to sign
+attacker-chosen data — pair it with KMS policies/audit and HSM touch-policies.
 
 ## Auditor-ready evidence pack
 
