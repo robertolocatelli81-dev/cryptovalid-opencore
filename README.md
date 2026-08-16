@@ -173,7 +173,9 @@ python3 cryptovalid_merkle.py prove  examples/sample_ledger.jsonl 1 # audit path
 python3 cryptovalid_merkle.py verify examples/sample_ledger.jsonl 1 # INCLUSION VALID
 ```
 
-The linear hash-chain stays the interoperable core; Merkle is **additive**. Domain separation:
+A working **RFC 3161 client** (`cryptovalid_tsa.py`) requests a timestamp over the STH root from any
+TSA — point `--tsa` at an eIDAS **qualified** TSP for a *qualified* token (verified end-to-end against a
+real public TSA). The linear hash-chain stays the interoperable core; Merkle is **additive**. Domain separation:
 `0x00` leaves, `0x01` nodes. Third-party verification needs only
 `(entry, index, tree_size, audit_path, root)`. Tests: `python3 test_merkle.py`.
 
@@ -190,3 +192,12 @@ python3 refresh_regulatory.py --check-urls   # re-checks sources, flags stale en
 **Honest scope:** it keeps the mapping fresh and provenance-honest and **flags** stale entries for a human
 to re-verify against the primary source — it does not auto-interpret law. Outdated regulatory status is
 never allowed to pass silently.
+
+## Standards & freedom-to-operate (factual, not legal advice)
+
+CryptoValid is built **only** on open standards and public-domain techniques: **RFC 3161**
+timestamping and **RFC 6962** Merkle proofs (open IETF standards), SHA-256 / Ed25519, and Merkle
+trees. The foundational timestamping patents are long expired (Merkle US4309569, 1979; Haber–Stornetta US5136647/US5373561, filed 1991–92, **expired 2004**), and the same design is
+practised openly by Certificate Transparency, Sigstore/Rekor, OpenTimestamps and immudb — broad
+prior art. No third-party patent is knowingly practised. *This is a technical freedom-to-operate
+note, not a legal opinion; a definitive FTO requires professional counsel.*
