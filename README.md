@@ -174,8 +174,8 @@ python3 cryptovalid_merkle.py verify examples/sample_ledger.jsonl 1 # INCLUSION 
 ```
 
 A working **RFC 3161 client** (`cryptovalid_tsa.py`) requests a timestamp over the STH root from any
-TSA — point `--tsa` at an eIDAS **qualified** TSP for a *qualified* token (verified end-to-end against a
-real public TSA). The linear hash-chain stays the interoperable core; Merkle is **additive**. Domain separation:
+TSA — point `--tsa` at an eIDAS **qualified** TSP for a *qualified* token, then **`cryptovalid_lotl.py`** certifies it is *qualified* by matching its TSA
+certificate against the **EU List of Trusted Lists** (ETSI TS 119 612, service type `TSA/QTST`) — verified end-to-end against real Trusted Lists (a non-qualified TSA is correctly rejected). The linear hash-chain stays the interoperable core; Merkle is **additive**. Domain separation:
 `0x00` leaves, `0x01` nodes. Third-party verification needs only
 `(entry, index, tree_size, audit_path, root)`. Tests: `python3 test_merkle.py`.
 
