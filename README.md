@@ -222,6 +222,28 @@ Adversarial testing (NEMESIS + an independent LLM red-team) found and CLOSED rea
   §3 of the spec) with a dedicated conformance vector, so a Go/Rust/JS verifier computes the same hashes.
 - **Replay across ledgers:** carry a `ledger_id` in `data` (see spec §3) to bind entries to one chain.
 
+**Declared limits** (from a further independent adversarial review, 2026-08-17 — stated, not hidden):
+
+- **Split-view / equivocation:** an RFC 3161 TSA stamps *any* hash it is shown — it proves
+  existence-by-T, **not uniqueness**. A signer-key holder could maintain two internally valid chains,
+  anchor both, and serve different views to different verifiers. Certificate Transparency solves this
+  with gossip and independent monitors; a standalone archive has no gossip. Mitigation: publish each
+  STH through more than one channel and compare; treated as future work, not as solved.
+- **Rollback / freshness:** a verifier who does not already know the latest HEAD cannot detect being
+  served an older (integral, anchored) state. The anti-truncation HEAD protects only relative to a
+  known HEAD; TSA anchors do not provide freshness.
+- **Pre-anchor window:** between an event and its sealed anchor, a root-level attacker can rewrite and
+  re-seal silently. The anchor proves "existed by T"; the per-entry timestamp comes from the local
+  clock and is not independently attested.
+- **Selective omission:** an append-only log proves what it contains, never the completeness of what
+  should have been recorded.
+- **Signing-channel governance:** "non-exportable key" ≠ "custody service incompressible": whoever
+  controls the KMS/HSM policy or unseal material can authorize signatures. Policy governance,
+  rotation and revocation are part of the security perimeter.
+- **Not post-quantum:** Ed25519 signatures could be forgeable by a future quantum adversary; already-
+  published TSA anchors then become the load-bearing evidence, which makes anchor coverage part of
+  the security perimeter, not an optional extra.
+
 Honest scope unchanged: the format proves *what/when/order/who-signed + non-alteration*, **not the truth
 of the recorded facts**, and is **not** an HSM or a legal-compliance certification.
 
@@ -327,9 +349,23 @@ never allowed to pass silently.
 
 ## Standards & freedom-to-operate (factual, not legal advice)
 
-CryptoValid is built **only** on open standards and public-domain techniques: **RFC 3161**
-timestamping and **RFC 6962** Merkle proofs (open IETF standards), SHA-256 / Ed25519, and Merkle
-trees. The foundational timestamping patents are long expired (Merkle US4309569, 1979; Haber–Stornetta US5136647/US5373561, filed 1991–92, **expired 2004**), and the same design is
-practised openly by Certificate Transparency, Sigstore/Rekor, OpenTimestamps and immudb — broad
-prior art. No third-party patent is knowingly practised. *This is a technical freedom-to-operate
-note, not a legal opinion; a definitive FTO requires professional counsel.*
+CryptoValid is built on open standards and techniques whose inventors we **name and credit**:
+Merkle trees (**Ralph Merkle**, US4309569, 1979 — expired), hash-chain timestamping (**Stuart
+Haber & W. Scott Stornetta**, US5136647/US5373561, filed 1991–92 — **expired 2004**), **RFC 3161**
+timestamping and **RFC 6962** Merkle proofs (open IETF standards; CT by **Laurie, Langley &
+Kasper**), SHA-256 (NIST) and Ed25519 (**D. J. Bernstein et al.**, public domain). The same design
+has been practised openly since 2013 by Certificate Transparency, Sigstore/Rekor, OpenTimestamps
+and immudb — broad, load-bearing prior art.
+
+**Closest patented art, considered and distinguished** (screening 2026-08-17): the **Guardtime /
+KSI** family (Buldas et al.) — its foundational US8719576B2 ("distributed calendar infrastructure",
+priority 2003) **expired December 2024**, and the living members (e.g. US9614682, US11057187) claim
+the calendar-aggregation KSI architecture, which this design does not practise (we use per-archive
+Merkle STHs + independent RFC 3161 TSAs, not a distributed calendar). The IETF datatracker records
+**zero IPR disclosures** against RFC 6962 — noting honestly that IETF disclosure duties bind
+*participants* only, so this is corroboration, not proof.
+
+**No *known* third-party patent is practised, after the documented screening above.** A freedom-to-
+operate claim is a universal negative and cannot be proven — pending applications and non-US filings
+remain invisible by construction. *Technical FTO note, not a legal opinion; a definitive FTO
+requires professional counsel.*
