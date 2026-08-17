@@ -36,6 +36,9 @@ Backends (URI-style selector, `backend_from_uri`):
       Exercised against that API contract with an injected client in tests — a live
       signature still requires a real AWS account (honest).
   vault:url=https://vault:8200;key=cryptovalid;mount=transit
+  nethsm:url=https://nethsm.example.com;key=cryptovalid;user=operator;pass_env=NETHSM_PASS
+      Nitrokey NetHSM (REST, basic-auth). Public demo nethsmdemo.nitrokey.com =
+      integration bench ONLY (known credentials, reset every 8h), never custody.
       HashiCorp Vault Transit engine, key type ed25519. stdlib-only client
       (urllib); token from $VAULT_TOKEN. Protocol tested against a local stub
       that signs with a real Ed25519 key (honest: stub, not a live Vault).
@@ -253,8 +256,65 @@ def _parse_kv(spec: str) -> Dict[str, str]:
     return out
 
 
+class NetHsmBackend:
+    """Nitrokey NetHSM via REST API (stdlib urllib, basic-auth; passphrase da env,
+    mai literal nel codice). La chiave vive nell'HSM di rete: mai nel processo.
+    Nota onesta: l'istanza DEMO pubblica (nethsmdemo.nitrokey.com, credenziali note,
+    reset ogni 8 ore) è un BANCO DI INTEGRAZIONE, non custodia — per la custodia
+    serve un NetHSM proprio (o l'operatore con passphrase segreta)."""
+
+    name = "nethsm"
+
+    def __init__(self, url: str, key: str, user: str,
+                 pass_env: str = "NETHSM_PASS"):
+        passphrase = os.environ.get(pass_env, "")
+        if not passphrase:
+            raise RuntimeError(f"NetHSM passphrase env var {pass_env!r} is empty/unset")
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+        if url.startswith("http://") and host not in ("127.0.0.1", "localhost", "::1"):
+            raise RuntimeError("refusing plain http:// to a non-loopback NetHSM: "
+                               "credentials would travel in cleartext (use https)")
+        self._url, self._key = url.rstrip("/"), key
+        self._auth = base64.b64encode(f"{user}:{passphrase}".encode()).decode()
+
+    def _req(self, method: str, path: str, body: Optional[Dict] = None) -> Dict:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{self._url}/api/v1/{path}", data=data,
+                                     method=method,
+                                     headers={"Authorization": f"Basic {self._auth}",
+                                              "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            raw = r.read()
+            return json.loads(raw.decode()) if raw else {}
+
+    def keygen(self) -> str:
+        """Genera la Ed25519 SULL'HSM (serve il ruolo Administrator)."""
+        self._req("POST", "keys/generate",
+                  {"mechanisms": ["EdDSA_Signature"], "type": "Curve25519",
+                   "id": self._key})
+        return self.public_key_hex()
+
+    def public_key_hex(self) -> str:
+        d = self._req("GET", f"keys/{self._key}")
+        return _raw_from_spki(base64.b64decode(d["public"]["data"])).hex()
+
+    def sign(self, message: bytes) -> bytes:
+        d = self._req("POST", f"keys/{self._key}/sign",
+                      {"mode": "EdDSA",
+                       "message": base64.b64encode(message).decode()})
+        sig = base64.b64decode(d["signature"])
+        if len(sig) != 64:
+            raise RuntimeError(f"expected 64-byte Ed25519 signature, got {len(sig)}")
+        return sig
+
+    def describe(self) -> Dict:
+        return {"backend": "nethsm", "url": self._url, "key": self._key,
+                "key_in_process_memory": False}
+
+
 _REQUIRED_KEYS = {"pkcs11": ("module", "token", "key"),
-                  "awskms": ("key_id",), "vault": ("url", "key")}
+                  "awskms": ("key_id",), "vault": ("url", "key"),
+                  "nethsm": ("url", "key", "user")}
 
 
 def backend_from_uri(uri: str, **extra):
@@ -278,8 +338,11 @@ def backend_from_uri(uri: str, **extra):
         return VaultTransitBackend(url=kv["url"], key=kv["key"],
                                    mount=kv.get("mount", "transit"),
                                    token_env=kv.get("token_env", "VAULT_TOKEN"))
+    if scheme == "nethsm":
+        return NetHsmBackend(url=kv["url"], key=kv["key"], user=kv["user"],
+                             pass_env=kv.get("pass_env", "NETHSM_PASS"))
     raise ValueError(f"unknown backend scheme {scheme!r} "
-                     "(expected file: | pkcs11: | awskms: | vault:)")
+                     "(expected file: | pkcs11: | awskms: | vault: | nethsm:)")
 
 
 def main(argv=None) -> int:  # pragma: no cover - thin CLI

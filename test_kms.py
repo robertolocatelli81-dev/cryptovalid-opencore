@@ -131,6 +131,84 @@ class TestSpkiAndFileBackend(unittest.TestCase):
             os.environ.pop("VAULT_TOKEN", None)
 
 
+_NETHSM_DEMO = os.environ.get("NETHSM_TEST_URL", "https://nethsmdemo.nitrokey.com")
+
+
+def _nethsm_demo_reachable():
+    """La demo pubblica si resetta ogni 8h e può essere giù: skip ONESTO, mai un
+    finto verde. Raggiungibile = /health/state risponde 'Operational'."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"{_NETHSM_DEMO}/api/v1/health/state",
+                                    timeout=10) as r:
+            return b"Operational" in r.read()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+class TestNetHsmUriAndErrors(unittest.TestCase):
+    """Rami senza rete: contratto URI e errori puliti."""
+
+    def test_missing_pass_env_clean_error(self):
+        os.environ.pop("NETHSM_PASS_MANCANTE", None)
+        with self.assertRaises(RuntimeError):
+            kms.NetHsmBackend(url="https://x", key="k", user="u",
+                              pass_env="NETHSM_PASS_MANCANTE")
+
+    def test_plain_http_non_loopback_refused(self):
+        os.environ["NETHSM_PASS"] = "x"
+        with self.assertRaises(RuntimeError):
+            kms.NetHsmBackend(url="http://nethsm.example.com", key="k", user="u")
+
+    def test_uri_missing_required_keys(self):
+        for bad in ("nethsm:url=https://x", "nethsm:key=k;user=u"):
+            with self.assertRaises(ValueError):
+                kms.backend_from_uri(bad)
+
+
+@unittest.skipUnless(_HAVE_CRYPTO and _nethsm_demo_reachable(),
+                     "NetHSM public demo unreachable (honest skip)")
+class TestNetHsmDemoLive(unittest.TestCase):
+    """Banco d'INTEGRAZIONE live contro la demo pubblica Nitrokey (reset ogni 8h,
+    credenziali note): prova il backend remoto REALE. Non è custodia."""
+
+    @classmethod
+    def setUpClass(cls):
+        import uuid
+        os.environ["NETHSM_PASS"] = "adminadmin"        # credenziali PUBBLICHE demo
+        cls.key_id = f"cvtest{uuid.uuid4().hex[:12]}"
+        admin = kms.backend_from_uri(
+            f"nethsm:url={_NETHSM_DEMO};key={cls.key_id};user=admin")
+        cls.pub = admin.keygen()                         # nasce SULL'HSM remoto (Admin)
+        # separazione ruoli NetHSM: l'Administrator NON firma — serve un Operator
+        op_user, op_pass = f"op{uuid.uuid4().hex[:10]}", uuid.uuid4().hex
+        admin._req("PUT", f"users/{op_user}",
+                   {"realName": "bench", "role": "Operator", "passphrase": op_pass})
+        os.environ["NETHSM_OP_PASS"] = op_pass
+        cls.be = kms.backend_from_uri(
+            f"nethsm:url={_NETHSM_DEMO};key={cls.key_id};user={op_user};"
+            "pass_env=NETHSM_OP_PASS")
+
+    def test_remote_sign_verifies_and_tamper_fails(self):
+        self.assertEqual(len(self.pub), 64)
+        self.assertFalse(self.be.describe()["key_in_process_memory"])
+        msg = b"sth-canonical-hash-bench-remoto"
+        sig = self.be.sign(msg)
+        self.assertEqual(len(sig), 64)
+        _verify_raw(self.pub, sig, msg)                  # controllo positivo
+        with self.assertRaises(Exception):                # controllo negativo
+            _verify_raw(self.pub, bytes([sig[0] ^ 1]) + sig[1:], msg)
+
+    def test_sign_ledger_e2e_via_nethsm(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        ledger = os.path.join(d, "l.jsonl"); _make_ledger(ledger)
+        signed = os.path.join(d, "signed.jsonl")
+        r = signer.sign_ledger(ledger, signed, backend=self.be)
+        self.assertEqual(r["signer"], self.pub)
+        self.assertTrue(signer.verify_file(signed, pubkey_hex=self.pub)["ok"])
+
+
 @unittest.skipUnless(_HAVE_CRYPTO and _HAVE_SOFTHSM,
                      "requires softhsm2 + opensc (real PKCS#11 bench)")
 class TestPkcs11SoftHsm(unittest.TestCase):
