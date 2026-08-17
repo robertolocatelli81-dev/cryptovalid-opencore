@@ -161,6 +161,27 @@ Build a pack with `--sign-key <keyfile>` to **authenticate the manifest** (recom
 subject, the file digests, and each ledger's entry count + head hash. `verify_pack` reports
 `manifest_authenticated`.
 
+### Auditor-facing report (PDF/HTML)
+
+An ISO inspector or an EU regulator expects a formal document, not JSON on a terminal.
+`cryptovalid_report.py` renders an evidence pack into a typographic audit report — front page,
+global status, per-ledger detail, signer keys, RFC 3161 / eIDAS anchoring, honest scope, and the
+exact vendor-free re-verify command:
+
+```bash
+python3 opencore/cryptovalid_report.py pack_dir/                      # -> report.html + report.pdf
+python3 opencore/cryptovalid_report.py pack_dir/ --lotl --lotl-ms ES  # opt-in eIDAS check (network)
+```
+
+Design rules (they ARE the security model of this layer): the report **never recomputes a
+verdict** — every light comes verbatim from the same fail-closed `verify_pack()` an auditor runs by
+hand, so a tampered pack renders RED, always. The report is a **rendering, not evidence**: the
+authoritative artifacts remain `MANIFEST.json` + the ledgers, and the document says so on its face.
+HTML needs nothing but the Python stdlib; PDF uses [WeasyPrint](https://weasyprint.org/) only if it
+is already installed (honest degrade to HTML otherwise). The eIDAS light has three honest states —
+not checked (default) / qualified / not qualified — never a fabricated green.
+Tests: `python3 opencore/test_report.py` (tamper→RED proven before the positive path).
+
 ## Threat model (honest — hardened after adversarial review)
 
 Adversarial testing (NEMESIS + an independent LLM red-team) found and CLOSED real gaps:

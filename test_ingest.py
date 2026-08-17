@@ -206,6 +206,27 @@ class TestSignedSth(unittest.TestCase):
         self.assertTrue(any(x in reasons for x in
                             ("sth_signer_mismatch", "head_signer_mismatch")))
 
+    def test_key_rotation_trusted_set(self):
+        # rotazione (es. file→HSM): la storia firmata dalla chiave VECCHIA resta
+        # valida se e SOLO se quella chiave è nel set fidato passato alla verifica
+        w = ing.Ingestor(self.d, batch_size=16, backend=self.be)
+        for i in range(40):
+            w.append({"i": i})
+        w.close()                                    # segmento firmato dalla chiave A
+        from cryptovalid_kms import FileKeyBackend
+        new_key = os.path.join(self.d, "new.key")
+        new_pub = signer.keygen(new_key)["public_key_hex"]
+        w2 = ing.Ingestor(self.d, batch_size=16, backend=FileKeyBackend(new_key))
+        w2.append({"rotated": True})
+        w2.close()                                   # coda firmata dalla chiave B
+        ok = ing.verify_archive(self.d, expected_pubkey_hex=[new_pub, self.pub])
+        self.assertTrue(ok["ok"])
+        self.assertEqual(sorted(ok["signers"]), sorted({self.pub, new_pub}))
+        # negativo: set con la SOLA chiave nuova → storia orfana, DEVE fallire
+        r = ing.verify_archive(self.d, expected_pubkey_hex=new_pub)
+        self.assertFalse(r["ok"])
+        self.assertIn("sth_signer_mismatch", [f["reason"] for f in r["failures"]])
+
     def test_signed_head_verified_and_reported(self):
         w = ing.Ingestor(self.d, batch_size=16, backend=self.be)
         for i in range(30):

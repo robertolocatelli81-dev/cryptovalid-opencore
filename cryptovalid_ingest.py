@@ -317,13 +317,19 @@ class Ingestor:
 
 
 # ── auditor path (read-only) ─────────────────────────────────────────────────
-def _check_signature(doc: Dict, expected_pubkey_hex: Optional[str]) -> Optional[str]:
-    """None se la firma del doc (STH o HEAD) è valida; altrimenti la ragione."""
+def _check_signature(doc: Dict, expected_pubkey_hex) -> Optional[str]:
+    """None se la firma del doc (STH o HEAD) è valida; altrimenti la ragione.
+    expected_pubkey_hex: None, UNA chiave hex, o un ITERABILE di chiavi fidate —
+    la rotazione delle chiavi (es. file→HSM) lascia in archivio segmenti firmati
+    dalla chiave precedente: restano validi se quella chiave è nel set fidato."""
     import base64
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     try:
-        if expected_pubkey_hex and doc.get("signer") != expected_pubkey_hex:
-            return "signer_mismatch"
+        if expected_pubkey_hex:
+            allowed = ({expected_pubkey_hex} if isinstance(expected_pubkey_hex, str)
+                       else set(expected_pubkey_hex))
+            if doc.get("signer") not in allowed:
+                return "signer_mismatch"
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(doc["signer"])).verify(
             base64.b64decode(doc["signature"]), _sth_canonical_hash(doc).encode())
         return None
@@ -332,7 +338,7 @@ def _check_signature(doc: Dict, expected_pubkey_hex: Optional[str]) -> Optional[
 
 
 def verify_archive(directory: str, prefix: str = "ledger",
-                   expected_pubkey_hex: Optional[str] = None,
+                   expected_pubkey_hex=None,
                    lotl_check: bool = False, lotl_member_states=None) -> Dict:
     """Third-party verification of a whole archive: every sealed segment's hash chain
     (verifier.py rules), Merkle root vs sidecar, STH chain across segments, the HEAD
