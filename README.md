@@ -182,6 +182,30 @@ is already installed (honest degrade to HTML otherwise). The eIDAS light has thr
 not checked (default) / qualified / not qualified — never a fabricated green.
 Tests: `python3 opencore/test_report.py` (tamper→RED proven before the positive path).
 
+## MCP server — agents that can prove what they did
+
+`cryptovalid_mcp.py` exposes CryptoValid to any MCP client (Claude Code, Claude Desktop, other
+agents) over stdio — **zero dependencies**: the MCP JSON-RPC transport is implemented with the
+Python stdlib, same ethos as the rest of this repo.
+
+```jsonc
+// client config
+{"command": "python3", "args": ["/path/to/opencore/cryptovalid_mcp.py"]}
+```
+
+Read-only tools, always available, every answer carries **provenance** (source, SHA-256, UTC):
+`verify_ledger`, `verify_pack`, `verify_archive` (with optional trusted-signer set and opt-in
+eIDAS/LOTL check). Write tools — `append_event`, `seal_segment` — let an agent **seal its own
+actions** into a tamper-evident, signed, RFC 3161-anchorable archive that anyone re-verifies
+offline; they are **human-gated twice** (env `CRYPTOVALID_MCP_ALLOW_WRITE=1` *and* a per-call
+`confirm_token` matching `CRYPTOVALID_MCP_CONFIRM`) and disabled by default. Signing uses the
+same backend URIs as everywhere else (`file:` / `pkcs11:` / `awskms:` / `vault:` / `nethsm:`) —
+with the HSM/KMS backends the private key never enters the server process.
+
+Tests: `python3 opencore/test_mcp.py` — over the real stdio transport, gate refusals and
+tampered-ledger failure proven before the positive path.
+Honest scope: sealing proves what/when/order/who-signed — never the truth of the recorded facts.
+
 ## Threat model (honest — hardened after adversarial review)
 
 Adversarial testing (NEMESIS + an independent LLM red-team) found and CLOSED real gaps:
