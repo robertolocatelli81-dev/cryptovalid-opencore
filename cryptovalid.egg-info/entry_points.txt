@@ -1,0 +1,8 @@
+[console_scripts]
+cryptovalid-evidence-pack = evidence_pack:main
+cryptovalid-ingest = cryptovalid_ingest:main
+cryptovalid-kms = cryptovalid_kms:main
+cryptovalid-lotl = cryptovalid_lotl:main
+cryptovalid-sign = signer:main
+cryptovalid-tsa = cryptovalid_tsa:main
+cryptovalid-verify = verifier:main

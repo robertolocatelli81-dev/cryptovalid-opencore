@@ -1,0 +1,6 @@
+
+[awskms]
+boto3>=1.34
+
+[signing]
+cryptography>=41

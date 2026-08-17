@@ -1,0 +1,44 @@
+# CryptoValid Open Core — installable package (enterprise hygiene: versioned artifact,
+# console entry points, SBOM-ready metadata). SPDX-License-Identifier: AGPL-3.0-or-later
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cryptovalid"
+version = "0.9.0"
+description = "Verifiable compliance evidence: hash-chained ledgers, RFC 6962 Merkle proofs, Ed25519/KMS signing, RFC 3161 + eIDAS LOTL qualified timestamps, offline stdlib verifier."
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.9"
+authors = [{ name = "Roberto Locatelli", email = "roberto.locatelli.81@gmail.com" }]
+keywords = ["compliance", "audit", "evidence", "eIDAS", "RFC3161", "merkle", "AI-Act"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Topic :: Security :: Cryptography",
+    "Programming Language :: Python :: 3",
+]
+# il verificatore resta STDLIB-ONLY; la firma è un extra dichiarato
+dependencies = []
+
+[project.optional-dependencies]
+signing = ["cryptography>=41"]
+awskms = ["boto3>=1.34"]
+
+[project.urls]
+Repository = "https://github.com/robertolocatelli81-dev/cryptovalid-opencore"
+
+[project.scripts]
+cryptovalid-verify = "verifier:main"
+cryptovalid-sign = "signer:main"
+cryptovalid-ingest = "cryptovalid_ingest:main"
+cryptovalid-kms = "cryptovalid_kms:main"
+cryptovalid-tsa = "cryptovalid_tsa:main"
+cryptovalid-lotl = "cryptovalid_lotl:main"
+cryptovalid-evidence-pack = "evidence_pack:main"
+
+[tool.setuptools]
+py-modules = ["verifier", "signer", "cryptovalid_ingest", "cryptovalid_kms",
+              "cryptovalid_tsa", "cryptovalid_lotl", "cryptovalid_merkle",
+              "evidence_pack", "conformance", "refresh_regulatory"]
