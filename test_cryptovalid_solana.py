@@ -14,10 +14,14 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cryptovalid_solana as CS  # noqa: E402
 
+# FICTITIOUS test vectors — all zeros on purpose. The suite is fully offline (the RPC is
+# injected), so NO real anchor, wallet, or ledger hash is needed or embedded here. These are
+# placeholders tied to no one, deliberately un-real so they can never be mistaken for a real
+# on-chain object.
 GEN = CS.MAINNET_GENESIS
-SIG = "3nsXANdLuTaiyR7yeXdcoE55tWRUXYBuwYnwAZ3VaeCDbc41T3EVA8mkxQHwkFQLU4pdTVH6WMTmNPJgzujaKNic"
-HASH = "4986246a5359e7d1cbe1af359395c73eaebde247aa3204324ba52263d7543cd2"
-SIGNER = "7mFaieZm7w26rDUMKuSF4iQGjXtK5RcXfp9VWG6ofEE7"
+SIG = "0" * 88                                     # fictitious signature-shaped placeholder
+HASH = "0" * 64                                    # fictitious sha3-256-shaped placeholder
+SIGNER = "0" * 44                                  # fictitious pubkey-shaped placeholder
 
 
 def _tx(digest=HASH, err=None, signer=SIGNER, slot=424705132):
@@ -47,7 +51,7 @@ class TestSolanaAnchor(unittest.TestCase):
     # ── il banco sa fallire ──
     def test_hash_sbagliato_rifiutato(self):
         CS._fetch_one = _patch({"r1": {"rpc": "r1", "reachable": True, "genesis": GEN, "tx": _tx()}})
-        out = CS.verify_solana_anchor(SIG, "0" * 64, rpcs=("r1",))
+        out = CS.verify_solana_anchor(SIG, "f" * 64, rpcs=("r1",))   # asks for a digest NOT on-chain
         self.assertFalse(out["ok"])
 
     def test_digest_non_64hex_rifiutato(self):

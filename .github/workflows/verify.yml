@@ -33,6 +33,21 @@ jobs:
       - name: Conformance — the reference verifier MUST match every test vector
         run: python3 conformance.py
 
+      - name: Solana anchor — the verifier MUST reject a fake cluster / wrong hash (offline gate)
+        run: |
+          # deterministic negative: a non-mainnet genesis must be rejected, no network needed
+          python3 - <<'PY'
+          import sys; sys.path.insert(0, ".")
+          import cryptovalid_solana as CS
+          CS._fetch_one = lambda rpc, sig, t: {"rpc": rpc, "reachable": True,
+              "genesis": "FAKECLUSTER", "tx": {"meta": {"err": None},
+              "transaction": {"message": {"accountKeys": [{"pubkey": "x"}],
+              "instructions": [{"program": "spl-memo", "parsed": "sha3:" + "a"*64}]}}}}
+          out = CS.verify_solana_anchor("sig", "a"*64, rpcs=("fake",))
+          assert out["ok"] is False, "fake cluster passed — genesis pin is broken"
+          print("fake cluster correctly rejected — Solana genesis pin works")
+          PY
+
       - name: Regulatory profiles — flag stale mappings (self-updating discipline)
         run: python3 refresh_regulatory.py --check-urls || echo "::warning::some regulatory mappings need human review"
 
