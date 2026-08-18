@@ -21,6 +21,26 @@ Copyright for both sides: Roberto Locatelli, 2026. The author licenses the
 contents of this directory under the GNU Affero General Public License v3.0 or
 later. Contributions to `opencore/` are accepted under the same license.
 
+## Patents / freedom-to-operate (honest — no professional FTO was done)
+
+Stated plainly so no one relies on a guarantee that does not exist:
+
+- **Measured (low patent exposure):** the primitives here are open standards or public prior art —
+  SHA-256/SHA3 (FIPS 180-4/202, royalty-free), Ed25519 (published patent-free by its authors),
+  RFC 3161 timestamping and RFC 6962 Merkle trees (open IETF standards), and hash-of-document
+  timestamping + hash-chaining, whose foundational patents (Haber–Stornetta, US 5,136,646/647)
+  expired over a decade ago. There are **no third-party dependencies**, so no patent or licence
+  travels in from an external library.
+- **Not established (residual risk — needs a lawyer, not this file):** a professional
+  freedom-to-operate search has **not** been performed. Patent risk in software is rarely in the
+  algorithms; it is in *combinations* and *business methods* (e.g. "verifying regulatory compliance
+  using a blockchain anchor"), and it varies by jurisdiction — US software/business-method patents
+  are broader than the EU (Art. 52 EPC). **AGPL-3.0 §11 grants a patent licence only from this
+  project's contributors; it does NOT shield you from a third party's patent.**
+- **Your responsibility:** this project is provided as-is, with no warranty of non-infringement.
+  Anyone deploying it — especially commercially or in the United States — should conduct their own
+  patent due diligence / FTO. The author has not, and this document is not legal advice.
+
 ## What this is
 
 A self-hosted toolkit that turns compliance activities into **evidence anyone can
