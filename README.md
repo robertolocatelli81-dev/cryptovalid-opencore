@@ -21,6 +21,13 @@ Copyright for both sides: Roberto Locatelli, 2026. The author licenses the
 contents of this directory under the GNU Affero General Public License v3.0 or
 later. Contributions to `opencore/` are accepted under the same license.
 
+**Commercial license — for AGPL-averse enterprises.** The AGPL-3.0 (esp. the §13 network clause)
+deliberately prevents cloud-stripping, but many corporate legal policies forbid AGPL to avoid copyleft
+contagion. If that is your case, a **commercial license of `opencore/`** is available from the author
+(roberto.locatelli.81@gmail.com): the same code, without the AGPL network/copyleft obligations. This is
+the standard open-core arrangement — AGPL for the community, a commercial license for enterprises that
+need it — so the copyleft protection is a positioning choice, not an adoption dead-end.
+
 ## Patents / freedom-to-operate (honest — no professional FTO was done)
 
 Stated plainly so no one relies on a guarantee that does not exist:
