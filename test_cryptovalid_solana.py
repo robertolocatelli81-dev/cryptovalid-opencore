@@ -57,6 +57,9 @@ class TestSolanaAnchor(unittest.TestCase):
     def test_digest_non_64hex_rifiutato(self):
         out = CS.verify_solana_anchor(SIG, "deadbeef", rpcs=("r1",))
         self.assertFalse(out["ok"])
+        # kills the hex-guard mutant: the 64-hex check itself must fail, not just the downstream digest
+        hexc = next(c for c in out["checks"] if "64-hex" in c["check"])
+        self.assertFalse(hexc["ok"])
 
     def test_cluster_falso_rifiutato_da_genesis_pin(self):
         CS._fetch_one = _patch({"fake": {"rpc": "fake", "reachable": True,
@@ -110,6 +113,23 @@ class TestSolanaAnchor(unittest.TestCase):
         self.assertTrue(out["ok"])
         xc = next(c for c in out["checks"] if "cross-confirmed" in c["check"])
         self.assertTrue(xc["ok"])                          # due archivi concordi → cross-confirmed
+
+    def test_strict_nof_m_insufficiente_rifiutato(self):
+        # kills the min_witnesses-enforcement mutant: 1 witness but min_witnesses=2 → STRICT must reject
+        CS._fetch_one = _patch({"r1": {"rpc": "r1", "reachable": True, "genesis": GEN, "tx": _tx()}})
+        out = CS.verify_solana_anchor(SIG, HASH, rpcs=("r1",), expected_signer=SIGNER, min_witnesses=2)
+        self.assertFalse(out["ok"])                        # requirement not met → reject
+        strict = next(c for c in out["checks"] if "same-chain archive replicas" in c["check"])
+        self.assertFalse(strict["ok"])
+
+    def test_strict_nof_m_soddisfatto_accettato(self):
+        # positive control for strict: 2 witnesses meet min_witnesses=2 → accept
+        CS._fetch_one = _patch({
+            "a1": {"rpc": "a1", "reachable": True, "genesis": GEN, "tx": _tx()},
+            "a2": {"rpc": "a2", "reachable": True, "genesis": GEN, "tx": _tx()},
+        })
+        out = CS.verify_solana_anchor(SIG, HASH, rpcs=("a1", "a2"), expected_signer=SIGNER, min_witnesses=2)
+        self.assertTrue(out["ok"])
 
 
 if __name__ == "__main__":

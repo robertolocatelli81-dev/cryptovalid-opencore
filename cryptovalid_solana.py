@@ -49,7 +49,9 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 _SCOPE = ("A Solana anchor proves existence + timestamp + immutability of the digest on a public "
           "finalized chain — NOT that the upstream evidence is true nor (without expected_signer) "
-          "who anchored it. Authorised/authentic is judged by CryptoValid's other layers.")
+          "who anchored it. With expected_signer it binds the anchor to a KEY, not a person: a "
+          "compromised/leaked signing key is OUT OF SCOPE (key custody is the mitigation, not the "
+          "anchor). Authorised/authentic is judged by CryptoValid's other layers.")
 
 
 def _rpc(url, method, params, timeout):
@@ -111,11 +113,21 @@ def _tx_signer(tx):
 
 
 def verify_solana_anchor(signature, expected_sha3_hex, rpcs=DEFAULT_RPCS, timeout=20,
-                         expected_signer=None):
+                         expected_signer=None, min_witnesses=1):
     """Verify that `expected_sha3_hex` is anchored on Solana mainnet by tx `signature`.
 
     Fail-closed: every hard check must pass. Returns {ok, checks[], onchain, honest_scope}.
     `expected_signer`: if given, the tx fee-payer must equal it (binds anchor→identity).
+    `min_witnesses`: stricter mode. Default 1 = accept a single declared archive witness
+    (backward-compatible). Set to 2+ to make cross-confirmation a HARD requirement: overall ok
+    becomes False unless ≥ min_witnesses distinct archive endpoints return the finalized tx and
+    agree on its content.
+    HONEST-SCOPE CAVEAT (supreme-ai 2026-08-19): distinct RPCs of the SAME chain are read replicas
+    of ONE source, NOT fault-independent trust roots. This guards against a single rogue/lying RPC,
+    but NOT against Solana client monoculture, a protocol bug, a chain-level attack, or a shared
+    hosting/provider. It is redundancy at the read edge, worth ~1.x witnesses — do not read it as
+    N independent confirmations. TRUE fault-independence needs HETEROGENEOUS anchors (e.g. Solana +
+    OpenTimestamps/Bitcoin + an eIDAS QTSP), not more same-chain RPCs.
 
     Scope of tx support: legacy + v0 transactions (every tx type on Solana today); a future v1+
     would need the RPC's maxSupportedTransactionVersion bumped — a documented limit, not silent.
@@ -169,6 +181,16 @@ def verify_solana_anchor(signature, expected_sha3_hex, rpcs=DEFAULT_RPCS, timeou
     # single-source is declared, never hidden
     add("cross-confirmed by ≥2 archives", (True if len(with_tx) >= 2 else None),
         "" if len(with_tx) >= 2 else "SINGLE archive witness — pass multiple archive RPCs for N-of-M")
+    # HIGH-ASSURANCE strict mode: when min_witnesses>1 the N-of-M cross-confirmation is ENFORCED
+    # (a HARD check), not merely declared — for stringent contexts that forbid a single point of trust.
+    witnesses_ok = len(with_tx) >= min_witnesses
+    if min_witnesses > 1:
+        add(f"strict: ≥{min_witnesses} same-chain archive replicas agree (NOT fault-independent)",
+            witnesses_ok,
+            f"{len(with_tx)}/{min_witnesses} required same-chain archive replicas"
+            + ("" if witnesses_ok else " → requirement NOT met → reject")
+            + " · same-chain replicas guard vs a rogue RPC only, not client/protocol/chain compromise;"
+              " true fault-independence needs heterogeneous anchors (OTS/Bitcoin/QTSP)")
 
     tx = with_tx[0]["tx"]
     meta = tx.get("meta") or {}
@@ -181,16 +203,21 @@ def verify_solana_anchor(signature, expected_sha3_hex, rpcs=DEFAULT_RPCS, timeou
         f"on-chain memo digests: {sorted(d[:12] + '…' for d in digests) or '(none)'}")
 
     signer = _tx_signer(tx)
+    # SINGLE decision point (was computed twice — a mutation-test found the display var and the hard
+    # verdict were independent; unified so one value drives both check and verdict).
+    signer_ok = (signer == expected_signer) if expected_signer is not None else None
     if expected_signer is not None:
-        signer_ok = signer == expected_signer
-        add("fee-payer == expected signer (anchor→identity)", signer_ok, f"on-chain signer {signer}")
+        add("fee-payer == expected signer (anchor→KEY, not person)", signer_ok,
+            f"on-chain signer {signer} · binds to the signing KEY; a compromised key is out of scope")
     else:
         add("fee-payer == expected signer (anchor→identity)", None,
             "no expected_signer given → anchor proves existence+timestamp only, NOT authorship")
 
     hard = [genesis_ok, no_contradiction, err_ok, digest_ok]
     if expected_signer is not None:
-        hard.append(signer == expected_signer)
+        hard.append(signer_ok)
+    if min_witnesses > 1:                 # strict N-of-M enforced only when explicitly requested
+        hard.append(witnesses_ok)
     ok = all(hard)
     return {"ok": ok, "checks": checks,
             "onchain": {"signature": signature, "slot": tx.get("slot"),
@@ -208,10 +235,12 @@ def main(argv=None):
     p.add_argument("expected_sha3_hex")
     p.add_argument("--signer", default=None, help="expected fee-payer pubkey (binds anchor→identity)")
     p.add_argument("--rpc", action="append", default=None, help="override RPC(s); repeatable")
+    p.add_argument("--min-witnesses", type=int, default=1,
+                   help="high-assurance: require N independent archive RPCs to cross-confirm (default 1)")
     a = p.parse_args(argv)
     out = verify_solana_anchor(a.signature, a.expected_sha3_hex,
                                rpcs=tuple(a.rpc) if a.rpc else DEFAULT_RPCS,
-                               expected_signer=a.signer)
+                               expected_signer=a.signer, min_witnesses=a.min_witnesses)
     print(json.dumps(out, indent=1, ensure_ascii=False))
     sys.exit(0 if out["ok"] else 1)
 
