@@ -60,6 +60,32 @@ re-execute**:
   server, no vendor — a third party replays the chain and reaches the same
   hashes, or the verification fails. Trust is replaced by verification.
 
+## Relevance to the Sustainable Development Goals
+
+CryptoValid is submitted as a candidate **Digital Public Good**. Its relevance to the SDGs is **institutional
+transparency and accountability**, not (yet) financial inclusion:
+
+- **SDG 16 — Peace, Justice and Strong Institutions.** Verifiable, tamper-evident compliance evidence directly
+  supports **target 16.6** (*effective, accountable and transparent institutions*) and **target 16.5** (*reduce
+  corruption*): any third party can re-execute `verifier.py` and reach the same hashes, so an institution's
+  records can be checked **without trusting the institution** — accountability by verification, not by assertion.
+- **SDG 9 — Industry, Innovation and Infrastructure.** It is open, dependency-free (`dependencies = []`) digital
+  infrastructure for trustworthy record-keeping, usable by any organisation at no licence cost.
+
+- **SDG 1 (No Poverty), 8 (Decent Work & Growth), 10 (Reduced Inequalities) — via the `microfinance` module.**
+  `microfinance.py` applies the same primitives to **microcredit transparency**: a microfinance institution's
+  **loan portfolio** is canonicalized (same portfolio → same digest, re-derivable by a **donor or regulator**),
+  its internal consistency is attested (disbursed = outstanding + repaid + written-off), and standard
+  **Portfolio-at-Risk (PAR30/PAR90)** is computed. On the **borrower-protection** side, `over_indebtedness()`
+  detects **over-indebtedness** — a borrower carrying loans across **multiple institutions** (a debt-trap
+  signal) — using a **hashed borrower reference** so exposure is aggregated **without any PII**.
+
+**Honest scope (no overclaim):** the microfinance module is a **real capability** but is currently validated on
+**synthetic loan data** (unlike the fund side, which is validated on real SEC filings) — MFIs do not publish
+portfolios the way funds do, so real-data validation awaits an operator's data. The confine is unchanged:
+**proof-of-integrity, not proof-of-veracity** (it attests that records are internally consistent and
+tamper-evident, not that the loans are real or well-underwritten). No PII by design (see PRIVACY.md).
+
 ## Where this fits (honest scope of the demand)
 
 The broad *compliance-automation* market (evidence-collection dashboards) is owned by SaaS

@@ -24,6 +24,7 @@ FORMA CANONICA (regole deterministiche, versionate — `CANON_VERSION`):
 Stdlib only.
 """
 import hashlib
+import html as _html
 import json
 import re
 from dataclasses import dataclass, field
@@ -45,6 +46,10 @@ class Position:
     name: str = ""                  # cosmetico — NON nel digest-core
     weight: str = ""                # DERIVATO (= f(qty,prezzo,NAV)) — NON nel digest-core
     cash_component: str = ""        # #3: componente cash del PCF per creation unit — SE presente, NEL digest
+    currency: str = ""              # B2: valuta locale del titolo (curCd) — per l'esposizione multi-valuta
+    value: str = ""                 # B2: valore (in base, es. valUSD) — per esposizione/attestazione, non nel digest-core
+    asset_class: str = ""           # B5: categoria (assetCat: EC equity, DBT debt, DE derivato…) — metadata,
+    #                                 NON nel digest (l'identificatore già distingue lo strumento); per esposizione
 
 
 @dataclass
@@ -55,6 +60,19 @@ class Holdings:
     positions: List[Position] = field(default_factory=list)
     skipped: List[Dict] = field(default_factory=list)   # righe NON incluse — MAI in silenzio (trovato dal
     #                                                     killer-experiment: un cert tool non deve droppare)
+
+
+@dataclass
+class Valuation:
+    """Pack di valorizzazione di un fondo. FUNDCERT lo ATTESTA (coerenza interna dei numeri forniti + fingerprint),
+    NON lo calcola: non prezza titoli, non fa fair value. Il calcolo NAV resta del fund administrator."""
+    fund_id: str
+    as_of: str
+    total_assets: str
+    total_liabilities: str
+    net_assets: str
+    securities_value: str = ""      # Σ dei valori dei titoli (se disponibile: copertura vs total_assets)
+    source: str = ""
 
 
 def audit_skips(h: "Holdings") -> Dict:
@@ -191,6 +209,24 @@ def diff(a: Holdings, b: Holdings, id_target: Optional[str] = None) -> Dict:
     }
 
 
+def corporate_action_flag(a: float, b: float, tol: float = 0.02) -> Dict:
+    """B4 — annota una differenza di quantità: candidato SPLIT/REVERSE (rapporto ≈ n:m semplice) vs discrepanza.
+    Wolfspeed +2907% non è un 'errore' nudo: è un rapporto ~1:30 = azione societaria. Distinguere il segnale
+    actionable (split/reverse da confermare) dal vero mismatch rende la lista materiale utile, non rumore."""
+    if a <= 0 or b <= 0:
+        return {"kind": "discrepancy"}
+    hi, lo = (b, a) if b >= a else (a, b)
+    r = hi / lo
+    for n in range(2, 51):                       # split n:1 / reverse 1:n
+        if abs(r - n) / n <= tol:
+            return {"kind": "split_candidate", "ratio": f"{n}:1" if b >= a else f"1:{n}"}
+    for q in (2, 3, 4, 5):                        # split frazionari comuni (3:2, 4:3, 5:4…)
+        for p in range(q + 1, 2 * q + 1):
+            if abs(r - p / q) / (p / q) <= tol:
+                return {"kind": "split_candidate", "ratio": f"{p}:{q}" if b >= a else f"{q}:{p}"}
+    return {"kind": "discrepancy"}               # nessun rapporto semplice → probabile mismatch reale
+
+
 def norm_name(name: str) -> str:
     """Normalizza un nome titolo per il match cross-source quando NON c'è un id comune (es. N-CSR senza CUSIP)."""
     n = name.upper()
@@ -200,14 +236,31 @@ def norm_name(name: str) -> str:
     return re.sub(r"\s+", " ", n).strip()
 
 
-def reconcile(a: Holdings, b: Holdings, by: str = "id", id_target: Optional[str] = None) -> Dict:
+def reconcile(a: Holdings, b: Holdings, by: str = "id", id_target: Optional[str] = None,
+              material_tol: float = 0.02, fixed_scale: Optional[float] = None) -> Dict:
     """Riconciliazione tra due fonti dello STESSO fondo/data — il VERO valore del prodotto (non l'uguaglianza
     del digest). Trovato sul dato SEC reale (N-PORT vs N-CSR del Vanguard 500 Index Fund, 31/12/2025): due
     filing autorevoli NON coincidono — differiscono per un FATTORE DI SCALA globale (+0.397%, sec-lending/units)
     a composizione identica. `reconcile` lo MISURA e separa la scala dalle differenze reali per-titolo.
-    by='id' allinea per (scheme,id[,id_target]); by='name' per nome normalizzato (quando manca l'id comune).
+    by='id' allinea per (scheme,id[,id_target]); by='name' per nome normalizzato (quando manca l'id comune);
+    by='auto' = IDENTIFIER-FIRST: usa ISIN/CUSIP(→ISIN) quando la posizione lo porta, nome come fallback — è il
+    match che i bond/MBS richiedono (nome+coupon+maturity collide tra pool diversi; il CUSIP no). CONFINE: 'auto'
+    allinea due fonti che portano ENTRAMBE l'identificatore (custodian/PCF/N-PORT); se una fonte NON ha id (es.
+    N-CSR, solo nome) le chiavi id-vs-nome non si allineano → per quel caso usa by='name'.
     Ritorna: matched, scale_factor/scale_pct, residual_after_scale (mismatch DOPO la scala), only_in_*."""
     import statistics as _st
+
+    def _auto_key(p):
+        """Chiave IDENTIFIER-FIRST: ISIN se c'è, CUSIP→ISIN normalizzato, altrimenti il nome (fallback).
+        Risolve le collisioni che il nome non regge (es. MBS pool: stesso nome/coupon/maturity, CUSIP diverso)
+        quando la fonte PORTA l'identificatore — è il match che i bond richiedono."""
+        scheme, ident = p.id_scheme.strip().upper(), p.identifier.strip().upper()
+        if scheme == "ISIN" and ident:
+            return f"ISIN:{ident}"
+        if scheme == "CUSIP" and ident:
+            isin = cusip_to_isin(ident)
+            return f"ISIN:{isin}" if isin else f"CUSIP:{ident}"
+        return f"NAME:{norm_name(p.name)}" if p.name else None
 
     def _q(h):
         m: Dict = {}
@@ -215,6 +268,11 @@ def reconcile(a: Holdings, b: Holdings, by: str = "id", id_target: Optional[str]
             for p in h.positions:
                 if p.name:
                     m.setdefault(norm_name(p.name), []).append(_canon_quantity(p.quantity))
+        elif by == "auto":                          # identificatore quando c'è, nome come fallback
+            for p in h.positions:
+                k = _auto_key(p)
+                if k:
+                    m.setdefault(k, []).append(_canon_quantity(p.quantity))
         else:
             for p in canonical_form(h, id_target)["positions"]:
                 m.setdefault(f"{p['scheme']}:{p['id']}", []).append(p["qty"])
@@ -222,25 +280,270 @@ def reconcile(a: Holdings, b: Holdings, by: str = "id", id_target: Optional[str]
 
     qa, qb = _q(a), _q(b)
     common = set(qa) & set(qb)
-    ratios = [float(qb[k][0]) / float(qa[k][0]) for k in common
-              if len(qa[k]) == 1 and len(qb[k]) == 1 and float(qa[k][0]) != 0]
-    scale = _st.median(ratios) if ratios else 1.0
-    residual = []
-    for k in sorted(common):                      # differenze REALI = quelle che restano DOPO aver tolto la scala
+    # fixed_scale: quando le due fonti NON hanno un fattore di scala globale (es. stesso portafoglio da due viste,
+    # microcredito MFI-vs-donatore), forzare 1.0 evita che la mediana — contaminata dalle discrepanze reali —
+    # falsi il confronto. Default None = auto-rileva la scala (caso N-CSR vs N-PORT con differenza di unità).
+    if fixed_scale is not None:
+        scale = fixed_scale
+    else:
+        ratios = [float(qb[k][0]) / float(qa[k][0]) for k in common
+                  if len(qa[k]) == 1 and len(qb[k]) == 1 and float(qa[k][0]) != 0]
+        scale = _st.median(ratios) if ratios else 1.0
+    # Un residuo va classificato per la sua ENTITÀ RELATIVA, non con una soglia assoluta cieca alla dimensione.
+    # Misurato su 12 fondi Vanguard reali: il rumore di quantizzazione/timing è ~costante in ASSOLUTO (~mille
+    # azioni) → appare grande in % sulle posizioni piccole (small-cap) e trascurabile sulle grandi. Usare una
+    # soglia relativa fissa fabbricava false "anomalie" sui fondi small-cap. material_tol separa la differenza
+    # REALE (grande in %, un holding davvero mis-stated) dal rumore MINORE (piccolo in %, quantizzazione/timing).
+    residual, minor = [], 0
+    for k in sorted(common):
         if len(qa[k]) == 1 and len(qb[k]) == 1:
             va, vb = float(qa[k][0]), float(qb[k][0])
-            if abs(vb / scale - va) > max(2.0, abs(va) * 5e-4):
-                residual.append({"key": k, "a": qa[k][0], "b": qb[k][0]})
+            if va == 0:
+                continue
+            rel = abs(vb / scale - va) / abs(va)
+            if rel > material_tol:                       # differenza MATERIALE (probabile discrepanza reale)
+                residual.append({"key": k, "a": qa[k][0], "b": qb[k][0], "rel_pct": round(rel * 100, 3),
+                                 "flag": corporate_action_flag(va, vb)})   # B4: split/reverse candidato vs discrepanza
+            elif rel > 5e-4:                             # residuo MINORE (rumore quantizzazione/timing)
+                minor += 1
     return {
         "by": by,
         "matched": len(common),
         "scale_factor": round(scale, 6),
         "scale_pct": round((scale - 1) * 100, 4),
-        "residual_after_scale": residual,
-        "residual_count": len(residual),
+        "material_tol_pct": round(material_tol * 100, 3),
+        "residual_after_scale": residual,               # SOLO le differenze materiali (> material_tol)
+        "residual_count": len(residual),                # = differenze reali; le anomalie small-cap NON entrano
+        "minor_residual_count": minor,                  # rumore di quantizzazione/timing (piccolo in %)
         "only_in_a": len(set(qa) - set(qb)),
         "only_in_b": len(set(qb) - set(qa)),
     }
+
+
+def canonicalizer_fingerprint() -> str:
+    """Fingerprint del METODO di canonicalizzazione — lega il digest alle REGOLE esatte, non solo al codice
+    pubblico (critica Gemini: la ri-computabilità serve un metodo stabile). Cambia se cambia una regola-core."""
+    spec = (f"{CANON_VERSION}|qdp={QUANTITY_DP}|round=ROUND_HALF_EVEN|"
+            f"sort=(scheme,id,qty,cash)|hash=sha3_256|content_only")
+    return hashlib.sha3_256(spec.encode()).hexdigest()[:16]
+
+
+def evidence_record(raw_input, source: str, fetched_at: str, holdings_digest: str,
+                    fund_id: str = "", as_of: str = "") -> Dict:
+    """Lega il digest all'INPUT che l'ha prodotto (provenienza: sha256 dei byte grezzi + fonte + quando) e al
+    METODO (fingerprint) → un record di evidenza autoconsistente che prova COSA input, COME, COSA risultato.
+    Risponde alla critica Gemini 'un digest non dice da dove viene': senza legare l'input, la ri-computabilità è
+    inutile. Va poi hash-chained nel ledger OMEGA per il tamper-evidence (chi/quando lo sigilla). `fetched_at`
+    è fornito dal chiamante (tempo reale della fonte) — NON inventato qui."""
+    raw = raw_input if isinstance(raw_input, bytes) else str(raw_input).encode()
+    rec = {
+        "kind": "fundcert_evidence", "fund_id": fund_id, "as_of": as_of,
+        "source": source, "fetched_at": fetched_at,
+        "input_sha256": hashlib.sha256(raw).hexdigest(),        # PROVENIENZA: quale input esatto
+        "canon_version": CANON_VERSION,
+        "canonicalizer_fp": canonicalizer_fingerprint(),        # METODO: quali regole
+        "holdings_digest": holdings_digest,                     # RISULTATO
+    }
+    rec["record_digest"] = hashlib.sha3_256(
+        json.dumps(rec, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return rec
+
+
+def resolve_exception(item: Dict, resolver: str, reason: str, decision: str, at: str = "") -> Dict:
+    """Il CHI/PERCHÉ che Gemini indicava mancante: registra la RISOLUZIONE di un'eccezione di triage (chi, perché,
+    quale decisione, quando). È il contesto operativo che un fingerprint da solo non porta; da hash-chainare per
+    la forensics. `at` (timestamp) fornito dal chiamante, non inventato."""
+    out = dict(item)
+    out["status"] = "resolved"
+    out["resolution"] = {"resolver": resolver, "reason": reason, "decision": decision, "at": at}
+    out["resolution_digest"] = hashlib.sha3_256(
+        json.dumps({"key": item.get("key"), **out["resolution"]}, sort_keys=True,
+                   separators=(",", ":")).encode()).hexdigest()
+    return out
+
+
+def valuation_digest(v: Valuation) -> str:
+    """SHA3-256 sull'INTERO pack di valorizzazione (totali + Σ titoli), non solo sulle quantità. Ri-derivabile."""
+    canon = {
+        "canon_version": CANON_VERSION, "kind": "valuation",
+        "fund_id": v.fund_id, "as_of": v.as_of,
+        "total_assets": _canon_quantity(v.total_assets),
+        "total_liabilities": _canon_quantity(v.total_liabilities),
+        "net_assets": _canon_quantity(v.net_assets),
+        "securities_value": _canon_quantity(v.securities_value) if v.securities_value not in ("", None) else "",
+    }
+    return hashlib.sha3_256(json.dumps(canon, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def attest_valuation(v: Valuation, tol_abs: str = "1", tol_rel: str = "0") -> Dict:
+    """ATTESTAZIONE (non calcolo) della coerenza interna di un pack di valorizzazione:
+      (1) identità contabile  total_assets − total_liabilities == net_assets  (esatta sui dati SEC reali);
+      (2) copertura           Σ(valore titoli) ≤ total_assets  e  cash/altri = total_assets − Σtitoli ≥ 0.
+    Ritorna gli esiti + il digest dell'intero pack. CONFINE: verifica i numeri FORNITI, NON prezza né calcola
+    il NAV (quello è del fund administrator). Un NAV sbagliato ma internamente coerente supera l'attestazione:
+    è proof-of-consistency, non proof-of-veracity — lo stesso confine di CryptoValid."""
+    ta, tl, na = Decimal(str(v.total_assets)), Decimal(str(v.total_liabilities)), Decimal(str(v.net_assets))
+    tol = max(Decimal(tol_abs), abs(na) * Decimal(tol_rel))
+    identity_gap = (ta - tl) - na
+    out = {
+        "fund_id": v.fund_id, "as_of": v.as_of,
+        "identity_ok": bool(abs(identity_gap) <= tol),      # totAssets − totLiabs == netAssets
+        "identity_gap": str(identity_gap),
+        "coverage_ok": None, "non_security_assets": None,
+        "digest": valuation_digest(v),
+        "attests": "coerenza interna dei numeri forniti; NON un calcolo/prezzatura del NAV",
+    }
+    if v.securities_value not in ("", None):
+        sec = Decimal(str(v.securities_value))
+        non_sec = ta - sec
+        out["coverage_ok"] = bool(sec <= ta + tol and non_sec >= -tol)   # titoli ≤ attivo, cash/crediti ≥ 0
+        out["non_security_assets"] = str(non_sec)
+    return out
+
+
+def name_similarity(a: str, b: str) -> float:
+    """C2 — similarità nome per il fuzzy fallback (0..1): Jaccard sui token normalizzati ∪ ratio di sequenza.
+    Solo stdlib. Serve a recuperare nomi quasi-uguali (abbreviazioni, ordini diversi) quando manca l'id."""
+    import difflib
+    na, nb = norm_name(a), norm_name(b)
+    if not na or not nb:
+        return 0.0
+    ta, tb = set(na.split()), set(nb.split())
+    jacc = len(ta & tb) / len(ta | tb) if (ta | tb) else 0.0
+    seq = difflib.SequenceMatcher(None, na, nb).ratio()
+    return max(jacc, seq)
+
+
+def _block_keys(name: str) -> tuple:
+    """Chiavi di BLOCKING per il fuzzy: primo token e prefisso — due nomi simili ne condividono almeno una.
+    Riduce i confronti da n×m (O(n²)) a soli quelli plausibili (record-linkage standard)."""
+    n = norm_name(name)
+    if not n:
+        return ()
+    first = n.split()[0]
+    return (f"t:{first}", f"p:{n[:4]}")
+
+
+def fuzzy_bridge(names_a: List[str], names_b: List[str], threshold: float = 0.85,
+                 blocking: bool = True) -> List[Dict]:
+    """C2 — accoppia i nomi NON matchati esattamente tra due fonti, sopra `threshold`, greedy sul punteggio più
+    alto (1:1). Ogni ponte porta lo score (l'umano lo vede/rifiuta). `blocking=True` (default) confronta solo i
+    nomi che condividono una chiave di blocking → sub-quadratico su grandi insiemi; blocking=False = tutte le
+    coppie (esatto ma O(n²))."""
+    if blocking:
+        index: Dict = {}
+        for b in names_b:                               # indicizza B per chiave di blocking
+            for k in _block_keys(b):
+                index.setdefault(k, set()).add(b)
+        cand_pairs = set()
+        for a in names_a:
+            for k in _block_keys(a):
+                for b in index.get(k, ()):              # solo i B che condividono un blocco con A
+                    cand_pairs.add((a, b))
+        scored = ((name_similarity(a, b), a, b) for a, b in cand_pairs)
+    else:
+        scored = ((name_similarity(a, b), a, b) for a in names_a for b in names_b)
+    cand = sorted((t for t in scored if t[0] >= threshold), key=lambda t: -t[0])
+    pairs, used_a, used_b = [], set(), set()
+    for s, a, b in cand:
+        if a in used_a or b in used_b:
+            continue
+        used_a.add(a); used_b.add(b); pairs.append({"a": a, "b": b, "score": round(s, 3)})
+    return pairs
+
+
+def parse_mapped(rows: List[Dict], mapping: Dict, fund_id: str = "", as_of: str = "", source: str = "mapped") -> Holdings:
+    """C1 — ingestion GENERICA: qualsiasi sorgente tabellare (list di dict) diventa Holdings dichiarando una
+    mappa campo→colonna, senza un parser bespoke. `mapping` es: {'identifier':'CUSIP','id_scheme':'=CUSIP',
+    'quantity':'Shares','name':'Name','currency':'Ccy','value':'MktVal'}. Un valore con prefisso '=' è LETTERALE
+    (scheme fisso). Salta le righe senza identifier o quantity, tracciandole in skipped (mai in silenzio)."""
+    def get(row, spec):
+        if not spec:
+            return ""
+        return spec[1:] if spec.startswith("=") else str(row.get(spec, "")).strip()
+    positions, skipped = [], []
+    for row in rows:
+        ident, qty = get(row, mapping.get("identifier")), get(row, mapping.get("quantity"))
+        if not ident or not qty:
+            skipped.append({"name": get(row, mapping.get("name")), "identifier": ident,
+                            "has_quantity": bool(qty)})
+            continue
+        positions.append(Position(identifier=ident, id_scheme=get(row, mapping.get("id_scheme")) or "TICKER",
+                                  quantity=qty, name=get(row, mapping.get("name")),
+                                  currency=get(row, mapping.get("currency")), value=get(row, mapping.get("value"))))
+    return Holdings(fund_id=fund_id, as_of=as_of, source=source, positions=positions, skipped=skipped)
+
+
+_ASSET_CLASS_LABEL = {"EC": "equity", "DBT": "debt", "DE": "derivative", "RA": "repo",
+                      "SN": "short-term-note", "LON": "loan", "ABS": "asset-backed",
+                      "COMM": "commodity", "RE": "real-estate", "STIV": "short-term-investment"}
+
+
+def asset_class_exposure(h: Holdings) -> Dict:
+    """B5 — esposizione per CLASSE d'asset (equity/debt/derivato/…), da `assetCat` dell'N-PORT. Risponde alla
+    deficienza Gemini 'copertura asset class/derivati': il tool ora VEDE i derivati e li separa, invece di
+    confonderli con le azioni. Metadata a parte (l'id li distingue già nel digest). Value in base (es. USD)."""
+    exp: Dict = {}
+    unknown = 0
+    for p in h.positions:
+        if p.value in ("", None):
+            unknown += 1
+            continue
+        cls = _ASSET_CLASS_LABEL.get((p.asset_class or "").strip().upper(), (p.asset_class or "unclassified").strip() or "unclassified")
+        exp[cls] = exp.get(cls, Decimal(0)) + Decimal(str(p.value))
+    total = sum(exp.values()) or Decimal(1)
+    return {"by_class": {k: str(v) for k, v in sorted(exp.items(), key=lambda kv: -kv[1])},
+            "pct": {k: round(float(v / total) * 100, 3) for k, v in exp.items()},
+            "n_classes": len(exp), "positions_without_value": unknown,
+            "has_derivatives": exp.get("derivative", Decimal(0)) > 0}
+
+
+def currency_exposure(h: Holdings) -> Dict:
+    """B2 — esposizione multi-valuta: somma il `value` (in base, es. USD) per `currency` locale del titolo.
+    La riconciliazione per SHARES è indipendente dalla valuta; questo dà la vista di rischio-valuta che i fondi
+    internazionali richiedono. Le posizioni senza value dichiarato finiscono in 'unknown' (mai perse in silenzio)."""
+    exp: Dict = {}
+    unknown = 0
+    for p in h.positions:
+        if p.value in ("", None):
+            unknown += 1
+            continue
+        cur = (p.currency or "UNSPECIFIED").strip().upper()
+        exp[cur] = exp.get(cur, Decimal(0)) + Decimal(str(p.value))
+    total = sum(exp.values()) or Decimal(1)
+    return {"by_currency": {k: str(v) for k, v in sorted(exp.items(), key=lambda kv: -kv[1])},
+            "pct": {k: round(float(v / total) * 100, 3) for k, v in exp.items()},
+            "n_currencies": len(exp), "positions_without_value": unknown}
+
+
+def is_inflation_linked(name: str) -> bool:
+    """B3 — rileva un titolo inflation-linked (TIPS/linker): per questi il face (N-CSR) ≠ principal
+    inflation-adjusted (N-PORT), quindi la differenza NON è una discrepanza ma l'accrual d'inflazione.
+    Vanno riconciliati sul principal adjusted, non sul face — o si riporta il fattore-indice implicito."""
+    n = name.upper()
+    return any(t in n for t in ("TIPS", "INFLATION", "INFLATION-INDEXED", "INFLATION INDEXED",
+                                "INDEX-LINKED", "INDEXED BOND", "CPI"))
+
+
+def triage(recon_result: Dict, top: Optional[int] = None) -> Dict:
+    """C3 — da un risultato di `reconcile` produce un worklist di eccezioni PRIORITIZZATO (severità + azione),
+    lo scaffold minimo di un workflow: non un ticketing completo, ma il residuo materiale diventa lavoro
+    ordinato e azionabile invece di un elenco piatto. Ogni voce ha stato 'open' (four-eyes a valle)."""
+    items = []
+    for r in recon_result.get("residual_after_scale", []):
+        rel = r.get("rel_pct", 0)
+        sev = "high" if rel >= 50 else "medium" if rel >= 10 else "low"
+        flag = r.get("flag", {}) or {}
+        action = ("confirm_corporate_action" if flag.get("kind") == "split_candidate"
+                  else "investigate_discrepancy")
+        items.append({"key": r["key"], "rel_pct": rel, "severity": sev, "action": action,
+                      "flag": flag, "status": "open"})
+    items.sort(key=lambda x: -x["rel_pct"])
+    by_action: Dict = {}
+    for it in items:
+        by_action[it["action"]] = by_action.get(it["action"], 0) + 1
+    return {"open": len(items), "by_action": by_action,
+            "worklist": items[:top] if top else items}
 
 
 # ─────────────────────── PARSER (fonti REALI) ───────────────────────
@@ -345,6 +648,7 @@ def parse_nport_xml(text: str, id_scheme: str = "CUSIP") -> Holdings:
             continue
         ident = scheme = qty = None
         name = ""
+        cur = val = acat = ""
         for ch in sec:
             lt = local(ch.tag)
             if lt == "cusip" and ch.text:
@@ -353,6 +657,14 @@ def parse_nport_xml(text: str, id_scheme: str = "CUSIP") -> Holdings:
                 qty = ch.text.strip()
             elif lt == "name" and ch.text and not name:
                 name = ch.text.strip()
+            elif lt == "curCd" and ch.text:              # B2: valuta locale (elemento diretto)
+                cur = ch.text.strip()
+            elif lt == "currencyConditional":            # B2: valuta estera come attributo (+ tasso di cambio)
+                cur = (ch.get("curCd") or cur).strip()
+            elif lt == "valUSD" and ch.text:             # B2: valore in USD (base)
+                val = ch.text.strip()
+            elif lt == "assetCat" and ch.text:           # B5: categoria d'asset (equity/debt/derivato…)
+                acat = ch.text.strip()
             elif lt == "identifiers":
                 for idn in ch:
                     if local(idn.tag) == "isin" and idn.get("value") and not ident:
@@ -363,5 +675,75 @@ def parse_nport_xml(text: str, id_scheme: str = "CUSIP") -> Holdings:
             except ValueError:
                 continue
             positions.append(Position(identifier=ident, id_scheme=scheme or id_scheme,
-                                      quantity=str(qty), name=name))
+                                      quantity=str(qty), name=name, currency=cur, value=val, asset_class=acat))
     return Holdings(fund_id=fund_id, as_of=as_of, source="nport", positions=positions)
+
+
+def parse_nport_valuation(text: str) -> Valuation:
+    """Estrae il pack di valorizzazione da un N-PORT: totAssets, totLiabs, netAssets (header) + Σ(valUSD) dei
+    titoli. Da dare a `attest_valuation()` per verificare l'identità contabile e la copertura sui dati reali."""
+    def _first(tag):
+        m = re.search(rf"<{tag}>([^<]*)</{tag}>", text)
+        return m.group(1).strip() if m else "0"
+    sid = re.search(r"<seriesId>([^<]*)</seriesId>", text)
+    per = re.search(r"<repPdDate>([^<]*)</repPdDate>", text)
+    sec_sum = sum(Decimal(v) for v in re.findall(r"<valUSD>([^<]*)</valUSD>", text)) if "<valUSD>" in text else Decimal(0)
+    return Valuation(fund_id=sid.group(1).strip() if sid else "", as_of=per.group(1).strip() if per else "",
+                     total_assets=_first("totAssets"), total_liabilities=_first("totLiabs"),
+                     net_assets=_first("netAssets"), securities_value=str(sec_sum), source="nport")
+
+
+def _ncsr_soi_sections(raw: str) -> List[tuple]:
+    """[(fund_name, start_offset)] per ogni Schedule of Investments in un documento N-CSR (HTML)."""
+    secs = []
+    for m in re.finditer(r"Schedule of Investments", raw):
+        i = m.start()
+        ctx = _html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw[max(0, i - 1500):i])))
+        mm = list(re.finditer(r"([A-Z][A-Za-z0-9&\-/ ]{3,45}? Fund)\s+Financial Statements", ctx))
+        if mm:
+            secs.append((mm[-1].group(1).strip(), i))
+    return secs
+
+
+def _ncsr_parse_row(cells: List[str]):
+    """Nome = ULTIMA cella con lettere (non header/settore); shares = PRIMO intero DOPO il nome. Robusto ai
+    marcatori di nota in testa ('*,1' sposta le colonne) — trovato su N-PORT/N-CSR Vanguard reali."""
+    name_idx = None
+    for i, cc in enumerate(cells):
+        if (re.search(r"[A-Za-z]", cc) and len(cc) > 2 and not cc.endswith("%)")
+                and not cc.endswith(":") and cc != "Shares" and "Market" not in cc and "Value" not in cc):
+            name_idx = i
+    if name_idx is None:
+        return None
+    for cc in cells[name_idx + 1:]:
+        v = cc.replace(",", "")
+        if re.fullmatch(r"\d+", v):
+            return cells[name_idx], v
+    return None
+
+
+def parse_ncsr_soi(html_text: str, fund_name: str) -> Holdings:
+    """Parser dello Schedule of Investments da un report SEC N-CSR (HTML). L'N-CSR NON porta CUSIP →
+    id_scheme='NAME' (riconciliazione per nome via `reconcile(by='name')`, non per digest). Isola la sezione
+    del fondo (header '<fund_name> ... Schedule of Investments') e la chiude alla successiva 'Statement of
+    Assets' o alla sezione SOI seguente; tollera i marcatori di nota che spostano le colonne.
+    HONEST SCOPE: tarato su SOI tabellari Nome/Shares/Value (validato su 12 fondi Vanguard reali, 2025-12-31);
+    N-CSR di altre famiglie possono richiedere adattamento. È una SECONDA fonte per riconciliare, non un digest."""
+    secs = _ncsr_soi_sections(html_text)
+    starts = [off for (nm, off) in secs if nm == fund_name]
+    if not starts:
+        raise ValueError(f"sezione SOI non trovata: {fund_name!r} (disponibili: {sorted({n for n, _ in secs})})")
+    start = starts[0]
+    later = [off for (_, off) in secs if off > start]
+    sa = html_text.find("Statement of Assets", start)
+    end = min([x for x in ([sa] + later) if x > start] or [start + 3_000_000])
+    seg = html_text[start:end]
+    positions, skipped = [], []
+    for r in re.findall(r"<tr[^>]*>(.*?)</tr>", seg, re.S):
+        cells = [_html.unescape(re.sub(r"<[^>]+>", "", x)).strip().replace("\n", " ")
+                 for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, re.S)]
+        cells = [y for y in cells if y != ""]
+        row = _ncsr_parse_row(cells)
+        if row:
+            positions.append(Position(identifier="", id_scheme="NAME", quantity=row[1], name=row[0]))
+    return Holdings(fund_id=fund_name, as_of="", source="ncsr", positions=positions, skipped=skipped)

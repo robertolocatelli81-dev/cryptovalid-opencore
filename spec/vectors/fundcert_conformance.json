@@ -1,0 +1,75 @@
+{
+ "canon_version": "fundcert-canon-1.0",
+ "quantity_dp": 6,
+ "cases": [
+  {
+   "name": "equity_scientific_notation",
+   "positions": [
+    [
+     "67066G104",
+     "CUSIP",
+     "2.99181969E8"
+    ],
+    [
+     "037833100",
+     "CUSIP",
+     "1.81423328E8"
+    ],
+    [
+     "040413205",
+     "CUSIP",
+     "1.275099E7"
+    ]
+   ],
+   "id_target": null,
+   "expected_digest": "80a8230c717aaa215909b66aeb7113db1daf2e9bd123a0f63df99b09931a029e"
+  },
+  {
+   "name": "placeholder_duplicati",
+   "positions": [
+    [
+     "000000000",
+     "CUSIP",
+     "100"
+    ],
+    [
+     "000000000",
+     "CUSIP",
+     "300"
+    ],
+    [
+     "037833100",
+     "CUSIP",
+     "1000"
+    ]
+   ],
+   "id_target": null,
+   "expected_digest": "7a31a254b615e085a43cca3183b5bfc743ef95cfe5cc836988bec75f4dfc09c1"
+  },
+  {
+   "name": "cusip_to_isin_target",
+   "positions": [
+    [
+     "037833100",
+     "CUSIP",
+     "1000000"
+    ]
+   ],
+   "id_target": "ISIN",
+   "expected_digest": "2f678ad0b9775b5e7ab9a7df2afa2b12389aeaac42bf2a7a523cee9b3fcec2aa"
+  },
+  {
+   "name": "cash_component",
+   "positions": [
+    [
+     "037833100",
+     "CUSIP",
+     "1000000",
+     "12345.67"
+    ]
+   ],
+   "id_target": null,
+   "expected_digest": "e90a1f0ebaba15bba516252f7a0694662be0f8b2b98f1b4649781adef34ff9cc"
+  }
+ ]
+}

@@ -105,6 +105,53 @@ CUSIP → match per nome normalizzato). Controllo positivo prima delle misure (N
   scala e isola le differenze reali → *«368 titoli, composizione identica, scala +0.397% (indaga sec-lending),
   1 residuo»* è esattamente il segnale che un fund administrator/auditor vuole. Feature nata dal dato reale.
 
+### (d-bis) 12 fondi Vanguard, N-CSR vs N-PORT (31/12/2025) — meccanismo chiuso (con walk-back)
+Esteso a **tutti i 12 fondi** del trust Vanguard Index Funds (parser N-CSR `parse_ncsr_soi` migliorato: gestisce
+i **marcatori di nota** '*,1' che spostavano le colonne → coverage 42%→**100-102%**). Controllo positivo + null
+passati su tutti e 12. Refutata la scala universale: il +0.397% del 500 Index è fondo-specifico (altri
+large-cap ~0.000%).
+
+**WALK-BACK onesto (una prima ipotesi refutata dal dato):** i fondi small-cap/extended mostravano molti residui,
+e li avevo attribuiti a **securities-lending**. Andando a prendere le note reali (marcatore N-CSR '1' = "positions
+on loan") il nesso è **CROLLATO**: P(residuo|in-prestito) vs P(residuo|no) → lift 1.69× (Small-Cap) e **0.36×**
+(Extended, al contrario). Lending NON spiega. Anche l'ipotesi collisioni-di-nome: **0 collisioni**.
+**Causa vera, MISURATA:** il residuo è **inversamente proporzionale alla dimensione della posizione** (scarto×shares
+≈ costante ~mille azioni in ogni quartile, in TUTTI i fondi) → è **rumore assoluto fisso** (rounding/timing tra i
+due snapshot di deposito), grande in % sulle posizioni piccole (small-cap), trascurabile sulle grandi (large-cap).
+Non era un'anomalia dei fondi: era la mia **soglia relativa cieca alla dimensione** a fabbricare false anomalie.
+
+**Fix nel prodotto:** `reconcile(material_tol=0.02)` separa la differenza **MATERIALE** (grande in %, discrepanza
+reale) dal residuo **MINORE** (piccolo in %, quantizzazione/timing). Riesito: **tutti e 12 i fondi riconciliano
+puliti**; su 12 fondi × migliaia di holding restano **~11 item materiali** da rivedere (Wolfspeed +2907% = corporate
+action 2025 nota, Republic Airways −67%, Pinnacle −93%, e 2-6% minori). È esattamente il segnale «guarda questi».
+HONEST SCOPE: match per **nome** (N-CSR senza CUSIP), 80-90% allineati; l'ID (CUSIP/ISIN) confermerebbe i pochi
+materiali che il nome lascia ambigui.
+
+### (d-ter) FONDI OBBLIGAZIONARI — 6 fondi Vanguard Bond Index (N-CSR vs N-PORT, 31/12/2025)
+Test su un'asset class diversa (bond = principal/coupon/maturity, non shares). Il nome NON è unico (mille
+Treasury/pool) → chiave COMPOSITA **nome|coupon|maturity**; unità diverse (N-CSR face $000 vs N-PORT balance $)
+assorbite dalla scala di `reconcile` (=1.00000, conferma). Controllo positivo+null passati su tutti e 6.
+`reconcile()` generalizza a QUALSIASI holding con chiave (qui `id_scheme='BONDKEY'`).
+- **Treasury/corporate riconciliano bene:** Intermediate 8 materiali/1953, Total Bond II 9/6895 (come l'equity).
+- **BUG di parsing trovato con l'auto-audit e riparato:** il face veniva scambiato con un marcatore di nota in
+  testa ('2') → 169 falsi materiali su Intermediate → fix (face = primo intero DOPO la maturity) → 8 reali.
+- **Due limiti d'asset-class DICHIARATI (dal dato):**
+  1. **MBS pool NON matchabili senza CUSIP:** Total Bond ha 1514 collisioni di chiave (1505 sono pool: 5 pool
+     "FANNIE MAE POOL|3.000|2042-05-01" diversi, stesso nome/coupon/maturity, CUSIP diversi) → match 41%. È la
+     prova che i bond richiedono match a livello di **identificatore** (CUSIP/ISIN), che l'N-CSR non pubblica.
+  2. **TIPS non riconciliano sul face:** scala 1.189 = aggiustamento cumulato d'inflazione (N-PORT usa il
+     principal inflation-adjusted, N-CSR il face) → 55/57 "materiali" che sono un fatto contabile, non errori.
+- **Lezione prodotto:** il name-matching regge sull'equity ma si ROMPE sui bond/MBS → il valore di OMEGA
+  (certificare con CUSIP/ISIN quando c'è) è massimo esattamente dove il nome fallisce.
+
+**INTEGRAZIONE CUSIP/ISIN — `reconcile(by='auto')`:** match IDENTIFIER-FIRST — chiave = ISIN (CUSIP→ISIN via
+check-digit) quando la posizione lo porta, nome come fallback. **Dimostrato sul dato reale:** sui bond MBS di
+Total Bond le collisioni di chiave crollano da **1514 (per nome) a 4 (per CUSIP→ISIN)** — il CUSIP distingue i
+pool che nome+coupon+maturity collassava. CONFINE onesto: 'auto' allinea due fonti che portano ENTRAMBE
+l'identificatore (custodian/PCF/N-PORT ↔ N-PORT); se una fonte non ha id (N-CSR, solo nome) si usa `by='name'`.
+È la ragione strutturale per cui la certificazione a livello di **identificatore** (CUSIP/ISIN) — quando le
+fonti lo portano — è la forma giusta del prodotto, non il nome.
+
 ### (e) Perché il digest-equality byte-identico NON è il test — imparato dal dato reale
 L'ipotesi iniziale era: stesso fondo/giorno da 2 fonti → stesso digest. Il giro (d) l'ha **falsificata sul dato
 reale**: due filing SEC autorevoli dello stesso fondo/data differiscono per una scala globale a composizione
