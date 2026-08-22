@@ -63,20 +63,34 @@ Certifies the record of a decision even when the model is **not reproducible**.
 - RCE proves **integrity** of the evidence (unaltered, internally consistent) and — for deterministic methods —
   **reproducibility** of the result. It does **NOT** prove the recorded facts are true (proof-of-integrity, not
   proof-of-veracity), nor that a decision was correct/fair, nor make a non-deterministic AI reproducible.
-- **Executability — attestation is in scope, preservation is not.** RCE flags `METHOD_DRIFT` on the method
-  version, and an optional **executability attestation** (record type C) pins the runtime *manifest* (Python
-  version, implementation, architecture, dependency versions, method-source hash) so a later verifier can
-  **detect** `ENVIRONMENT_DRIFT` and know whether a re-execution is on the same stack. It does **NOT** preserve or
-  reconstruct the runtime: resurrecting a dead environment for re-execution in future decades (containers/
-  emulation) remains a separate, infrastructure-level problem RCE does not solve. Reference: `executability_attestation.py`.
+- **Executability & preservation are DELEGATED to mature standards — RCE does not reinvent them** (honest
+  correction, 2026-08-22): packaging → **RO-Crate / Workflow-Run RO-Crate**; reproducible environments over
+  years → **Nix / GNU Guix `time-machine`**; source-code preservation → **Software Heritage / SWHID**
+  (ISO/IEC 18670:2025, a recognised DPG); re-executing workflows years later → **REANA / RECAST / CWL**. RCE's
+  optional `executability_attestation` / `reexecution_capsule` modules are lightweight **demos** of the concept;
+  the production path is to **emit an RO-Crate, reference an SWHID, and delegate re-execution to Nix/Guix/REANA**,
+  not to compete with them.
 - **Anchoring in time** (that the record existed at time T) is delegated to independent witnesses — RFC 3161
   timestamps, OpenTimestamps→Bitcoin — see `SPEC_EVIDENCE_FORMAT.md`. **Long-term crypto-agility** (the hash/
   signature ageing) is delegated to a renewal chain (eIDAS-LTA / RFC 4998 style).
 
-## 6. Relationship to existing standards
-RCE **complements**, does not replace: SLSA/in-toto (builds) · eIDAS LTA / RFC 4998 (documents/signatures) ·
-RFC 3161 & OpenTimestamps (time anchoring). It occupies the empty slot: **re-certifiable derived metrics and AI
-decisions**, offline-verifiable, vendor-neutral.
+## 6. Relationship to existing standards (honest positioning)
+RCE **complements and delegates**, it does not replace: SLSA/in-toto (build provenance) · **RO-Crate / Codemeta**
+(research/artifact packaging) · **Nix/Guix + Software Heritage/SWHID** (reproducible environments & source
+preservation) · **REANA/RECAST/CWL** (re-executing workflows years later) · eIDAS LTA / RFC 4998 (document/
+signature longevity) · RFC 3161 & OpenTimestamps (time anchoring). Those are mature and, for preservation and
+re-execution, **better than anything RCE should build**.
+
+The genuinely un-covered slot RCE targets is narrow and honest:
+1. **AI-decision auditability when the model is NOT reproducible** (record type B): the whole preservation stack
+   assumes you can re-execute; non-deterministic LLMs/agents break that. Certifying the decision *record*
+   (accountability without replay), as regulators now demand (US SR 26-2 Apr 2026; EU AI Act high-risk), is the
+   piece the reproducibility ecosystem does not address.
+2. A thin **RegTech re-certification profile** (record type A): drift-typing (INPUT/METHOD/RESULT) of a *derived
+   financial metric* framed against regulatory replay requirements — composed on top of the standards above, not
+   instead of them.
+Everything preservation/packaging/environment-related (record type C) is a **demo** and should be replaced by
+RO-Crate + SWHID + Nix/Guix/REANA in production.
 
 ## 7. Reference implementation (informative)
 - `fintech/temporal_reverification.py` — Record type A.
