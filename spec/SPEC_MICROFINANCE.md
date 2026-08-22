@@ -60,3 +60,18 @@ layer evidence di opencore). Zero dipendenze (stdlib; `cryptography` opzionale).
 ## 9. Confine invalicabile
 Proof-of-integrity, non veracity. No-PII by design. Non è un credit bureau né consulenza; è **infrastruttura di
 verifica** (un donatore/regolatore/rete controlla i numeri senza fidarsi e senza vedere le persone).
+
+## ⚠ LIMITE VERIFICATO (council 4-menti, 2026-08-22): cross-MFI vs no-PII
+Contraddizione trovata NEL CODICE (non estrapolata) dal council e confermata alla fonte:
+- `hash_borrower(id, salt)` usa un salt che **l'MFI tiene privato** (per-istituto).
+- Il matching cross-MFI del sovra-indebitamento (`borrower_debt_exposure`/`over_indebtedness`) funziona **solo
+  se le MFI condividono lo stesso schema di hash** → **salt CONDIVISO** → l'hash del beneficiario diventa uno
+  **pseudonimo stabile e linkabile fra istituti = dato personale pseudonimizzato** (GDPR Recital 26: resta dato
+  personale). Col salt **per-istituto**, lo stesso beneficiario produce hash diversi → il matching **non
+  funziona**.
+- CONSEGUENZA ONESTA: il "no-PII by design" **regge per il singolo portafoglio** (attestazione/PAR), ma **salta
+  nell'uso cross-MFI** che giustificherebbe SDG 1/8/10. Percio' quegli SDG sono stati **RITIRATI dalla nomina DPG**
+  (tenuti solo 16 + 9). `DO_NO_HARM.md` inoltre non copre il rischio "flag di esclusione dei poveri dal credito".
+- FIX FUTURO (non fatto): per un cross-MFI davvero no-PII servono commitment/PSI (private set intersection) o un
+  registro con pseudonimi ciechi + prova ZK, NON un hash con salt condiviso. Da progettare PRIMA di rivendicare
+  l'inclusione finanziaria. Vedi [[project_confidential_attestation_20260822]] (Pedersen) come mattone parziale.
