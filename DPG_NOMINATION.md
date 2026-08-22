@@ -14,6 +14,9 @@ raccoglie tutti i campi con le **evidenze reali nel repo**. Fonte degli indicato
 - **Repository pubblico:** https://github.com/robertolocatelli81-dev/cryptovalid-opencore
 - **Proprietà:** Copyright (C) 2026 Roberto Locatelli ([`NOTICE`](NOTICE), `pyproject.toml`)
 - **Stadio:** funzionante, 27 suite di test, validato su dati reali (SEC N-PORT/N-CSR, KIVA, MIX).
+- **Evidenza di stress ONLINE (2026-08-22):** backbone deterministico 27/27 + OMEGA 8/8 + 6 moduli nuovi, e
+  ancore esterne verificate DAL VIVO — RFC 3161 (freeTSA), OpenTimestamps→Bitcoin (3/3 calendar), Solana
+  mainnet (pin genesis). Sa fallire (ledger manomesso → FAIL). Vedi [`spec/STRESS_REAL_ONLINE_20260822.md`](spec/STRESS_REAL_ONLINE_20260822.md).
 
 ## Rilevanza agli SDG (indicatore 1) — dichiarata ONESTA
 - **SDG 16** (istituzioni trasparenti/anti-corruzione) — **PRIMARIO e pieno**: evidenza di compliance
