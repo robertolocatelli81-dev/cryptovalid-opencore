@@ -84,6 +84,11 @@ class MetricSpec:
     metric_id: str
     num_of: Callable[[Dict], int]   # contributo intero al numeratore
     den_of: Callable[[Dict], int]   # contributo intero al denominatore
+    # PROPRIETA' DELLA DEFINIZIONE (disciplina QRAFT-RA "il certificato deve sapere FALLIRE", 2026-08-22):
+    # se ogni record ha num_i <= den_i per costruzione, allora num_total <= den_total e il ratio e' in
+    # [0,1]. E' un INVARIANTE verificabile OFFLINE sui totali pubblici -> chiude il buco per cui
+    # verify_attestation accettava un ratio impossibile (es. PAR30=1.5) purche' i totali fossero legati.
+    num_le_den: bool = True
 
 
 def _outstanding(r: Dict) -> int:
@@ -106,11 +111,18 @@ SPEC_PAR30 = MetricSpec(
     den_of=_outstanding,
 )
 # Write-off ratio = write-offs / outstanding (denominatore semplificato al portafoglio impegnato)
+# num_le_den=False: i write-off (chiusi) possono eccedere l'outstanding CORRENTE -> ratio non limitato a 1.
 SPEC_WRITEOFF = MetricSpec(
     metric_id="WRITEOFF_RATIO",
     num_of=lambda r: to_minor(r.get("principal_written_off", "0")),
     den_of=_outstanding,
+    num_le_den=False,
 )
+
+# Registro delle proprieta' NOTE al VERIFICATORE (non ci si fida del valore dichiarato dal prover):
+# metric_id -> il ratio e' limitato a [0,1] per DEFINIZIONE della metrica. Il verificatore usa QUESTO,
+# non il campo nell'attestazione (che un prover malevolo metterebbe a False per schivare il check).
+KNOWN_BOUNDED: Dict[str, bool] = {"PAR30": True, "WRITEOFF_RATIO": False}
 
 
 # --------------------------------------------------------------------------- #
@@ -172,6 +184,7 @@ class Commitment:
     as_of: str
     tree_root: str = ""   # radice interna del Merkle sum tree (per la verifica dei path)
     spec_version: str = SPEC_VERSION
+    num_le_den: bool = True   # proprieta' della metrica (per la guardia di coerenza offline)
 
 
 def _bind_meta(tree_root: str, n: int, metric_id: str, as_of: str,
@@ -189,7 +202,19 @@ def commit_ledger(records: List[Dict], master_salt: str, spec: MetricSpec, as_of
     root = _levels(leaves)[-1][0]
     n = len(records)
     root_hash = _bind_meta(root["hash"], n, spec.metric_id, as_of, root["num"], root["den"])
-    return Commitment(root_hash, root["num"], root["den"], n, spec.metric_id, as_of, tree_root=root["hash"])
+    return Commitment(root_hash, root["num"], root["den"], n, spec.metric_id, as_of,
+                      tree_root=root["hash"], num_le_den=spec.num_le_den)
+
+
+def metric_numerical_hash(spec_version: str, metric_id: str, as_of: str,
+                          num_total: int, den_total: int) -> str:
+    """Fingerprint di RIPRODUCIBILITA' del CALCOLO derivato, SALT-INDIPENDENTE (disciplina dual-hash del
+    QraftReport di QRAFT-RA, 2026-08-22). A differenza del root_hash (che dipende dal master_salt = impronta
+    di EMISSIONE), questo dipende solo dai numeri derivati pubblici: due ri-commit onesti dello STESSO ledger
+    con salt diversi danno root_hash diversi ma STESSO numerical_hash -> si prova che il ratio derivato e'
+    riprodotto, indipendentemente da quando/con-che-salt e' stato emesso. Non aggiunge leak: num/den sono gia'
+    pubblici. Serve per confrontare/riconciliare attestazioni e certificarne la riproducibilita'."""
+    return _h(_enc("CLDMA-NUM", spec_version, metric_id, as_of, num_total, den_total))
 
 
 def attestation(c: Commitment) -> Dict:
@@ -203,6 +228,9 @@ def attestation(c: Commitment) -> Dict:
         "n_records": c.n, "root_hash": c.root_hash, "tree_root": c.tree_root,
         "numerator_minor": c.num_total, "denominator_minor": c.den_total,
         "ratio": str(ratio.quantize(Decimal("0.000001"))),
+        # disciplina QRAFT-RA (additivi, non toccano il binding): fingerprint riproducibilita' + proprieta' metrica
+        "numerical_hash": metric_numerical_hash(c.spec_version, c.metric_id, c.as_of, c.num_total, c.den_total),
+        "num_le_den": c.num_le_den,
     }
 
 
@@ -225,6 +253,64 @@ def verify_attestation(att: Dict) -> bool:
         return att["ratio"] in ("0", "0.000000")
     exp = (Decimal(att["numerator_minor"]) / Decimal(den)).quantize(Decimal("0.000001"))
     return str(exp) == str(Decimal(att["ratio"]).quantize(Decimal("0.000001")))
+
+
+# --------------------------------------------------------------------------- #
+#  Guardia di COERENZA che SA FALLIRE (disciplina QRAFT-RA, 2026-08-22)
+# --------------------------------------------------------------------------- #
+def verify_metric_consistency(att: Dict, num_le_den: Optional[bool] = None) -> Dict:
+    """Guardia OFFLINE che SA fallire — chiude un buco di `verify_attestation` (che controlla binding +
+    aritmetica del ratio, ma NON che il ratio sia POSSIBILE). Controlli, tutti sui campi PUBBLICI:
+      1. RIPRODUCIBILITA': ricalcola `numerical_hash` e verifica che (a) e' deterministico e (b) coincide
+         col dichiarato -> il calcolo derivato e' riproducibile e non e' stato alterato.
+      2. INVARIANTE num<=den per le metriche LIMITATE: se il ratio e' [0,1] per definizione (es. PAR30) e
+         num_total > den_total, e' IMPOSSIBILE -> FAIL. `verify_attestation` da solo lo accettava.
+      3. NON-NEGATIVITA' dei totali; ratio in [0,1] se limitato.
+    `num_le_den`: il verificatore lo passa dalla SUA conoscenza della metrica (o si usa KNOWN_BOUNDED per
+    metric_id); NON ci si fida ciecamente del campo nell'attestazione (un prover lo metterebbe a False).
+    Ritorna {ok, checks, reasons}. E' progettata per FALLIRE su input impossibili: vedi il banco."""
+    reasons: List[str] = []
+    checks: Dict[str, bool] = {}
+    num = att.get("numerator_minor")
+    den = att.get("denominator_minor")
+
+    # 1) riproducibilita' del calcolo (dual-hash): il numerical_hash e' deterministico e combacia
+    recomputed = metric_numerical_hash(att.get("spec_version", ""), att.get("metric_id", ""),
+                                       att.get("as_of", ""), num, den)
+    recomputed2 = metric_numerical_hash(att.get("spec_version", ""), att.get("metric_id", ""),
+                                        att.get("as_of", ""), num, den)
+    repro_ok = (recomputed == recomputed2)
+    declared = att.get("numerical_hash")
+    match_ok = (declared is None) or (declared == recomputed)  # se assente non si punisce; se presente deve combaciare
+    checks["reproducible"] = repro_ok
+    checks["numerical_hash_match"] = match_ok
+    if not repro_ok:
+        reasons.append("numerical_hash non deterministico (impossibile: bug)")
+    if not match_ok:
+        reasons.append("numerical_hash dichiarato != ricalcolato (totali/spec alterati dopo il calcolo)")
+
+    # 2) invariante di dominio della metrica: il verificatore decide se e' limitata
+    if num_le_den is None:
+        num_le_den = KNOWN_BOUNDED.get(att.get("metric_id", ""), att.get("num_le_den", False))
+    nonneg_ok = (isinstance(num, int) and isinstance(den, int) and num >= 0 and den >= 0)
+    checks["non_negative"] = nonneg_ok
+    if not nonneg_ok:
+        reasons.append("totali non interi o negativi")
+    bound_ok = True
+    if num_le_den and nonneg_ok:
+        bound_ok = (num <= den)
+        checks["num_le_den"] = bound_ok
+        if not bound_ok:
+            reasons.append(f"ratio IMPOSSIBILE per metrica limitata: num_total={num} > den_total={den} "
+                           f"(> 100%): buco che verify_attestation da solo NON coglie")
+    ratio_bound_ok = True
+    if num_le_den and nonneg_ok and den not in (0, None):
+        ratio_bound_ok = (Decimal(num) / Decimal(den)) <= Decimal(1)
+        checks["ratio_in_0_1"] = ratio_bound_ok
+
+    ok = repro_ok and match_ok and nonneg_ok and bound_ok and ratio_bound_ok
+    return {"ok": ok, "checks": checks, "reasons": reasons,
+            "num_le_den_applied": num_le_den, "numerical_hash": recomputed}
 
 
 # --------------------------------------------------------------------------- #

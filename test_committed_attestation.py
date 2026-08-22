@@ -95,13 +95,6 @@ def test_den_zero_defined():
     assert C.verify_attestation(att)
 
 
-if __name__ == "__main__":
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    for fn in fns:
-        fn(); print(f"[OK] {fn.__name__}")
-    print(f">>> CLDMA: {len(fns)}/{len(fns)} test verdi (positivi colgono, null passa, conformance congelato)")
-
-
 def test_buco_A_totali_falsi_con_radice_reale():
     # controllo 3-menti 21/08: un prover pubblica totali FALSI tenendo una radice reale.
     # verify_attestation prima si fidava dei campi (falso-verde), ora lega i totali alla radice.
@@ -132,3 +125,49 @@ def test_buco_B_sibling_negativo_in_verify_open():
     opened = [{"index": 0, "record": rec0, "salt": salt0, "num": n0, "den": d0,
                "path": [{"side": "right", "num": evil_num, "den": 0, "hash": evil_hash}]}]
     assert not C.verify_open(cc, spec, opened)["all_ok"]
+
+
+# --- disciplina QRAFT-RA travasata in CLDMA (2026-08-22): dual-hash + guardia che sa fallire ---
+def test_qraft_guard_catches_impossible_ratio():
+    # PRIMA dimostra di saper FALLIRE: un PAR30 > 100% e' impossibile (piu' a-rischio del totale).
+    # verify_attestation da solo lo ACCETTA se la radice lega i totali falsi; verify_metric_consistency NO.
+    led = [{"loan_id": "L", "principal_outstanding": "100.00", "days_overdue": "40", "status": "active"}]
+    c = C.commit_ledger(led, "s", C.SPEC_PAR30, "2026-08-22")
+    att = C.attestation(c)
+    assert C.verify_metric_consistency(att)["ok"]                 # onesto: passa entrambe
+    from decimal import Decimal as D
+    bad = dict(att); bad["numerator_minor"] = 2000; bad["denominator_minor"] = 1000
+    bad["ratio"] = str((D(2000) / D(1000)).quantize(D("0.000001")))
+    bad["root_hash"] = C._bind_meta(att["tree_root"], att["n_records"], att["metric_id"], att["as_of"], 2000, 1000)
+    bad["numerical_hash"] = C.metric_numerical_hash(att["spec_version"], att["metric_id"], att["as_of"], 2000, 1000)
+    assert C.verify_attestation(bad)                              # buco: verify_attestation da solo accetta
+    assert not C.verify_metric_consistency(bad)["ok"]            # la guardia FALLISCE (come deve)
+
+
+def test_qraft_numerical_hash_is_salt_independent():
+    # dual-hash: stesso ledger, salt diversi -> root_hash diverso (emissione) ma numerical_hash uguale (calcolo)
+    led = [{"loan_id": "L", "principal_outstanding": "500.00", "days_overdue": "10", "status": "active"},
+           {"loan_id": "M", "principal_outstanding": "500.00", "days_overdue": "60", "status": "active"}]
+    a1 = C.attestation(C.commit_ledger(led, "salt-1", C.SPEC_PAR30, "2026-08-22"))
+    a2 = C.attestation(C.commit_ledger(led, "salt-2", C.SPEC_PAR30, "2026-08-22"))
+    assert a1["root_hash"] != a2["root_hash"]                    # emissione diversa
+    assert a1["numerical_hash"] == a2["numerical_hash"]          # calcolo derivato riprodotto
+
+
+def test_qraft_verifier_ignores_declared_num_le_den():
+    # un prover malevolo mette num_le_den=False per schivare il check: il verificatore usa KNOWN_BOUNDED
+    led = [{"loan_id": "L", "principal_outstanding": "100.00", "days_overdue": "40", "status": "active"}]
+    att = C.attestation(C.commit_ledger(led, "s", C.SPEC_PAR30, "2026-08-22"))
+    from decimal import Decimal as D
+    bad = dict(att); bad["numerator_minor"] = 500; bad["denominator_minor"] = 100
+    bad["ratio"] = str((D(500) / D(100)).quantize(D("0.000001")))
+    bad["numerical_hash"] = C.metric_numerical_hash(att["spec_version"], att["metric_id"], att["as_of"], 500, 100)
+    bad["num_le_den"] = False                                    # il prover mente sulla proprieta'
+    assert not C.verify_metric_consistency(bad)["ok"]           # KNOWN_BOUNDED[PAR30]=True vince -> FAIL
+
+
+if __name__ == "__main__":
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for fn in fns:
+        fn(); print(f"[OK] {fn.__name__}")
+    print(f">>> CLDMA: {len(fns)}/{len(fns)} test verdi (positivi colgono, null passa, conformance congelato)")
