@@ -15,6 +15,7 @@ HONEST-SCOPE: pianifica il rinnovo dell'ACCESSIBILITÀ dell'evidenza; non prova 
 sostituisce un archive dedicato (l'alternativa forte resta un nodo full-archive / servizio a pagamento).
 Stdlib only. La sonda è iniettabile (`probe_fn=`) per test ermetici.
 """
+import json
 from typing import Callable, Dict, List, Optional
 
 
@@ -62,3 +63,23 @@ def plan(anchors: List[Dict], probe_fn: Callable[[str], Dict], now_ts: float,
                          "on-chain HUMAN-GATED, non automatica); non prova veridicità (W1) né sostituisce "
                          "un archive dedicato. Finestra ancorata alla MISURA, non a un'ipotesi."),
     }
+
+
+def main(argv=None):
+    import argparse
+    import sys
+    p = argparse.ArgumentParser(prog="cryptovalid-reanchor",
+                                description="Valuta il decadimento di un'ancora e segnala se ri-ancorare.")
+    p.add_argument("retention_json", help="file JSON con almeno {\"witnesses_with_tx\": N}")
+    p.add_argument("--age-days", type=float, required=True)
+    p.add_argument("--min-witnesses", type=int, default=2)
+    a = p.parse_args(sys.argv[1:] if argv is None else argv)
+    with open(a.retention_json, encoding="utf-8") as f:
+        ret = json.load(f)
+    r = assess(ret, a.age_days, a.min_witnesses)
+    print(json.dumps(r, ensure_ascii=False, indent=1))
+    return 1 if r["needs_reanchor"] else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

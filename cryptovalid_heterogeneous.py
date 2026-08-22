@@ -17,6 +17,7 @@ HONEST-SCOPE: prova che il digest è attestato da ≥N sistemi di fiducia INDIPE
 tocca l'attestazione RFC3161, e viceversa). NON prova la veridicità del contenuto (resta W1, confine). I
 verificatori di dominio sono iniettabili (`verifiers=`) per test ermetici. Stdlib only.
 """
+import json
 from typing import Callable, Dict, List, Optional
 
 
@@ -86,3 +87,23 @@ def verify_heterogeneous_anchor(expected_sha3_hex: str, attestations: List[Dict]
                          "dominio non tocca l'altro); repliche dello stesso dominio contano UNA. NON prova "
                          "la veridicità del contenuto (confine W1)."),
     }
+
+
+def main(argv=None):
+    import argparse
+    import sys
+    p = argparse.ArgumentParser(prog="cryptovalid-heterogeneous",
+                                description="Verifica un'ancora ETEROGENEA (>=N domini di fiducia indipendenti).")
+    p.add_argument("digest_sha3_hex")
+    p.add_argument("attestations_json", help="file JSON: lista di attestazioni [{\"domain\": ...}, ...]")
+    p.add_argument("--min-domains", type=int, default=2)
+    a = p.parse_args(sys.argv[1:] if argv is None else argv)
+    with open(a.attestations_json, encoding="utf-8") as f:
+        atts = json.load(f)
+    r = verify_heterogeneous_anchor(a.digest_sha3_hex, atts, min_domains=a.min_domains)
+    print(json.dumps(r, ensure_ascii=False, indent=1))
+    return 0 if r.get("ok") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

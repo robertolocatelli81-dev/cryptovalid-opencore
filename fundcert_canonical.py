@@ -294,7 +294,7 @@ def reconcile(a: Holdings, b: Holdings, by: str = "id", id_target: Optional[str]
     # azioni) → appare grande in % sulle posizioni piccole (small-cap) e trascurabile sulle grandi. Usare una
     # soglia relativa fissa fabbricava false "anomalie" sui fondi small-cap. material_tol separa la differenza
     # REALE (grande in %, un holding davvero mis-stated) dal rumore MINORE (piccolo in %, quantizzazione/timing).
-    residual, minor = [], 0
+    residual, minor, ambiguous = [], 0, []
     for k in sorted(common):
         if len(qa[k]) == 1 and len(qb[k]) == 1:
             va, vb = float(qa[k][0]), float(qb[k][0])
@@ -306,6 +306,15 @@ def reconcile(a: Holdings, b: Holdings, by: str = "id", id_target: Optional[str]
                                  "flag": corporate_action_flag(va, vb)})   # B4: split/reverse candidato vs discrepanza
             elif rel > 5e-4:                             # residuo MINORE (rumore quantizzazione/timing)
                 minor += 1
+        else:
+            # chiave con id NON unico (multi-lotto, futures/cash senza CUSIP, pool MBS, placeholder
+            # '000000000'): il confronto 1-a-1 non si applica → NON collassare in silenzio (etica
+            # "nulla sparisce"). Si dichiara: le somme aggregate possono differire e non entrano in
+            # residual/minor. Chi verifica deve trattarle separatamente (per lotto o per aggregato).
+            sa, sb = sum(float(x) for x in qa[k]), sum(float(x) for x in qb[k])
+            ambiguous.append({"key": k, "rows_a": len(qa[k]), "rows_b": len(qb[k]),
+                              "sum_a": sa, "sum_b": sb,
+                              "sums_match": abs(sa - sb) <= max(1.0, 5e-4 * abs(sa))})
     return {
         "by": by,
         "matched": len(common),
@@ -315,6 +324,8 @@ def reconcile(a: Holdings, b: Holdings, by: str = "id", id_target: Optional[str]
         "residual_after_scale": residual,               # SOLO le differenze materiali (> material_tol)
         "residual_count": len(residual),                # = differenze reali; le anomalie small-cap NON entrano
         "minor_residual_count": minor,                  # rumore di quantizzazione/timing (piccolo in %)
+        "ambiguous_keys": ambiguous,                    # id non-unici: dichiarati, mai spariti in silenzio
+        "ambiguous_count": len(ambiguous),
         "only_in_a": len(set(qa) - set(qb)),
         "only_in_b": len(set(qb) - set(qa)),
     }
@@ -548,6 +559,25 @@ def triage(recon_result: Dict, top: Optional[int] = None) -> Dict:
 
 # ─────────────────────── PARSER (fonti REALI) ───────────────────────
 
+def _safe_fromstring(data):
+    """XML da FONTI ESTERNE (XLSX di ETF, N-PORT SEC): difeso da entity-expansion/XXE
+    (billion-laughs, external entities). Usa defusedxml se presente; altrimenti stdlib
+    ma RIFIUTA fail-closed ogni DOCTYPE/ENTITY (il vettore di quegli attacchi). Un doc
+    di holdings legittimo non ha mai un DOCTYPE — respingerlo non perde dati veri."""
+    try:
+        from defusedxml.ElementTree import fromstring as _dfs
+        return _dfs(data)
+    except ImportError:
+        import xml.etree.ElementTree as ET  # nosec B405 - input filtrato sotto
+        head = (data[:4096].decode("utf-8", "replace") if isinstance(data, bytes)
+                else data[:4096])
+        low = head.lower()
+        if "<!doctype" in low or "<!entity" in low:
+            raise ValueError("XML con DOCTYPE/ENTITY rifiutato (rischio XML-bomb/XXE; "
+                             "per parsarlo installare defusedxml)")
+        return ET.fromstring(data)  # nosec B314 - DOCTYPE/ENTITY già rifiutati sopra
+
+
 def parse_ssga_xlsx(path: str) -> Holdings:
     """Parser SSGA/SPDR holdings XLSX (stdlib zipfile+xml). Colonne: Name, Ticker, Identifier(CUSIP), SEDOL,
     Weight, Sector, Shares Held. Header con Ticker Symbol + 'Holdings: As of <data>'."""
@@ -558,12 +588,12 @@ def parse_ssga_xlsx(path: str) -> Holdings:
     z = zipfile.ZipFile(path)
     ss = []
     if "xl/sharedStrings.xml" in z.namelist():
-        for si in ET.fromstring(z.read("xl/sharedStrings.xml")).findall("a:si", NS):
+        for si in _safe_fromstring(z.read("xl/sharedStrings.xml")).findall("a:si", NS):
             ss.append("".join(t.text or "" for t in si.iter(
                 "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t")))
     sheet = [n for n in z.namelist() if re.match(r"xl/worksheets/sheet1\.xml", n)][0]
     rows = []
-    for row in ET.fromstring(z.read(sheet)).iter(
+    for row in _safe_fromstring(z.read(sheet)).iter(
             "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"):
         cells = []
         for c in row.findall("a:c", NS):
@@ -634,7 +664,7 @@ def parse_nport_xml(text: str, id_scheme: str = "CUSIP") -> Holdings:
     def local(t):
         return t.rsplit("}", 1)[-1]
 
-    root = ET.fromstring(text)
+    root = _safe_fromstring(text)
     fund_id = as_of = ""
     for el in root.iter():
         lt = local(el.tag)

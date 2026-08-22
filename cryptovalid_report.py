@@ -25,7 +25,13 @@ Design rules (they ARE the security model of this layer):
 
 Usage:
   python3 cryptovalid_report.py <pack_dir> [--out report.pdf] [--html-only]
-                                [--lotl] [--lotl-ms ES,IT] [--title "..."]
+                                [--lotl] [--lotl-ms ES,IT] [--solana] [--title "..."]
+  python3 cryptovalid_report.py <pack_dir> --solana-digest   # digest to anchor on-chain
+
+Second anchor (opt-in): a SOLANA_ANCHOR.json in the pack ({tx_signature, digest_sha3_hex,
+expected_signer?}) declares a mainnet spl-memo tx; --solana verifies it on-chain
+(read-only, N-of-M RPC via cryptovalid_solana). The digest is BOUND to the pack:
+sha3_256(manifest_digest_sha256) — an unrelated tx cannot be passed off as this pack's.
 """
 from __future__ import annotations
 
@@ -77,6 +83,56 @@ def lotl_status(manifest: Dict, member_states: Optional[List[str]] = None,
     except Exception as e:  # noqa: BLE001
         return {"checked": True, "qualified": None,
                 "note": f"LOTL check failed: {type(e).__name__}: {str(e)[:80]}"}
+
+
+# ------------------------------------------------------------- Solana (opt-in)
+
+def solana_anchor_digest(manifest: Dict) -> str:
+    """The pack's canonical Solana-memo digest: SHA3-256 over the ASCII hex of the
+    manifest digest. Anyone can recompute it from MANIFEST.json alone — the anchor
+    is BOUND to this pack, an unrelated (even valid) tx cannot be passed off as ours."""
+    return hashlib.sha3_256((manifest.get("manifest_digest_sha256") or "").encode()).hexdigest()
+
+
+def solana_status(pack_dir: str, manifest: Dict, check: bool = False) -> Dict:
+    """Opt-in second anchor: a SOLANA_ANCHOR.json in the pack
+    ({tx_signature, digest_sha3_hex, expected_signer?}) declares a mainnet spl-memo tx.
+    Four honest states: absent / recorded-not-checked (default, network is opt-in) /
+    verified / failed. Binding first: a declared digest that does not derive from THIS
+    manifest is a failure even before touching the network (fail-closed)."""
+    path = os.path.join(pack_dir, "SOLANA_ANCHOR.json")
+    if not os.path.exists(path):
+        return {"present": False, "checked": False, "verified": None}
+    try:
+        with open(path, encoding="utf-8") as f:
+            a = json.load(f)
+    except (OSError, ValueError) as e:
+        return {"present": True, "checked": False, "verified": False,
+                "note": f"SOLANA_ANCHOR.json unreadable: {type(e).__name__}"}
+    sig = a.get("tx_signature")
+    declared = (a.get("digest_sha3_hex") or "").strip().lower()
+    expected = solana_anchor_digest(manifest)
+    if not sig or declared != expected:
+        return {"present": True, "checked": False, "verified": False,
+                "note": "declared digest is NOT bound to this pack's manifest digest "
+                        "(expected sha3_256(manifest_digest_sha256))"}
+    if not check:
+        return {"present": True, "checked": False, "verified": None,
+                "tx_signature": sig,
+                "note": "anchor recorded; on-chain verification is a network check (--solana)"}
+    try:
+        import cryptovalid_solana as sol
+        r = sol.verify_solana_anchor(sig, expected,
+                                     expected_signer=a.get("expected_signer"))
+        out = {"present": True, "checked": True, "verified": bool(r.get("ok")),
+               "tx_signature": sig, "onchain": r.get("onchain")}
+        if not r.get("ok"):
+            out["note"] = "; ".join(c["check"] for c in r.get("checks", [])
+                                    if c.get("ok") is False) or "on-chain verification failed"
+        return out
+    except Exception as e:  # noqa: BLE001
+        return {"present": True, "checked": True, "verified": None,
+                "note": f"Solana check failed: {type(e).__name__}: {str(e)[:80]}"}
 
 
 # ---------------------------------------------------------------- rendering
@@ -146,7 +202,7 @@ table.grid td { padding: 1.6mm 2mm; border-bottom: .4pt solid #e5e7eb;
 
 def render_html(manifest: Dict, verification: Dict, lotl: Dict,
                 title: str = "Compliance Evidence — Audit Report",
-                pack_dir: str = "") -> str:
+                pack_dir: str = "", solana: Optional[Dict] = None) -> str:
     """Pure-stdlib rendering of verify_pack()'s verdict. Every status shown comes
     from `verification`/`lotl` — this function must stay verdict-free."""
     valid = bool(verification.get("valid"))
@@ -198,6 +254,25 @@ def render_html(manifest: Dict, verification: Dict, lotl: Dict,
     else:
         eidas_badge = _badge(None, na="INCONCLUSIVE")
         eidas_note = lotl.get("note", "inconclusive")
+
+    sol = solana or {"present": False, "checked": False, "verified": None}
+    if not sol.get("present"):
+        sol_badge, sol_note = _badge(None, na="NOT ANCHORED"), \
+            "No Solana anchor in this pack (optional second anchor; RFC 3161 + signatures stand alone)."
+    elif sol.get("verified") is True:
+        oc = sol.get("onchain") or {}
+        sol_badge = _badge(True, yes="VERIFIED")
+        sol_note = (f"Mainnet tx {_short(sol.get('tx_signature'), 20)} finalized, memo digest bound to "
+                    f"this manifest (slot {oc.get('slot')}, witnesses {oc.get('witnesses')}). "
+                    "Proves existence+timestamp on a public chain, not the truth of the facts.")
+    elif sol.get("verified") is False:
+        sol_badge, sol_note = _badge(False, no="VERIFICATION FAILED"), \
+            sol.get("note", "on-chain verification failed")
+    elif sol.get("checked"):
+        sol_badge, sol_note = _badge(None, na="INCONCLUSIVE"), sol.get("note", "inconclusive")
+    else:
+        sol_badge, sol_note = _badge(None, na="RECORDED, NOT VERIFIED"), \
+            "Anchor recorded in the pack; on-chain verification is a network check (opt-in via --solana)."
 
     comp = [
         ("File digests match the manifest", verification.get("files_ok")),
@@ -252,6 +327,7 @@ def render_html(manifest: Dict, verification: Dict, lotl: Dict,
 <tr><th>Anchor</th><th>Status</th><th>Detail</th></tr>
 <tr><td>RFC 3161 timestamp</td><td>{rfc_badge}</td><td>{_e(rfc_note)}</td></tr>
 <tr><td>eIDAS qualification (LOTL)</td><td>{eidas_badge}</td><td>{_e(eidas_note)}</td></tr>
+<tr><td>Solana mainnet anchor</td><td>{sol_badge}</td><td>{_e(sol_note)}</td></tr>
 </table>
 
 <h2>5 · Honest scope</h2>
@@ -271,6 +347,7 @@ re-verify with nothing but the open-source repository:</p>
 
 def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = False,
                     lotl: bool = False, lotl_ms: Optional[List[str]] = None,
+                    solana: bool = False,
                     title: str = "Compliance Evidence — Audit Report") -> Dict:
     """Verify the pack independently, render HTML (always), then PDF if WeasyPrint
     is importable and not html_only. Returns paths + the UNMODIFIED verdict."""
@@ -284,16 +361,17 @@ def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = 
     verification = evidence_pack.verify_pack(pack_dir)           # the ONLY verdict source
     lres = lotl_status(manifest, member_states=lotl_ms) if lotl else \
         {"checked": False, "qualified": None}
+    sres = solana_status(pack_dir, manifest, check=solana)
 
     doc = render_html(manifest, verification, lres, title=title,
-                      pack_dir=os.path.abspath(pack_dir))
+                      pack_dir=os.path.abspath(pack_dir), solana=sres)
     base = out or os.path.join(pack_dir, "report.pdf")
     html_path = os.path.splitext(base)[0] + ".html"
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(doc)
     result = {"valid": verification["valid"], "html": html_path, "pdf": None,
               "report_sha256": hashlib.sha256(doc.encode()).hexdigest(),
-              "eidas": lres}
+              "eidas": lres, "solana": sres}
     if not html_only:
         try:
             from weasyprint import HTML  # optional, never a hard dependency
@@ -316,11 +394,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--lotl", action="store_true",
                    help="opt-in NETWORK check: is the TSA eIDAS-qualified (EU LOTL)?")
     p.add_argument("--lotl-ms", help="comma-separated member states (e.g. ES,IT)")
+    p.add_argument("--solana", action="store_true",
+                   help="opt-in NETWORK check: verify the pack's SOLANA_ANCHOR.json on mainnet")
+    p.add_argument("--solana-digest", action="store_true",
+                   help="print the sha3 digest to anchor on-chain for THIS pack, then exit "
+                        "(memo format: sha3:<digest>)")
     p.add_argument("--title", default="Compliance Evidence — Audit Report")
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
+    if a.solana_digest:
+        with open(os.path.join(a.pack_dir, "MANIFEST.json"), encoding="utf-8") as f:
+            d = solana_anchor_digest(json.load(f))
+        print(json.dumps({"solana_memo": f"sha3:{d}", "digest_sha3_hex": d,
+                          "binding": "sha3_256(manifest_digest_sha256)"}, indent=1))
+        return 0
     r = generate_report(a.pack_dir, out=a.out, html_only=a.html_only, lotl=a.lotl,
                         lotl_ms=[s.strip() for s in a.lotl_ms.split(",")] if a.lotl_ms else None,
-                        title=a.title)
+                        solana=a.solana, title=a.title)
     print(json.dumps(r, indent=1))
     return 0 if r["valid"] else 1
 

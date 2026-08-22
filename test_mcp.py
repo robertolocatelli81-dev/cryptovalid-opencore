@@ -117,9 +117,10 @@ class TestMcpPositive(unittest.TestCase):
     def test_tools_list_marks_gated_writes(self):
         r = self.c.request("tools/list")
         tools = {t["name"]: t["description"] for t in r["result"]["tools"]}
-        self.assertEqual(len(tools), 5)
+        self.assertEqual(len(tools), 6)          # +verify_ap2_evidence (2026-08-21)
         for w in ("append_event", "seal_segment"):
             self.assertIn("human-gated", tools[w])
+        self.assertIn("READ-ONLY", tools["verify_ap2_evidence"])
 
     def test_verify_ledger_with_provenance(self):
         body, is_err = self.c.call("verify_ledger", {"path": self.signed})
@@ -127,6 +128,26 @@ class TestMcpPositive(unittest.TestCase):
         self.assertEqual(body["result"]["verdict"], "PASS")
         self.assertEqual(len(body["provenance"]["sha256"]), 64)   # provenienza SEMPRE
         self.assertIn("verified_at_utc", body["provenance"])
+
+    def test_verify_ap2_evidence_roundtrip_and_tamper(self):
+        # fixture reale: evidence pack ap2 costruito ora, poi manomesso (il banco sa fallire)
+        import test_ap2_evidence as fx
+        import ap2_evidence as ap2
+        sk, jwk = fx._make_signer()
+        sd = fx._make_sd_jwt(sk, {"iss": "wallet"}, {"amount": "9.99"},
+                             header_extra={"jwk": jwk})
+        out = os.path.join(self.d, "ap2_evidence.json")
+        ap2.build_evidence([{"name": "intent", "sd_jwt": sd}], out)
+        body, is_err = self.c.call("verify_ap2_evidence", {"path": out})
+        self.assertFalse(is_err)
+        self.assertTrue(body["result"]["valid"], body)
+        self.assertEqual(body["result"]["provenance_classes"], ["jwk_header"])
+        self.assertEqual(len(body["provenance"]["sha256"]), 64)
+        ev = json.load(open(out))
+        ev["subject"] = "tampered"
+        json.dump(ev, open(out, "w"))
+        body2, _ = self.c.call("verify_ap2_evidence", {"path": out})
+        self.assertFalse(body2["result"]["valid"])
 
     def test_wrong_token_still_blocked_even_with_gate_open(self):
         body, is_err = self.c.call("append_event",

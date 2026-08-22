@@ -214,6 +214,28 @@ Build a pack with `--sign-key <keyfile>` to **authenticate the manifest** (recom
 subject, the file digests, and each ledger's entry count + head hash. `verify_pack` reports
 `manifest_authenticated`.
 
+### Dispute evidence for agentic-payment mandates (AP2 / SD-JWT)
+
+The AP2 spec tells implementers *what* to keep for dispute resolution (the SD-JWTs with their
+disclosures) but not *how* — no key snapshotting, no tamper-evidence, no long-term validation.
+`ap2_evidence.py` turns a set of SD-JWT mandates into **one self-contained evidence file** that
+verifies **offline years later**: it validates each ES256 signature at build time, snapshots the
+key material with an explicit **provenance class** (`x5c_header` / `jwk_header` / `supplied` /
+`jwks_fetched` — declared, never dressed up), recomputes cross-mandate hash **bindings** from the
+exact compact serializations, and seals everything under a SHA-256 digest with an optional
+RFC 3161 timestamp:
+
+```bash
+python3 opencore/ap2_evidence.py build ev.json intent=intent.sdjwt cart=cart.sdjwt --tsa http://tsa.izenpe.com
+python3 opencore/ap2_evidence.py verify ev.json     # offline, fail-closed
+```
+
+Honest scope: proves these exact artifacts verified with this key material at build time (and
+existed at the TSA's time, if stamped). It does **not** confer eIDAS art. 45j qualified-archive
+legal presumption and does not validate x5c chains to a trust anchor. ES256 only, loudly.
+Tests: `python3 opencore/test_ap2_evidence.py`. Also exposed read-only as the MCP tool
+`verify_ap2_evidence`.
+
 ### Auditor-facing report (PDF/HTML)
 
 An ISO inspector or an EU regulator expects a formal document, not JSON on a terminal.
@@ -258,6 +280,59 @@ with the HSM/KMS backends the private key never enters the server process.
 Tests: `python3 opencore/test_mcp.py` — over the real stdio transport, gate refusals and
 tampered-ledger failure proven before the positive path.
 Honest scope: sealing proves what/when/order/who-signed — never the truth of the recorded facts.
+
+## DORA ICT-incident evidence (EU, evidence-driven enforcement)
+
+Under EU DORA, supervisors moved to *evidence-driven* enforcement in 2026: they want
+**timestamps, classification rationales and log trails — not policy PDFs**. Major ICT incidents
+follow a hard reporting lifecycle: initial notification within **4h** of major classification
+(24h backstop), intermediate within **72h**, final within **1 month**.
+
+`dora_incident.py` makes that lifecycle **tamper-evident and reproducible**: each phase
+(detected → classified → initial/intermediate/final) is a canonical, hash-chained record, and
+the DORA deadlines are checked against the *recorded* timestamps — a regulator recomputes the
+same verdicts from the records alone, then re-verifies with the unified verifier. Seal the chain
+head with a qualified eIDAS timestamp (`cryptovalid_tsa`) for legal-grade time.
+`python3 dora_incident.py attest phases.json --incident-id INC-1` / `verify att.json phases.json`.
+
+Honest scope (the boundary never moves): **proof-of-integrity + timeline + deadline-check, NOT a
+DORA compliance certificate** and NOT proof that the major/significant classification is correct
+(the entity's judgement, reviewed by its auditor). Complements web-evidence anchoring tools by
+covering the part they leave open: the incident lifecycle and its deadlines.
+
+## Transaction evidence for tax/audit (IRS Form 1099-DA era)
+
+From 2026 US brokers must report crypto cost basis (Form 1099-DA) — but NOT for assets acquired
+before 2026, nor for non-custodial/DeFi activity: the taxpayer must track and, on audit, *prove*
+their own transactions. Tax software computes the numbers; it does not give evidence that survives
+an audit without trusting the software.
+
+`tx_evidence.py` fills exactly that gap: it canonicalizes each transaction deterministically,
+hash-chains the set (tamper-evident), and re-derives the cost basis with a **declared, deterministic
+FIFO** method — so a third party (an auditor, the IRS) recomputes the **same numbers** from the same
+records. `python3 tx_evidence.py attest transactions.json` / `verify attestation.json transactions.json`.
+
+Honest scope (the boundary never moves): **proof-of-integrity + proof-of-reproducibility, NOT tax
+advice and NOT proof of tax-correctness** — it does not pick your accounting method, apply
+wash-sale/jurisdiction rules, or certify compliance. Those remain the taxpayer's and their advisor's.
+
+## Long-term evidence defenders (WORM · re-anchor · heterogeneous anchors)
+
+Three capabilities that keep evidence sound *over years*, each a runnable tool now:
+
+- **`cryptovalid_worm.py`** — WORM escrow of the *record* (not just its hash): append-only,
+  overwrite refused, GDPR crypto-shredding of the key. Meets immutable-retention rules
+  (SEC Rule 17a-4, MiCA 5–7 years). `python3 cryptovalid_worm.py put <store> <key> <file>`.
+- **`cryptovalid_reanchor.py`** — public-RPC anchors lose witnesses as nodes prune history
+  (an "auto-DoS" of the evidence, measured). This assesses decay and flags when to re-anchor
+  *before* the evidence becomes unreachable. `python3 cryptovalid_reanchor.py <retention.json> --age-days N`.
+  Run it on a timer; re-anchoring itself is an on-chain tx and stays human-gated.
+- **`cryptovalid_heterogeneous.py`** — real fault-independence: N *distinct* trust domains
+  (Solana + Bitcoin/OTS + eIDAS QTSP), not replicas of one chain. Same-domain replicas count
+  once. `python3 cryptovalid_heterogeneous.py <sha3_hex> <attestations.json> --min-domains 2`.
+
+Honest scope: these harden *availability, retention and robustness* of the evidence — not the
+truth of its content (that boundary never moves).
 
 ## Threat model (honest — hardened after adversarial review)
 

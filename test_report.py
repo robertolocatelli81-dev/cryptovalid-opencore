@@ -151,3 +151,72 @@ class TestNoRendererVerdict(_Base):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestSolanaAnchor(_Base):
+    """Seconda ancora (Solana) nel report: 4 stati onesti, legatura al pack, rete stubbata
+    (il protocollo on-chain vero è coperto da test_cryptovalid_solana)."""
+
+    def _manifest(self):
+        with open(os.path.join(self.pack, "MANIFEST.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def _write_anchor(self, digest):
+        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+            json.dump({"tx_signature": "5" * 64, "digest_sha3_hex": digest}, f)
+
+    def test_absent_anchor_is_honest_na(self):
+        r = report.generate_report(self.pack, html_only=True)
+        self.assertEqual(r["solana"], {"present": False, "checked": False, "verified": None})
+        doc = open(r["html"], encoding="utf-8").read()
+        self.assertIn("Solana mainnet anchor", doc)
+        self.assertIn("NOT ANCHORED", doc)
+
+    def test_unbound_anchor_fails_offline(self):
+        # il banco deve saper fallire: ancora valida-ma-ESTRANEA respinta SENZA rete
+        self._write_anchor("a" * 64)
+        r = report.generate_report(self.pack, html_only=True)
+        self.assertIs(r["solana"]["verified"], False)
+        self.assertIn("NOT bound", r["solana"]["note"])
+        self.assertIn("VERIFICATION FAILED", open(r["html"], encoding="utf-8").read())
+
+    def test_bound_anchor_recorded_not_checked_by_default(self):
+        self._write_anchor(report.solana_anchor_digest(self._manifest()))
+        r = report.generate_report(self.pack, html_only=True)
+        self.assertIsNone(r["solana"]["verified"])
+        self.assertFalse(r["solana"]["checked"])
+        self.assertIn("RECORDED, NOT VERIFIED", open(r["html"], encoding="utf-8").read())
+
+    def test_bound_anchor_checked_with_injected_verifier(self):
+        d = report.solana_anchor_digest(self._manifest())
+        self._write_anchor(d)
+        import cryptovalid_solana as sol
+        orig, calls = sol.verify_solana_anchor, {}
+
+        def fake_ok(sig, exp, **kw):
+            calls["args"] = (sig, exp)
+            return {"ok": True, "checks": [],
+                    "onchain": {"signature": sig, "slot": 1, "witnesses": 2,
+                                "block_time": 0, "signer": "S", "digests": [exp]}}
+
+        def fake_bad(sig, exp, **kw):
+            return {"ok": False, "onchain": None,
+                    "checks": [{"check": "expected digest present in canonical spl-memo",
+                                "ok": False, "note": ""}]}
+
+        sol.verify_solana_anchor = fake_ok
+        try:
+            r = report.generate_report(self.pack, html_only=True, solana=True)
+        finally:
+            sol.verify_solana_anchor = orig
+        self.assertIs(r["solana"]["verified"], True)
+        self.assertEqual(calls["args"][1], d)          # verifica ESATTAMENTE il digest legato
+        self.assertIn("VERIFIED", open(r["html"], encoding="utf-8").read())
+
+        sol.verify_solana_anchor = fake_bad
+        try:
+            r2 = report.generate_report(self.pack, html_only=True, solana=True)
+        finally:
+            sol.verify_solana_anchor = orig
+        self.assertIs(r2["solana"]["verified"], False)
+        self.assertIn("spl-memo", r2["solana"]["note"])

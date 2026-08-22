@@ -86,7 +86,13 @@ def portfolio_at_risk(p: LoanPortfolio, days: int = 30) -> Dict:
     for loan in p.loans:
         o = Decimal(F._canon_quantity(loan.principal_outstanding))
         outstanding += o
-        if int(float(loan.days_overdue or "0")) > days:
+        # un valore days_overdue sporco ("n/a", "30+") NON deve abbattere l'intero
+        # portafoglio: fail-closed sul singolo record (conta come a-rischio, segnala)
+        try:
+            overdue = int(float(loan.days_overdue or "0"))
+        except (ValueError, TypeError):
+            overdue = days + 1        # non-parsabile → prudenza: a rischio
+        if overdue > days:
             at_risk += o
     par = (at_risk / outstanding) if outstanding > 0 else Decimal(0)
     return {"days": days, "outstanding": str(outstanding), "at_risk": str(at_risk),

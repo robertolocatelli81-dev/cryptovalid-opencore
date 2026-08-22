@@ -109,6 +109,13 @@ def t_verify_pack(args: Dict) -> Dict:
     return {"result": r, "provenance": _prov(man, _sha256_file(man))}
 
 
+def t_verify_ap2_evidence(args: Dict) -> Dict:
+    import ap2_evidence
+    path = args["path"]
+    r = ap2_evidence.verify_evidence(path)
+    return {"result": r, "provenance": _prov(path, _sha256_file(path))}
+
+
 def t_verify_archive(args: Dict) -> Dict:
     d = args["directory"]
     r = ingest.verify_archive(
@@ -171,6 +178,15 @@ _TOOLS = {
                         "token). READ-ONLY, fail-closed; returns verdict + provenance."),
         "schema": {"type": "object", "required": ["pack_dir"],
                    "properties": {"pack_dir": {"type": "string"}}}},
+    "verify_ap2_evidence": {
+        "fn": t_verify_ap2_evidence, "readonly": True,
+        "description": ("Offline re-verification of an ap2-evidence-pack file (agentic-payment "
+                        "SD-JWT mandates): digest, every ES256 signature with the SNAPSHOTTED "
+                        "key material, disclosures, cross-artifact hash bindings, RFC 3161 token. "
+                        "READ-ONLY, fail-closed; reports each key's provenance_class honestly."),
+        "schema": {"type": "object", "required": ["path"],
+                   "properties": {"path": {"type": "string",
+                                           "description": "path to the evidence .json file"}}}},
     "verify_archive": {
         "fn": t_verify_archive, "readonly": True,
         "description": ("Verify a whole ingestion archive: segment chains, Merkle STH chain, "

@@ -120,3 +120,28 @@ def retrieve_record(record_id: str, key_id: str, worm: LocalWormStore, keyring: 
     blob = worm.get(record_id)
     nonce, ct = blob[:12], blob[12:]
     return AESGCM(key).decrypt(nonce, ct, record_id.encode())     # AES-GCM: manomissione → InvalidTag
+
+
+def main(argv=None):
+    import argparse
+    import sys
+    p = argparse.ArgumentParser(prog="cryptovalid-worm",
+                                description="WORM escrow store — retention immutabile del dato (SEC 17a-4).")
+    sub = p.add_subparsers(dest="cmd")
+    pp = sub.add_parser("put")
+    pp.add_argument("store"); pp.add_argument("key"); pp.add_argument("file")
+    pg = sub.add_parser("get")
+    pg.add_argument("store"); pg.add_argument("key")
+    a = p.parse_args(sys.argv[1:] if argv is None else argv)
+    if a.cmd == "put":
+        with open(a.file, "rb") as f:
+            print(json.dumps(LocalWormStore(a.store).put(a.key, f.read())))
+        return 0
+    if a.cmd == "get":
+        sys.stdout.buffer.write(LocalWormStore(a.store).get(a.key))
+        return 0
+    p.print_help(); return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
