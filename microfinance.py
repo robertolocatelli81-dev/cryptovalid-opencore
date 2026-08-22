@@ -9,8 +9,15 @@ vedere dati personali.
 
 CONFINE (onesto, uguale a CryptoValid): è **proof-of-integrity**, NON proof-of-veracity. Attesta la COERENZA dei
 numeri forniti e li rende tamper-evident; NON verifica che i prestiti esistano davvero né che siano ben concessi.
-PRIVACY (DPG indicator 7/9a): l'identità del beneficiario è **hashata** (`hash_borrower`) — nessun PII entra nel
-digest o nei record. L'MFI hasha lato suo con un salt che non condivide.
+PRIVACY (DPG indicator 7/9a) — HONEST-SCOPE, corretto 2026-08-22 (council + GDPR Recital 26):
+- Su un SINGOLO portafoglio l'MFI usa un salt **per-istituto** che NON condivide → il `borrower_ref` non è
+  linkabile fra istituti (pseudonimo locale).
+- Il **cross-MFI** (`borrower_debt_exposure`/`over_indebtedness`, microdebito) funziona SOLO se gli istituti
+  **condividono lo schema di hash** (salt condiviso): allora il `borrower_ref` diventa uno pseudonimo
+  **stabile e linkabile fra istituti** che, sotto GDPR **Recital 26**, **È dato personale pseudonimizzato**
+  (la pseudonimizzazione NON è anonimizzazione). In quel caso il titolare del trattamento è l'operatore.
+Nessun nome/PII in chiaro entra mai nel digest o nei record; ma il "no-PII by design" vale per il singolo
+portafoglio, NON per il matching cross-MFI. Vedi DO_NO_HARM.md e spec/SPEC_MICROFINANCE.md (fix: PSI/ZK).
 
 Riuso reale del motore FUNDCERT: `_canon_quantity`, `evidence_record`, `canonicalizer_fingerprint`, `reconcile`.
 """

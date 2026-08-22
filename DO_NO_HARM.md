@@ -38,3 +38,24 @@ CryptoValid makes records **tamper-evident**; it cannot make a *false* record *t
 **proof-of-integrity, not proof-of-veracity** (an operator that seals wrong data seals it faithfully; the digest
 proves only that it was not altered afterwards). It is a **defensive** transparency tool: it strengthens
 accountability, and provides no offensive capability. The confine is explicit throughout the docs and specs.
+
+## Optional microfinance module — pseudonymisation & exclusion risk (honest disclosure)
+
+The optional `microfinance.py` module is **outside the scope of this DPG nomination** (which claims only SDG 16
+and 9), but it ships in the repository, so its risks are disclosed here — not hidden.
+
+- **Pseudonymised data IS personal data in the cross-institution case.** A single MFI portfolio uses a
+  **per-institution salt** for `hash_borrower()`, so the borrower reference is not linkable across institutions.
+  The **cross-MFI over-indebtedness** feature, however, only works when institutions **share the hashing scheme**
+  (a shared salt): the borrower reference then becomes a **stable, linkable pseudonym**, which **is personal data**
+  under GDPR Recital 26 (pseudonymisation is not anonymisation). This is a genuine limitation, not a claim of
+  anonymity.
+- **Exclusion / blacklisting risk.** An over-indebtedness flag is dual-use: it can *protect* a borrower from a
+  debt trap, or be misused as a **credit-exclusion blacklist** against poor borrowers. The tool computes and
+  attests numbers; it makes **no automated decision** about any person and must not be used as the sole basis to
+  deny credit.
+- **Controller responsibility.** In any deployment touching a subject, the **hosting operator is the data
+  controller**, responsible for the lawful basis, consent, and data-subject requests. The software provides
+  local isolation and pseudonymisation, not a lawful basis.
+- A privacy-preserving cross-MFI design (PSI / blinded pseudonyms / ZK) is **future work**, required **before**
+  claiming any financial-inclusion (SDG 1/8/10) impact. See `spec/SPEC_MICROFINANCE.md`.
