@@ -63,9 +63,12 @@ Certifies the record of a decision even when the model is **not reproducible**.
 - RCE proves **integrity** of the evidence (unaltered, internally consistent) and — for deterministic methods —
   **reproducibility** of the result. It does **NOT** prove the recorded facts are true (proof-of-integrity, not
   proof-of-veracity), nor that a decision was correct/fair, nor make a non-deterministic AI reproducible.
-- **Executability over decades is out of scope.** RCE flags `METHOD_DRIFT` but assumes the pinned method is still
-  runnable; preserving the runtime for re-execution in future decades (containers/emulation) is a separate,
-  infrastructure-level problem RCE does not solve.
+- **Executability — attestation is in scope, preservation is not.** RCE flags `METHOD_DRIFT` on the method
+  version, and an optional **executability attestation** (record type C) pins the runtime *manifest* (Python
+  version, implementation, architecture, dependency versions, method-source hash) so a later verifier can
+  **detect** `ENVIRONMENT_DRIFT` and know whether a re-execution is on the same stack. It does **NOT** preserve or
+  reconstruct the runtime: resurrecting a dead environment for re-execution in future decades (containers/
+  emulation) remains a separate, infrastructure-level problem RCE does not solve. Reference: `executability_attestation.py`.
 - **Anchoring in time** (that the record existed at time T) is delegated to independent witnesses — RFC 3161
   timestamps, OpenTimestamps→Bitcoin — see `SPEC_EVIDENCE_FORMAT.md`. **Long-term crypto-agility** (the hash/
   signature ageing) is delegated to a renewal chain (eIDAS-LTA / RFC 4998 style).
