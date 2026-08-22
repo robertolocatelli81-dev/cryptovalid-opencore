@@ -33,8 +33,15 @@ DIVISIONE ONESTA DEL LAVORO (honest-scope):
   la radice DEVE essere ANCORATA ESTERNAMENTE al momento dell'attestazione (ledger CLDMA / RFC3161 TSA /
   Solana) perche' completezza e non-troncamento contino. Mitigato in parte: indice nella foglia (anti-riordino)
   + n legato alla radice (cattura n incoerente). La completezza piena resta fuori schema (come CLDMA E4).
-- MITIGAZIONE onesta del range SENZA Bulletproofs (council): APERTURA A CAMPIONE (spot-check) delle foglie
-  sfidate dal regolatore -- riusa la challenge di CLDMA -- coglie probabilisticamente i contributi fuori-range.
+- MITIGAZIONE del range SENZA Bulletproofs (council) -- IMPLEMENTATA: SPOT-CHECK a campione
+  (`challenge_indices`/`open_challenged`/`verify_challenged`): il regolatore sfida k foglie (indici da beacon
+  = hash(root||nonce) DOPO l'attestazione), il prover le apre, si controlla 0<=num<=den<=MAX_SANE. Coglie il
+  -k (q-k >> den) e l'overflow con detection PROBABILISTICA 1-(1-f)^k. Alza la soundness da ZERO a
+  probabilistica restando STDLIB e senza ZK. Rivela solo le foglie campionate (privacy ridotta sul campione).
+  NB: verifica il RANGE dei contributi; la CLASSIFICAZIONE onesta (che num/den seguano la definizione della
+  metrica sul record) richiederebbe di aprire anche il RECORD sfidato (come la challenge piena di CLDMA) = piu'
+  privacy spesa -> layer ulteriore, qui non incluso. Le prove di RANGE in ZK (Bulletproofs) restano l'alternativa
+  pesante e a zero-privacy-cost, ma NON stdlib e MAI a mano.
 - La guardia `if num<0 raise` in build e' solo HONEST-PATH: un prover malevolo pubblica il dict `att`
   direttamente, non passa da build -> NON e' una difesa (lo dice il council). verify_total_opening ora e'
   SELF-CONTAINED (ricomputa i totali dalle foglie e verifica la radice: non si fida del campo pubblicato).
@@ -167,6 +174,52 @@ def verify_total_opening(att: Dict, opening: Dict) -> Dict:
     if not reasons and opening["den_total"]:
         ratio = opening["num_total"] / opening["den_total"]
     return {"ok": not reasons, "reasons": reasons, "ratio": ratio}
+
+
+# --------------------------------------------------------------------------- #
+#  MITIGAZIONE onesta del range SENZA Bulletproofs: SPOT-CHECK a campione (council 2026-08-22)
+#  Alza la soundness da ZERO a PROBABILISTICA (detection = 1-(1-f)^k) restando stdlib e senza ZK.
+#  Riusa la challenge di CLDMA (indici da beacon pubblico = hash(root||nonce)). NON e' zero-knowledge:
+#  rivela i contributi delle SOLE foglie campionate (privacy ridotta sul campione, non azzerata).
+# --------------------------------------------------------------------------- #
+MAX_SANE = 10 ** 18  # limite di sanita' dichiarato (unita' minori): oltre = fuori range (coglie q-k e overflow)
+
+
+def challenge_indices(att: Dict, nonce: str, k: int) -> List[int]:
+    """k indici da sfidare, deterministici da (radice, nonce). REQUISITO (CLDMA E2): il `nonce` DEVE venire
+    dal VERIFICATORE/beacon DOPO l'attestazione, altrimenti il prover lo macina per evitare le foglie barate."""
+    return _C.challenge(att["root"], nonce, k, att["n_records"])
+
+
+def open_challenged(att: Dict, secret: Dict, indices: List[int]) -> List[Dict]:
+    """Il prover apre SOLO le foglie sfidate (valore + randomizer), non tutte."""
+    return [{"index": i, "num": secret["nums"][i], "r_num": secret["r_nums"][i],
+             "den": secret["dens"][i], "r_den": secret["r_dens"][i]} for i in indices]
+
+
+def verify_challenged(att: Dict, opened: List[Dict]) -> Dict:
+    """Per ogni foglia sfidata: (a) l'apertura combacia con l'impegno pubblicato; (b) RANGE:
+    0 <= num <= den <= MAX_SANE (non-negativita' + bound + sanita') -> coglie il -k (q-k e' enorme > den) e
+    l'overflow. Se una foglia barata e' campionata, FALLISCE. Honest-scope: detection PROBABILISTICA."""
+    reasons: List[str] = []
+    if not opened:
+        return {"ok": False, "reasons": ["nessuna foglia aperta (challenge vuoto) = assurance nulla"]}
+    for o in opened:
+        i = o["index"]
+        leaf = att["leaves"][i]
+        if not _P.open_commit(leaf["c_num"], o["num"], o["r_num"]):
+            reasons.append(f"foglia {i}: c_num non apre al valore dichiarato")
+        if not _P.open_commit(leaf["c_den"], o["den"], o["r_den"]):
+            reasons.append(f"foglia {i}: c_den non apre al valore dichiarato")
+        if not (0 <= o["num"] <= o["den"] <= MAX_SANE):
+            reasons.append(f"foglia {i}: FUORI RANGE (num={o['num']}, den={o['den']}) -> contributo "
+                           f"negativo/overflow (attacco -k) o valore assurdo")
+    return {"ok": not reasons, "reasons": reasons, "n_checked": len(opened)}
+
+
+def detection_probability(fraction_bad: float, k: int) -> float:
+    """P(almeno una sfida colpisce una foglia barata) = 1-(1-f)^k. Honest-scope dello spot-check."""
+    return _C.detection_probability(fraction_bad, k)
 
 
 if __name__ == "__main__":

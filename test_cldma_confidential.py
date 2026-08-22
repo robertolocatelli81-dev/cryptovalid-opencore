@@ -102,5 +102,58 @@ class TestBindingFixesCouncil(unittest.TestCase):
         self.assertFalse(CC.verify_total_opening(att, op)["ok"])
 
 
+class TestSpotCheckMitigation(unittest.TestCase):
+    """Lo spot-check DEVE cogliere l'attacco -k quando la foglia barata e' campionata (controllo positivo)."""
+
+    def _attack_att(self):
+        # prover malevolo: foglia 0 impegna num = q-500 ("-500"); tutto il resto coerente
+        att, secret = _mk()
+        bad_num = (P.Q - 500) % P.Q
+        cbad, rbad = P.commit(bad_num)
+        att["leaves"][0]["c_num"] = cbad
+        att["C_num_total"] = P.add(cbad, att["leaves"][1]["c_num"])
+        lh = [CC._leaf_hash(i, l["record_commit"], l["c_num"], l["c_den"]) for i, l in enumerate(att["leaves"])]
+        att["root"] = CC._bound_root(CC._merkle_root(lh), att["metric_id"], att["as_of"], len(att["leaves"]))
+        secret["nums"][0] = bad_num
+        secret["r_nums"][0] = rbad
+        return att, secret
+
+    def test_spotcheck_catches_negative_when_sampled(self):
+        att, secret = self._attack_att()
+        opened = CC.open_challenged(att, secret, [0])          # foglia barata campionata
+        r = CC.verify_challenged(att, opened)
+        self.assertFalse(r["ok"])
+        self.assertTrue(any("FUORI RANGE" in x for x in r["reasons"]))
+
+    def test_spotcheck_honest_passes(self):
+        att, secret = _mk()
+        idx = CC.challenge_indices(att, "verifier-nonce", 2)
+        self.assertTrue(CC.verify_challenged(att, CC.open_challenged(att, secret, idx))["ok"])
+
+    def test_spotcheck_tampered_opening_fails(self):
+        att, secret = _mk()
+        opened = CC.open_challenged(att, secret, [0])
+        opened[0]["r_num"] += 1                                # apertura con randomizer errato
+        self.assertFalse(CC.verify_challenged(att, opened)["ok"])
+
+    def test_spotcheck_num_gt_den_caught(self):
+        att, secret = _mk()
+        # rivela un'apertura con num>den (impegno coerente ma classificazione impossibile): colta dal range
+        att2, secret2 = _mk()
+        opened = CC.open_challenged(att, secret, [0])
+        opened[0]["num"], opened[0]["den"] = 999999, 1        # non aprira' l'impegno -> comunque FAIL
+        self.assertFalse(CC.verify_challenged(att, opened)["ok"])
+
+    def test_empty_challenge_no_assurance(self):
+        att, _ = _mk()
+        self.assertFalse(CC.verify_challenged(att, [])["ok"])
+
+    def test_detection_probability_monotone(self):
+        p1 = CC.detection_probability(0.1, 5)
+        p2 = CC.detection_probability(0.1, 20)
+        self.assertGreater(p2, p1)                             # piu' sfide -> piu' detection
+        self.assertGreater(p1, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
