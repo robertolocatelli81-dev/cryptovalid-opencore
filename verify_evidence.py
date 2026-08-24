@@ -178,6 +178,84 @@ def verify_cldma(path: str) -> dict:
 
 # ─────────────────────────────────────────────────── auto-detect
 
+# ───────────────────────────────────────── pack di settore (OMEGA compliance/*)
+
+# I 6 evidence pack multi-settore (OMEGA 2026-08-24). Formato: JSON piatto con
+# "kind", "honest_scope" e "pack_sha3" = SHA3-256 del pack SENZA il campo
+# pack_sha3, in serializzazione canonica (sort_keys, separatori stretti).
+SECTOR_PACK_KINDS = {
+    "ai_act_art12_evidence_pack": "EU AI Act Art.12 record-keeping",
+    "cra_evidence_pack": "Cyber Resilience Act (SBOM + vuln handling)",
+    "art50_evidence_pack": "AI Act Art.50 content transparency",
+    "part11_evidence_pack": "FDA 21 CFR Part 11 audit trail",
+    "supplychain_evidence_pack": "EUDR due diligence + DPP",
+    "eudi_acceptance_evidence_pack": "eIDAS 2.0 EUDI relying-party",
+}
+
+
+def _canonical_sha3(obj) -> str:
+    """Ri-calcolo del pack_sha3. DUPLICAZIONE SORVEGLIATA (deliberata): per dati
+    CARICATI DA JSON questa serializzazione è byte-identica alla canonical_json
+    dell'ADCL (il type-tagging dell'ADCL scatta solo su tipi non-JSON, che qui
+    non possono esistere). Un test in tests/test_multisector_demo.py verifica
+    che i due hash NON divergano — se qualcuno cambia uno dei due, si vede lì."""
+    import hashlib
+    data = json.dumps(obj, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=True, allow_nan=False).encode("utf-8")
+    return hashlib.sha3_256(data).hexdigest()
+
+
+def verify_sector_pack(path: str, ledger_path: str | None = None) -> dict:
+    """Verifica un evidence pack di settore: JSON valido + kind noto +
+    honest_scope DICHIARATO (parte del formato: un pack senza limiti espliciti
+    è respinto) + pack_sha3 ricalcolato. Se accanto al pack c'è il ledger
+    (stesso nome con suffisso .ledger.jsonl, o passato esplicito) verifica
+    anche la hash-chain; altrimenti SKIP onesto."""
+    layers = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            pack = json.load(f)
+        layers.append(_layer("pack-json", "PASS"))
+    except (OSError, ValueError) as e:
+        return _rollup("sector_pack", [_layer("pack-json", "FAIL", str(e))])
+
+    kind = pack.get("kind", "")
+    if kind in SECTOR_PACK_KINDS:
+        layers.append(_layer("pack-kind", "PASS", SECTOR_PACK_KINDS[kind]))
+    else:
+        layers.append(_layer("pack-kind", "FAIL", f"kind sconosciuto: {kind!r}"))
+
+    scope = pack.get("honest_scope", "")
+    if scope and "NOT" in scope:
+        layers.append(_layer("honest-scope", "PASS", "limiti dichiarati nel pack"))
+    else:
+        layers.append(_layer("honest-scope", "FAIL",
+                             "pack senza honest_scope esplicito: respinto"))
+
+    declared = pack.get("pack_sha3", "")
+    body = {k: v for k, v in pack.items() if k != "pack_sha3"}
+    computed = _canonical_sha3(body)
+    if declared and declared == computed:
+        layers.append(_layer("pack-sha3", "PASS"))
+    else:
+        layers.append(_layer("pack-sha3", "FAIL",
+                             f"dichiarato {declared[:16]}… ≠ calcolato {computed[:16]}…"))
+
+    lp = ledger_path
+    if lp is None:
+        cand = path[:-5] + ".ledger.jsonl" if path.endswith(".json") else path + ".ledger.jsonl"
+        lp = cand if os.path.exists(cand) else None
+    if lp:
+        lr = verify_ledger(lp)
+        ok = lr.get("valid")
+        layers.append(_layer("ledger-chain", "PASS" if ok else "FAIL",
+                             f"{lp} ({len(lr.get('layers', []))} strati)"))
+    else:
+        layers.append(_layer("ledger-chain", "SKIP",
+                             "ledger non fornito accanto al pack (onesto)"))
+    return _rollup(f"sector_pack:{kind or 'unknown'}", layers)
+
+
 def verify_auto(path: str) -> dict:
     """Rileva il tipo dell'artefatto e instrada al verificatore giusto."""
     if os.path.isdir(path):
@@ -199,6 +277,8 @@ def verify_auto(path: str) -> dict:
         return verify_ap2(path)
     if '"root_hash"' in head and ('"metric_id"' in head or "CLDMA" in head):
         return verify_cldma(path)
+    if '_evidence_pack"' in head and '"kind"' in head:
+        return verify_sector_pack(path)
     return verify_ledger(path)
 
 
@@ -214,11 +294,12 @@ def _rollup(kind: str, layers: list) -> dict:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="verify_evidence",
                                 description="Un verificatore per TUTTA l'evidenza CryptoValid, offline")
-    p.add_argument("cmd", choices=["auto", "pack", "archive", "ledger", "ap2", "cldma"])
+    p.add_argument("cmd", choices=["auto", "pack", "archive", "ledger", "ap2", "cldma", "sector"])
     p.add_argument("path")
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     fn = {"auto": verify_auto, "pack": verify_pack, "archive": verify_archive,
-          "ledger": verify_ledger, "ap2": verify_ap2, "cldma": verify_cldma}[a.cmd]
+          "ledger": verify_ledger, "ap2": verify_ap2, "cldma": verify_cldma,
+          "sector": verify_sector_pack}[a.cmd]
     r = fn(a.path)
     print(json.dumps(r, ensure_ascii=False, indent=1))
     return 0 if r["valid"] else 1
