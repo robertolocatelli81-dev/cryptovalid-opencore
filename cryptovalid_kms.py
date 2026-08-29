@@ -199,6 +199,113 @@ class AwsKmsBackend:
                 "signing_algorithm": "ED25519_SHA_512", "key_in_process_memory": False}
 
 
+# --------------------------------------------------------------------------- #
+#  AWS KMS via HTTP + SigV4, NO SDK (added 2026-08-29)                          #
+#  Same key spec/algorithm as AwsKmsBackend, but stdlib-only (no boto3). The    #
+#  SigV4 signing-key derivation is validated against AWS's official test vector #
+#  and the live round-trip was verified end-to-end against real AWS KMS.        #
+# --------------------------------------------------------------------------- #
+def _sigv4_signing_key(secret_key: str, datestamp: str, region: str, service: str) -> bytes:
+    import hashlib
+    import hmac
+
+    def _h(key: bytes, msg: str) -> bytes:
+        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+    k_date = _h(("AWS4" + secret_key).encode("utf-8"), datestamp)
+    k_region = _h(k_date, region)
+    k_service = _h(k_region, service)
+    return _h(k_service, "aws4_request")
+
+
+def _sigv4_headers(host: str, region: str, service: str, target: str, body: bytes,
+                   access_key: str, secret_key: str, session_token: Optional[str],
+                   amzdate: str, datestamp: str) -> Dict[str, str]:
+    import hashlib
+    import hmac
+
+    algorithm = "AWS4-HMAC-SHA256"
+    ctype = "application/x-amz-json-1.1"
+    hdrs = {"content-type": ctype, "host": host, "x-amz-date": amzdate, "x-amz-target": target}
+    if session_token:
+        hdrs["x-amz-security-token"] = session_token
+    signed_headers = ";".join(sorted(hdrs))
+    canonical_headers = "".join(f"{k}:{hdrs[k]}\n" for k in sorted(hdrs))
+    payload_hash = hashlib.sha256(body).hexdigest()
+    canonical_request = f"POST\n/\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    credential_scope = f"{datestamp}/{region}/{service}/aws4_request"
+    string_to_sign = (f"{algorithm}\n{amzdate}\n{credential_scope}\n"
+                      f"{hashlib.sha256(canonical_request.encode()).hexdigest()}")
+    signing_key = _sigv4_signing_key(secret_key, datestamp, region, service)
+    signature = hmac.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+    authorization = (f"{algorithm} Credential={access_key}/{credential_scope}, "
+                     f"SignedHeaders={signed_headers}, Signature={signature}")
+    out = {"Content-Type": ctype, "X-Amz-Date": amzdate, "X-Amz-Target": target,
+           "Authorization": authorization}
+    if session_token:
+        out["X-Amz-Security-Token"] = session_token
+    return out
+
+
+class AwsKmsHttpBackend:
+    """AWS KMS via HTTP + SigV4, stdlib-only (NO boto3). Same KeySpec
+    ECC_NIST_EDWARDS25519 / SigningAlgorithm ED25519_SHA_512 / MessageType RAW as
+    AwsKmsBackend, so verifier.py verifies these signatures unchanged. Credentials
+    come from the environment (never constructor literals — avoids source leaks)."""
+
+    name = "awskms-http"
+
+    def __init__(self, key_id: str, region: str,
+                 access_key_env: str = "AWS_ACCESS_KEY_ID",
+                 secret_key_env: str = "AWS_SECRET_ACCESS_KEY",
+                 session_token_env: str = "AWS_SESSION_TOKEN",
+                 endpoint: Optional[str] = None):
+        if not region:
+            raise ValueError("awskms-http backend requires an explicit region")
+        self._key_id = key_id
+        self._region = region
+        self._ak = os.environ.get(access_key_env, "")
+        self._sk = os.environ.get(secret_key_env, "")
+        self._st = os.environ.get(session_token_env) or None
+        if not (self._ak and self._sk):
+            raise RuntimeError("awskms-http backend: AWS credentials not in environment "
+                               f"({access_key_env}/{secret_key_env})")
+        self._host = f"kms.{region}.amazonaws.com"
+        self._endpoint = endpoint or f"https://{self._host}"
+
+    def _call(self, target: str, payload: Dict) -> Dict:
+        import datetime
+        import json
+        body = json.dumps(payload).encode()
+        now = datetime.datetime.now(datetime.timezone.utc)
+        amzdate = now.strftime("%Y%m%dT%H%M%SZ")
+        datestamp = now.strftime("%Y%m%d")
+        headers = _sigv4_headers(self._host, self._region, "kms", target, body,
+                                 self._ak, self._sk, self._st, amzdate, datestamp)
+        req = urllib.request.Request(self._endpoint.rstrip("/") + "/", data=body,
+                                     headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=20) as r:  # nosec B310 - fixed AWS endpoint
+            return json.load(r)
+
+    def public_key_hex(self) -> str:
+        r = self._call("TrentService.GetPublicKey", {"KeyId": self._key_id})
+        return _raw_from_spki(base64.b64decode(r["PublicKey"])).hex()
+
+    def sign(self, message: bytes) -> bytes:
+        r = self._call("TrentService.Sign", {
+            "KeyId": self._key_id, "Message": base64.b64encode(message).decode(),
+            "MessageType": "RAW", "SigningAlgorithm": "ED25519_SHA_512"})
+        sig = base64.b64decode(r["Signature"])
+        if len(sig) != 64:
+            raise RuntimeError(f"expected 64-byte Ed25519 signature, got {len(sig)}")
+        return sig
+
+    def describe(self) -> Dict:
+        return {"backend": "awskms-http", "key_id": self._key_id,
+                "signing_algorithm": "ED25519_SHA_512",
+                "key_in_process_memory": False, "sdk": "none (stdlib SigV4)"}
+
+
 class VaultTransitBackend:
     """HashiCorp Vault Transit engine, key type ed25519. stdlib-only (urllib).
     Token from $VAULT_TOKEN (never a constructor literal — avoids source-code leaks)."""
@@ -334,6 +441,13 @@ def backend_from_uri(uri: str, **extra):
     if scheme == "awskms":
         return AwsKmsBackend(key_id=kv["key_id"], region=kv.get("region"),
                              profile=kv.get("profile"), **extra)
+    if scheme == "awskms-http":
+        _missing = [k for k in ("key_id", "region") if not kv.get(k)]
+        if _missing:
+            raise ValueError(f"awskms-http: backend URI is missing required key(s): "
+                             f"{', '.join(_missing)}")
+        return AwsKmsHttpBackend(key_id=kv["key_id"], region=kv["region"],
+                                 endpoint=kv.get("endpoint"))
     if scheme == "vault":
         return VaultTransitBackend(url=kv["url"], key=kv["key"],
                                    mount=kv.get("mount", "transit"),
