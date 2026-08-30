@@ -271,7 +271,19 @@ class AwsKmsHttpBackend:
             raise RuntimeError("awskms-http backend: AWS credentials not in environment "
                                f"({access_key_env}/{secret_key_env})")
         self._host = f"kms.{region}.amazonaws.com"
-        self._endpoint = endpoint or f"https://{self._host}"
+        if endpoint:
+            # security (asymmetry fix, 2026-08-29): a custom endpoint must be https OR a
+            # loopback host. An http/remote override would leak the session token in the
+            # SigV4 headers and let the signed requests (host pinned to kms.{region}) be
+            # replayed against real AWS — the same guard VaultTransitBackend already has.
+            u = urllib.parse.urlsplit(endpoint)
+            if u.scheme != "https" and (u.hostname or "").lower() not in (
+                    "127.0.0.1", "localhost", "::1"):
+                raise ValueError("awskms-http endpoint must be https (or a loopback host "
+                                 "for testing)")
+            self._endpoint = endpoint
+        else:
+            self._endpoint = f"https://{self._host}"
 
     def _call(self, target: str, payload: Dict) -> Dict:
         import datetime
