@@ -582,7 +582,6 @@ def parse_ssga_xlsx(path: str) -> Holdings:
     """Parser SSGA/SPDR holdings XLSX (stdlib zipfile+xml). Colonne: Name, Ticker, Identifier(CUSIP), SEDOL,
     Weight, Sector, Shares Held. Header con Ticker Symbol + 'Holdings: As of <data>'."""
     import re
-    import xml.etree.ElementTree as ET
     import zipfile
     NS = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
     z = zipfile.ZipFile(path)
@@ -659,7 +658,6 @@ def parse_holdings_csv(text: str, id_col: str = "ISIN", qty_col: str = "Shares",
 def parse_nport_xml(text: str, id_scheme: str = "CUSIP") -> Holdings:
     """Parser SEC N-PORT (EDGAR) — la fonte migliore per storico strutturato. Ogni <invstOrSec> ha
     identificatori (cusip/isin/ticker), <balance> (quantità) e valuta. Namespace-agnostico (tag locali)."""
-    import xml.etree.ElementTree as ET
 
     def local(t):
         return t.rsplit("}", 1)[-1]

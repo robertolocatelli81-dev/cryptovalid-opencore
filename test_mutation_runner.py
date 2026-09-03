@@ -4,7 +4,6 @@
 (non è truccato a 'tutti uccisi'). Controllo su un TOY module+test in tempdir (ermetico, niente produzione).
 """
 import os
-import subprocess
 import sys
 import tempfile
 import unittest

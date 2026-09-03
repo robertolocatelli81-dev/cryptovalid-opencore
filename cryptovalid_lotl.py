@@ -98,7 +98,8 @@ def is_qualified(token_der: bytes, qualified_fingerprints: set):
     return bool(token_cert_fingerprints(token_der) & qualified_fingerprints)
 
 def main(argv=None):
-    import argparse, base64
+    import argparse
+    import base64
     p = argparse.ArgumentParser(prog="cryptovalid_lotl",
                                 description="Certify an RFC 3161 token as eIDAS-qualified via the EU LOTL.")
     p.add_argument("token_b64", help="RFC 3161 TimeStampToken, base64 (from cryptovalid_tsa)")

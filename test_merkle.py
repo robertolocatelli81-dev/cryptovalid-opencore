@@ -3,7 +3,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Roberto Locatelli
 """Standalone test dell'estensione Merkle (RFC 6962): inclusione+consistenza verificano; manomissioni falliscono."""
-import hashlib, os, sys, unittest
+import hashlib
+import os
+import sys
+import unittest
 _HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, _HERE)
 import cryptovalid_merkle as M  # noqa: E402
 

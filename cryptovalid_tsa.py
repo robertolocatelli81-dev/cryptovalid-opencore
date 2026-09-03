@@ -12,9 +12,7 @@ TSP in the eIDAS EU Trusted List to obtain a *qualified* timestamp with enhanced
 Stdlib-only for the protocol (hand-rolled DER TimeStampReq + response parsing). Optional full
 token signature verification via the `openssl ts` CLI when available. No new Python dependencies.
 """
-import hashlib
 import os
-import struct
 import urllib.request
 
 # ── minimal DER ──
@@ -89,7 +87,9 @@ def verify_cms_signature(token_der: bytes):
     col certificato embedded, NON la catena di trust — la qualificazione della catena
     è il lavoro della LOTL, per impronta). Ritorna True/False, o None se openssl manca.
     Serve a respingere blob forgiati che contengono il digest senza essere CMS firmati."""
-    import shutil, subprocess, tempfile
+    import shutil
+    import subprocess
+    import tempfile
     if not shutil.which("openssl"):
         return None
     with tempfile.NamedTemporaryFile(delete=False) as tf:
@@ -105,7 +105,9 @@ def verify_cms_signature(token_der: bytes):
 
 def verify_with_openssl(token_der: bytes, digest_data: bytes):
     """Full RFC 3161 verification via `openssl ts` (signature + TSA cert), if openssl is installed."""
-    import shutil, subprocess, tempfile
+    import shutil
+    import subprocess
+    import tempfile
     if not shutil.which("openssl"):
         return None
     with tempfile.NamedTemporaryFile(delete=False) as tf, tempfile.NamedTemporaryFile(delete=False) as df:
@@ -131,7 +133,9 @@ def timestamp_sth(root_hex: str, tsa_url: str, timeout: int = 30):
             "tsa_url": tsa_url}
 
 def main(argv=None):
-    import argparse, base64, json
+    import argparse
+    import base64
+    import json
     p = argparse.ArgumentParser(prog="cryptovalid_tsa",
                                 description="RFC 3161 (qualified) timestamp over a digest / Merkle STH.")
     p.add_argument("digest_hex", help="SHA-256 digest hex (e.g. a Merkle STH root_sha256)")

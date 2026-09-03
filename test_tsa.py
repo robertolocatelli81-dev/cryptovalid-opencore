@@ -3,7 +3,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Roberto Locatelli
 """Standalone test of the RFC 3161 TSA client (offline-deterministic; live TSA test opt-in)."""
-import hashlib, os, subprocess, shutil, sys, unittest
+import hashlib
+import os
+import subprocess
+import shutil
+import sys
+import unittest
 _HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, _HERE)
 import cryptovalid_tsa as T  # noqa: E402
 

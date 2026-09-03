@@ -3,7 +3,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Roberto Locatelli
 """Standalone test of the eIDAS LOTL validation (offline-deterministic; live test opt-in)."""
-import base64, hashlib, os, sys, unittest
+import base64
+import hashlib
+import os
+import sys
+import unittest
 _HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, _HERE)
 import cryptovalid_lotl as L  # noqa: E402
 
@@ -49,7 +53,8 @@ class TestLOTL(unittest.TestCase):
         self.assertEqual(p, ["https://tsl.belgium.be/tsl-be-v6.xml"])
     @unittest.skipUnless(os.environ.get("CRYPTOVALID_LIVE_TSA"), "set CRYPTOVALID_LIVE_TSA=1 for live LOTL/TSA test")
     def test_live_freetsa_not_qualified(self):
-        import cryptovalid_tsa as T, urllib.request
+        import cryptovalid_tsa as T
+        import urllib.request
         d = hashlib.sha256(b"live").digest()
         _, token, _ = T.request_timestamp(d, "https://freetsa.org/tsr", timeout=25)
         qual = L.qtst_fingerprints(urllib.request.urlopen("https://tsl.belgium.be/tsl-be-v6.xml", timeout=40).read())

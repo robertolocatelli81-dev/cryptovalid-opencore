@@ -49,9 +49,9 @@ LIMITI TROVATI DA NEMESIS (2026-08-20) e loro stato:
 from __future__ import annotations
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
 
 SPEC_VERSION = "CLDMA-2"   # 2026-08-21: totali legati ESPLICITAMENTE alla radice (buco A)
 
@@ -445,7 +445,8 @@ def anchor_commitment(c: Commitment, timeout: int = 20) -> Dict:
     NON il contenuto ne' la completezza (E4). Degrada onesto: se offline -> {ok: False, error}."""
     digest = bytes.fromhex(c.root_hash)  # 32 byte
     try:
-        import sys as _sys, os as _os
+        import sys as _sys
+        import os as _os
         _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
         if _root not in _sys.path:
             _sys.path.insert(0, _root)
