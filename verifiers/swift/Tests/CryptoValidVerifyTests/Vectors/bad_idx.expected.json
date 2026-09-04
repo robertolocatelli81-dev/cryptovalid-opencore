@@ -1,0 +1,12 @@
+{
+ "input": "bad_idx.jsonl",
+ "normative": {
+  "algorithm": "sha256",
+  "chain_integrity": false,
+  "entries": 2,
+  "hash_failures_idx": [],
+  "link_failures_idx": [],
+  "verdict": "FAIL"
+ },
+ "reference_receipt_sha256": "0c1c1719a31cc4a634b0bd00f24cff1f926a9a7d2a6f5883648095d7b963eb9d"
+}

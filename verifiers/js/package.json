@@ -1,0 +1,14 @@
+{
+  "name": "@cryptovalid/verify",
+  "version": "0.1.0",
+  "description": "Independent, zero-dependency CryptoValid evidence-ledger verifier (Node stdlib only). Clean-room second implementation that agrees byte-for-byte with the reference, so an auditor can re-check offline in a different runtime.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "bin": { "cvverify": "./cvverify.mjs" },
+  "exports": { ".": "./cvverify.mjs" },
+  "scripts": { "test": "node test.mjs" },
+  "files": ["cvverify.mjs", "README.md"],
+  "keywords": ["cryptovalid", "audit", "hash-chain", "ed25519", "evidence", "offline", "air-gapped"],
+  "dependencies": {}
+}

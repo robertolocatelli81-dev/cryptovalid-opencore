@@ -1,0 +1,12 @@
+{
+ "input": "valid_sha3_256.jsonl",
+ "normative": {
+  "algorithm": "sha3_256",
+  "chain_integrity": true,
+  "entries": 2,
+  "hash_failures_idx": [],
+  "link_failures_idx": [],
+  "verdict": "PASS"
+ },
+ "reference_receipt_sha256": "c5bd6ec65c1f32c1d7e691479d978676d98abe53654d591cadb836ae3106c16a"
+}

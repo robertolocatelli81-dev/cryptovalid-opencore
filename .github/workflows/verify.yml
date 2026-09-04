@@ -29,6 +29,11 @@ jobs:
             echo "== $t"
             python3 "$t"
           done
+          # PQ signature-suite regressions (pinning, require_pq, dup-key, content-binding)
+          for t in pqcrypto/test_*.py; do
+            echo "== $t"
+            python3 "$t"
+          done
 
       - name: Conformance — the reference verifier MUST match every test vector
         run: python3 conformance.py

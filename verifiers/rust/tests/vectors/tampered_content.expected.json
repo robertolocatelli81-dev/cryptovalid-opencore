@@ -1,0 +1,14 @@
+{
+ "input": "tampered_content.jsonl",
+ "normative": {
+  "algorithm": "sha256",
+  "chain_integrity": false,
+  "entries": 3,
+  "hash_failures_idx": [
+   1
+  ],
+  "link_failures_idx": [],
+  "verdict": "FAIL"
+ },
+ "reference_receipt_sha256": "75b3ec447aae3325a48fdbfcc052022acc8b5edf806d92dcba23041316700546"
+}

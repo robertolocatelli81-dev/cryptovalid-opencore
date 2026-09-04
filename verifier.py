@@ -43,6 +43,34 @@ GENESIS_PREV = "0" * 64
 SUPPORTED_ALGOS = ("sha256", "sha3_256")
 
 
+
+def _reject_dup(pairs):
+    seen = {}
+    for k, v in pairs:
+        if k in seen:
+            raise ValueError(f"duplicate JSON key {k!r}")
+        seen[k] = v
+    return seen
+
+
+_SAFE_INT = 2 ** 53 - 1   # portable across Python/JS/Rust/Swift; decimals travel as strings
+
+
+def _no_float(x):
+    raise ValueError(f"non-portable float {x!r} (use a string; the format forbids floats)")
+
+
+def _bounded_int(x):
+    n = int(x)
+    if abs(n) > _SAFE_INT:
+        raise ValueError(f"integer {x} outside the portable range +/-(2**53-1)")
+    return n
+
+
+def _loads_strict(text):
+    return json.loads(text, object_pairs_hook=_reject_dup, parse_float=_no_float, parse_int=_bounded_int,
+                      parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f"JSON constant {c}")))
+
 def canonical_payload(entry: Dict) -> bytes:
     """Stringa canonica dell'entry per ricomputare self_hash. Esclude self_hash E le attestazioni
     aggiunte DOPO (signature/signer): il self_hash impegna il CONTENUTO, la firma impegna il self_hash.
@@ -219,8 +247,8 @@ def verify_ledger(path: str, algo: Optional[str] = None) -> Dict:
     entries: List[Dict] = []
     for i, line in enumerate(raw_lines):
         try:
-            entries.append(json.loads(line))
-        except json.JSONDecodeError as e:
+            entries.append(_loads_strict(line))
+        except (json.JSONDecodeError, ValueError) as e:
             errors.append({"line": i, "error": f"json_decode:{e}"})
 
     # Schema NATIVO (non-PersistentLedger): niente `idx` → verifica di linkage onesta,

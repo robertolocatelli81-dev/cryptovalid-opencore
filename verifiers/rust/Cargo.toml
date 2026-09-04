@@ -1,0 +1,18 @@
+[package]
+name = "cvverify"
+version = "0.1.0"
+edition = "2021"
+description = "Independent, zero-dependency CryptoValid evidence-ledger verifier (Rust std only). Air-gapped, clean-room second implementation that agrees byte-for-byte with the reference."
+license = "AGPL-3.0-or-later"
+
+[[bin]]
+name = "cvverify"
+path = "src/main.rs"
+
+[lib]
+name = "cvverify"
+path = "src/lib.rs"
+
+# Zero external dependencies: SHA-256 and SHA3-256 are pure-Rust in this crate,
+# so the verifier compiles and runs fully offline / air-gapped.
+[dependencies]

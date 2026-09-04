@@ -1,0 +1,13 @@
+{
+ "input": "canonical_unicode.jsonl",
+ "normative": {
+  "algorithm": "sha256",
+  "chain_integrity": true,
+  "entries": 2,
+  "hash_failures_idx": [],
+  "link_failures_idx": [],
+  "verdict": "PASS"
+ },
+ "note": "Locks canonicalisation: unicode ASCII-escaped, integers not floats, keys sorted. A conformant verifier reproduces these self_hashes.",
+ "reference_receipt_sha256": "79e20f54814a826d4b45552b1ee4c7b284fe153198fda0974212f852168eb67d"
+}

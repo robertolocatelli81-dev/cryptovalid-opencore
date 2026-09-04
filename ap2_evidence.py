@@ -60,7 +60,14 @@ from typing import Dict, List, Optional, Tuple
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
+import sys as _sys  # noqa: E402
+import os as _os  # noqa: E402
 import evidence_pack  # noqa: E402  (RFC 3161 stamp + cryptographic token verify)
+for _pqc in (_os.path.join(_HERE, "pqcrypto"), _os.path.join(_os.path.dirname(_HERE), "pqcrypto")):
+    if _os.path.isdir(_pqc):
+        _sys.path.insert(0, _pqc)
+        break
+import sigsuite as _sigsuite  # noqa: E402  (crypto-agile hybrid classical + ML-DSA-65 producer signatures)
 
 EVIDENCE_FORMAT = "ap2-evidence-pack/1.0"
 
@@ -70,7 +77,7 @@ HONEST_SCOPE = (
     "anchors their existence to the TSA's clock. Does NOT prove the issuer authorised "
     "the key beyond what the provenance class states, does NOT confer eIDAS qualified-"
     "archive legal presumption, does NOT validate x5c chains to a trust anchor, and "
-    "never proves the truth of the recorded transaction itself. 'valid' means each "
+    "never proves the truth of the recorded transaction itself. When a producer signature is present, it protects THIS pack integrity, and authenticity ONLY for a relying party that has PINNED the producer public key out of band (an embedded key alone proves consistency, not authenticity), across the retention window (hybrid: a classical signature + FIPS-204 ML-DSA-65, surviving the quantum transition per NIST IR 8547); it does NOT retro-protect the underlying ES256 mandate signature - for the existed-before-a-quantum-adversary claim you still need a trusted time anchor (RFC 3161 / RFC 4998 renewal). 'valid' means each "
     "artifact verifies and the file is intact — NOT that the mandates form a bound "
     "chain (read `bindings`) nor that self-asserted keys prove issuer identity (read "
     "`provenance_classes`/`self_asserted_only`). KB-JWT holder binding is verified "
@@ -85,6 +92,17 @@ class Ap2EvidenceError(ValueError):
 
 
 # ────────────────────────────────────────────────────────── b64url / hashing
+
+def _no_dup_pairs(pairs):
+    """Reject duplicate JSON object keys: a crafted pack could otherwise carry two
+    values for one key (parser keeps the last) so its meaning diverges from its digest."""
+    seen = {}
+    for k, v in pairs:
+        if k in seen:
+            raise Ap2EvidenceError(f"duplicate JSON key {k!r} (rejected fail-closed)")
+        seen[k] = v
+    return seen
+
 
 def _b64url_decode(s: str) -> bytes:
     s = s.strip()
@@ -431,15 +449,42 @@ def build_evidence(artifacts: List[Dict], out_path: str,
             "rfc3161_anchored": evidence["rfc3161_timestamp"].get("anchored", False)}
 
 
-def verify_evidence(path: str) -> Dict:
+def sign_evidence(path, identity=None, classical_alg="ed25519"):
+    """Add an OMEGA PRODUCER SIGNATURE to an evidence pack: a HYBRID block (a classical
+    signature + ML-DSA-65 when available) over evidence_digest_sha256, so the pack's
+    integrity/authenticity survives the quantum transition (NIST IR 8547). The signature
+    scheme is a DECLARED class per the auditor's request: each signature records
+    its sig_alg. Backward-compatible: producer_signatures is excluded from the digest,
+    exactly like the RFC 3161 timestamp. Honest scope: this protects THIS pack; it does not
+    retro-protect the underlying ES256 mandate signature (still classical) - for that, the
+    durable claim rests on the time anchor proving the mandate existed pre-quantum."""
+    with open(path, encoding="utf-8") as f:
+        ev = json.load(f, object_pairs_hook=_no_dup_pairs)
+    digest = ev.get("evidence_digest_sha256")
+    if not digest:
+        raise Ap2EvidenceError("evidence pack has no digest to sign")
+    if identity is None:
+        identity = _sigsuite.ProducerIdentity.create(classical_alg=classical_alg)
+    ev["producer_signatures"] = identity.sign_block(digest.encode("ascii"))
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(ev, f, ensure_ascii=False, indent=1, sort_keys=True)
+    algs = [x["sig_alg"] for x in ev["producer_signatures"]["signatures"]]
+    return {"out": path, "scheme": ev["producer_signatures"]["scheme"], "sig_algs": algs,
+            "pq_protected": any(a in _sigsuite.POST_QUANTUM for a in algs),
+            "producer_public_keys": identity.public_keys()}
+
+
+def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = False,
+                    require_producer: bool = False) -> Dict:
     """OFFLINE re-verification from the evidence file alone: digest, every signature with
     the SNAPSHOTTED key, every disclosure, every binding, and the RFC 3161 token
     cryptographically (via openssl when present; honest None when absent). Fail-closed."""
     with open(path, encoding="utf-8") as f:
-        ev = json.load(f)
+        ev = json.load(f, object_pairs_hook=_no_dup_pairs)
     e2 = {k: v for k, v in ev.items()
-          if k not in ("evidence_digest_sha256", "rfc3161_timestamp")}
-    digest_ok = hashlib.sha256(_canon(e2)).hexdigest() == ev.get("evidence_digest_sha256")
+          if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
+    recomputed_digest = hashlib.sha256(_canon(e2)).hexdigest()
+    digest_ok = recomputed_digest == ev.get("evidence_digest_sha256")
 
     art_results, all_ok = [], True
     for_bindings = []
@@ -468,18 +513,47 @@ def verify_evidence(path: str) -> Dict:
     rfc = {"claimed": ts.get("anchored", False), "verified": None}
     if ts.get("anchored") and ts.get("tsr_b64"):
         rfc = {"claimed": True, **evidence_pack._verify_rfc3161(
-            ts["tsr_b64"], ev.get("evidence_digest_sha256", ""))}
+            ts["tsr_b64"], recomputed_digest)}
 
     classes = sorted({r.get("provenance_class") for r in art_results
                       if r.get("provenance_class")})
+
+    # OMEGA producer signature(s) over the digest: crypto-agile, hybrid (classical + ML-DSA-65).
+    # A claimed-but-invalid signature is tamper -> fail-closed. pq_protected only on a valid PQ sig.
+    prod = ev.get("producer_signatures")
+    if prod:
+        pv = _sigsuite.verify_producer_block(
+            prod, recomputed_digest.encode("ascii"),
+            trusted=trusted_producer_keys)
+        producer = {"present": True, "scheme": pv["scheme"], "ok": pv["ok"],
+                    "pq_protected": pv["pq_protected"], "trusted": pv["trusted"],
+                    "signatures": pv["results"]}
+        if not pv["ok"]:
+            all_ok = False
+        # a pinned trust set that the producer key does NOT match = not authentic
+        if trusted_producer_keys is not None and pv["trusted"] is not True:
+            all_ok = False
+    else:
+        producer = {"present": False, "pq_protected": False, "trusted": None,
+                    "note": "no producer signature; pack integrity rests on digest + time anchor only. "
+                            "Without a pinned producer key a signature would prove consistency, not authenticity."}
+    # relying-party policy: enforce PQ / producer so a stripped-signature downgrade is rejected
+    policy_ok = True
+    if require_producer and not (producer["present"] and producer.get("ok")):
+        policy_ok = False
+    if require_pq and not (producer.get("pq_protected") and producer.get("trusted") is True):
+        policy_ok = False
+
     return {"digest_ok": digest_ok, "artifacts": art_results,
+            "producer_signatures": producer, "pq_protected": producer.get("pq_protected", False),
             "bindings_ok": bindings_ok, "rfc3161": rfc,
             "provenance_classes": classes,
             # tutto auto-asserito = la firma prova solo coerenza interna, mai identita'
             "self_asserted_only": bool(classes) and set(classes) <= {"jwk_header"},
             # un evidence senza artefatti non prova NULLA: mai 'valid' (falso-verde per l'auditor)
+            "policy_ok": policy_ok,
             "valid": bool(art_results and digest_ok and all_ok and bindings_ok
-                          and rfc.get("verified") is not False),
+                          and rfc.get("verified") is not False and policy_ok),
             "honest_scope": ev.get("honest_scope")}
 
 

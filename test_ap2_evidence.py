@@ -319,8 +319,8 @@ class TestFullContextReviewFindings(_Base):
         self.assertIn("not validated", ap2.HONEST_SCOPE)
 
 
-class TestTripleMindReviewFixes(_Base):
-    """Fix dal controllo delle tre menti (21/08): zero-artefatti, cap x5c."""
+class TestReviewFixes(_Base):
+    """Fix da review (zero-artefatti, cap x5c)."""
 
     def test_zero_artifacts_is_not_valid(self):
         import ap2_evidence as ap2mod
@@ -342,3 +342,47 @@ class TestTripleMindReviewFixes(_Base):
         jwt = _sign_jwt(self.sk, {"alg": "ES256", "x5c": [fake] * 11}, {"iss": "y"})
         with self.assertRaises(ap2.Ap2EvidenceError):
             ap2._snapshot_key(ap2.parse_sd_jwt(jwt + "~"))
+
+
+class TestProducerSignatureContentBinding(_Base):
+    """Stress test: la firma-produttore DEVE legare il CONTENUTO.
+    Prima del fix, verify_producer_block riceveva il digest DICHIARATO, così su un
+    pack con contenuto manomesso e digest stantio producer.ok restava True."""
+
+    def _signed(self):
+        ap2.build_evidence([{"name": "intent", "sd_jwt": self.intent}], self.out)
+        s = ap2.sign_evidence(self.out)
+        return s.get("producer_public_keys")
+
+    def test_producer_signature_content_bound(self):
+        pinned = self._signed()
+        # controllo positivo: pack intatto → tutto verde
+        ok = ap2.verify_evidence(self.out, trusted_producer_keys=pinned)
+        self.assertTrue(ok["valid"])
+        self.assertTrue(ok["producer_signatures"]["ok"])
+        # TAMPER-A: contenuto cambiato, digest+firma originali (stantii)
+        ev = json.load(open(self.out))
+        ev["subject"] = "HACKED: pay 999999 to attacker"
+        tp = os.path.join(self.d, "tamperA.json"); json.dump(ev, open(tp, "w"))
+        r = ap2.verify_evidence(tp, trusted_producer_keys=pinned)
+        self.assertFalse(r["valid"])                       # digest_ok lo prende comunque
+        self.assertFalse(r["digest_ok"])
+        self.assertFalse(r["producer_signatures"]["ok"])   # ← il fix: firma legata al contenuto
+
+    def test_producer_signature_resign_fails_without_key(self):
+        pinned = self._signed()
+        ev = json.load(open(self.out))
+        ev["subject"] = "HACKED"
+        # ricalcola il digest per far combaciare digest_ok, ma senza la chiave privata
+        e2 = {k: v for k, v in ev.items()
+              if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
+        ev["evidence_digest_sha256"] = ap2.hashlib.sha256(ap2._canon(e2)).hexdigest()
+        tp = os.path.join(self.d, "tamperB.json"); json.dump(ev, open(tp, "w"))
+        r = ap2.verify_evidence(tp, trusted_producer_keys=pinned)
+        self.assertTrue(r["digest_ok"])
+        self.assertFalse(r["producer_signatures"]["ok"])   # firma sul vecchio digest → fallisce
+        self.assertFalse(r["valid"])
+
+
+if __name__ == "__main__":
+    unittest.main()

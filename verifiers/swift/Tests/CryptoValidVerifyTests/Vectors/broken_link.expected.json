@@ -1,0 +1,16 @@
+{
+ "input": "broken_link.jsonl",
+ "normative": {
+  "algorithm": "sha256",
+  "chain_integrity": false,
+  "entries": 2,
+  "hash_failures_idx": [
+   1
+  ],
+  "link_failures_idx": [
+   1
+  ],
+  "verdict": "FAIL"
+ },
+ "reference_receipt_sha256": "a176f805692751163103eddcff3d5560ec4754229752f1eb93b80e47d0e6bf96"
+}

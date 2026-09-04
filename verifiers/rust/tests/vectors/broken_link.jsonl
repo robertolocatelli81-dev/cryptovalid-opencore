@@ -1,0 +1,2 @@
+{"idx": 0, "ts": "2026-08-13T10:00:00Z", "data": {"a": 1}, "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000", "self_hash": "43ea784b44ec4e981e24ec33e960dd6efeca4300c34b6e566aa0e86a15598836"}
+{"idx": 1, "ts": "2026-08-13T10:01:00Z", "data": {"a": 2}, "prev_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "self_hash": "e51defb4a44985c6bf42d4edc0fda1d5898fe1623bcfd2ec09517bbcd8f7b07e"}
