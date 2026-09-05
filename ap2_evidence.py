@@ -475,7 +475,7 @@ def sign_evidence(path, identity=None, classical_alg="ed25519"):
 
 
 def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = False,
-                    require_producer: bool = False) -> Dict:
+                    require_producer: bool = False, require_anchor: bool = False) -> Dict:
     """OFFLINE re-verification from the evidence file alone: digest, every signature with
     the SNAPSHOTTED key, every disclosure, every binding, and the RFC 3161 token
     cryptographically (via openssl when present; honest None when absent). Fail-closed."""
@@ -542,6 +542,11 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     if require_producer and not (producer["present"] and producer.get("ok")):
         policy_ok = False
     if require_pq and not (producer.get("pq_protected") and producer.get("trusted") is True):
+        policy_ok = False
+    # require_anchor: the existed-by claim must be PROVEN, not merely claimed. A missing
+    # anchor, an unverifiable one (no openssl -> verified None), or a failing token all
+    # reject — fail-closed, "claimed" never upgrades to "proven".
+    if require_anchor and rfc.get("verified") is not True:
         policy_ok = False
 
     return {"digest_ok": digest_ok, "artifacts": art_results,

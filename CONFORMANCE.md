@@ -1,6 +1,23 @@
 # Cross-implementation conformance
 
 The CryptoValid evidence format has one normative contract: `opencore/spec/vectors/*`.
+
+## ap2-evidence-pack vectors (spec/vectors/ap2/)
+
+The AP2 dispute-evidence pack has its own normative text (`SPEC_AP2_EVIDENCE.md`) and vector set:
+one ACCEPT (`valid_signed`, the positive control) and five REJECTs (stripped-signature downgrade,
+valid-but-unpinned producer key, digest mismatch, time anchor required-but-missing, time anchor
+claimed-but-invalid). A verifier conforms iff it reproduces each vector's `normative` block under
+the declared policy — `python3 spec/vectors/ap2/run_ap2_conformance.py` (exit 0 = conformant).
+The ML-DSA-65 producer-signature primitive is additionally checked against the NIST ACVP sigVer
+subset in `pqcrypto/vectors/acvp_mldsa65_sigver.txt` (the same 9 cases elara-mesh runs — one NIST
+oracle for both stacks): `python3 opencore/test_ap2_conformance.py`.
+
+| Implementation | Runtime / deps | Status |
+|---|---|---|
+| `opencore/ap2_evidence.py` | Python 3 + `cryptography` | reference — conformant 6/6; ACVP ML-DSA-65 sigVer 9/9 |
+
+## Ledger vectors (spec/vectors/)
 Every independent verifier MUST reproduce the normative block (verdict, chain_integrity,
 algorithm, entries, hash/link failure indices) on each vector — including the vectors
 that MUST fail (bad_idx, broken_link, tampered_content).
