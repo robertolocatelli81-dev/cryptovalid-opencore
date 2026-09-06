@@ -1,6 +1,6 @@
 # Cross-implementation conformance
 
-The CryptoValid evidence format has one normative contract: `opencore/spec/vectors/*`.
+The CryptoValid evidence format has one normative contract: `spec/vectors/*`.
 
 ## ap2-evidence-pack vectors (spec/vectors/ap2/)
 
@@ -11,11 +11,11 @@ claimed-but-invalid). A verifier conforms iff it reproduces each vector's `norma
 the declared policy — `python3 spec/vectors/ap2/run_ap2_conformance.py` (exit 0 = conformant).
 The ML-DSA-65 producer-signature primitive is additionally checked against the NIST ACVP sigVer
 subset in `pqcrypto/vectors/acvp_mldsa65_sigver.txt` (the same 9 cases elara-mesh runs — one NIST
-oracle for both stacks): `python3 opencore/test_ap2_conformance.py`.
+oracle for both stacks): `python3 test_ap2_conformance.py`.
 
 | Implementation | Runtime / deps | Status |
 |---|---|---|
-| `opencore/ap2_evidence.py` | Python 3 + `cryptography` | reference — conformant 6/6; ACVP ML-DSA-65 sigVer 9/9 |
+| `ap2_evidence.py` | Python 3 + `cryptography` | reference — conformant 6/6; ACVP ML-DSA-65 sigVer 9/9 |
 
 ## Ledger vectors (spec/vectors/)
 Every independent verifier MUST reproduce the normative block (verdict, chain_integrity,
@@ -24,7 +24,7 @@ that MUST fail (bad_idx, broken_link, tampered_content).
 
 | Implementation | Runtime / deps | Status |
 |---|---|---|
-| `opencore/verifier.py` | Python 3, stdlib | reference — conformant |
+| `verifier.py` | Python 3, stdlib | reference — conformant |
 | `verifiers/js/cvverify.mjs` | Node ≥18, stdlib only | **conformant 6/6**; 38-check suite incl. cross-oracle vs the Python reference |
 | `verifiers/rust/` | Rust, **std only** (SHA-256+Keccak in-crate) | **conformant 6/6**; `cargo test` + `clippy -D warnings`; cross-oracle Python↔JS↔Rust = 0 mismatch |
 | `verifiers/swift/` | Swift + CryptoKit (Apple) / swift-crypto (Linux) | **compiled & tested (Swift 6.3.3): swift test 4/4**; in the 4-language cross-oracle (Python/JS/Rust/Swift) = 0 mismatch |

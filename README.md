@@ -5,7 +5,7 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539579.svg)](https://doi.org/10.5281/zenodo.22539579)
 
-[![verify-evidence](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml/badge.svg)](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml)
+[![verify-evidence](https://github.com/robertolocatelli81-dev/cryptovalid-actions/workflows/verify.yml/badge.svg)](https://github.com/robertolocatelli81-dev/cryptovalid-actions/workflows/verify.yml)
 
 **Verifiable compliance evidence for internet services — free software.**
 
@@ -16,16 +16,16 @@ the author (Roberto Locatelli) on 2026-08-08.
 
 | Component | License |
 |---|---|
-| `opencore/` — evidence format spec, standalone verifier, and every deliverable funded by open-source grants | **AGPL-3.0-or-later** (see `LICENSE` in this directory) |
+| `` — evidence format spec, standalone verifier, and every deliverable funded by open-source grants | **AGPL-3.0-or-later** (see `LICENSE` in this directory) |
 | Everything else in the OMEGA Ecosystem repository | **BSL 1.1** (source-available; see repository root) |
 
 Copyright for both sides: Roberto Locatelli, 2026. The author licenses the
 contents of this directory under the GNU Affero General Public License v3.0 or
-later. Contributions to `opencore/` are accepted under the same license.
+later. Contributions to `` are accepted under the same license.
 
 **Commercial license — for AGPL-averse enterprises.** The AGPL-3.0 (esp. the §13 network clause)
 deliberately prevents cloud-stripping, but many corporate legal policies forbid AGPL to avoid copyleft
-contagion. If that is your case, a **commercial license of `opencore/`** is available from the author
+contagion. If that is your case, a **commercial license of ``** is available from the author
 (roberto.locatelli.81@gmail.com): the same code, without the AGPL network/copyleft obligations. This is
 the standard open-core arrangement — AGPL for the community, a commercial license for enterprises that
 need it — so the copyleft protection is a positioning choice, not an adoption dead-end.
@@ -138,7 +138,7 @@ application.
 ## Quick start
 
 ```bash
-python3 opencore/verifier.py <ledger.jsonl>     # verifies a hash-chained ledger
+python3 verifier.py <ledger.jsonl>     # verifies a hash-chained ledger
 ```
 
 Exit code 0 = chain intact; non-zero = the file tells you where it broke.
@@ -151,10 +151,10 @@ evidence tools do **not** give you: their evidence lives in a vendor database ("
 CryptoValid evidence is signed, self-hosted, and verifiable offline by anyone, forever.
 
 ```bash
-python3 opencore/signer.py keygen  signer.key                          # Ed25519 keypair (seed, chmod 600)
-python3 opencore/signer.py sign    ledger.jsonl  ledger.signed.jsonl  signer.key
-python3 opencore/verifier.py       ledger.signed.jsonl                 # hash chain still PASS (stdlib-only)
-python3 opencore/signer.py verify  ledger.signed.jsonl                 # signatures PASS (content->self_hash->signature)
+python3 signer.py keygen  signer.key                          # Ed25519 keypair (seed, chmod 600)
+python3 signer.py sign    ledger.jsonl  ledger.signed.jsonl  signer.key
+python3 verifier.py       ledger.signed.jsonl                 # hash chain still PASS (stdlib-only)
+python3 signer.py verify  ledger.signed.jsonl                 # signatures PASS (content->self_hash->signature)
 ```
 
 - The signature commits to each entry's `self_hash`; `signature`/`signer` are attestation fields
@@ -164,7 +164,7 @@ python3 opencore/signer.py verify  ledger.signed.jsonl                 # signatu
 - **Optional layer, honest scope:** the core hash verifier stays **stdlib-only**; signatures need the
   `cryptography` package. Absence of signatures never weakens the hash chain. By default keys are
   software keys on a file — production should use a KMS/HSM backend (below). Tests:
-  `python3 opencore/test_signer.py`.
+  `python3 test_signer.py`.
 
 ### KMS/HSM key custody (no private key in process memory)
 
@@ -174,18 +174,18 @@ the evidence format and the verifier do not change. URI-style selection:
 ```bash
 # PKCS#11 HSM (YubiHSM 2, SoftHSM2, smartcard) — PIN via env, never on argv
 export CRYPTOVALID_PIN=****
-python3 opencore/cryptovalid_kms.py keygen-hsm --backend \
+python3 cryptovalid_kms.py keygen-hsm --backend \
   "pkcs11:module=/usr/lib/softhsm/libsofthsm2.so;token=cryptovalid;key=evidence;pin=env:CRYPTOVALID_PIN"
-python3 opencore/signer.py sign ledger.jsonl ledger.signed.jsonl --backend "pkcs11:module=...;token=...;key=evidence"
+python3 signer.py sign ledger.jsonl ledger.signed.jsonl --backend "pkcs11:module=...;token=...;key=evidence"
 
 # AWS KMS (KeySpec ECC_NIST_EDWARDS25519, EdDSA supported since 2025-11; needs boto3+credentials)
-python3 opencore/signer.py sign ledger.jsonl out.jsonl --backend "awskms:key_id=alias/cryptovalid;region=eu-south-1"
+python3 signer.py sign ledger.jsonl out.jsonl --backend "awskms:key_id=alias/cryptovalid;region=eu-south-1"
 
 # HashiCorp Vault Transit (key type ed25519; token from $VAULT_TOKEN; stdlib-only client)
-python3 opencore/signer.py sign ledger.jsonl out.jsonl --backend "vault:url=https://vault:8200;key=cryptovalid"
+python3 signer.py sign ledger.jsonl out.jsonl --backend "vault:url=https://vault:8200;key=cryptovalid"
 ```
 
-**Honest bench per backend** (`opencore/test_kms.py`): PKCS#11 is tested **end-to-end against a
+**Honest bench per backend** (`test_kms.py`): PKCS#11 is tested **end-to-end against a
 real SoftHSM2 token** (non-exportable key, tamper ⇒ FAIL); AWS KMS is exercised against the exact
 API contract (`MessageType RAW` + `ED25519_SHA_512`) with an injected client — a live signature
 requires a real account; Vault Transit is protocol-tested against a local stub. Removing the key
@@ -200,14 +200,14 @@ verdicts + signer keys + an optional RFC 3161 timestamp, a human `SUMMARY.md`, a
 A third party re-checks **everything** with nothing but this repository:
 
 ```bash
-python3 opencore/evidence_pack.py build  pack_dir/  ledger.signed.jsonl  --subject "audit CUST-001"
-python3 opencore/evidence_pack.py verify pack_dir/
+python3 evidence_pack.py build  pack_dir/  ledger.signed.jsonl  --subject "audit CUST-001"
+python3 evidence_pack.py verify pack_dir/
 ```
 
 `verify` returns `valid: true` only if every file digest matches the manifest, the manifest is
 self-consistent, and every ledger passes its hash chain **and** (if signed) its signatures — no server,
 no account, no vendor. Tamper any file and it drops to `valid: false`. RFC 3161 anchoring is optional
-(needs `openssl` + a TSA); its absence never invalidates the pack. Tests: `python3 opencore/test_evidence_pack.py`.
+(needs `openssl` + a TSA); its absence never invalidates the pack. Tests: `python3 test_evidence_pack.py`.
 
 This is the difference from closed GRC evidence tools: **your evidence is a bundle anyone can re-execute
 to verify — forever, offline, without trusting us.**
@@ -228,14 +228,14 @@ exact compact serializations, and seals everything under a SHA-256 digest with a
 RFC 3161 timestamp:
 
 ```bash
-python3 opencore/ap2_evidence.py build ev.json intent=intent.sdjwt cart=cart.sdjwt --tsa http://tsa.izenpe.com
-python3 opencore/ap2_evidence.py verify ev.json     # offline, fail-closed
+python3 ap2_evidence.py build ev.json intent=intent.sdjwt cart=cart.sdjwt --tsa http://tsa.izenpe.com
+python3 ap2_evidence.py verify ev.json     # offline, fail-closed
 ```
 
 Honest scope: proves these exact artifacts verified with this key material at build time (and
 existed at the TSA's time, if stamped). It does **not** confer eIDAS art. 45j qualified-archive
 legal presumption and does not validate x5c chains to a trust anchor. ES256 only, loudly.
-Tests: `python3 opencore/test_ap2_evidence.py`. Also exposed read-only as the MCP tool
+Tests: `python3 test_ap2_evidence.py`. Also exposed read-only as the MCP tool
 `verify_ap2_evidence`.
 
 ### Auditor-facing report (PDF/HTML)
@@ -246,8 +246,8 @@ global status, per-ledger detail, signer keys, RFC 3161 / eIDAS anchoring, hones
 exact vendor-free re-verify command:
 
 ```bash
-python3 opencore/cryptovalid_report.py pack_dir/                      # -> report.html + report.pdf
-python3 opencore/cryptovalid_report.py pack_dir/ --lotl --lotl-ms ES  # opt-in eIDAS check (network)
+python3 cryptovalid_report.py pack_dir/                      # -> report.html + report.pdf
+python3 cryptovalid_report.py pack_dir/ --lotl --lotl-ms ES  # opt-in eIDAS check (network)
 ```
 
 Design rules (they ARE the security model of this layer): the report **never recomputes a
@@ -257,7 +257,7 @@ authoritative artifacts remain `MANIFEST.json` + the ledgers, and the document s
 HTML needs nothing but the Python stdlib; PDF uses [WeasyPrint](https://weasyprint.org/) only if it
 is already installed (honest degrade to HTML otherwise). The eIDAS light has three honest states —
 not checked (default) / qualified / not qualified — never a fabricated green.
-Tests: `python3 opencore/test_report.py` (tamper→RED proven before the positive path).
+Tests: `python3 test_report.py` (tamper→RED proven before the positive path).
 
 ## MCP server — agents that can prove what they did
 
@@ -267,7 +267,7 @@ Python stdlib, same ethos as the rest of this repo.
 
 ```jsonc
 // client config
-{"command": "python3", "args": ["/path/to/opencore/cryptovalid_mcp.py"]}
+{"command": "python3", "args": ["/path/to/cryptovalid_mcp.py"]}
 ```
 
 Read-only tools, always available, every answer carries **provenance** (source, SHA-256, UTC):
@@ -279,7 +279,7 @@ offline; they are **human-gated twice** (env `CRYPTOVALID_MCP_ALLOW_WRITE=1` *an
 same backend URIs as everywhere else (`file:` / `pkcs11:` / `awskms:` / `vault:` / `nethsm:`) —
 with the HSM/KMS backends the private key never enters the server process.
 
-Tests: `python3 opencore/test_mcp.py` — over the real stdio transport, gate refusals and
+Tests: `python3 test_mcp.py` — over the real stdio transport, gate refusals and
 tampered-ledger failure proven before the positive path.
 Honest scope: sealing proves what/when/order/who-signed — never the truth of the recorded facts.
 
