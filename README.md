@@ -3,6 +3,8 @@
 
 # CryptoValid Open Core
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539579.svg)](https://doi.org/10.5281/zenodo.22539579)
+
 [![verify-evidence](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml/badge.svg)](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml)
 
 **Verifiable compliance evidence for internet services — free software.**
