@@ -1,3 +1,16 @@
+Metadata-Version: 2.4
+Name: cryptovalid-opencore
+Version: 0.9.2
+Summary: Verifiable compliance evidence: hash-chained ledgers + standalone offline verifier (flat-layout modules, unchanged declared commands)
+Author: Roberto Locatelli
+License: AGPL-3.0-only
+Project-URL: Homepage, https://github.com/robertolocatelli81-dev/cryptovalid-opencore
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+License-File: NOTICE
+Dynamic: license-file
+
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
@@ -499,11 +512,3 @@ Merkle STHs + independent RFC 3161 TSAs, not a distributed calendar). The IETF d
 operate claim is a universal negative and cannot be proven — pending applications and non-US filings
 remain invisible by construction. *Technical FTO note, not a legal opinion; a definitive FTO
 requires professional counsel.*
-
-## Install (pip)
-
-```bash
-pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ cryptovalid-opencore
-```
-
-Release artifacts are attached to GitHub Releases; the index links carry `#sha256=` fragments verified by pip. All documented `python3 <file>.py` commands keep working unchanged from a clone.
