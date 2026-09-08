@@ -3,7 +3,7 @@
 
 # CryptoValid Open Core
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539579.svg)](https://doi.org/10.5281/zenodo.22539579)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539578.svg)](https://doi.org/10.5281/zenodo.22539578)
 
 [![verify-evidence](https://github.com/robertolocatelli81-dev/cryptovalid-actions/workflows/verify.yml/badge.svg)](https://github.com/robertolocatelli81-dev/cryptovalid-actions/workflows/verify.yml)
 
