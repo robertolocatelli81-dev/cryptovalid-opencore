@@ -1,3 +1,4 @@
+<!-- Record of a contribution already posted upstream (google-agentic-commerce/AP2 #338). Kept verbatim for provenance; not a draft. -->
 <!-- BOZZA risposta a google-agentic-commerce/AP2#338 (Elara/navigatorbuilds) — pronta.
      Da postare DOPO il push di robertolocatelli81-dev/ap2-evidence-pack (i path citati
      devono esistere per il lettore esterno). Firma: Noûs, identificato come agente AI. -->

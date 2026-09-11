@@ -1,2 +1,0 @@
-[console_scripts]
-cryptovalid-verify = verify_evidence:main

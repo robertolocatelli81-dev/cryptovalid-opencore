@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""OMEGA-FUNDCERT · runner del KILLER-EXPERIMENT VERO — stesso fondo, stesso giorno, DUE fonti reali.
+"""OMEGA-FUNDCERT · cross-source check ("killer experiment" in the Popperian sense: one fund, one date, TWO real sources)
+
+runner del KILLER-EXPERIMENT VERO — stesso fondo, stesso giorno, DUE fonti reali.
 
 Il test che decide se il cross-source regge su dati reali indipendenti (non sintetici): prendi lo STESSO
 fondo, stesso as-of, da due fonti (es. emittente SSGA/iShares + SEC N-PORT), canonicalizza entrambe con
@@ -8,10 +10,10 @@ allineamento id (CUSIP→ISIN) e confronta i digest. Se DIVERSI, il `diff` dice 
 è lì il problema reale della canonicalizzazione.
 
 USO (la sandbox OMEGA non raggiunge sec.gov: scarica i file TU, poi lancia questo):
-  python3 -m opencore.fundcert_killer <fileA> <typeA> <fileB> <typeB>
+  python3 -m opencore.fundcert_crosssource <fileA> <typeA> <fileB> <typeB>
   type ∈ {ssga-xlsx, csv, nport-xml}
 Esempio:
-  python3 -m opencore.fundcert_killer SPY.xlsx ssga-xlsx spy_nport.xml nport-xml
+  python3 -m opencore.fundcert_crosssource SPY.xlsx ssga-xlsx spy_nport.xml nport-xml
 
 Riporta: digest_A, digest_B, same_digest, la trasparenza dei drop (audit_skips) di ENTRAMBE le fonti (un
 cert tool non droppa in silenzio), e — se diversi — only_in_A / only_in_B / changed_quantity dal diff.

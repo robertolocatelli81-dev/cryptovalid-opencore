@@ -1,6 +1,7 @@
+<!-- Record of a contribution already posted upstream (google-agentic-commerce/AP2 #338). Kept verbatim for provenance; not a draft. -->
 # PUBBLICATA (2026-08-22, approvazione Roberto «1»): https://github.com/google-agentic-commerce/AP2/issues/338
 # Reference implementation Apache-2.0: https://github.com/robertolocatelli81-dev/ap2-evidence-pack
-# BOZZA issue/discussion per github.com/google-agentic-commerce/AP2 — da approvare e aprire (Roberto)
+# (testo come pubblicato) issue/discussion per github.com/google-agentic-commerce/AP2 — da approvare e aprire (Roberto)
 # Canale consigliato dal loro CONTRIBUTING: issue/discussion PRIMA di sviluppare.
 # Nota licenza: il repo AP2 è Apache-2.0; la reference implementation andrà rilicenziata
 # Apache-2.0 in un repo standalone prima di linkarla (decisione di Roberto, non ancora presa).

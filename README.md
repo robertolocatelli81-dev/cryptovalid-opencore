@@ -118,8 +118,13 @@ Delivered and tested — the CI badge above is green on every push:
 - **RFC 3161** timestamping — cryptographically verified against a real public TSA;
 - a **self-updating regulatory profile** (MiCA / EU AI Act / DORA / GDPR) that carries provenance
   and flags stale mappings for human review;
-- **adversarially hardened**: an independent red-team pass found and closed real gaps (truncation,
-  manifest re-forge, timestamp forgery, cross-language JSON canonicalisation) — each with a regression test;
+- **adversarially hardened**: red-team passes found and closed real gaps (truncation and manifest
+  re-forge at the *signed pack* layer, timestamp forgery, cross-language JSON canonicalisation; and on
+  2026-09-11, a bare-ledger verifier that answered `PASS` on an **empty** file) — each with a regression test.
+  **Know what `verifier.py` proves**: a bare hash chain is internally consistent evidence — it cannot see
+  truncation or a re-chained suffix written by someone with write access to the file. The receipt now
+  says so in a `scope` field; those attacks are caught by the signed evidence pack (`evidence_pack.py`),
+  which commits to entry count and head hash;
 - **high-frequency ingestion** (`cryptovalid_ingest.py`): segmented hash-chained ledgers with
   Merkle-STH sealing (chained across segments, KMS/HSM-signable), batched fsync, fail-closed
   crash recovery — throughput measured by the bench, never quoted as a fixed claim;

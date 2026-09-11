@@ -21,7 +21,8 @@ Verified schema:
   - self_hash = SHA-256( JSON(entry without self_hash, sort_keys, separators (',',':')) )
   - prev_hash of entry i = self_hash of entry i-1 (the first has 64 zeros)
 
-Output: structured JSON receipt. Exit code 0 = chain intact, 1 = failure.
+Output: structured JSON receipt with an explicit `scope` (what PASS proves and does not prove).
+Exit code 0 = chain intact, 1 = failure or EMPTY (a file with no entries has no chain to verify).
 
 Example:
     python3 opencore/verifier.py exports/omega_audit_ledger.jsonl
@@ -311,7 +312,20 @@ def verify_ledger(path: str, algo: Optional[str] = None) -> Dict:
             idx_ok = False
             errors.append({"line": i, "error": f"idx_mismatch: expected {i}, got {e.get('idx')}"})
 
+    # Timestamp monotonicity: REPORTED, not enforced. A backwards `ts` does not break the hash chain
+    # (the chain proves order of *appending*, not wall-clock time), but an auditor must see it.
+    ts_ok, ts_backwards = True, []
+    for i in range(1, len(entries)):
+        a, b = entries[i - 1].get("ts"), entries[i].get("ts")
+        if isinstance(a, str) and isinstance(b, str) and b < a:
+            ts_ok = False
+            ts_backwards.append({"idx": entries[i].get("idx", i), "prev_ts": a, "ts": b})
+
     chain_integrity = len(hash_failures) == 0 and len(link_failures) == 0 and idx_ok and len(errors) == 0
+    # An empty file has no chain to verify: "PASS" on nothing was a false green (found by the
+    # 2026-09-11 red-team pass: truncation to zero entries verified as PASS).
+    if not entries:
+        chain_integrity = False
 
     receipt: Dict = {
         "verified_utc": started,
@@ -329,9 +343,26 @@ def verify_ledger(path: str, algo: Optional[str] = None) -> Dict:
         "link_passed": len(link_failures) == 0,
         "link_failures": link_failures[:10],
         "idx_monotonic": idx_ok,
+        "ts_monotonic": ts_ok,
+        "ts_backwards": ts_backwards[:10],
         "parse_errors": errors[:10],
         "chain_integrity": chain_integrity,
-        "verdict": "PASS" if chain_integrity else "FAIL",
+        "verdict": ("EMPTY" if not entries else "PASS" if chain_integrity else "FAIL"),
+        # What this verdict does and does not prove. A bare hash chain is internally consistent
+        # evidence: anyone with write access to the file can truncate it or rewrite a suffix and
+        # re-chain it, and this verifier will not see that. Those attacks are caught one layer up —
+        # a signed evidence pack commits to entry count + head hash (evidence_pack.py) and RFC 3161 /
+        # public anchors commit to time. Stated here so that "PASS" is never read as more than it is.
+        "scope": {
+            "proves": ["every self_hash recomputes from its entry (canonical JSON)",
+                       "every prev_hash links to the previous self_hash (genesis = 64 zeros)",
+                       "idx is contiguous from 0"],
+            "does_not_prove": ["no truncation (a shorter prefix is a valid chain)",
+                               "no suffix rewrite by a party with write access (re-chained fork)",
+                               "authorship (use signer.py / a signed evidence pack)",
+                               "wall-clock time (ts is reported, not attested: use RFC 3161 / anchors)"],
+            "to_cover_those": "evidence_pack.py verify <pack>  (signed manifest: entry count + head)",
+        },
     }
 
     # Receipt-of-receipt: hash del receipt stesso (deterministico, escluso verified_utc)
