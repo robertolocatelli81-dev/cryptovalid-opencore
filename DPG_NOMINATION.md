@@ -95,4 +95,4 @@ https://digitalpublicgoods.net/submission-guide/ · È il passo umano di Roberto
   "stage": "nominee"
 }
 ```
-Domanda che la DPGA farà (Gemini): **sostenibilità / bus-factor=1** (owner singolo) — rispondere "cerco stewardship istituzionale".
+Punto aperto dichiarato: **sostenibilità / bus-factor = 1** (maintainer singolo). Risposta data: si cerca una stewardship istituzionale (fondazione o consorzio); fino ad allora il rischio è reale e non viene minimizzato.
