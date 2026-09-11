@@ -5,7 +5,7 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539578.svg)](https://doi.org/10.5281/zenodo.22539578)
 
-[![verify-evidence](https://github.com/robertolocatelli81-dev/cryptovalid-actions/workflows/verify.yml/badge.svg)](https://github.com/robertolocatelli81-dev/cryptovalid-actions/workflows/verify.yml)
+[![verify-evidence](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml/badge.svg)](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml)
 
 **Verifiable compliance evidence for internet services — free software.**
 
@@ -16,16 +16,16 @@ the author (Roberto Locatelli) on 2026-08-08.
 
 | Component | License |
 |---|---|
-| `` — evidence format spec, standalone verifier, and every deliverable funded by open-source grants | **AGPL-3.0-or-later** (see `LICENSE` in this directory) |
+| **this repository (`cryptovalid-opencore`)** — evidence format spec, standalone verifier, and every deliverable funded by open-source grants | **AGPL-3.0-or-later** (see `LICENSE` in this directory) |
 | Everything else in the OMEGA Ecosystem repository | **BSL 1.1** (source-available; see repository root) |
 
 Copyright for both sides: Roberto Locatelli, 2026. The author licenses the
 contents of this directory under the GNU Affero General Public License v3.0 or
-later. Contributions to `` are accepted under the same license.
+later. Contributions to this repository are accepted under the same license.
 
 **Commercial license — for AGPL-averse enterprises.** The AGPL-3.0 (esp. the §13 network clause)
 deliberately prevents cloud-stripping, but many corporate legal policies forbid AGPL to avoid copyleft
-contagion. If that is your case, a **commercial license of ``** is available from the author
+contagion. If that is your case, a **commercial license of this code** is available from the author
 (roberto.locatelli.81@gmail.com): the same code, without the AGPL network/copyleft obligations. This is
 the standard open-core arrangement — AGPL for the community, a commercial license for enterprises that
 need it — so the copyleft protection is a positioning choice, not an adoption dead-end.
@@ -96,7 +96,9 @@ targets the narrower, regulation-driven case where evidence must survive **witho
 vendor:
 
 - **EU AI Act** high-risk systems must keep automatic logs (Art. 12) for **≥ 6 months** (Art. 19);
-  the high-risk obligations become enforceable on **2 August 2026**.
+  the high-risk obligations for Annex III systems apply from **2 December 2027** (deferred by the
+  Digital Omnibus, Reg. (EU) 2026/1744 — the original 2 August 2026 date no longer holds; see
+  `spec/regulatory_profiles.json`, which carries the dated source).
 - For records to be **admissible** in judicial or regulatory proceedings, each event should be
   timestamped with an **eIDAS *qualified* timestamp** and made immutable by a **third party
   independent of both provider and deployer** — cryptographic measures, not access controls.
@@ -389,7 +391,7 @@ A verifiable-evidence *feature* is copyable; an *adopted format* is not. CryptoV
 proves interoperability by reproducing the same verdicts:
 
 ```bash
-python3 conformance.py            # exit 0 = the reference verifier conforms (5/5 vectors)
+python3 conformance.py            # exit 0 = the reference verifier conforms (7/7 vectors)
 ```
 
 Implement it in Go/Rust/JS, match the vectors, and open a PR to the conformance table — the format becomes

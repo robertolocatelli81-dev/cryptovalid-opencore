@@ -1,7 +1,7 @@
 // Professional test suite for the independent CryptoValid verifier.
 // Runs the normative conformance vectors, positive+negative controls, an Ed25519
 // signature round-trip, AND cross-checks every vector against the REFERENCE Python
-// verifier (opencore/verifier.py) as an independent oracle — so a bug that makes us
+// verifier (verifier.py at the repo root) as an independent oracle — so a bug that makes us
 // wrongly agree with ourselves is caught by disagreement with the reference.
 import { verifyLedger, conformance } from "./cvverify.mjs";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
@@ -12,8 +12,8 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const VDIR = join(HERE, "..", "..", "opencore", "spec", "vectors");
-const REF = join(HERE, "..", "..", "opencore", "verifier.py");
+const VDIR = join(HERE, "..", "..", "spec", "vectors");
+const REF = join(HERE, "..", "..", "verifier.py");
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => { if (cond) pass++; else { fail++; console.log("FAIL", name, extra); } };
 

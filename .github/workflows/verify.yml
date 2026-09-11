@@ -89,3 +89,41 @@ jobs:
           python3 signer.py sign examples/sample_ledger.jsonl "$RUNNER_TEMP/hsm_signed.jsonl" --backend "$B"
           python3 verifier.py "$RUNNER_TEMP/hsm_signed.jsonl"            # hash chain PASS (stdlib-only)
           python3 signer.py verify "$RUNNER_TEMP/hsm_signed.jsonl"       # HSM signatures PASS
+
+  # Independent verifiers of the same spec. The differential oracle asserts ZERO disagreements
+  # across Python, JS and Rust on hostile inputs — "a pack accepted by one is accepted by all, or the
+  # build fails" is only true because this job exists (added 2026-09-11: until then the oracle was
+  # not run in CI, and its shipped copy pointed at a path that did not exist in this layout).
+  independent-verifiers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: JS verifier — self-test against the spec vectors and the Python reference
+        run: node verifiers/js/test.mjs
+      - name: Rust verifier — unit tests + rejects the tampered ledger
+        run: |
+          cargo test --release --manifest-path verifiers/rust/Cargo.toml
+          if cargo run -q --release --manifest-path verifiers/rust/Cargo.toml -- examples/sample_ledger_tampered.jsonl; then
+            echo "::error::rust verifier accepted a tampered ledger"; exit 1; fi
+          cargo run -q --release --manifest-path verifiers/rust/Cargo.toml -- examples/sample_ledger.jsonl > /dev/null
+      - name: Differential oracle — Python vs JS vs Rust must agree on every hostile input
+        run: python3 verifiers/differential_oracle.py
+
+  swift-verifier:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift verifier — unit tests + rejects the tampered ledger
+        working-directory: verifiers/swift
+        run: |
+          swift --version
+          swift test
+          if swift run -c release cvverify ../../examples/sample_ledger_tampered.jsonl; then
+            echo "::error::swift verifier accepted a tampered ledger"; exit 1; fi
+          swift run -c release cvverify ../../examples/sample_ledger.jsonl > /dev/null

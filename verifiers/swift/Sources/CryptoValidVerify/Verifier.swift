@@ -59,7 +59,8 @@ public enum CryptoValidVerifier {
         }
         var idxOk = true
         for (i, e) in entries.enumerated() where intVal(e["idx"]) != Int64(i) { idxOk = false }
-        let chain = hashFail.isEmpty && linkFail.isEmpty && idxOk && parseErrors == 0
+        // zero entries = nothing verified = FAIL (2026-09-11: all four verifiers said PASS on an empty file)
+        let chain = hashFail.isEmpty && linkFail.isEmpty && idxOk && parseErrors == 0 && !entries.isEmpty
 
         var sigAll: Bool? = nil
         if entries.contains(where: { $0["signature"] != nil }) {

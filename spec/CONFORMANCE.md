@@ -51,7 +51,10 @@ python3 conformance.py     # exit 0 = conformant
 
 | Implementation | Language | Author | Conformance |
 |---|---|---|---|
-| `verifier.py` (reference) | Python (stdlib) | Roberto Locatelli | ✅ 5/5 vectors |
+| `verifier.py` (reference) | Python (stdlib) | Roberto Locatelli | ✅ 7/7 vectors |
+| `verifiers/js/cvverify.mjs` | Node (stdlib) | Roberto Locatelli | ✅ 7/7 vectors, cross-oracle vs reference in CI |
+| `verifiers/rust/` | Rust (std) | Roberto Locatelli | ✅ cargo test + tampered-ledger rejection in CI |
+| `verifiers/swift/` | Swift (swift-crypto) | Roberto Locatelli | ✅ swift test + tampered-ledger rejection in CI (macOS job) |
 | _your implementation here_ | | | |
 
 ## Optional profiles

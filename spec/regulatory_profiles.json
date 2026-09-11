@@ -67,7 +67,7 @@
       "milestone": "crypto token regime (DIFC)",
       "name": "UAE DFSA (DIFC)",
       "needs_review": false,
-      "notes": "Registrato; mapping requisiti DA FARE.",
+      "notes": "Registered as a profile; requirement mapping NOT yet done (declared gap, human review pending).",
       "source_url": "https://www.dfsa.ae/",
       "status": "in_force",
       "status_provenance": "asserted from public sources 2026-08; NOT derived from effective-date alone (cf. MiCA transitional: date passed but regime expired); source-verification pending"
@@ -79,7 +79,7 @@
       "milestone": "FSMR virtual asset framework",
       "name": "UAE ADGM/FSRA (Abu Dhabi)",
       "needs_review": false,
-      "notes": "Registrato; mapping requisiti DA FARE.",
+      "notes": "Registered as a profile; requirement mapping NOT yet done (declared gap, human review pending).",
       "source_url": "https://www.adgm.com/",
       "status": "in_force",
       "status_provenance": "asserted from public sources 2026-08; NOT derived from effective-date alone (cf. MiCA transitional: date passed but regime expired); source-verification pending"
@@ -91,7 +91,7 @@
       "milestone": "payment token / AED stablecoin",
       "name": "UAE CBUAE Payment Token Services Regulation",
       "needs_review": false,
-      "notes": "Registrato; mapping requisiti DA FARE.",
+      "notes": "Registered as a profile; requirement mapping NOT yet done (declared gap, human review pending).",
       "source_url": "https://www.centralbank.ae/",
       "status": "in_force",
       "status_provenance": "asserted from public sources 2026-08; NOT derived from effective-date alone (cf. MiCA transitional: date passed but regime expired); source-verification pending"

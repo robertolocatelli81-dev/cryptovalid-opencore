@@ -127,6 +127,8 @@ export function verifyLedger(text, { algo = null, pubkey = null } = {}) {
   });
   let idxOk = true;
   entries.forEach((e, i) => { if (e.idx !== i) { idxOk = false; errors.push({ line: i, error: `idx_mismatch: expected ${i}, got ${e.idx}` }); } });
+  // zero entries = nothing verified = FAIL (2026-09-11: all four verifiers said PASS on an empty file)
+  if (entries.length === 0) errors.push({ line: 0, error: "empty_ledger: zero entries, nothing to verify" });
   const chainIntegrity = hashFailures.length === 0 && linkFailures.length === 0 && idxOk && errors.length === 0;
 
   let signatures = null;

@@ -102,7 +102,7 @@ forces a boolean where reality had none.
 5. If `signature`/`signer` present: verify Ed25519 over the canonical form.
 6. If `tsa_token` present: verify the RFC 3161 token binds `self_hash` and a
    TSA time consistent with `ts`.
-7. Emit a JSON receipt including counts, failures (capped), verdict PASS/FAIL,
+7. A ledger with zero entries is FAIL (nothing was verified; `empty_ledger` error). Emit a JSON receipt including counts, failures (capped), verdict PASS/FAIL,
    and the receipt's own SHA-256 (receipt-of-receipt, deterministic: timestamp
    excluded).
 

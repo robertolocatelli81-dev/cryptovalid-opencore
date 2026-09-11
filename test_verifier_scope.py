@@ -54,8 +54,9 @@ class TestBareLedgerScope(unittest.TestCase):
 
     def test_empty_ledger_is_not_pass(self):
         r = self._verify([])
-        self.assertEqual(r["verdict"], "EMPTY")
+        self.assertEqual(r["verdict"], "FAIL")
         self.assertFalse(r["chain_integrity"])
+        self.assertTrue(any("empty_ledger" in e["error"] for e in r["parse_errors"]))
 
     def test_empty_ledger_exit_code_is_nonzero(self):
         p = os.path.join(self.tmp.name, "empty.jsonl")

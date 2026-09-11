@@ -14,6 +14,10 @@ about natural persons:
 - No names, contact details, biometric, location, financial-account, or health data of individuals.
 - The identifiers it handles (ISIN/CUSIP/LEI, fund tickers) identify **securities and legal entities**, not
   natural persons.
+- **One declared exception — the microfinance module** (`microfinance.py`): a salted `hash_borrower` is a
+  *pseudonymised* borrower identifier, which is personal data under GDPR Recital 26 for whoever holds the
+  salt. It is processed only by the operating institution, never transmitted by the tool, and the module is
+  not part of the DPG nomination's SDG claims for that reason (see `DPG_NOMINATION.md`).
 
 The tool is **self-hosted**: the operator runs it on their own infrastructure. CryptoValid neither transmits
 data to the author nor to any third-party service by default (the only optional outbound calls are to a

@@ -22,7 +22,7 @@ Verified schema:
   - prev_hash of entry i = self_hash of entry i-1 (the first has 64 zeros)
 
 Output: structured JSON receipt with an explicit `scope` (what PASS proves and does not prove).
-Exit code 0 = chain intact, 1 = failure or EMPTY (a file with no entries has no chain to verify).
+Exit code 0 = chain intact, 1 = failure (a file with zero entries is a failure: nothing was verified).
 
 Example:
     python3 opencore/verifier.py exports/omega_audit_ledger.jsonl
@@ -322,10 +322,12 @@ def verify_ledger(path: str, algo: Optional[str] = None) -> Dict:
             ts_backwards.append({"idx": entries[i].get("idx", i), "prev_ts": a, "ts": b})
 
     chain_integrity = len(hash_failures) == 0 and len(link_failures) == 0 and idx_ok and len(errors) == 0
-    # An empty file has no chain to verify: "PASS" on nothing was a false green (found by the
-    # 2026-09-11 red-team pass: truncation to zero entries verified as PASS).
+    # A ledger with ZERO entries has no chain to verify: "PASS" on nothing was a false green (found
+    # by the 2026-09-11 red-team pass: truncation to zero entries verified as PASS — in all four
+    # verifiers of this family). The spec vocabulary is PASS/FAIL, so it is a FAIL with a named error.
     if not entries:
         chain_integrity = False
+        errors.append({"line": 0, "error": "empty_ledger: zero entries, nothing to verify"})
 
     receipt: Dict = {
         "verified_utc": started,
@@ -347,7 +349,7 @@ def verify_ledger(path: str, algo: Optional[str] = None) -> Dict:
         "ts_backwards": ts_backwards[:10],
         "parse_errors": errors[:10],
         "chain_integrity": chain_integrity,
-        "verdict": ("EMPTY" if not entries else "PASS" if chain_integrity else "FAIL"),
+        "verdict": "PASS" if chain_integrity else "FAIL",
         # What this verdict does and does not prove. A bare hash chain is internally consistent
         # evidence: anyone with write access to the file can truncate it or rewrite a suffix and
         # re-chain it, and this verifier will not see that. Those attacks are caught one layer up —

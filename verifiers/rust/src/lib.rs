@@ -115,7 +115,9 @@ pub fn verify_ledger(text: &str, algo: Option<&str>) -> VerifyResult {
             idx_ok = false;
         }
     }
-    let chain = hash_failures.is_empty() && link_failures.is_empty() && idx_ok && parse_errors == 0;
+    // zero entries = nothing verified = FAIL (2026-09-11: all four verifiers said PASS on an empty file)
+    let chain = hash_failures.is_empty() && link_failures.is_empty() && idx_ok && parse_errors == 0
+        && !entries.is_empty();
 
     VerifyResult {
         verdict: if chain { "PASS" } else { "FAIL" }.into(),

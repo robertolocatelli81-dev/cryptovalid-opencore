@@ -39,7 +39,7 @@ raccoglie tutti i campi con le **evidenze reali nel repo**. Fonte degli indicato
 | 2 | Licenza open approvata | ✅ | `AGPL-3.0-or-later` — [`LICENSE`](LICENSE), SPDX, [`NOTICE`](NOTICE) |
 | 3 | Proprietà chiara | ✅ | Copyright Roberto Locatelli — [`NOTICE`](NOTICE), `pyproject.toml` |
 | 4 | Indipendenza di piattaforma | ✅ | `dependencies = []` (solo stdlib ≥3.9); `cryptography` opzionale e OSI-open |
-| 5 | Documentazione | ✅ | [`README.md`](README.md) (499 righe), `spec/` (CONFORMANCE, SPEC_*, REQUIREMENTS_COVERAGE, GAP_ROADMAP) |
+| 5 | Documentazione | ✅ | [`README.md`](README.md) (516 righe), `spec/` (CONFORMANCE, SPEC_*, REQUIREMENTS_COVERAGE, GAP_ROADMAP) |
 | 6 | Estrazione dati non-PII/non-proprietaria | ✅ | formati aperti JSONL/JSON/CSV/N-PORT XML; import/export non proprietari |
 | 7 | Privacy e leggi applicabili | ✅ | [`PRIVACY.md`](PRIVACY.md) — no-PII by design, self-hosted, GDPR-aware |
 | 8 | Standard e best practice | ✅ | SHA3/SHA-256 (FIPS 202/180-4), Ed25519 (RFC 8032), RFC 3161 (TSA), RFC 6962 (Merkle), ISO 6166; threat model dichiarato |
@@ -83,7 +83,7 @@ https://digitalpublicgoods.net/submission-guide/ · È il passo umano di Roberto
   "aliases": ["OMEGA open-core", "CryptoValid"],
   "description": "Zero-dependency open-source library that lets any third party locally verify the integrity of financial and compliance evidence: hash-chained ledgers, committed-ledger derived-metric attestations, and fund holdings. Anyone recomputes the SHA-256/SHA3-256 hash chains and Merkle attestations and checks them without trusting the operator. It is proof-of-integrity (the evidence is unaltered and internally consistent), not proof-of-veracity (it does not claim the recorded facts are true).",
   "website": "https://github.com/robertolocatelli81-dev/cryptovalid-opencore",
-  "license": [{"spdx": "AGPL-3.0-or-later", "licenseURL": "https://github.com/robertolocatelli81-dev/cryptovalid-opencore/blob/main/LICENSE"}],
+  "license": [{"spdx": "AGPL-3.0-or-later", "licenseURL": "https://github.com/robertolocatelli81-dev/cryptovalid-opencore/blob/master/LICENSE"}],
   "SDGs": [
     {"SDGNumber": 16, "evidenceText": "Tamper-evident, independently verifiable evidence of compliance and audit decisions: anyone recomputes the SHA-256/SHA3-256 hash chains and Merkle attestations without trusting the operator, supporting transparent, accountable institutions and anti-corruption. The verifier demonstrably fails on tampered evidence, and integrity is anchorable to independent witnesses (RFC 3161 timestamps, OpenTimestamps/Bitcoin)."},
     {"SDGNumber": 9, "evidenceText": "Zero-dependency (Python standard library only), offline-recomputable open infrastructure for verifying financial and regulatory evidence, auditable by any third party without vendor lock-in or proprietary dependencies."}

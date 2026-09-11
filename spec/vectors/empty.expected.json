@@ -1,0 +1,13 @@
+{
+ "input": "empty.jsonl",
+ "normative": {
+  "verdict": "FAIL",
+  "chain_integrity": false,
+  "algorithm": "sha256",
+  "entries": 0,
+  "hash_failures_idx": [],
+  "link_failures_idx": []
+ },
+ "reference_receipt_sha256": "58d39f1371c8ee59f2710f5f4492cc1803ab88c11bc345b466a4e6edb62082d5",
+ "note": "Zero entries: nothing was verified. Every verifier of this family said PASS on this file until 2026-09-11; a conformant verifier MUST say FAIL."
+}

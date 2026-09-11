@@ -1,6 +1,3 @@
-build/
-dist/
-*.egg-info/
-*.key
-*.pyc
 __pycache__/
+*.pyc
+*.key

@@ -49,12 +49,13 @@ CORPUS = {
     "dup-key": '{"idx":0,"ts":"t","data":{"a":1,"a":2},"prev_hash":"' + "0" * 64 + '","self_hash":"z"}',
     "escaped-dup": '{"idx":0,"ts":"t","data":{"a":1,"\\u0061":2},"prev_hash":"' + "0" * 64 + '","self_hash":"z"}',
     "garbage": "not json",
+    "empty": "",   # zero entries: all four verifiers said PASS until 2026-09-11 — MUST be FAIL
 }
 
 
 def main():
     verifiers = {
-        "python": ["python3", os.path.join(ROOT, "opencore", "verifier.py")],
+        "python": ["python3", os.path.join(ROOT, "verifier.py")],   # radice del repo pubblico (layout piatto)
         "js": ["node", os.path.join(HERE, "js", "cvverify.mjs")],
         "rust": [RUST],
         "swift": [SWIFT],
