@@ -1,0 +1,529 @@
+Metadata-Version: 2.4
+Name: cryptovalid-opencore
+Version: 0.9.3
+Summary: Verifiable compliance evidence: hash-chained ledgers + standalone offline verifier (flat-layout modules, unchanged declared commands)
+Author: Roberto Locatelli
+License: AGPL-3.0-or-later
+Project-URL: Homepage, https://github.com/robertolocatelli81-dev/cryptovalid-opencore
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+License-File: NOTICE
+Dynamic: license-file
+
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- Copyright (C) 2026 Roberto Locatelli -->
+
+# CryptoValid Open Core
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539578.svg)](https://doi.org/10.5281/zenodo.22539578)
+
+[![verify-evidence](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml/badge.svg)](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml)
+
+**Verifiable compliance evidence for internet services — free software.**
+
+This directory is the **AGPL-3.0 carve-out** of the OMEGA Ecosystem, decided by
+the author (Roberto Locatelli) on 2026-08-08.
+
+## Licensing architecture (dual license, honest and explicit)
+
+| Component | License |
+|---|---|
+| **this repository (`cryptovalid-opencore`)** — evidence format spec, standalone verifier, and every deliverable funded by open-source grants | **AGPL-3.0-or-later** (see `LICENSE` in this directory) |
+| Everything else in the OMEGA Ecosystem repository | **BSL 1.1** (source-available; see repository root) |
+
+Copyright for both sides: Roberto Locatelli, 2026. The author licenses the
+contents of this directory under the GNU Affero General Public License v3.0 or
+later. Contributions to this repository are accepted under the same license.
+
+**Commercial license — for AGPL-averse enterprises.** The AGPL-3.0 (esp. the §13 network clause)
+deliberately prevents cloud-stripping, but many corporate legal policies forbid AGPL to avoid copyleft
+contagion. If that is your case, a **commercial license of this code** is available from the author
+(roberto.locatelli.81@gmail.com): the same code, without the AGPL network/copyleft obligations. This is
+the standard open-core arrangement — AGPL for the community, a commercial license for enterprises that
+need it — so the copyleft protection is a positioning choice, not an adoption dead-end.
+
+## Patents / freedom-to-operate (honest — no professional FTO was done)
+
+Stated plainly so no one relies on a guarantee that does not exist:
+
+- **Measured (low patent exposure):** the primitives here are open standards or public prior art —
+  SHA-256/SHA3 (FIPS 180-4/202, royalty-free), Ed25519 (published patent-free by its authors),
+  RFC 3161 timestamping and RFC 6962 Merkle trees (open IETF standards), and hash-of-document
+  timestamping + hash-chaining, whose foundational patents (Haber–Stornetta, US 5,136,646/647)
+  expired over a decade ago. There are **no third-party dependencies**, so no patent or licence
+  travels in from an external library.
+- **Not established (residual risk — needs a lawyer, not this file):** a professional
+  freedom-to-operate search has **not** been performed. Patent risk in software is rarely in the
+  algorithms; it is in *combinations* and *business methods* (e.g. "verifying regulatory compliance
+  using a blockchain anchor"), and it varies by jurisdiction — US software/business-method patents
+  are broader than the EU (Art. 52 EPC). **AGPL-3.0 §11 grants a patent licence only from this
+  project's contributors; it does NOT shield you from a third party's patent.**
+- **Your responsibility:** this project is provided as-is, with no warranty of non-infringement.
+  Anyone deploying it — especially commercially or in the United States — should conduct their own
+  patent due diligence / FTO. The author has not, and this document is not legal advice.
+
+## What this is
+
+A self-hosted toolkit that turns compliance activities into **evidence anyone can
+re-execute**:
+
+- append-only **hash-chained ledgers** (canonical JSON, SHA-256);
+- **Ed25519**-signed records;
+- **RFC 3161** independent timestamps;
+- a **standalone verifier** (`verifier.py`, in this directory): one command, no
+  server, no vendor — a third party replays the chain and reaches the same
+  hashes, or the verification fails. Trust is replaced by verification.
+
+## Relevance to the Sustainable Development Goals
+
+CryptoValid is submitted as a candidate **Digital Public Good**. Its relevance to the SDGs is **institutional
+transparency and accountability**, not (yet) financial inclusion:
+
+- **SDG 16 — Peace, Justice and Strong Institutions.** Verifiable, tamper-evident compliance evidence directly
+  supports **target 16.6** (*effective, accountable and transparent institutions*) and **target 16.5** (*reduce
+  corruption*): any third party can re-execute `verifier.py` and reach the same hashes, so an institution's
+  records can be checked **without trusting the institution** — accountability by verification, not by assertion.
+- **SDG 9 — Industry, Innovation and Infrastructure.** It is open, dependency-free (`dependencies = []`) digital
+  infrastructure for trustworthy record-keeping, usable by any organisation at no licence cost.
+
+- **SDG 1 (No Poverty), 8 (Decent Work & Growth), 10 (Reduced Inequalities) — via the `microfinance` module.**
+  `microfinance.py` applies the same primitives to **microcredit transparency**: a microfinance institution's
+  **loan portfolio** is canonicalized (same portfolio → same digest, re-derivable by a **donor or regulator**),
+  its internal consistency is attested (disbursed = outstanding + repaid + written-off), and standard
+  **Portfolio-at-Risk (PAR30/PAR90)** is computed. On the **borrower-protection** side, `over_indebtedness()`
+  detects **over-indebtedness** — a borrower carrying loans across **multiple institutions** (a debt-trap
+  signal) — using a **hashed borrower reference** so exposure is aggregated **without any PII**.
+
+**Honest scope (no overclaim):** the microfinance module is a **real capability** but is currently validated on
+**synthetic loan data** (unlike the fund side, which is validated on real SEC filings) — MFIs do not publish
+portfolios the way funds do, so real-data validation awaits an operator's data. The confine is unchanged:
+**proof-of-integrity, not proof-of-veracity** (it attests that records are internally consistent and
+tamper-evident, not that the loans are real or well-underwritten). No PII by design (see PRIVACY.md).
+
+## Where this fits (honest scope of the demand)
+
+The broad *compliance-automation* market (evidence-collection dashboards) is owned by SaaS
+incumbents and is **not** the target — their model is *trust the vendor's database*. CryptoValid
+targets the narrower, regulation-driven case where evidence must survive **without** trusting any
+vendor:
+
+- **EU AI Act** high-risk systems must keep automatic logs (Art. 12) for **≥ 6 months** (Art. 19);
+  the high-risk obligations for Annex III systems apply from **2 December 2027** (deferred by the
+  Digital Omnibus, Reg. (EU) 2026/1744 — the original 2 August 2026 date no longer holds; see
+  `spec/regulatory_profiles.json`, which carries the dated source).
+- For records to be **admissible** in judicial or regulatory proceedings, each event should be
+  timestamped with an **eIDAS *qualified* timestamp** and made immutable by a **third party
+  independent of both provider and deployer** — cryptographic measures, not access controls.
+
+That is exactly this format's shape: offline third-party verification (`verifier.py`), a
+qualified-TSP-ready **Signed Tree Head** (see *Merkle proofs* below), and tamper-evidence that
+fails loudly. **Honest limits:** this is an *emerging* segment (not proven revenue); the *qualified*
+timestamp needs a real QTSP integration; and general-purpose "crypto-ledger" demand is genuinely
+weak (cf. AWS retiring QLDB). The wedge is **court-admissible AI/records evidence, not a database**.
+
+## Status (honest)
+
+Delivered and tested — the CI badge above is green on every push:
+
+- append-only **hash-chained ledgers** + a **standalone stdlib verifier**, defined by
+  **conformance test vectors** (`spec/vectors/`) so any language can prove interoperability;
+- **Ed25519-signed** records (`signer.py`) and a signed, **auditor-ready evidence pack**
+  (`evidence_pack.py`) that a third party verifies offline, vendor-free;
+- **RFC 3161** timestamping — cryptographically verified against a real public TSA;
+- a **self-updating regulatory profile** (MiCA / EU AI Act / DORA / GDPR) that carries provenance
+  and flags stale mappings for human review;
+- **adversarially hardened**: red-team passes found and closed real gaps (truncation and manifest
+  re-forge at the *signed pack* layer, timestamp forgery, cross-language JSON canonicalisation; and on
+  2026-09-11, a bare-ledger verifier that answered `PASS` on an **empty** file) — each with a regression test.
+  **Know what `verifier.py` proves**: a bare hash chain is internally consistent evidence — it cannot see
+  truncation or a re-chained suffix written by someone with write access to the file. The receipt now
+  says so in a `scope` field; those attacks are caught by the signed evidence pack (`evidence_pack.py`),
+  which commits to entry count and head hash;
+- **high-frequency ingestion** (`cryptovalid_ingest.py`): segmented hash-chained ledgers with
+  Merkle-STH sealing (chained across segments, KMS/HSM-signable), batched fsync, fail-closed
+  crash recovery — throughput measured by the bench, never quoted as a fixed claim;
+- **KMS/HSM signing backends** (`cryptovalid_kms.py`): the Ed25519 private key can live in a
+  **PKCS#11 HSM** (tested end-to-end against SoftHSM2; YubiHSM 2 exposes the same mechanism),
+  **AWS KMS** (`ECC_NIST_EDWARDS25519`, exercised against the API contract — a live signature
+  needs a real AWS account), or **HashiCorp Vault Transit** (protocol-tested against a stub) —
+  instead of a local key file. Signatures stay standard Ed25519, so the stdlib verifier is unchanged.
+
+Honest caveats, unchanged: **no users yet**; this is **not** an HSM itself (it *talks to* one —
+key custody is only as strong as the token/KMS policy behind it), **not** an accredited certification,
+and **not** legal advice — it proves *what / when / order / who-signed + non-alteration*, not the truth of
+the recorded facts. Broader packaging and an independent security audit are the object of a pending NLnet
+application.
+
+## Quick start
+
+```bash
+python3 verifier.py <ledger.jsonl>     # verifies a hash-chained ledger
+```
+
+Exit code 0 = chain intact; non-zero = the file tells you where it broke.
+
+## Signed evidence (the enterprise edge)
+
+Hash-chaining proves a ledger was not altered. **Signing** proves *who sealed it* — and lets a
+third party verify authorship with nothing but a public key. This is what closed, cloud GRC
+evidence tools do **not** give you: their evidence lives in a vendor database ("trust us");
+CryptoValid evidence is signed, self-hosted, and verifiable offline by anyone, forever.
+
+```bash
+python3 signer.py keygen  signer.key                          # Ed25519 keypair (seed, chmod 600)
+python3 signer.py sign    ledger.jsonl  ledger.signed.jsonl  signer.key
+python3 verifier.py       ledger.signed.jsonl                 # hash chain still PASS (stdlib-only)
+python3 signer.py verify  ledger.signed.jsonl                 # signatures PASS (content->self_hash->signature)
+```
+
+- The signature commits to each entry's `self_hash`; `signature`/`signer` are attestation fields
+  excluded from the content hash, so a signed ledger **still passes the stdlib hash verifier unchanged**.
+- `signer verify` re-derives `self_hash` from the content too, so it catches content tampering on its
+  own: the full chain is *content → self_hash → signature*.
+- **Optional layer, honest scope:** the core hash verifier stays **stdlib-only**; signatures need the
+  `cryptography` package. Absence of signatures never weakens the hash chain. By default keys are
+  software keys on a file — production should use a KMS/HSM backend (below). Tests:
+  `python3 test_signer.py`.
+
+### KMS/HSM key custody (no private key in process memory)
+
+`cryptovalid_kms.py` delegates the signature to a backend where the key is **non-exportable**;
+the evidence format and the verifier do not change. URI-style selection:
+
+```bash
+# PKCS#11 HSM (YubiHSM 2, SoftHSM2, smartcard) — PIN via env, never on argv
+export CRYPTOVALID_PIN=****
+python3 cryptovalid_kms.py keygen-hsm --backend \
+  "pkcs11:module=/usr/lib/softhsm/libsofthsm2.so;token=cryptovalid;key=evidence;pin=env:CRYPTOVALID_PIN"
+python3 signer.py sign ledger.jsonl ledger.signed.jsonl --backend "pkcs11:module=...;token=...;key=evidence"
+
+# AWS KMS (KeySpec ECC_NIST_EDWARDS25519, EdDSA supported since 2025-11; needs boto3+credentials)
+python3 signer.py sign ledger.jsonl out.jsonl --backend "awskms:key_id=alias/cryptovalid;region=eu-south-1"
+
+# HashiCorp Vault Transit (key type ed25519; token from $VAULT_TOKEN; stdlib-only client)
+python3 signer.py sign ledger.jsonl out.jsonl --backend "vault:url=https://vault:8200;key=cryptovalid"
+```
+
+**Honest bench per backend** (`test_kms.py`): PKCS#11 is tested **end-to-end against a
+real SoftHSM2 token** (non-exportable key, tamper ⇒ FAIL); AWS KMS is exercised against the exact
+API contract (`MessageType RAW` + `ED25519_SHA_512`) with an injected client — a live signature
+requires a real account; Vault Transit is protocol-tested against a local stub. Removing the key
+from process memory does **not** protect against a compromised host asking the HSM to sign
+attacker-chosen data — pair it with KMS policies/audit and HSM touch-policies.
+
+## Auditor-ready evidence pack
+
+Assembling evidence for an auditor is the regtech time-sink. `evidence_pack.py` turns one or more
+ledgers into a **self-verifying bundle** (MANIFEST with per-file SHA-256 + per-ledger hash/signature
+verdicts + signer keys + an optional RFC 3161 timestamp, a human `SUMMARY.md`, and the ledgers).
+A third party re-checks **everything** with nothing but this repository:
+
+```bash
+python3 evidence_pack.py build  pack_dir/  ledger.signed.jsonl  --subject "audit CUST-001"
+python3 evidence_pack.py verify pack_dir/
+```
+
+`verify` returns `valid: true` only if every file digest matches the manifest, the manifest is
+self-consistent, and every ledger passes its hash chain **and** (if signed) its signatures — no server,
+no account, no vendor. Tamper any file and it drops to `valid: false`. RFC 3161 anchoring is optional
+(needs `openssl` + a TSA); its absence never invalidates the pack. Tests: `python3 test_evidence_pack.py`.
+
+This is the difference from closed GRC evidence tools: **your evidence is a bundle anyone can re-execute
+to verify — forever, offline, without trusting us.**
+
+Build a pack with `--sign-key <keyfile>` to **authenticate the manifest** (recommended): it binds the
+subject, the file digests, and each ledger's entry count + head hash. `verify_pack` reports
+`manifest_authenticated`.
+
+### Dispute evidence for agentic-payment mandates (AP2 / SD-JWT)
+
+The AP2 spec tells implementers *what* to keep for dispute resolution (the SD-JWTs with their
+disclosures) but not *how* — no key snapshotting, no tamper-evidence, no long-term validation.
+`ap2_evidence.py` turns a set of SD-JWT mandates into **one self-contained evidence file** that
+verifies **offline years later**: it validates each ES256 signature at build time, snapshots the
+key material with an explicit **provenance class** (`x5c_header` / `jwk_header` / `supplied` /
+`jwks_fetched` — declared, never dressed up), recomputes cross-mandate hash **bindings** from the
+exact compact serializations, and seals everything under a SHA-256 digest with an optional
+RFC 3161 timestamp:
+
+```bash
+python3 ap2_evidence.py build ev.json intent=intent.sdjwt cart=cart.sdjwt --tsa http://tsa.izenpe.com
+python3 ap2_evidence.py verify ev.json     # offline, fail-closed
+```
+
+Honest scope: proves these exact artifacts verified with this key material at build time (and
+existed at the TSA's time, if stamped). It does **not** confer eIDAS art. 45j qualified-archive
+legal presumption and does not validate x5c chains to a trust anchor. ES256 only, loudly.
+Tests: `python3 test_ap2_evidence.py`. Also exposed read-only as the MCP tool
+`verify_ap2_evidence`.
+
+### Auditor-facing report (PDF/HTML)
+
+An ISO inspector or an EU regulator expects a formal document, not JSON on a terminal.
+`cryptovalid_report.py` renders an evidence pack into a typographic audit report — front page,
+global status, per-ledger detail, signer keys, RFC 3161 / eIDAS anchoring, honest scope, and the
+exact vendor-free re-verify command:
+
+```bash
+python3 cryptovalid_report.py pack_dir/                      # -> report.html + report.pdf
+python3 cryptovalid_report.py pack_dir/ --lotl --lotl-ms ES  # opt-in eIDAS check (network)
+```
+
+Design rules (they ARE the security model of this layer): the report **never recomputes a
+verdict** — every light comes verbatim from the same fail-closed `verify_pack()` an auditor runs by
+hand, so a tampered pack renders RED, always. The report is a **rendering, not evidence**: the
+authoritative artifacts remain `MANIFEST.json` + the ledgers, and the document says so on its face.
+HTML needs nothing but the Python stdlib; PDF uses [WeasyPrint](https://weasyprint.org/) only if it
+is already installed (honest degrade to HTML otherwise). The eIDAS light has three honest states —
+not checked (default) / qualified / not qualified — never a fabricated green.
+Tests: `python3 test_report.py` (tamper→RED proven before the positive path).
+
+## MCP server — agents that can prove what they did
+
+`cryptovalid_mcp.py` exposes CryptoValid to any MCP client (Claude Code, Claude Desktop, other
+agents) over stdio — **zero dependencies**: the MCP JSON-RPC transport is implemented with the
+Python stdlib, same ethos as the rest of this repo.
+
+```jsonc
+// client config
+{"command": "python3", "args": ["/path/to/cryptovalid_mcp.py"]}
+```
+
+Read-only tools, always available, every answer carries **provenance** (source, SHA-256, UTC):
+`verify_ledger`, `verify_pack`, `verify_archive` (with optional trusted-signer set and opt-in
+eIDAS/LOTL check). Write tools — `append_event`, `seal_segment` — let an agent **seal its own
+actions** into a tamper-evident, signed, RFC 3161-anchorable archive that anyone re-verifies
+offline; they are **human-gated twice** (env `CRYPTOVALID_MCP_ALLOW_WRITE=1` *and* a per-call
+`confirm_token` matching `CRYPTOVALID_MCP_CONFIRM`) and disabled by default. Signing uses the
+same backend URIs as everywhere else (`file:` / `pkcs11:` / `awskms:` / `vault:` / `nethsm:`) —
+with the HSM/KMS backends the private key never enters the server process.
+
+Tests: `python3 test_mcp.py` — over the real stdio transport, gate refusals and
+tampered-ledger failure proven before the positive path.
+Honest scope: sealing proves what/when/order/who-signed — never the truth of the recorded facts.
+
+## DORA ICT-incident evidence (EU, evidence-driven enforcement)
+
+Under EU DORA, supervisors moved to *evidence-driven* enforcement in 2026: they want
+**timestamps, classification rationales and log trails — not policy PDFs**. Major ICT incidents
+follow a hard reporting lifecycle: initial notification within **4h** of major classification
+(24h backstop), intermediate within **72h**, final within **1 month**.
+
+`dora_incident.py` makes that lifecycle **tamper-evident and reproducible**: each phase
+(detected → classified → initial/intermediate/final) is a canonical, hash-chained record, and
+the DORA deadlines are checked against the *recorded* timestamps — a regulator recomputes the
+same verdicts from the records alone, then re-verifies with the unified verifier. Seal the chain
+head with a qualified eIDAS timestamp (`cryptovalid_tsa`) for legal-grade time.
+`python3 dora_incident.py attest phases.json --incident-id INC-1` / `verify att.json phases.json`.
+
+Honest scope (the boundary never moves): **proof-of-integrity + timeline + deadline-check, NOT a
+DORA compliance certificate** and NOT proof that the major/significant classification is correct
+(the entity's judgement, reviewed by its auditor). Complements web-evidence anchoring tools by
+covering the part they leave open: the incident lifecycle and its deadlines.
+
+## Transaction evidence for tax/audit (IRS Form 1099-DA era)
+
+From 2026 US brokers must report crypto cost basis (Form 1099-DA) — but NOT for assets acquired
+before 2026, nor for non-custodial/DeFi activity: the taxpayer must track and, on audit, *prove*
+their own transactions. Tax software computes the numbers; it does not give evidence that survives
+an audit without trusting the software.
+
+`tx_evidence.py` fills exactly that gap: it canonicalizes each transaction deterministically,
+hash-chains the set (tamper-evident), and re-derives the cost basis with a **declared, deterministic
+FIFO** method — so a third party (an auditor, the IRS) recomputes the **same numbers** from the same
+records. `python3 tx_evidence.py attest transactions.json` / `verify attestation.json transactions.json`.
+
+Honest scope (the boundary never moves): **proof-of-integrity + proof-of-reproducibility, NOT tax
+advice and NOT proof of tax-correctness** — it does not pick your accounting method, apply
+wash-sale/jurisdiction rules, or certify compliance. Those remain the taxpayer's and their advisor's.
+
+## Long-term evidence defenders (WORM · re-anchor · heterogeneous anchors)
+
+Three capabilities that keep evidence sound *over years*, each a runnable tool now:
+
+- **`cryptovalid_worm.py`** — WORM escrow of the *record* (not just its hash): append-only,
+  overwrite refused, GDPR crypto-shredding of the key. Meets immutable-retention rules
+  (SEC Rule 17a-4, MiCA 5–7 years). `python3 cryptovalid_worm.py put <store> <key> <file>`.
+- **`cryptovalid_reanchor.py`** — public-RPC anchors lose witnesses as nodes prune history
+  (an "auto-DoS" of the evidence, measured). This assesses decay and flags when to re-anchor
+  *before* the evidence becomes unreachable. `python3 cryptovalid_reanchor.py <retention.json> --age-days N`.
+  Run it on a timer; re-anchoring itself is an on-chain tx and stays human-gated.
+- **`cryptovalid_heterogeneous.py`** — real fault-independence: N *distinct* trust domains
+  (Solana + Bitcoin/OTS + eIDAS QTSP), not replicas of one chain. Same-domain replicas count
+  once. `python3 cryptovalid_heterogeneous.py <sha3_hex> <attestations.json> --min-domains 2`.
+
+Honest scope: these harden *availability, retention and robustness* of the evidence — not the
+truth of its content (that boundary never moves).
+
+## Threat model (honest — hardened after adversarial review)
+
+Adversarial testing (NEMESIS + an independent LLM red-team) found and CLOSED real gaps:
+
+- **Truncation / branching:** a bare hash chain does not prevent dropping trailing entries or forking a
+  new history after any point. A **signed manifest** commits each ledger's entry count and head hash, so
+  `verify_pack` detects truncation. *Bare ledgers still need a signed manifest (or an external anchor) for
+  this — documented, not hidden.*
+- **Manifest re-forge:** an unsigned manifest is integrity-checked, **not authenticated** — its metadata is
+  trustworthy only if `manifest_authenticated` is true. A tampered signed manifest → `valid: false`.
+- **RFC 3161:** the timestamp token is now **cryptographically verified** (status Granted + message imprint
+  == manifest digest), proved against a real DigiCert TSA. A forged token → `rfc3161.verified: false`.
+- **Cross-language integrity:** canonicalisation is pinned (ASCII-escaped, no floats, unique keys — see
+  §3 of the spec) with a dedicated conformance vector, so a Go/Rust/JS verifier computes the same hashes.
+- **Replay across ledgers:** carry a `ledger_id` in `data` (see spec §3) to bind entries to one chain.
+
+**Declared limits** (from a further independent adversarial review, 2026-08-17 — stated, not hidden):
+
+- **Split-view / equivocation:** an RFC 3161 TSA stamps *any* hash it is shown — it proves
+  existence-by-T, **not uniqueness**. A signer-key holder could maintain two internally valid chains,
+  anchor both, and serve different views to different verifiers. Certificate Transparency solves this
+  with gossip and independent monitors; a standalone archive has no gossip. Mitigation: publish each
+  STH through more than one channel and compare; treated as future work, not as solved.
+- **Rollback / freshness:** a verifier who does not already know the latest HEAD cannot detect being
+  served an older (integral, anchored) state. The anti-truncation HEAD protects only relative to a
+  known HEAD; TSA anchors do not provide freshness.
+- **Pre-anchor window:** between an event and its sealed anchor, a root-level attacker can rewrite and
+  re-seal silently. The anchor proves "existed by T"; the per-entry timestamp comes from the local
+  clock and is not independently attested.
+- **Selective omission:** an append-only log proves what it contains, never the completeness of what
+  should have been recorded.
+- **Signing-channel governance:** "non-exportable key" ≠ "custody service incompressible": whoever
+  controls the KMS/HSM policy or unseal material can authorize signatures. Policy governance,
+  rotation and revocation are part of the security perimeter.
+- **Not post-quantum:** Ed25519 signatures could be forgeable by a future quantum adversary; already-
+  published TSA anchors then become the load-bearing evidence, which makes anchor coverage part of
+  the security perimeter, not an optional extra.
+
+Honest scope unchanged: the format proves *what/when/order/who-signed + non-alteration*, **not the truth
+of the recorded facts**, and is **not** an HSM or a legal-compliance certification.
+
+## An open standard (not just a tool)
+
+A verifiable-evidence *feature* is copyable; an *adopted format* is not. CryptoValid is defined by
+**conformance test vectors** (`spec/vectors/` + `spec/CONFORMANCE.md`), so a verifier in **any language**
+proves interoperability by reproducing the same verdicts:
+
+```bash
+python3 conformance.py            # exit 0 = the reference verifier conforms (7/7 vectors)
+```
+
+Implement it in Go/Rust/JS, match the vectors, and open a PR to the conformance table — the format becomes
+a shared standard, not one vendor's tool. Full spec: [`SPEC_EVIDENCE_FORMAT.md`](SPEC_EVIDENCE_FORMAT.md).
+
+## Merkle proofs (optional extension, RFC 6962)
+
+`cryptovalid_merkle.py` builds an **RFC 6962** Merkle tree over the same canonical entries,
+adding what a linear chain cannot do efficiently:
+
+- **inclusion proofs** — verify one entry in `O(log n)` without recomputing the whole chain;
+- **consistency proofs** — cryptographic proof that a newer ledger *append-only extends* an older one;
+- a **Signed Tree Head** (`{tree_size, root_sha256}`) — submit `root_sha256` to a **qualified TSP**
+  (eIDAS EU Trusted List) for a *qualified* RFC 3161 timestamp (the admissibility requirement above).
+
+```bash
+python3 cryptovalid_merkle.py sth    examples/sample_ledger.jsonl   # {tree_size, root_sha256}
+python3 cryptovalid_merkle.py prove  examples/sample_ledger.jsonl 1 # audit path for entry 1
+python3 cryptovalid_merkle.py verify examples/sample_ledger.jsonl 1 # INCLUSION VALID
+```
+
+A working **RFC 3161 client** (`cryptovalid_tsa.py`) requests a timestamp over the STH root from any
+TSA — point `--tsa` at an eIDAS **qualified** TSP for a *qualified* token, then **`cryptovalid_lotl.py`** certifies it is *qualified* by matching its TSA
+certificate against the **EU List of Trusted Lists** (ETSI TS 119 612, service type `TSA/QTST`) —
+**validated end-to-end LIVE (2026-08-16)**: a real timestamp from a real *qualified* TSP
+(**Izenpe**, Spanish Trusted List) over an ingestion HEAD hash returned `qualified: true`, while
+two non-qualified TSAs (freetsa, and **Certum's public TSA** — correctly distinguished from the
+*qualified* services of the same company listed in the Polish TL) were rejected. Honest scope:
+`qualified: true` means the TSA certificate is a QTST-`granted` service in the EU Trusted Lists
+at verification time; full ETSI TS 119 615 legal validation (chains, revocation, time constraints)
+is beyond exact-fingerprint matching, and production use still wants a contracted QTSP with an SLA. The linear hash-chain stays the interoperable core; Merkle is **additive**. Domain separation:
+`0x00` leaves, `0x01` nodes. Third-party verification needs only
+`(entry, index, tree_size, audit_path, root)`. Tests: `python3 test_merkle.py`.
+
+## High-frequency ingestion (Art. 12 logs at scale)
+
+`cryptovalid_ingest.py` turns a high-rate event stream into this same evidence format —
+nothing new to verify, just more of it, faster:
+
+- **segments** (`ledger-000000.jsonl`, …): each one an ordinary hash-chained ledger the
+  stdlib verifier accepts unchanged — an auditor needs one file, not the archive;
+- **sealing**: each segment gets an RFC 6962 **STH sidecar**, hash-chained to the previous
+  STH (removing or reordering *interior* segments is detectable), optionally **Ed25519-signed
+  via any KMS/HSM backend** above, and ready for a single RFC 3161 timestamp per batch;
+- **HEAD manifest** (`<prefix>.head.json`, rewritten at every seal): commits to the segment
+  *count* and the last STH — a bare STH chain, like any bare hash chain, cannot see its own
+  **tail** being truncated or extended (same limit the threat model states for entries).
+  Honest scope: the HEAD closes the tail gap only when **signed** and verified against a
+  **pinned public key**; an unsigned HEAD can be rewritten by whoever rewrites the archive.
+  Anchor the HEAD hash via RFC 3161 for third-party time;
+- **batched fsync** (the durability unit is the flush; `batch_size=1` for per-event
+  durability) and **fail-closed crash recovery**: a torn trailing line is truncated and
+  reported; a *tampered* history refuses to resume;
+- **automatic RFC 3161 anchoring** (`tsa_url=`): every seal live-timestamps the STH canonical
+  hash (token in `<segment>.sth.tsr` + honest metadata receipt), optionally LOTL-certified as
+  eIDAS-qualified (`lotl_check=True`, cached) — validated live against a real QTSP (Izenpe).
+  Best-effort by design: a TSA/network failure never blocks ingestion (it lands in the receipt
+  and in a verify warning) and runs outside the writer lock (a slow TSA never stalls appends).
+  Verification of tokens is two-layer and fail-closed: **CMS signature** (openssl, `-noverify`:
+  the chain-to-QTST question belongs to the LOTL match) + **digest binding** to the STH — a
+  forged blob or an unbound token fails; without openssl, acceptance degrades to binding-only
+  with an explicit warning. The LOTL cache lives in `~/.cache/cryptovalid/`, never inside the
+  archive (a co-located cache could be poisoned to fake the qualified verdict);
+- `verify_archive()` / `python3 cryptovalid_ingest.py verify <dir> [--lotl --lotl-ms ES]`
+  re-checks every sealed segment: hash chain, Merkle root vs sidecar, STH chain, signatures,
+  HEAD manifest, and RFC 3161 token binding (LOTL qualification opt-in, needs network).
+
+```bash
+python3 cryptovalid_ingest.py bench  /tmp/cv-bench --n 50000   # throughput MEASURED on your machine
+python3 cryptovalid_ingest.py verify /tmp/cv-bench --prefix bench
+```
+
+**Honest numbers:** throughput depends on machine/filesystem/batch — the bench measures it
+where you run it (reference dev box: ~25k events/s at batch 256 with per-batch fsync; your
+number is the one that counts). Timestamps come from the **host clock**: pair sealed STHs
+with RFC 3161 tokens for independent time. Tests: `python3 test_ingest.py` (tamper, torn-tail
+recovery, concurrency, signed-STH negative controls).
+
+## Self-updating regulatory profiles
+
+`spec/regulatory_profiles.json` maps evidence to EU requirements (MiCA, EU AI Act, DORA, GDPR) with
+`status`, `effective_utc`, `source_url` and an `as_of` date. A ledger entry may set
+`data.regulatory_ref = "<id>"` to declare what it supports.
+
+```bash
+python3 refresh_regulatory.py --check-urls   # re-checks sources, flags stale entries; exit 1 = needs review
+```
+
+**Honest scope:** it keeps the mapping fresh and provenance-honest and **flags** stale entries for a human
+to re-verify against the primary source — it does not auto-interpret law. Outdated regulatory status is
+never allowed to pass silently.
+
+## Standards & freedom-to-operate (factual, not legal advice)
+
+CryptoValid is built on open standards and techniques whose inventors we **name and credit**:
+Merkle trees (**Ralph Merkle**, US4309569, 1979 — expired), hash-chain timestamping (**Stuart
+Haber & W. Scott Stornetta**, US5136647/US5373561, filed 1991–92 — **expired 2004**), **RFC 3161**
+timestamping and **RFC 6962** Merkle proofs (open IETF standards; CT by **Laurie, Langley &
+Kasper**), SHA-256 (NIST) and Ed25519 (**D. J. Bernstein et al.**, public domain). The same design
+has been practised openly since 2013 by Certificate Transparency, Sigstore/Rekor, OpenTimestamps
+and immudb — broad, load-bearing prior art.
+
+**Closest patented art, considered and distinguished** (screening 2026-08-17): the **Guardtime /
+KSI** family (Buldas et al.) — its foundational US8719576B2 ("distributed calendar infrastructure",
+priority 2003) **expired December 2024**, and the living members (e.g. US9614682, US11057187) claim
+the calendar-aggregation KSI architecture, which this design does not practise (we use per-archive
+Merkle STHs + independent RFC 3161 TSAs, not a distributed calendar). The IETF datatracker records
+**zero IPR disclosures** against RFC 6962 — noting honestly that IETF disclosure duties bind
+*participants* only, so this is corroboration, not proof.
+
+**No *known* third-party patent is practised, after the documented screening above.** A freedom-to-
+operate claim is a universal negative and cannot be proven — pending applications and non-US filings
+remain invisible by construction. *Technical FTO note, not a legal opinion; a definitive FTO
+requires professional counsel.*
+
+## Install (pip)
+
+```bash
+pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ cryptovalid-opencore
+```
+
+Release artifacts are attached to GitHub Releases; the index links carry `#sha256=` fragments verified by pip. All documented `python3 <file>.py` commands keep working unchanged from a clone.

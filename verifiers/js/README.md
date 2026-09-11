@@ -9,7 +9,7 @@ different runtime — proof that the format is vendor-neutral, not tool-locked.
 node cvverify.mjs ledger.jsonl                 # verify a hash-chained ledger
 node cvverify.mjs ledger.signed.jsonl --pubkey <hex>   # + pin the Ed25519 signer
 node cvverify.mjs --conformance <vectors_dir>  # run the normative vector suite
-npm test                                        # 38 checks incl. cross-oracle vs Python
+npm test                                        # 39 checks incl. cross-oracle vs Python
 ```
 
 Verifies: canonical hash-chain (self_hash recompute, prev_hash linkage, sequential

@@ -25,7 +25,7 @@ that MUST fail (bad_idx, broken_link, tampered_content).
 | Implementation | Runtime / deps | Status |
 |---|---|---|
 | `verifier.py` | Python 3, stdlib | reference — conformant |
-| `verifiers/js/cvverify.mjs` | Node ≥18, stdlib only | **conformant 7/7**; 38-check suite incl. cross-oracle vs the Python reference |
+| `verifiers/js/cvverify.mjs` | Node ≥18, stdlib only | **conformant 7/7**; 39-check suite incl. cross-oracle vs the Python reference |
 | `verifiers/rust/` | Rust, **std only** (SHA-256+Keccak in-crate) | **conformant 7/7**; `cargo test` + `clippy -D warnings`; cross-oracle Python↔JS↔Rust = 0 mismatch |
 | `verifiers/swift/` | Swift + CryptoKit (Apple) / swift-crypto (Linux) | **compiled & tested (Swift 6.3.3): swift test 4/4**; in the 4-language cross-oracle (Python/JS/Rust/Swift) = 0 mismatch |
 
