@@ -84,7 +84,7 @@ class MetricSpec:
     metric_id: str
     num_of: Callable[[Dict], int]   # contributo intero al numeratore
     den_of: Callable[[Dict], int]   # contributo intero al denominatore
-    # PROPRIETA' DELLA DEFINIZIONE (disciplina QRAFT-RA "il certificato deve sapere FALLIRE", 2026-08-22):
+    # PROPRIETA' DELLA DEFINIZIONE (disciplina "il certificato deve sapere FALLIRE", 2026-08-22):
     # se ogni record ha num_i <= den_i per costruzione, allora num_total <= den_total e il ratio e' in
     # [0,1]. E' un INVARIANTE verificabile OFFLINE sui totali pubblici -> chiude il buco per cui
     # verify_attestation accettava un ratio impossibile (es. PAR30=1.5) purche' i totali fossero legati.
@@ -209,7 +209,7 @@ def commit_ledger(records: List[Dict], master_salt: str, spec: MetricSpec, as_of
 def metric_numerical_hash(spec_version: str, metric_id: str, as_of: str,
                           num_total: int, den_total: int) -> str:
     """Fingerprint di RIPRODUCIBILITA' del CALCOLO derivato, SALT-INDIPENDENTE (disciplina dual-hash del
-    QraftReport di QRAFT-RA, 2026-08-22). A differenza del root_hash (che dipende dal master_salt = impronta
+    il dual-hash dei report di calcolo, 2026-08-22). A differenza del root_hash (che dipende dal master_salt = impronta
     di EMISSIONE), questo dipende solo dai numeri derivati pubblici: due ri-commit onesti dello STESSO ledger
     con salt diversi danno root_hash diversi ma STESSO numerical_hash -> si prova che il ratio derivato e'
     riprodotto, indipendentemente da quando/con-che-salt e' stato emesso. Non aggiunge leak: num/den sono gia'
@@ -228,7 +228,7 @@ def attestation(c: Commitment) -> Dict:
         "n_records": c.n, "root_hash": c.root_hash, "tree_root": c.tree_root,
         "numerator_minor": c.num_total, "denominator_minor": c.den_total,
         "ratio": str(ratio.quantize(Decimal("0.000001"))),
-        # disciplina QRAFT-RA (additivi, non toccano il binding): fingerprint riproducibilita' + proprieta' metrica
+        # disciplina dual-hash (additivi, non toccano il binding): fingerprint riproducibilita' + proprieta' metrica
         "numerical_hash": metric_numerical_hash(c.spec_version, c.metric_id, c.as_of, c.num_total, c.den_total),
         "num_le_den": c.num_le_den,
     }
@@ -256,7 +256,7 @@ def verify_attestation(att: Dict) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-#  Guardia di COERENZA che SA FALLIRE (disciplina QRAFT-RA, 2026-08-22)
+#  Guardia di COERENZA che SA FALLIRE (disciplina dual-hash, 2026-08-22)
 # --------------------------------------------------------------------------- #
 def verify_metric_consistency(att: Dict, num_le_den: Optional[bool] = None) -> Dict:
     """Guardia OFFLINE che SA fallire — chiude un buco di `verify_attestation` (che controlla binding +

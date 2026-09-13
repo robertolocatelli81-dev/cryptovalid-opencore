@@ -15,7 +15,7 @@ oracle for both stacks): `python3 test_ap2_conformance.py`.
 
 | Implementation | Runtime / deps | Status |
 |---|---|---|
-| `ap2_evidence.py` | Python 3 + `cryptography` | reference — conformant 7/7; ACVP ML-DSA-65 sigVer 9/9 |
+| `ap2_evidence.py` | Python 3 + `cryptography` | reference — conformant 6/6 (1 accept + 5 reject); ACVP ML-DSA-65 sigVer 9/9 |
 
 ## Ledger vectors (spec/vectors/)
 Every independent verifier MUST reproduce the normative block (verdict, chain_integrity,

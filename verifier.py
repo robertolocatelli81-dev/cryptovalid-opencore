@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -68,7 +69,70 @@ def _bounded_int(x):
     return n
 
 
+MAX_JSON_DEPTH = 512  # normative acceptance-profile bound (spec/CONFORMANCE.md, 2026-09-13)
+MAX_INPUT_BYTES = 256 * 1024 * 1024  # a ledger/pack larger than this is refused fail-closed (input_too_large)
+_RECURSION_HEADROOM = 3 * MAX_JSON_DEPTH + 256  # frames the C decoder + object_pairs_hook may need per line
+
+
+def _ensure_recursion_headroom() -> None:
+    """The PASS side of the bound must not depend on how deep the CALLER's stack already is (an MCP
+    server or a report generator invoking verify_ledger from many frames down). Raise the interpreter
+    recursion limit so that an in-profile line (<= MAX_JSON_DEPTH) can always be decoded (2026-09-13).
+    Limits (declared in spec/CONFORMANCE.md): this raises the interpreter limit, not the thread's C stack;
+    on CPython >= 3.12 the C decoder keeps its own counter, so the positive control for this guard was
+    reproduced on 3.11. The raised limit is left in place on purpose (lowering it back under a still-deep
+    caller would be the real hazard)."""
+    depth = 0
+    f = sys._getframe()
+    while f is not None:
+        depth += 1
+        f = f.f_back
+    need = depth + _RECURSION_HEADROOM
+    if sys.getrecursionlimit() < need:
+        sys.setrecursionlimit(need)
+
+
+def input_too_large(path: str) -> bool:
+    try:
+        return os.path.getsize(path) > MAX_INPUT_BYTES
+    except OSError:
+        return False
+
+
+def json_nesting_depth(text: str) -> int:
+    """Maximum bracket nesting of a JSON text, by a LINEAR scan (no recursion, no parsing):
+    brackets inside strings are ignored, escapes honoured. Used to refuse pathological nesting
+    deterministically BEFORE the recursive stdlib decoder can hit the interpreter's stack."""
+    depth = max_depth = 0
+    in_str = esc = False
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "[{":
+            depth += 1
+            if depth > max_depth:
+                max_depth = depth
+        elif ch in "]}":
+            depth -= 1
+    return max_depth
+
+
+class JsonTooDeep(ValueError):
+    pass
+
+
 def _loads_strict(text):
+    d = json_nesting_depth(text)
+    if d > MAX_JSON_DEPTH:
+        raise JsonTooDeep(f"json_too_deep: nesting {d} exceeds the acceptance-profile bound {MAX_JSON_DEPTH}")
+    _ensure_recursion_headroom()
     return json.loads(text, object_pairs_hook=_reject_dup, parse_float=_no_float, parse_int=_bounded_int,
                       parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f"JSON constant {c}")))
 
@@ -235,6 +299,10 @@ def verify_ledger(path: str, algo: Optional[str] = None) -> Dict:
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     errors: List[Dict] = []
 
+    if input_too_large(path):
+        # fail-closed on size too: reading it would exhaust memory and die without a receipt (council 13/09)
+        return {"verdict": "FAIL", "path": path, "verified_utc": started, "entries_count": 0,
+                "parse_errors": [{"line": -1, "error": f"input_too_large: file exceeds {MAX_INPUT_BYTES} bytes"}]}
     try:
         with open(path) as f:
             raw_lines = [ln for ln in f if ln.strip()]
@@ -249,8 +317,16 @@ def verify_ledger(path: str, algo: Optional[str] = None) -> Dict:
     for i, line in enumerate(raw_lines):
         try:
             entries.append(_loads_strict(line))
+        except JsonTooDeep as e:
+            # Nesting beyond the NORMATIVE bound (MAX_JSON_DEPTH, measured by a linear scan, never by
+            # recursion): a FAIL with a named error, never a crash (2026-09-13).
+            errors.append({"line": i, "error": str(e)})
         except (json.JSONDecodeError, ValueError) as e:
             errors.append({"line": i, "error": f"json_decode:{e}"})
+        except RecursionError as e:
+            # Belt-and-braces: the pre-scan already refused > MAX_JSON_DEPTH, so reaching here means the
+            # host process had less stack than the bound assumes (deep caller). Named, not disguised.
+            errors.append({"line": i, "error": f"recursion_error: {str(e)[:120]}"})
 
     # Schema NATIVO (non-PersistentLedger): niente `idx` → verifica di linkage onesta,
     # senza fingere una ricomputazione completa dell'hash che non conosciamo.
@@ -392,7 +468,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--out", default=None, help="Scrivi receipt JSON anche su file")
     args = parser.parse_args(argv)
 
-    receipt = verify_ledger(args.ledger_path, algo=args.algo)
+    try:
+        receipt = verify_ledger(args.ledger_path, algo=args.algo)
+    except RecursionError as e:  # last-resort fail-closed: a receipt, never a traceback (2026-09-13).
+        # Not labelled json_too_deep on purpose: here the cause is unknown (council review 13/09 —
+        # a recursion bug in the verifier itself must not be disguised as a malformed input).
+        receipt = {"verdict": "FAIL", "path": args.ledger_path,
+                   "verified_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                   "parse_errors": [{"line": -1, "error": f"recursion_error: {str(e)[:120]}"}]}
 
     if args.out:
         with open(args.out, "w") as f:

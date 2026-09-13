@@ -32,6 +32,10 @@ import argparse
 import base64
 import hashlib
 import json
+try:  # depth bound shared with the reference verifier (same repo, flat layout)
+    from verifier import MAX_JSON_DEPTH as _MAX_JSON_DEPTH, json_nesting_depth as _json_depth, input_too_large as _too_large
+except Exception:  # noqa: BLE001 — packaged/relative layouts
+    from .verifier import MAX_JSON_DEPTH as _MAX_JSON_DEPTH, json_nesting_depth as _json_depth, input_too_large as _too_large  # type: ignore
 import os
 import shutil
 import sys
@@ -228,8 +232,20 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
 def verify_pack(pack_dir: str) -> Dict:
     """Verifica INDIPENDENTE dell'intero pack (l'auditor non usa alcun vendor): digest dei file ==
     manifest, manifest auto-consistente, ogni ledger passa hash + firme. Fail-closed."""
+    if _too_large(os.path.join(pack_dir, "MANIFEST.json")):
+        return {"files_ok": False, "file_ok": {}, "manifest_ok": False, "manifest_authenticated": False,
+                "ledgers_ok": False, "ledgers": [], "rfc3161": {}, "valid": False,
+                "error": "input_too_large: MANIFEST exceeds the verifier's size bound"}
     with open(os.path.join(pack_dir, "MANIFEST.json"), encoding="utf-8") as f:
-        man = json.load(f)
+        raw = f.read()
+    depth = _json_depth(raw)
+    if depth > _MAX_JSON_DEPTH:
+        # Nesting beyond the normative bound (linear pre-scan, same rule as verifier.py, 2026-09-13):
+        # a FAIL receipt with the SAME key set as the normal one (every field at its fail value) + error.
+        return {"files_ok": False, "file_ok": {}, "manifest_ok": False, "manifest_authenticated": False,
+                "ledgers_ok": False, "ledgers": [], "rfc3161": {}, "valid": False,
+                "error": f"json_too_deep: MANIFEST nesting {depth} exceeds the acceptance-profile bound {_MAX_JSON_DEPTH}"}
+    man = json.loads(raw)
     file_ok = {}
     for name, dig in man.get("file_digests_sha256", {}).items():
         p = os.path.join(pack_dir, name)

@@ -74,7 +74,9 @@ transparency and accountability**, not (yet) financial inclusion:
 - **SDG 9 — Industry, Innovation and Infrastructure.** It is open, dependency-free (`dependencies = []`) digital
   infrastructure for trustworthy record-keeping, usable by any organisation at no licence cost.
 
-- **SDG 1 (No Poverty), 8 (Decent Work & Growth), 10 (Reduced Inequalities) — via the `microfinance` module.**
+- **SDG 1 / 8 / 10 — NOT claimed.** They were withdrawn from the DPG nomination on 2026-08-22 after the 4-mind
+  review (see `DPG_NOMINATION.md`, «SOLO 16 + 9»): the `microfinance` module is a real capability, but a
+  proof-of-integrity tool does not by itself advance poverty or inequality targets. What it does:
   `microfinance.py` applies the same primitives to **microcredit transparency**: a microfinance institution's
   **loan portfolio** is canonicalized (same portfolio → same digest, re-derivable by a **donor or regulator**),
   its internal consistency is attested (disbursed = outstanding + repaid + written-off), and standard

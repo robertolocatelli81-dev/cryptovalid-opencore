@@ -127,8 +127,8 @@ def test_buco_B_sibling_negativo_in_verify_open():
     assert not C.verify_open(cc, spec, opened)["all_ok"]
 
 
-# --- disciplina QRAFT-RA travasata in CLDMA (2026-08-22): dual-hash + guardia che sa fallire ---
-def test_qraft_guard_catches_impossible_ratio():
+# --- disciplina dual-hash travasata in CLDMA (2026-08-22): dual-hash + guardia che sa fallire ---
+def test_cldma_guard_catches_impossible_ratio():
     # PRIMA dimostra di saper FALLIRE: un PAR30 > 100% e' impossibile (piu' a-rischio del totale).
     # verify_attestation da solo lo ACCETTA se la radice lega i totali falsi; verify_metric_consistency NO.
     led = [{"loan_id": "L", "principal_outstanding": "100.00", "days_overdue": "40", "status": "active"}]
@@ -144,7 +144,7 @@ def test_qraft_guard_catches_impossible_ratio():
     assert not C.verify_metric_consistency(bad)["ok"]            # la guardia FALLISCE (come deve)
 
 
-def test_qraft_numerical_hash_is_salt_independent():
+def test_cldma_numerical_hash_is_salt_independent():
     # dual-hash: stesso ledger, salt diversi -> root_hash diverso (emissione) ma numerical_hash uguale (calcolo)
     led = [{"loan_id": "L", "principal_outstanding": "500.00", "days_overdue": "10", "status": "active"},
            {"loan_id": "M", "principal_outstanding": "500.00", "days_overdue": "60", "status": "active"}]
@@ -154,7 +154,7 @@ def test_qraft_numerical_hash_is_salt_independent():
     assert a1["numerical_hash"] == a2["numerical_hash"]          # calcolo derivato riprodotto
 
 
-def test_qraft_verifier_ignores_declared_num_le_den():
+def test_cldma_verifier_ignores_declared_num_le_den():
     # un prover malevolo mette num_le_den=False per schivare il check: il verificatore usa KNOWN_BOUNDED
     led = [{"loan_id": "L", "principal_outstanding": "100.00", "days_overdue": "40", "status": "active"}]
     att = C.attestation(C.commit_ledger(led, "s", C.SPEC_PAR30, "2026-08-22"))

@@ -2,8 +2,9 @@
 
 Zero-dependency Rust re-implementation of the CryptoValid evidence verifier: SHA-256
 and SHA3-256 are pure-Rust in this crate, so it builds and runs fully offline with no
-external crates. It agrees byte-for-byte with the Python reference and the JS/Swift
-verifiers on the normative vectors (verified by a cross-oracle in CI).
+external crates. It agrees with the Python reference and the JS/Swift verifiers on the normative vectors (same verdicts
+and same canonical digests, i.e. byte-identical canonical JSON on those vectors) and on every verdict of the
+adversarial corpus (cross-oracle in CI).
 
 ```bash
 cargo build --release

@@ -13,8 +13,11 @@ raccoglie tutti i campi con le **evidenze reali nel repo**. Fonte degli indicato
 - **Tipo:** software · **Licenza:** `AGPL-3.0-or-later` (OSI-approved) → [`LICENSE`](LICENSE), header SPDX, [`NOTICE`](NOTICE)
 - **Repository pubblico:** https://github.com/robertolocatelli81-dev/cryptovalid-opencore
 - **Proprietà:** Copyright (C) 2026 Roberto Locatelli ([`NOTICE`](NOTICE), `pyproject.toml`)
-- **Stadio:** funzionante, 32 file di test (296 casi unittest, CI su ogni push), validato su dati reali (SEC N-PORT/N-CSR, KIVA, MIX).
-- **Evidenza di stress ONLINE (2026-08-22):** backbone deterministico 27/27 + OMEGA 8/8 + 6 moduli nuovi, e
+- **Stadio:** funzionante, validato su dati reali (SEC N-PORT/N-CSR, KIVA, MIX). Test **misurati il 2026-09-13
+  (v0.9.4)**: 31 file `test_*.py` Python = **302 casi** (291 unittest + 11 controlli CLDMA), + suite JS (39), Rust e
+  Swift e oracolo differenziale in CI; 33 esecuzioni complete su clone anonimo in sandbox nella giornata: 1 rosso su 10 prima dell'ultimo fix (test non deterministico, corretto), poi **10 esecuzioni consecutive verdi sull'albero finale** (ciascuna: 31 suite Python, conformance, ledger manomesso respinto, JS 39, oracolo differenziale).
+  (Il conteggio del 22/08 era «32 file / 296 casi»: due file di test sono stati poi fusi, undici casi aggiunti.)
+- **Evidenza di stress ONLINE (2026-08-22, numeri storici di quel giorno):** backbone deterministico 27/27 + OMEGA 8/8 + 6 moduli nuovi, e
   ancore esterne verificate DAL VIVO — RFC 3161 (freeTSA), OpenTimestamps→Bitcoin (3/3 calendar), Solana
   mainnet (pin genesis). Sa fallire (ledger manomesso → FAIL). Vedi [`spec/STRESS_REAL_ONLINE_20260822.md`](spec/STRESS_REAL_ONLINE_20260822.md).
 

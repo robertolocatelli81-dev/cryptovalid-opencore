@@ -164,7 +164,7 @@ def verify_cldma(path: str) -> dict:
             att = json.load(f)
         ok = cldma.verify_attestation(att)
         layers.append(_layer("totali legati alla radice + ratio", "PASS" if ok else "FAIL"))
-        # disciplina QRAFT-RA (2026-08-22): guardia di coerenza che SA fallire — riproducibilita' del calcolo
+        # disciplina dual-hash (2026-08-22): guardia di coerenza che SA fallire — riproducibilita' del calcolo
         # (numerical_hash) + invariante num<=den per metriche limitate (coglie il ratio IMPOSSIBILE che
         # verify_attestation da solo accetta). Il verificatore usa KNOWN_BOUNDED per metric_id, non il campo del prover.
         cons = cldma.verify_metric_consistency(att)

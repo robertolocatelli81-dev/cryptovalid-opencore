@@ -1,8 +1,9 @@
 # @cryptovalid/verify — independent JS verifier
 
 Zero-dependency (Node stdlib only) re-implementation of the CryptoValid evidence
-verifier. It agrees **byte-for-byte** with the reference (`verifier.py`) on
-the normative conformance vectors, so an auditor can re-check evidence offline in a
+verifier. It agrees with the reference (`verifier.py`) on the normative conformance vectors — same verdicts and
+same canonical digests (i.e. byte-identical canonical JSON on those vectors) — and on every verdict of the
+adversarial corpus (cross-oracle in CI), so an auditor can re-check evidence offline in a
 different runtime — proof that the format is vendor-neutral, not tool-locked.
 
 ```bash

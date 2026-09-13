@@ -52,6 +52,10 @@ import argparse
 import base64
 import hashlib
 import json
+try:  # depth bound shared with the reference verifier (same repo, flat layout)
+    from verifier import MAX_JSON_DEPTH as _MAX_JSON_DEPTH, json_nesting_depth as _json_depth, input_too_large as _too_large
+except Exception:  # noqa: BLE001 — packaged/relative layouts
+    from .verifier import MAX_JSON_DEPTH as _MAX_JSON_DEPTH, json_nesting_depth as _json_depth, input_too_large as _too_large  # type: ignore
 import os
 import sys
 import urllib.request
@@ -479,8 +483,22 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
     """OFFLINE re-verification from the evidence file alone: digest, every signature with
     the SNAPSHOTTED key, every disclosure, every binding, and the RFC 3161 token
     cryptographically (via openssl when present; honest None when absent). Fail-closed."""
+    if _too_large(path):
+        return {"digest_ok": False, "artifacts": [], "producer_signatures": {}, "pq_protected": False,
+                "bindings_ok": False, "rfc3161": {}, "provenance_classes": [], "self_asserted_only": False,
+                "policy_ok": False, "valid": False, "honest_scope": None,
+                "error": "input_too_large: evidence file exceeds the verifier's size bound"}
     with open(path, encoding="utf-8") as f:
-        ev = json.load(f, object_pairs_hook=_no_dup_pairs)
+        raw = f.read()
+    depth = _json_depth(raw)
+    if depth > _MAX_JSON_DEPTH:
+        # Nesting beyond the normative bound (linear pre-scan, same rule as verifier.py, 2026-09-13):
+        # a FAIL receipt with the SAME key set as the normal one (every field at its fail value) + error.
+        return {"digest_ok": False, "artifacts": [], "producer_signatures": {}, "pq_protected": False,
+                "bindings_ok": False, "rfc3161": {}, "provenance_classes": [], "self_asserted_only": False,
+                "policy_ok": False, "valid": False, "honest_scope": None,
+                "error": f"json_too_deep: nesting {depth} exceeds the acceptance-profile bound {_MAX_JSON_DEPTH}"}
+    ev = json.loads(raw, object_pairs_hook=_no_dup_pairs)
     e2 = {k: v for k, v in ev.items()
           if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
     recomputed_digest = hashlib.sha256(_canon(e2)).hexdigest()

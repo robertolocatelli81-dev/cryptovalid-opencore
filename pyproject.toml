@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cryptovalid-opencore"
-version = "0.9.3"
+version = "0.9.4"
 description = "Verifiable compliance evidence: hash-chained ledgers + standalone offline verifier (flat-layout modules, unchanged declared commands)"
 license = {text = "AGPL-3.0-or-later"}
 requires-python = ">=3.9"

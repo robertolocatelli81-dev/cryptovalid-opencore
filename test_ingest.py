@@ -182,7 +182,12 @@ class TestSignedSth(unittest.TestCase):
         self.assertFalse(r["ok"])
         # controllo negativo 2: firma manomessa nel sidecar
         sc = os.path.join(self.d, sth["segment"] + ".sth.json")
-        doc = json.load(open(sc)); doc["signature"] = "A" + doc["signature"][1:]
+        doc = json.load(open(sc))
+        # flip the first hex NIBBLE to a DIFFERENT digit: "A"+sig[1:] was a no-op whenever sig started
+        # with "a" (hex is case-insensitive) -> the tamper vanished 1/16 of the runs (found 2026-09-13,
+        # 1 failure in 10 full runs of the suite)
+        first = doc["signature"][0].lower()
+        doc["signature"] = ("0" if first != "0" else "1") + doc["signature"][1:]
         json.dump(doc, open(sc, "w"))
         r2 = ing.verify_archive(self.d, expected_pubkey_hex=self.pub)
         self.assertIn("sth_signature_invalid", [f["reason"] for f in r2["failures"]])

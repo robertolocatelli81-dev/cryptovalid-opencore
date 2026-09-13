@@ -27,7 +27,7 @@ Pins a metric so it can be recomputed and compared in future years.
 | Field | Meaning |
 |---|---|
 | `metric_id` | what is measured (e.g. `PAR30`, `credit_expected_loss`) |
-| `method_id` | which method computed it (e.g. `CLDMA`, `qraft_credit_quadrature`) |
+| `method_id` | which method computed it (e.g. `CLDMA`, `cldma_credit_quadrature`) |
 | `method_version` | **pins the code**: `spec_version` / `canon_version` / a method lineage string |
 | `input_digest` | `digest(input)` — pins the data |
 | `numerical_hash` | reproducibility fingerprint of the **result** (salt/time-independent) |

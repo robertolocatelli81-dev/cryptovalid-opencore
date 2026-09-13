@@ -4,7 +4,8 @@ A clean-room CryptoValid verifier for iOS / iPadOS / macOS (and Linux with
 swift-crypto), built the way Apple builds for its own systems: **no third-party
 dependencies** — SHA-256 and Ed25519 come from the system **CryptoKit**; SHA3-256
 (absent from CryptoKit) is a small pure-Swift Keccak in this package. Canonical JSON
-is a byte-for-byte twin of the Python reference and the JS verifier.
+matches the Python reference and the JS verifier on the normative vectors (same canonical digests,
+i.e. byte-identical canonical JSON on those vectors; verdict agreement on the adversarial corpus in CI).
 
 ```bash
 swift build

@@ -18,7 +18,7 @@ reali e ancore esterne live**, e che il sistema **sa fallire** (il controllo pos
 | **Controllo positivo** — ledger intatto=`0`, manomesso=`FAIL` | **PASS** (sa fallire) |
 | Suite `opencore` completa | **PASS 27/27** |
 | OMEGA lato-sistema (`tests/stress_total_real_online.py`) | **PASS 8/8** — connettori reali fx/crypto/macro/equities, brain, fintech sotto carico, concorrenza 603 op/s, determinismo bit-identico, resilienza a fonte-giù |
-| Moduli sessione 2026-08-22 (longterm_evidence, vdf_timeanchor, longterm_hashbased, pedersen_commit, cldma_confidential, qraft_credit_quadrature) | **PASS 6/6** |
+| Moduli sessione 2026-08-22 (longterm_evidence, vdf_timeanchor, longterm_hashbased, pedersen_commit, cldma_confidential, internal-method) | **PASS 6/6** |
 
 ### B. Ancore ESTERNE ONLINE — verificate dal vivo
 | Ancora | Esito reale |
@@ -31,7 +31,7 @@ reali e ancore esterne live**, e che il sistema **sa fallire** (il controllo pos
 **17 PASS · 0 FAIL · 1 SKIP onesto.**
 | Area | Esito |
 |---|---|
-| Suite finance deterministiche (fundcert, microfinance, CLDMA, cldma_confidential, pedersen, ap2_evidence, tx_evidence, dora_incident, qeas, qraft_credit, eba_stress, fintech_m1_m2, omega_fintech_platform) | **PASS 13/13** |
+| Suite finance deterministiche (fundcert, microfinance, CLDMA, cldma_confidential, pedersen, ap2_evidence, tx_evidence, dora_incident, qeas, internal-method, eba_stress, fintech_m1_m2, omega_fintech_platform) | **PASS 13/13** |
 | **Controllo positivo** fundcert — vettore `tampered_content` | **PASS** (rifiutato, rc≠0) |
 | **Controllo positivo** CLDMA — PAR30 impossibile (200%) | **PASS** (guardia lo rifiuta) |
 | tx_evidence — verificatori presenti (`verify_attestation`, `verify_chain`) | **PASS** |
@@ -67,3 +67,5 @@ headers={'Content-Type':'application/json'}),timeout=15).read())['result'])"
 I due FAIL iniziali dello script di stress erano **bug dello strumento di verifica** (chiave `valid` invece di
 `verified`; chiamata RPC Solana senza firma), **non** del codice — colti con verifica simmetrica e corretti. Il
 codice spedito ha retto; i metri vanno controllati come il codice.
+
+*2026-09-13: i nomi di moduli interni non pubblicati sono stati sostituiti con `internal-method` in questo rapporto storico; i numeri non sono stati toccati.*

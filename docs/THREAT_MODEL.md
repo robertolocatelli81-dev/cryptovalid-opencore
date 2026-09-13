@@ -5,6 +5,17 @@ last 10 days, in their current state. Honest-scope is a first-class requirement:
 document states what is protected AND, explicitly, what is NOT. Every mechanism below is
 implemented in code cited by module; claims a 4-mind review could not verify are marked.*
 
+
+> **Scope note (2026-09-13).** This document describes the *whole* CryptoValid evidence stack. Only these
+> mechanisms live in **this** repository: `verifier.py` (hash-chain/idx/linkage, strict acceptance profile),
+> `sigsuite.py` + `ap2_evidence.py` (hybrid ML-DSA-65 co-signature, `verify_producer_block`, pinned
+> `trusted_producer_keys`), `verifiers/` (JS/Rust/Swift + `differential_oracle.py`). Mechanisms cited by
+> module names that are **not** in this repo — `canonical.py`, `device.py`, `interop/confidential.py`,
+> `longterm_evidence.py`, `DeviceTrust`/`OrgTrust`, `ReplayGuard`, `hwkeys.ExternalSigner`,
+> `timestamp.verify` — are implemented in the sibling toolkit
+> [omega-evidence](https://github.com/robertolocatelli81-dev/omega-evidence) (Apache-2.0) and are listed here
+> for completeness of the threat model, not as capabilities of this package.
+
 ---
 
 ## 1. Assets
