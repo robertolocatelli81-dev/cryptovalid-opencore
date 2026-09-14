@@ -58,6 +58,10 @@ class TestCBOR(unittest.TestCase):
         self.assertEqual(R.cbor_encode({2: 1, 1: 2}), R.cbor_encode({1: 2, 2: 1}))       # deterministic
         with self.assertRaises(ValueError):
             R.cbor_decode(R.cbor_encode([1]) + b"\x00")                                    # trailing bytes
+        with self.assertRaises(ValueError):
+            R.cbor_decode(b"\xa2\x01\x01\x01\x02")                                          # chiave duplicata
+        with self.assertRaises(ValueError):
+            R.cbor_decode(b"\x81" * 100 + b"\x01")                                           # 100 array annidati
 
 
 @unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
@@ -90,19 +94,25 @@ class TestReceipts(unittest.TestCase):
         for i in range(len(self.leaves)):
             r = R.inclusion_receipt(SAMPLE, i, self.key)
             self.assertTrue(R.verify_receipt(r, self.pk, leaf_canonical=self.leaves[i])["ok"], i)
-            self.assertTrue(R.verify_receipt(r, self.pk)["ok"])
+            self.assertFalse(R.verify_receipt(r, self.pk)["ok"])           # senza la TUA entry: rifiutata (fail-closed)
             # wrong entry for this receipt
             other = self.leaves[(i + 1) % len(self.leaves)]
             self.assertFalse(R.verify_receipt(r, self.pk, leaf_canonical=other)["ok"])
-        r = R.inclusion_receipt(SAMPLE, 1, self.key)
+        r = R.inclusion_receipt(SAMPLE, 1, self.key); lf = self.leaves[1]
         bad = json.loads(json.dumps(r))
         if bad["inclusion_path"]:
             bad["inclusion_path"][0] = "00" * 32
-            self.assertFalse(R.verify_receipt(bad, self.pk)["ok"])
+            self.assertFalse(R.verify_receipt(bad, self.pk, leaf_canonical=lf)["ok"])
         bad = json.loads(json.dumps(r)); bad["leaf_index"] = 0
-        self.assertFalse(R.verify_receipt(bad, self.pk)["ok"])
-        self.assertFalse(R.verify_receipt(r, self.pk_other)["ok"])
-        self.assertFalse(R.verify_receipt({"kind": "x"}, self.pk)["ok"])
+        self.assertFalse(R.verify_receipt(bad, self.pk, leaf_canonical=lf)["ok"])
+        # tree_size forgiato con path riusato (council 14/09, Fable): deve cadere
+        r0 = R.inclusion_receipt(SAMPLE, 0, self.key)
+        forged = json.loads(json.dumps(r0)); forged["tree_size"] = 5
+        self.assertFalse(R.verify_receipt(forged, self.pk, leaf_canonical=self.leaves[0])["ok"])
+        self.assertIn("tree_size", R.verify_receipt(forged, self.pk, leaf_canonical=self.leaves[0])["why"])
+        self.assertFalse(R.verify_receipt(r, self.pk_other, leaf_canonical=lf)["ok"])
+        self.assertFalse(R.verify_receipt(r, "", leaf_canonical=lf)["ok"])
+        self.assertFalse(R.verify_receipt({"kind": "x"}, self.pk, leaf_canonical=lf)["ok"])
         with self.assertRaises(IndexError):
             R.inclusion_receipt(SAMPLE, 99, self.key)
 
@@ -110,7 +120,11 @@ class TestReceipts(unittest.TestCase):
         short = os.path.join(self.tmp, "short.jsonl"); _write(short, self.entries[:2])
         old = R.signed_tree_head(M.leaves_from_ledger(short), self.key)
         r = R.consistency_receipt(old, SAMPLE, self.key)
-        self.assertTrue(R.verify_receipt(r, self.pk)["ok"], r)
+        self.assertTrue(R.verify_receipt(r, self.pk, trusted_root_1_hex=old["root_sha256"])["ok"], r)
+        self.assertFalse(R.verify_receipt(r, self.pk)["ok"])                                      # senza la TUA root_1
+        self.assertFalse(R.verify_receipt(r, self.pk, trusted_root_1_hex="00" * 32)["ok"])       # root_1 forgiata nella ricevuta
+        forged = json.loads(json.dumps(r)); forged["tree_size_2"] = 6
+        self.assertFalse(R.verify_receipt(forged, self.pk, trusted_root_1_hex=old["root_sha256"])["ok"])
         # rewrite an old entry (keep the chain valid by recomputing): consistency MUST fail
         rew = json.loads(json.dumps(self.entries))
         rew[0]["payload"] = {"rewritten": True}
@@ -118,18 +132,25 @@ class TestReceipts(unittest.TestCase):
         rew[0]["self_hash"] = hashlib.sha256(body).hexdigest()
         rw = os.path.join(self.tmp, "rewritten.jsonl"); _write(rw, rew)
         r2 = R.consistency_receipt(old, rw, self.key)
-        self.assertFalse(R.verify_receipt(r2, self.pk)["ok"])
+        self.assertFalse(R.verify_receipt(r2, self.pk, trusted_root_1_hex=old["root_sha256"])["ok"])
         # shrink
         r3 = R.consistency_receipt(R.signed_tree_head(self.leaves, self.key), short, self.key)
         self.assertFalse(r3["ok"]); self.assertIn("SHRANK", r3["why"])
-        self.assertFalse(R.verify_receipt(r3, self.pk)["ok"])
+        self.assertFalse(R.verify_receipt(r3, self.pk, trusted_root_1_hex=old["root_sha256"])["ok"])
+        # consistency_roots (RFC 9162 §2.1.4.2) concorda con verify_consistency su ogni coppia (m, n)
+        for m in range(1, len(self.leaves) + 1):
+            for n in range(m, len(self.leaves) + 1):
+                proof = M.consistency_proof(m, self.leaves[:n]) if m < n else []
+                roots = R.consistency_roots(m, n, proof, M.mth(self.leaves[:m]))
+                self.assertIsNotNone(roots, (m, n)); self.assertEqual(roots[1], M.mth(self.leaves[:n]), (m, n))
+                self.assertTrue(M.verify_consistency(m, n, proof, M.mth(self.leaves[:m]), M.mth(self.leaves[:n])) or m == n)
 
     def test_cose_roundtrip_and_tamper(self):
         r = R.inclusion_receipt(SAMPLE, 2, self.key)
         cose = R.to_cose(r, self.key)
         self.assertEqual(cose[:1], b"\xd2")
         v = R.verify_cose(cose, self.pk, leaf_hash_hex=r["leaf_sha256"])
-        self.assertTrue(v["ok"], v); self.assertEqual(v["leaf_index"], 2)
+        self.assertTrue(v["ok"], v); self.assertEqual(v["leaf_index_from_unsigned_proof"], 2)
         self.assertFalse(R.verify_cose(cose, self.pk_other, r["leaf_sha256"])["ok"])
         self.assertFalse(R.verify_cose(cose, self.pk, "00" * 32)["ok"])
         self.assertFalse(R.verify_cose(cose, self.pk)["ok"])                  # inclusion needs the leaf hash
@@ -140,18 +161,25 @@ class TestReceipts(unittest.TestCase):
         proof = R.cbor_decode(unprot[R.LABEL_VDP][R.PROOF_INCLUSION][0])
         self.assertEqual(proof[0], r["tree_size"]); self.assertEqual(proof[1], 2)
         self.assertEqual(payload.hex(), r["sth"]["root_sha256"])
-        c = R.consistency_receipt(R.signed_tree_head(self.leaves[:2], self.key), SAMPLE, self.key)
-        self.assertTrue(R.verify_cose(R.to_cose(c, self.key), self.pk)["ok"])
+        old = R.signed_tree_head(self.leaves[:2], self.key)
+        c = R.consistency_receipt(old, SAMPLE, self.key)
+        cc = R.to_cose(c, self.key)
+        _, _, payload, _ = R.cbor_decode(cc[1:])
+        self.assertIsNone(payload)                                                        # RFC 9942: payload DETACHED
+        self.assertFalse(R.verify_cose(cc, self.pk)["ok"])                                # senza la TUA root_1: no
+        self.assertTrue(R.verify_cose(cc, self.pk, trusted_root_1_hex=old["root_sha256"])["ok"])
+        self.assertFalse(R.verify_cose(cc, self.pk, trusted_root_1_hex="00" * 32)["ok"])
+        self.assertFalse(R.verify_cose(cc, self.pk_other, trusted_root_1_hex=old["root_sha256"])["ok"])
 
     def test_banco_del_banco_node_hash_rotto(self):
-        r = R.inclusion_receipt(SAMPLE, 1, self.key)
+        r = R.inclusion_receipt(SAMPLE, 1, self.key); lf = self.leaves[1]
         orig = M.node_hash
         try:
             M.node_hash = lambda a, b: hashlib.sha256(b"\x02" + a + b).digest()
-            self.assertFalse(R.verify_receipt(r, self.pk)["ok"])
+            self.assertFalse(R.verify_receipt(r, self.pk, leaf_canonical=lf)["ok"])
         finally:
             M.node_hash = orig
-        self.assertTrue(R.verify_receipt(r, self.pk)["ok"])
+        self.assertTrue(R.verify_receipt(r, self.pk, leaf_canonical=lf)["ok"])
 
 
 class TestMonitor(unittest.TestCase):
@@ -202,7 +230,74 @@ class TestMonitor(unittest.TestCase):
             st = json.load(f)
         self.assertTrue(R.verify_sth(st["sth"], st["log_pubkey_hex"])["ok"])
         v = MON.run(self.ledger, self.state, keyfile=k2)
-        self.assertFalse(v["ok"]); self.assertTrue(any("LOG KEY CHANGED" in a for a in v["alerts"]))
+        self.assertFalse(v["ok"]); self.assertTrue(any("LOG KEY CHANGED" in a or "STATE TAMPERED" in a for a in v["alerts"]))
+
+    @unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
+    def test_state_file_rewritten_is_detected(self):
+        # council 14/09 (Gemini+Fable): riscrivere il file di stato azzerava la baseline su un ledger riscritto
+        k = os.path.join(self.tmp, "k"); pk = signer.keygen(k)["public_key_hex"]
+        self.assertTrue(MON.run(self.ledger, self.state, keyfile=k)["ok"])
+        with open(self.state) as f:
+            st = json.load(f)
+        st["root_sha256"] = "00" * 32; st["tree_size"] = 1               # baseline falsa
+        with open(self.state, "w") as f:
+            json.dump(st, f)
+        v = MON.run(self.ledger, self.state, keyfile=k)
+        self.assertFalse(v["ok"]); self.assertTrue(any("STATE TAMPERED" in a for a in v["alerts"])); self.assertIsNone(v["state_written"])
+        # auditor senza chiave privata ma con la pubblica fidata: stesso rilevamento
+        v2 = MON.run(self.ledger, self.state, trusted_pubkey_hex=pk)
+        self.assertTrue(any("STATE TAMPERED" in a for a in v2["alerts"]))
+        # stato senza STH (scritto senza chiave) e poi chiave disponibile: segnalato
+        os.remove(self.state); MON.run(self.ledger, self.state)
+        v3 = MON.run(self.ledger, self.state, keyfile=k)
+        self.assertTrue(any("STATE UNSIGNED" in a for a in v3["alerts"]))
+        # modalità AUDITOR (solo chiave pubblica): verde a ogni run, MAI scrive uno stato non firmato (round 3, Fable+Opus)
+        os.remove(self.state)
+        for _ in range(3):
+            va = MON.run(self.ledger, self.state, trusted_pubkey_hex=pk)
+            self.assertTrue(va["ok"], va["alerts"]); self.assertIn("auditor", va["stato_baseline"])
+            self.assertIsNone(va["state_written"]); self.assertIn("baseline_non_avanzata", va)
+        self.assertFalse(os.path.exists(self.state))
+        self.assertIn("replaying an OLDER signed state", va["scope"])
+        # il writer pubblica lo STH firmato → l'auditor avanza la baseline con QUELLO, verificato
+        vw = MON.run(self.ledger, self.state + ".writer", keyfile=k)
+        sth_file = os.path.join(self.tmp, "sth.json")
+        with open(self.state + ".writer") as f, open(sth_file, "w") as g:
+            json.dump({"sth": json.load(f)["sth"]}, g)
+        # file STH malformato (lista / JSON rotto): nessun crash, baseline non avanzata
+        for bad in ("[1,2]", "{broken"):
+            with open(sth_file + ".bad", "w") as g:
+                g.write(bad)
+            vb = MON.run(self.ledger, self.state + ".x", trusted_pubkey_hex=pk, sth_path=sth_file + ".bad")
+            self.assertTrue(vb["ok"]); self.assertIsNone(vb["state_written"])
+        va = MON.run(self.ledger, self.state, trusted_pubkey_hex=pk, sth_path=sth_file)
+        self.assertTrue(va["ok"]); self.assertEqual(va["state_written"], self.state)
+        with open(self.state) as f:
+            self.assertIn("sth", json.load(f))
+        # e ora l'attacco del round 3: stato senza sth con la root di un ledger riscritto → l'auditor lo RIFIUTA
+        with open(self.state) as f:
+            st = json.load(f)
+        st.pop("sth"); st["root_sha256"] = "11" * 32
+        with open(self.state, "w") as f:
+            json.dump(st, f)
+        va = MON.run(self.ledger, self.state, trusted_pubkey_hex=pk)
+        self.assertFalse(va["ok"]); self.assertTrue(any("STATE" in a for a in va["alerts"]))
+
+    def test_n1_zero_and_truncated_cose_are_refused_everywhere(self):
+        if not HAVE_CRYPTO:
+            self.skipTest("cryptography assente")
+        k = os.path.join(self.tmp, "k0"); pk = signer.keygen(k)["public_key_hex"]
+        empty = R.signed_tree_head([], k)
+        r = R.consistency_receipt(empty, self.ledger, k)
+        self.assertFalse(r["ok"]); self.assertFalse(R.verify_receipt(r, pk, trusted_root_1_hex=empty["root_sha256"])["ok"])
+        with self.assertRaises(ValueError):
+            R.to_cose(r, k)
+        with self.assertRaises(ValueError):
+            R.cbor_decode(b"\xa1\x81\x01\x02")          # chiave di mappa = array: ValueError, non TypeError
+        with self.assertRaises(ValueError):
+            R.cbor_decode(b"\xa1\xf6\x01")              # chiave null: rifiutata (non «accettata in silenzio»)
+        with self.assertRaises(ValueError):
+            R.cbor_decode(b"\xa1\xf5\x01")              # chiave true: rifiutata (in Python collide con 1)
 
 
 class TestEidasLedger(unittest.TestCase):
@@ -236,6 +331,21 @@ class TestEidasLedger(unittest.TestCase):
             ps = E.practice_statement(out, "ACME QTSP", {"qualified_certificates": True})
             self.assertIn("Practice Statement", ps); self.assertIn("to be provided", ps)   # QTSP timestamps, device still missing
             self.assertNotIn("qualified electronic ledger: YES", ps)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    @unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
+    def test_signature_swap_is_measured(self):
+        # council 14/09 (Fable): scambiare signer/signature di un record dava PASS al verifier — l'autovalutazione ora misura le firme
+        tmp = tempfile.mkdtemp(prefix="eid2_")
+        try:
+            k = os.path.join(tmp, "k"); signer.keygen(k)
+            out = os.path.join(tmp, "signed.jsonl"); signer.sign_ledger(SAMPLE, out, keyfile=k)
+            es = _entries(out); es[0]["signature"], es[1]["signature"] = es[1]["signature"], es[0]["signature"]
+            _write(out, es)
+            by = {r["req"]: r for r in E.assess(out)["requisiti"]}
+            fv = by["REQ-7.5-05"]["misura"]["firme_verificate"]
+            self.assertTrue(fv["failures"]); self.assertLess(fv["verified"], 3)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

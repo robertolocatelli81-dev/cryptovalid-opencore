@@ -79,8 +79,13 @@ def cbor_encode(x: Any) -> bytes:
     raise TypeError(f"CBOR: tipo non supportato {type(x).__name__}")
 
 
+CBOR_MAX_DEPTH = 64
+
+
 def cbor_decode(b: bytes) -> Any:
-    def rd(i: int):
+    def rd(i: int, depth: int = 0):
+        if depth > CBOR_MAX_DEPTH:
+            raise ValueError("CBOR: annidamento oltre il limite")
         ib = b[i]
         major, info = ib >> 5, ib & 0x1f
         i += 1
@@ -109,14 +114,21 @@ def cbor_decode(b: bytes) -> Any:
         if major == 4:
             out = []
             for _ in range(n):
-                v, i = rd(i)
+                v, i = rd(i, depth + 1)
                 out.append(v)
             return out, i
         if major == 5:
             out = {}
             for _ in range(n):
-                k, i = rd(i)
-                v, i = rd(i)
+                k, i = rd(i, depth + 1)
+                v, i = rd(i, depth + 1)
+                # chiavi ammesse da QUESTO decoder: int, str, bytes. bool/None sono rifiutati esplicitamente (in
+                # Python 1 == True e collidono in una mappa: darebbero un «duplicato» spurio); array/mappe come
+                # chiavi non sono hashabili qui.
+                if isinstance(k, bool) or k is None or not isinstance(k, (int, str, bytes)):
+                    raise ValueError("CBOR: chiave di mappa non ammessa da questo decoder (ammesse: int, str, bytes)")
+                if k in out:
+                    raise ValueError("CBOR: chiave duplicata (RFC 8949 §5.6)")
                 out[k] = v
             return out, i
         raise ValueError(f"CBOR: major type {major} non supportato")
@@ -183,7 +195,8 @@ def inclusion_receipt(ledger_path: str, index: int, keyfile: str, tsa_url: Optio
         raise IndexError(f"index {index} fuori dal ledger ({len(leaves)} entry)")
     sth = signed_tree_head(leaves, keyfile)
     path = [h.hex() for h in M.inclusion_proof(index, leaves)]
-    entry = [json.loads(l) for l in open(ledger_path, encoding="utf-8") if l.strip()][index]
+    with open(ledger_path, encoding="utf-8") as f:
+        entry = [json.loads(l) for l in f if l.strip()][index]
     r = {"kind": KIND, "proof_type": "inclusion", "vds": "RFC9162_SHA256",
          "leaf_index": index, "tree_size": len(leaves), "inclusion_path": path,
          "leaf_sha256": M.leaf_hash(leaves[index]).hex(), "entry_self_hash": entry.get("self_hash"),
@@ -198,6 +211,9 @@ def inclusion_receipt(ledger_path: str, index: int, keyfile: str, tsa_url: Optio
 def consistency_receipt(old_sth: Dict, ledger_path: str, keyfile: str) -> Dict:
     leaves = M.leaves_from_ledger(ledger_path)
     n1, n2 = int(old_sth["tree_size"]), len(leaves)
+    if n1 == 0:
+        return {"kind": KIND, "proof_type": "consistency", "ok": False, "tree_size_1": 0, "tree_size_2": n2,
+                "why": "old tree empty: nothing to prove (RFC 9162 defines no consistency from size 0) — use an inclusion receipt"}
     if n2 < n1:
         return {"kind": KIND, "proof_type": "consistency", "ok": False,
                 "why": f"ledger SHRANK: {n1} → {n2} (truncation)", "tree_size_1": n1, "tree_size_2": n2}
@@ -208,10 +224,14 @@ def consistency_receipt(old_sth: Dict, ledger_path: str, keyfile: str) -> Dict:
             "consistency_path": path, "sth": sth, "issued": sth["ts"]}
 
 
-def verify_receipt(r: Dict, trusted_pubkey_hex: str, leaf_canonical: Optional[bytes] = None) -> Dict:
-    """Offline verification. Inclusion: recompute the root from leaf + path and compare with the signed
-    root; if `leaf_canonical` (the entry's canonical bytes) is given, its leaf hash must match too.
-    Consistency: verify path between root_1 and root_2; the STH over root_2 must be signed."""
+def verify_receipt(r: Dict, trusted_pubkey_hex: str, leaf_canonical: Optional[bytes] = None,
+                   trusted_root_1_hex: Optional[str] = None) -> Dict:
+    """Offline verification, fail-closed (council 14/09):
+    Inclusion: `leaf_canonical` (the relying party's OWN entry, canonical bytes) is REQUIRED — a receipt only
+    proves the inclusion of the leaf you hand it, never of a leaf it names itself; `tree_size` must equal the
+    signed STH size (a forged size with a reused path is refused); root recomputed from leaf + path.
+    Consistency: `trusted_root_1_hex` (the relying party's OWN previous root) is REQUIRED; `tree_size_2` must
+    equal the signed STH size; the path must connect trusted root_1 to the signed root_2."""
     if not trusted_pubkey_hex:
         return {"ok": False, "why": "trusted_pubkey_hex is required: the key inside a receipt is never trusted"}
     if r.get("kind") != KIND:
@@ -222,9 +242,13 @@ def verify_receipt(r: Dict, trusted_pubkey_hex: str, leaf_canonical: Optional[by
         return {"ok": False, "why": f"STH: {s.get('why')}"}
     try:
         if r["proof_type"] == "inclusion":
+            if leaf_canonical is None:
+                return {"ok": False, "why": "leaf_canonical is required: pass YOUR entry, the receipt must not choose the leaf"}
+            if int(r["tree_size"]) != int(sth["tree_size"]):
+                return {"ok": False, "why": "tree_size of the proof differs from the signed tree head"}
             path = [bytes.fromhex(h) for h in r["inclusion_path"]]
-            leaf = bytes.fromhex(r["leaf_sha256"])
-            if leaf_canonical is not None and M.leaf_hash(leaf_canonical).hex() != r["leaf_sha256"]:
+            leaf = M.leaf_hash(leaf_canonical)
+            if leaf.hex() != r["leaf_sha256"]:
                 return {"ok": False, "why": "leaf hash does not match the given entry"}
             root = bytes.fromhex(sth["root_sha256"])
             ok = _verify_inclusion_from_leaf_hash(r["leaf_index"], r["tree_size"], leaf, path, root)
@@ -233,11 +257,15 @@ def verify_receipt(r: Dict, trusted_pubkey_hex: str, leaf_canonical: Optional[by
         if r["proof_type"] == "consistency":
             if r.get("ok") is False:
                 return {"ok": False, "why": r.get("why")}
-            n1, n2 = r["tree_size_1"], r["tree_size_2"]
-            if sth["root_sha256"] != r["root_2"]:
-                return {"ok": False, "why": "root_2 differs from the signed root"}
+            n1, n2 = int(r["tree_size_1"]), int(r["tree_size_2"])
+            if not trusted_root_1_hex:
+                return {"ok": False, "why": "trusted_root_1_hex is required: pass YOUR previous root, not the receipt's"}
+            if r["root_1"].lower() != trusted_root_1_hex.lower():
+                return {"ok": False, "why": "root_1 in the receipt differs from your trusted previous root"}
+            if sth["root_sha256"] != r["root_2"] or n2 != int(sth["tree_size"]):
+                return {"ok": False, "why": "root_2 / tree_size_2 differ from the signed tree head"}
             if n1 == 0:
-                return {"ok": True, "why": "old tree empty: any new tree is consistent"}
+                return {"ok": False, "why": "old tree empty: nothing to prove — use an inclusion receipt"}
             if n1 == n2:
                 ok = r["root_1"] == r["root_2"]
                 return {"ok": ok, "why": "same size: roots must be equal" + ("" if ok else " — they are NOT (rewrite)")}
@@ -271,6 +299,37 @@ def _verify_inclusion_from_leaf_hash(m: int, n: int, leaf: bytes, proof: List[by
     return sn == 0 and r == root
 
 
+def consistency_roots(m: int, n: int, proof: List[bytes], old_root: bytes):
+    """RFC 9162 §2.1.4.2: from a consistency path and the OLD root, recompute (old_root', new_root).
+    Returns None if the path is malformed. Used to rebuild the DETACHED payload of a consistency receipt."""
+    if m == n:
+        return (old_root, old_root) if not proof else None
+    if m <= 0 or m > n:
+        return None
+    path = ([old_root] + list(proof)) if (m & (m - 1)) == 0 else list(proof)
+    if not path:
+        return None
+    fn, sn = m - 1, n - 1
+    while fn & 1:
+        fn >>= 1
+        sn >>= 1
+    fr = sr = path[0]
+    for c in path[1:]:
+        if sn == 0:
+            return None
+        if fn & 1 or fn == sn:
+            fr = M.node_hash(c, fr)
+            sr = M.node_hash(c, sr)
+            while not (fn & 1) and fn != 0:
+                fn >>= 1
+                sn >>= 1
+        else:
+            sr = M.node_hash(sr, c)
+        fn >>= 1
+        sn >>= 1
+    return (fr, sr) if sn == 0 else None
+
+
 def _stamp(digest_hex: str, tsa_url: str) -> Dict:
     try:
         import cryptovalid_tsa as T
@@ -301,14 +360,22 @@ def to_cose(r: Dict, keyfile: str) -> bytes:
         proof = {PROOF_INCLUSION: [cbor_encode([r["tree_size"], r["leaf_index"], [bytes.fromhex(h) for h in r["inclusion_path"]]])]}
         payload = bytes.fromhex(r["sth"]["root_sha256"])
     else:
+        if r.get("ok") is False or "consistency_path" not in r:
+            raise ValueError("cannot encode a failed/incomplete consistency receipt as COSE")
+        # RFC 9942: for consistency proofs the newer root is a DETACHED payload — the verifier MUST recompute it
+        # from its own trusted root_1 and the path (council 14/09: it was attached and never recomputed)
         proof = {PROOF_CONSISTENCY: [cbor_encode([r["tree_size_1"], r["tree_size_2"], [bytes.fromhex(h) for h in r["consistency_path"]]])]}
         payload = bytes.fromhex(r["root_2"])
+        protected = cbor_encode({1: COSE_ALG_EDDSA, LABEL_VDS: VDS_RFC9162_SHA256, 4: bytes.fromhex(pk)})
+        sig = sk.sign(_sig_structure(protected, payload))
+        return b"\xd2" + cbor_encode([protected, {LABEL_VDP: proof}, None, sig])   # payload nil = detached
     protected = cbor_encode({1: COSE_ALG_EDDSA, LABEL_VDS: VDS_RFC9162_SHA256, 4: bytes.fromhex(pk)})
     sig = sk.sign(_sig_structure(protected, payload))
     return b"\xd2" + cbor_encode([protected, {LABEL_VDP: proof}, payload, sig])     # tag 18 = COSE_Sign1
 
 
-def verify_cose(cose: bytes, trusted_pubkey_hex: str, leaf_hash_hex: Optional[str] = None) -> Dict:
+def verify_cose(cose: bytes, trusted_pubkey_hex: str, leaf_hash_hex: Optional[str] = None,
+                trusted_root_1_hex: Optional[str] = None) -> Dict:
     _, Ed25519PublicKey, _ = _ed()
     try:
         if cose[:1] != b"\xd2":
@@ -319,19 +386,32 @@ def verify_cose(cose: bytes, trusted_pubkey_hex: str, leaf_hash_hex: Optional[st
             return {"ok": False, "why": "unsupported alg/vds"}
         if ph.get(4) != bytes.fromhex(trusted_pubkey_hex):
             return {"ok": False, "why": "kid differs from the trusted log key"}
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(trusted_pubkey_hex)).verify(sig, _sig_structure(protected, payload))
-        vdp = unprotected.get(LABEL_VDP) or {}
+        pk = Ed25519PublicKey.from_public_bytes(bytes.fromhex(trusted_pubkey_hex))
+        vdp = unprotected.get(LABEL_VDP) or {}          # proofs live in the UNPROTECTED header (RFC 9942): not signed
         if PROOF_INCLUSION in vdp:
+            if payload is None:
+                return {"ok": False, "why": "inclusion receipt with detached payload not supported by this verifier"}
+            pk.verify(sig, _sig_structure(protected, payload))
             ts, idx, path = cbor_decode(vdp[PROOF_INCLUSION][0])
             if leaf_hash_hex is None:
-                return {"ok": False, "why": "inclusion receipt: pass leaf_hash_hex to verify"}
+                return {"ok": False, "why": "inclusion receipt: pass leaf_hash_hex (YOUR entry's leaf hash)"}
             ok = _verify_inclusion_from_leaf_hash(idx, ts, bytes.fromhex(leaf_hash_hex), list(path), payload)
-            return {"ok": ok, "proof": "inclusion", "tree_size": ts, "leaf_index": idx,
-                    "why": "signature and inclusion proof valid" if ok else "inclusion proof INVALID"}
+            return {"ok": ok, "proof": "inclusion", "tree_size_from_unsigned_proof": ts, "leaf_index_from_unsigned_proof": idx,
+                    "signed_root": payload.hex(),
+                    "why": "signature valid and the proof rebuilds the signed root" if ok else "inclusion proof INVALID"}
         if PROOF_CONSISTENCY in vdp:
             n1, n2, path = cbor_decode(vdp[PROOF_CONSISTENCY][0])
-            return {"ok": True, "proof": "consistency", "why": "signature valid; consistency path carried (verify with root_1)",
-                    "sizes": [n1, n2], "path_len": len(path)}
+            if not trusted_root_1_hex:
+                return {"ok": False, "why": "consistency receipt: pass trusted_root_1_hex (YOUR previous root)"}
+            roots = consistency_roots(int(n1), int(n2), list(path), bytes.fromhex(trusted_root_1_hex))
+            if roots is None or roots[0].hex() != trusted_root_1_hex.lower():
+                return {"ok": False, "why": "consistency path does not connect your trusted root_1"}
+            new_root = roots[1] if payload is None else payload
+            if payload is not None and payload != roots[1]:
+                return {"ok": False, "why": "attached payload differs from the recomputed root_2"}
+            pk.verify(sig, _sig_structure(protected, new_root))      # detached: the payload is the RECOMPUTED root
+            return {"ok": True, "proof": "consistency", "sizes_from_unsigned_proof": [n1, n2], "root_2": new_root.hex(),
+                    "why": "signature valid over the root_2 recomputed from your root_1 and the path (append-only growth)"}
         return {"ok": False, "why": "no proof in vdp"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "why": f"{type(e).__name__}"}
@@ -347,6 +427,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     b.add_argument("--tsa"); b.add_argument("--cose", help="write the COSE_Sign1 bytes to this file")
     c = sub.add_parser("consistency"); c.add_argument("old_sth_json"); c.add_argument("ledger"); c.add_argument("keyfile")
     v = sub.add_parser("verify"); v.add_argument("receipt_json"); v.add_argument("trusted_pubkey_hex")
+    v.add_argument("--entry-json", help="inclusion: file with YOUR entry (JSON object)"); v.add_argument("--trusted-root-1", help="consistency: YOUR previous root (hex)")
     args = p.parse_args(argv)
     if args.cmd == "sth":
         print(json.dumps(signed_tree_head(M.leaves_from_ledger(args.ledger), args.keyfile), indent=1)); return 0
@@ -362,7 +443,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         r = consistency_receipt(old.get("sth", old), args.ledger, args.keyfile)
         print(json.dumps(r, indent=1)); return 0 if r.get("ok", True) else 1
     with open(args.receipt_json, encoding="utf-8") as f:
-        res = verify_receipt(json.load(f), args.trusted_pubkey_hex)
+        rcpt = json.load(f)
+    leaf = None
+    if args.entry_json:
+        with open(args.entry_json, encoding="utf-8") as f:
+            leaf = M.canonical(json.load(f))
+    res = verify_receipt(rcpt, args.trusted_pubkey_hex, leaf_canonical=leaf, trusted_root_1_hex=args.trusted_root_1)
     print(json.dumps(res, indent=1)); return 0 if res["ok"] else 1
 
 

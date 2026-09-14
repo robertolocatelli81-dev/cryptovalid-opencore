@@ -43,8 +43,8 @@ import verifier as V  # noqa: E402
 
 FONTI = {
     "eIDAS_2": "Regulation (EU) 2024/1183 (in force 20 May 2024): Art. 3(52) electronic ledger, Art. 45k legal effects, Art. 45l requirements",
-    "IR_2025_2531": "Commission Implementing Regulation (EU) 2025/2531 of 16 December 2025 — reference standards and specifications for qualified electronic ledgers (OJ L, 17.12.2025)",
-    "ETSI_EN_319_401": "ETSI EN 319 401 V3.1.1 (2024-06) with the adaptations of the Annex (REQ-6.1-12, REQ-7.5-03..06)",
+    "IR_2025_2531": "Commission Implementing Regulation (EU) 2025/2531 of 16 December 2025 — reference standards and specifications for qualified electronic ledgers (OJ L, 17.12.2025); its Annex §3(a) applies ETSI EN 319 401 V3.1.1 'with adaptations'",
+    "REQ_numbering": "the REQ-x.y-NN identifiers are ETSI EN 319 401's, as adapted/added by the Annex of IR 2025/2531 (e.g. REQ-7.5-03..06, REQ-6.1-12): cite 'IR 2025/2531, Annex, REQ-7.5-04' — not an article of the Regulation",
 }
 
 
@@ -62,6 +62,13 @@ def assess(ledger_path: str, deployment: Optional[Dict] = None) -> Dict:
     entries = _entries(ledger_path)
     n = len(entries)
     signed = sum(1 for e in entries if e.get("signature") and e.get("signer"))
+    firme_valide = None
+    if signed:
+        try:
+            import signer as SG
+            firme_valide = SG.verify_ledger_signatures(entries)
+        except Exception as ex:  # noqa: BLE001 — senza cryptography: firme presenti ma NON verificate qui
+            firme_valide = {"verified": None, "note": f"non verificate: {type(ex).__name__}"}
     stamped = sum(1 for e in entries if e.get("tsa_token"))
     algo = snap.get("algorithm_used")
     chain_ok = bool(snap.get("hash_recompute_passed") and snap.get("link_passed"))
@@ -86,7 +93,10 @@ def assess(ledger_path: str, deployment: Optional[Dict] = None) -> Dict:
     else:
         stato, manca = "NON_SODDISFATTO", f"record firmati {signed}/{n}: firmare ogni record (signer.py) con certificato qualificato"
     add("REQ-7.5-05", "integrità dei record con firme/sigilli avanzati su certificati qualificati; rilevabilità IMMEDIATA di ogni modifica",
-        stato, {"record_firmati": signed, "totale": n, "rilevabilita_immediata": "verifier ricalcola ogni self_hash e ogni anello: una modifica è FAIL al primo controllo",
+        stato, {"record_firmati": signed, "totale": n, "firme_verificate": firme_valide,
+                "rilevabilita_immediata": ("del CONTENUTO: verifier ricalcola ogni self_hash e ogni anello, una modifica al contenuto è FAIL al "
+                                           "primo controllo; dei campi di attestazione (signer/signature, fuori dal canonico) solo con "
+                                           "signer.verify_ledger_signatures — qui eseguita se ci sono firme"),
                 "certificati_qualificati_dichiarati": d["qualified_certificates"]}, manca)
     # REQ-7.5-03 data origin by the users with AdES on qualified certificates
     add("REQ-7.5-03", "origine dei dati: firme/sigilli avanzati su certificati qualificati creati dagli UTENTI (CAdES/XAdES/JAdES con x5c)",
