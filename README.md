@@ -428,6 +428,34 @@ is beyond exact-fingerprint matching, and production use still wants a contracte
 `0x00` leaves, `0x01` nodes. Third-party verification needs only
 `(entry, index, tree_size, audit_path, root)`. Tests: `python3 test_merkle.py`.
 
+## Receipts, monitor, eIDAS 2.0 self-assessment, JWS (2026-09-13)
+
+Compared online with the field (Sigstore Rekor v2, immudb, Azure Confidential Ledger, Google Trillian/Tessera,
+the IETF SCITT architecture) and with the new EU rules for **qualified electronic ledgers** (eIDAS 2.0,
+Regulation (EU) 2024/1183 Art. 45l; Commission Implementing Regulation (EU) 2025/2531 of 16 December 2025),
+four pieces were missing and are now here, stdlib-only:
+
+| Module | What it adds | Standard |
+|---|---|---|
+| `cryptovalid_receipt.py` | **Portable receipts**: inclusion and consistency proofs for one entry / two tree heads, with a tree head **really signed** by the log key (the old `signed_tree_head` in `cryptovalid_merkle` carried no signature — renamed `tree_head`, alias kept). JSON profile and **COSE_Sign1** encoding per RFC 9942 (`vds`=1 RFC9162_SHA256, `vdp` with inclusion −1 / consistency −2 as arrays of bstr, alg EdDSA); minimal CBOR codec included. Verified offline against a **trusted** log key — the key inside the receipt is never trusted. | RFC 9942, RFC 9162, RFC 9052, RFC 8949 |
+| `cryptovalid_monitor.py` | **Append-only / non-equivocation monitor** (what rekor-monitor and immudb's auditor do): keeps the last green tree head and proves at every run that the ledger only grew; catches truncation, rewrite of old entries, forks and log-key changes; a red run never advances the baseline. | RFC 6962 consistency proofs |
+| `eidas_ledger_check.py` | **Self-assessment** of a ledger against IR 2025/2531 (REQ-7.5-03/04/05/06, Art. 45l): what is met by construction (hash list + Merkle, SHA-256/SHA3-256, immediate detectability), what needs the deployment's qualified pieces (qualified certificates, QTSP timestamps, certified signing device), what no code can give (being a QTSP). Produces the automated **ledger report** (Annex §2) and an **Electronic Ledger Practice Statement** skeleton (REQ-6.1-12) filled from what was measured. Never a claim of qualification. | eIDAS 2.0, IR 2025/2531, ETSI EN 319 401 |
+| `cryptovalid_jws.py` | **JWS container** (RFC 7515, EdDSA per RFC 8037) of a record's canonical form with `kid` and optional **`x5c`** — the header the regulation requires for JAdES; the qualified certificate is the user's, the toolkit puts it in the right place. Not a full JAdES profile (stated). | RFC 7515, RFC 8037, ETSI TS 119 182-1 (target) |
+
+```bash
+python3 signer.py keygen log.key
+python3 cryptovalid_receipt.py inclusion examples/sample_ledger.jsonl 2 log.key --cose r.cose > r.json
+python3 cryptovalid_receipt.py verify r.json <log_pubkey_hex>          # offline, trusted key given by you
+python3 cryptovalid_monitor.py examples/sample_ledger.jsonl state.json --keyfile log.key   # run it on a schedule
+python3 eidas_ledger_check.py examples/sample_ledger.jsonl --practice-statement --provider "ACME"
+python3 cryptovalid_jws.py sign examples/sample_ledger.jsonl 0 log.key --x5c <base64 DER cert>
+python3 test_ledger_evidence.py                                         # 15 tests, negatives first
+```
+
+Honest scope, once more: a receipt signed by the log key proves what the log key holder published; a
+qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
+certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
+
 ## High-frequency ingestion (Art. 12 logs at scale)
 
 `cryptovalid_ingest.py` turns a high-rate event stream into this same evidence format —

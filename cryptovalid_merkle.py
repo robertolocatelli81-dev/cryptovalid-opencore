@@ -126,13 +126,22 @@ def leaves_from_ledger(path):
     return [canonical(json.loads(line)) for line in open(path) if line.strip()]
 
 
-def signed_tree_head(leaves):
+def tree_head(leaves):
+    """UNSIGNED tree head (size + root). Until 2026-09-13 this function was called `signed_tree_head` while
+    carrying no signature — a misnomer found in the review of that day. The signed one lives in
+    cryptovalid_receipt.signed_tree_head (Ed25519 log key)."""
     root = mth(leaves)
     return {
         "tree_size": len(leaves),
         "root_sha256": root.hex(),
-        "note": "submit root_sha256 to a qualified TSP (eIDAS EU Trusted List) for a QUALIFIED RFC3161 timestamp",
+        "signed": False,
+        "note": "unsigned; sign it with cryptovalid_receipt.signed_tree_head and/or submit root_sha256 to a qualified TSP for a QUALIFIED RFC 3161 timestamp",
     }
+
+
+def signed_tree_head(leaves):
+    """Deprecated alias kept for callers (cryptovalid_ingest): returns the UNSIGNED tree head."""
+    return tree_head(leaves)
 
 
 def main(argv=None):
@@ -146,7 +155,7 @@ def main(argv=None):
     args = p.parse_args(argv)
     lv = leaves_from_ledger(args.ledger)
     if args.cmd == "sth":
-        print(json.dumps(signed_tree_head(lv), indent=2)); return 0
+        print(json.dumps(tree_head(lv), indent=2)); return 0
     root = mth(lv)
     if args.cmd == "prove":
         pr = inclusion_proof(args.index, lv)

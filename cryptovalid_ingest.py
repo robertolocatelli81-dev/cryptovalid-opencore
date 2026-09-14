@@ -229,7 +229,7 @@ class Ingestor:
                 return None
             path = self._seg_path(self._seq)
             leaves = merkle.leaves_from_ledger(path)
-            sth = merkle.signed_tree_head(leaves)
+            sth = merkle.tree_head(leaves)          # unsigned head (renamed 2026-09-13); signed just below when a backend is given
             sth.update({"segment": os.path.basename(path), "sealed_utc": _utc_now(),
                         "last_self_hash": self._prev,
                         "prev_sth_sha256": self._prev_sth_hash()})
