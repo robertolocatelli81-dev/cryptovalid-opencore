@@ -62,6 +62,33 @@ python3 conformance.py     # exit 0 = conformant
 
 - **Signatures** (`signer.py`): Ed25519 over `self_hash`. A signing-conformant tool re-derives
   `self_hash` from content and verifies the signature (content → self_hash → signature).
+- **Signed chain tip** (`cryptovalid_tip.py`, 15/09/2026): the writer MAY publish `<ledger>.tip.json` =
+  `{kind:"cryptovalid_tip/1", entries, ledger_id, tip_sha256, ts, log_pubkey_hex, signature_hex}`, Ed25519 over the
+  canonical bytes `{"entries":N,"kind":"cryptovalid_tip/1","ledger_id":"…","tip_sha256":"…","ts":"…"}` (key order
+  fixed, no spaces; `ledger_id` = `self_hash` of entry 0, the chain's identity). A tip-conformant verifier, given
+  the tip and the TRUSTED log key: (1) verifies the signature against the trusted key (the key inside the tip is
+  informative only); (2) FAILs `tip_of_another_ledger` when `ledger_id` is not the file's first `self_hash`,
+  `ledger_id_mismatch` when it is not the identity the relying party expects (`--expect-ledger-id`, out of band:
+  the only defence when a log key signs several ledgers and a whole pair file+tip is substituted),
+  `tail_truncated` when the file has fewer entries than the tip, `unsealed_tail` when it has more,
+  `tail_rewritten` when the count matches but the last `self_hash` differs; (3) when the tip is REQUIRED, a
+  missing tip is `tip_missing`; a malformed tip is never silence (`tip_invalid` / `tip_unreadable`); (4) **without
+  the trusted log key the tip is NOT checked** (`tip_untrusted`, `checked:false`; the key inside the tip proves
+  nothing): the verdict is the bare chain's, and a required tip is a FAIL — never a "PASS but untrusted" an
+  automation would read as exit 0; (5) `--tip-not-before` compares INSTANTS (ISO-8601 with `Z`, an offset, or
+  naive = UTC), never strings; (6) formats are strict and identical in the three checkers — `ledger_id` and
+  `tip_sha256` 64 lowercase hex, `ts` a plain printable ISO-8601 instant (parsed always, not only with
+  `--tip-not-before`), `entries` a non-negative integer — a SIGNED tip outside the profile is `tip_invalid`
+  (oracle cases `tip-garbage-ts`, `tip-upper-hex`: FAIL on Python/JS/Go, unchecked by Rust/Swift, declared).
+  Writers: `cryptovalid_ingest.Ingestor(tip_keyfile=…)` (every flush, O(1), same lock), Go `AppendSigned` /
+  `cvappend -tipkey`, `cryptovalid_tip.py sign` (any file, O(n)). Verifiers: Python (reference), JS, Go;
+  **declared divergence**: Rust and Swift ignore the tip (measured by the oracle case `tip-truncated`).
+  What the tip does not prove: the holder of the log key can truncate and re-sign (key custody is the limit);
+  and a **rollback** — truncation plus an OLDER genuine tip restored — passes, because the tip proves "a state
+  the key signed", not "the latest": a verifier MAY refuse tips dated before a known instant
+  (`--tip-not-before`, string comparison on the tip's ISO-8601 `ts`); the monitor state, receipts or an external
+  anchor are the systematic answer. Types are strict: `entries` is a non-negative JSON integer (a `"10"` or
+  `10.0` would sign the same bytes but is refused by all three checkers).
 - **RFC 3161** timestamping: the token's message imprint MUST equal the stamped digest.
 - **Regulatory profiles** (`spec/regulatory_profiles.json`, self-updated by `refresh_regulatory.py`):
   a ledger entry MAY set `data.regulatory_ref = "<id>"` to declare which EU requirement it supports.

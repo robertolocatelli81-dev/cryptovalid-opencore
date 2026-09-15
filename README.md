@@ -126,9 +126,21 @@ Delivered and tested — the CI badge above is green on every push:
   re-forge at the *signed pack* layer, timestamp forgery, cross-language JSON canonicalisation; and on
   2026-09-11, a bare-ledger verifier that answered `PASS` on an **empty** file) — each with a regression test.
   **Know what `verifier.py` proves**: a bare hash chain is internally consistent evidence — it cannot see
-  truncation or a re-chained suffix written by someone with write access to the file. The receipt now
-  says so in a `scope` field; those attacks are caught by the signed evidence pack (`evidence_pack.py`),
-  which commits to entry count and head hash;
+  truncation or a re-chained suffix written by someone with write access to the file. The receipt
+  says so in a `scope` field. Since 0.11.0 the **signed chain tip** (`cryptovalid_tip.py`, sidecar
+  `<ledger>.tip.json`, written after every append in O(1)) moves that limit: with the tip and the
+  trusted log key, `verifier.py --trusted-pubkey <hex> [--require-tip]` names `tail_truncated`,
+  `tail_rewritten` and `unsealed_tail`; the JS and Go verifiers check it too (Rust/Swift: declared no).
+  Without the trusted log key the tip is not checked at all (`tip_untrusted`): the key inside a tip proves
+  nothing, so there is no "PASS but untrusted" for an automation to misread.
+  What remains, stated in the receipt: a holder of the log key can truncate and re-sign (key custody:
+  HSM/KMS); a rollback to an older genuine tip passes unless you pass `--tip-not-before` or compare
+  with the monitor state / receipts / an anchor; and when one log key signs several ledgers, a whole
+  pair file+tip of another ledger is caught only with `--expect-ledger-id` (the tip carries the chain's
+  identity, `ledger_id` = self_hash of entry 0). The production writer keeps the tip itself:
+  `Ingestor(tip_keyfile=…)` signs it at every flush under its lock. Measured on the arc (#703)
+  bench: 6002/6003 tamperings without the tip, 6003/6003 with it, and an attacker re-signing the tip
+  with a key of their own is refused;
 - **high-frequency ingestion** (`cryptovalid_ingest.py`): segmented hash-chained ledgers with
   Merkle-STH sealing (chained across segments, KMS/HSM-signable), batched fsync, fail-closed
   crash recovery — throughput measured by the bench, never quoted as a fixed claim;
@@ -448,6 +460,7 @@ four pieces were missing and are now here, stdlib-only:
 | Module | What it adds | Standard |
 |---|---|---|
 | `cryptovalid_receipt.py` | **Portable receipts**: inclusion and consistency proofs for one entry / two tree heads, with a tree head **really signed** by the log key (the old `signed_tree_head` in `cryptovalid_merkle` carried no signature — renamed `tree_head`, alias kept). JSON profile and **COSE_Sign1** encoding per RFC 9942 (`vds`=1 RFC9162_SHA256, `vdp` with inclusion −1 / consistency −2 as arrays of bstr, alg EdDSA; consistency receipts carry a **detached** payload and the verifier recomputes root_2); minimal CBOR codec (duplicate keys and deep nesting refused). Verification is fail-closed: it needs **your** entry (inclusion) or **your** previous root (consistency) and a **trusted** log key — nothing named inside the receipt is trusted, and the proof's tree size must equal the signed head's. | RFC 9942, RFC 9162, RFC 9052, RFC 8949 |
+| `cryptovalid_tip.py` | **Signed chain tip** (0.11.0): `{entries, tip_sha256, ts}` signed with the log key after every append (O(1), atomic sidecar `<ledger>.tip.json`; Go `AppendSigned` / `cvappend -tipkey` writes it under the same lock). Any snapshot verifier holding the tip and the trusted key sees tail truncation, suffix rewrite and unsealed appends — the three attacks a bare chain cannot see. Same signed bytes in Python, JS and Go (cross-signed in the tests). Limit: the holder of the log key; deleting the tip is visible only with `--require-tip` or a copy kept elsewhere (monitor state, receipts, anchor). | signed tree-head idea of RFC 6962, reduced to the chain tip |
 | `cryptovalid_monitor.py` | **Append-only / non-equivocation monitor** (what rekor-monitor and immudb's auditor do): keeps the last green tree head and proves at every run that the ledger only grew; catches truncation, rewrite of old entries, forks and log-key changes; a red run never advances the baseline; the saved state is itself verified on load (signed head). Three modes, stated: **writer** (`--keyfile`, signs the head), **auditor** (`--trusted-pubkey`, never writes an unsigned state, advances only with a signed head published by the writer via `--sth-file`), none (blind trust, declared). Declared limits: the blind window between two runs, and deletion/replay of the state file (keep it where the ledger writer cannot write, or anchor each signed head externally). | RFC 6962 consistency proofs |
 | `eidas_ledger_check.py` | **Self-assessment** of a ledger against IR 2025/2531 (REQ-7.5-03/04/05/06, Art. 45l): what is met by construction (hash list + Merkle, SHA-256/SHA3-256, immediate detectability), what needs the deployment's qualified pieces (qualified certificates, QTSP timestamps, certified signing device), what no code can give (being a QTSP). Produces the automated **ledger report** (Annex §2) and an **Electronic Ledger Practice Statement** skeleton (REQ-6.1-12) filled from what was measured. Never a claim of qualification. | eIDAS 2.0, IR 2025/2531, ETSI EN 319 401 |
 | `cryptovalid_jws.py` | **JWS container** (RFC 7515, EdDSA per RFC 8037) of a record's canonical form with `kid` and optional **`x5c`** — the header the regulation requires for JAdES; the qualified certificate is the user's, the toolkit puts it in the right place. Not a full JAdES profile (stated). | RFC 7515, RFC 8037, ETSI TS 119 182-1 (target) |

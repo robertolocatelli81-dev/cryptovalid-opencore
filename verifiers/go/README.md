@@ -31,3 +31,10 @@ invalid UTF-8.
 per process: threads of one process need their own mutex; on non-Unix builds there is no lock at all.
 Go's `json.Marshal` turns a whole-number `float64` into an integer and replaces non-UTF-8 bytes in Go
 strings with U+FFFD before `Append` sees them: validate at the source.
+
+## Signed chain tip (0.11.0)
+
+`AppendSigned(path, ts, data, "sha256", key)` = `Append` + a signed chain tip (with `ledger_id` = first self_hash) `<ledger>.tip.json` written under
+the same lock (`cvappend -tipkey seed.hex`). `cvverify [-tip f] [-trusted-pubkey hex] [-require-tip] [-tip-not-before iso] [-expect-ledger-id hex]` compares
+the snapshot with the tip: `tail_truncated`, `unsealed_tail`, `tail_rewritten`, `tip_rolled_back`, `tip_of_another_ledger`, `ledger_id_mismatch`, `tip_invalid`, `tip_missing`.
+The signed bytes are the Python reference's (`cryptovalid_tip.py`): the tests cross-sign Python↔Go.

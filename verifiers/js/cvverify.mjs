@@ -10,7 +10,7 @@
 // and — when present — Ed25519 signatures over self_hash. stdlib crypto only.
 // Honest scope: proves integrity/linkage/signature, NOT the truth of recorded facts.
 import { createHash, verify as edVerify, createPublicKey } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -138,7 +138,52 @@ export function hasLoneSurrogate(text) {
   return false;
 }
 
-export function verifyLedger(text, { algo = null, pubkey = null } = {}) {
+// Signed chain tip (15/09/2026, cryptovalid_tip.py / tip.go): same signed bytes in every language —
+// {"entries":N,"kind":"cryptovalid_tip/1","ledger_id":"…","tip_sha256":"…","ts":"…"} (ledger_id = self_hash of entry 0,
+// the chain's identity). With the tip and the TRUSTED log key,
+// tail truncation / suffix rewrite / an unsealed append become named failures (a bare chain cannot see them).
+export const TIP_KIND = "cryptovalid_tip/1";
+export function tipPayload(entries, ledgerId, tipSha256, ts) {
+  return Buffer.from(`{"entries":${entries},"kind":"${TIP_KIND}","ledger_id":"${ledgerId}","tip_sha256":"${tipSha256}","ts":"${ts}"}`, "utf-8");
+}
+const HEX64 = /^[0-9a-f]{64}$/;
+export function parseInstant(s) {
+  const t = String(s).trim();
+  return Date.parse(/(Z|[+-]\d\d:\d\d)$/.test(t) ? t : t + "Z");   // a naive value is UTC, as in Python/Go
+}
+export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = null, notBefore = null, firstSelfHash = null, expectLedgerId = null) {
+  if (!tip || typeof tip !== "object" || Array.isArray(tip) || tip.kind !== TIP_KIND) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
+  for (const k of ["entries", "ledger_id", "tip_sha256", "ts", "signature_hex"]) if (!(k in tip)) return { ok: false, error: `tip_invalid: tip missing field ${k}` };
+  // strict types, same as Go's decoder: entries a non-negative integer, the rest strings
+  if (typeof tip.entries !== "number" || !Number.isInteger(tip.entries) || tip.entries < 0) return { ok: false, error: "tip_invalid: tip entries must be a non-negative integer" };
+  if (!["ledger_id", "tip_sha256", "ts", "signature_hex"].every((k) => typeof tip[k] === "string")) return { ok: false, error: "tip_invalid: tip fields must be strings" };
+  if (!HEX64.test(tip.ledger_id) || !HEX64.test(tip.tip_sha256) || !/^[\x21-\x7e]{1,40}$/.test(tip.ts) || /["\\]/.test(tip.ts) || Number.isNaN(parseInstant(tip.ts))) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
+  // the key inside the tip proves nothing: without the trusted log key there is NO verification (never a
+  // "PASS but untrusted" an automation reads as exit 0 — council 15/09, Gemini)
+  if (!trustedPubkeyHex) return { ok: false, trusted: false, error: "tip_untrusted: no trusted log key given (--trusted-pubkey); the key inside the tip cannot be trusted" };
+  if (tip.log_pubkey_hex && tip.log_pubkey_hex !== trustedPubkeyHex) return { ok: false, error: "tip_invalid: tip log key differs from the trusted log key" };
+  let sigOk = false;
+  try {
+    const key = createPublicKey({ key: Buffer.concat([SPKI, Buffer.from(trustedPubkeyHex, "hex")]), format: "der", type: "spki" });
+    sigOk = edVerify(null, tipPayload(Number(tip.entries), tip.ledger_id, tip.tip_sha256, tip.ts), key, Buffer.from(tip.signature_hex, "hex"));
+  } catch (e) { sigOk = false; }
+  if (!sigOk) return { ok: false, error: "tip_invalid: tip signature invalid" };
+  const n = Number(tip.entries), trusted = Boolean(trustedPubkeyHex);
+  if (expectLedgerId && tip.ledger_id !== expectLedgerId) return { ok: false, trusted, error: "ledger_id_mismatch: the tip belongs to a different ledger than the one you expect" };
+  if (firstSelfHash !== null && entriesCount > 0 && tip.ledger_id !== firstSelfHash) return { ok: false, trusted, error: "tip_of_another_ledger: the tip's ledger_id is not this file's first self_hash" };
+  // ROLLBACK (declared): an older genuine tip restored after a truncation passes; notBefore refuses older tips
+  if (notBefore) {   // instants, not strings (council 15/09, Opus): 'Z' / '+00:00' / other offsets of the same moment agree
+    const a = parseInstant(tip.ts), b = parseInstant(notBefore);
+    if (Number.isNaN(a) || Number.isNaN(b)) return { ok: false, trusted, error: "tip_invalid: timestamp not ISO-8601" };
+    if (a < b) return { ok: false, trusted, error: `tip_rolled_back: the tip is dated ${tip.ts}, before the required ${notBefore}` };
+  }
+  if (entriesCount < n) return { ok: false, trusted, error: `tail_truncated: file has ${entriesCount} entries, the signed tip commits to ${n}` };
+  if (entriesCount > n) return { ok: false, trusted, error: `unsealed_tail: file has ${entriesCount} entries, the signed tip commits to ${n} (appended after the last signed head)` };
+  if (lastSelfHash !== tip.tip_sha256) return { ok: false, trusted, error: "tail_rewritten: same entry count but the last self_hash differs from the signed tip" };
+  return { ok: true, trusted, entries: n, tip_sha256: tip.tip_sha256, ts: tip.ts };
+}
+
+export function verifyLedger(text, { algo = null, pubkey = null, tip = null, trustedPubkey = null, requireTip = false, tipNotBefore = null, expectLedgerId = null } = {}) {
   const entries = [], errors = [];
   text.split("\n").forEach((ln, i) => {
     if (!ln.trim()) return;
@@ -166,6 +211,18 @@ export function verifyLedger(text, { algo = null, pubkey = null } = {}) {
   entries.forEach((e, i) => { if (e.idx !== i) { idxOk = false; errors.push({ line: i, error: `idx_mismatch: expected ${i}, got ${e.idx}` }); } });
   // zero entries = nothing verified = FAIL (2026-09-11: all four verifiers said PASS on an empty file)
   if (entries.length === 0) errors.push({ line: 0, error: "empty_ledger: zero entries, nothing to verify" });
+  // signed chain tip: `tip` is the parsed document (or null); the CLI loads <ledger>.tip.json when present
+  let tipCheck = null;
+  if (tip !== null && !trustedPubkey) {
+    // a tip is there but no trusted key: NOT checked; the verdict is the bare chain's, FAIL if required
+    tipCheck = { ok: false, checked: false, error: "tip_untrusted: a signed tip is present but no trusted log key was given (--trusted-pubkey); the tail limit applies in full" };
+    if (requireTip) errors.push({ line: entries.length, error: tipCheck.error });
+  } else if (tip !== null) {
+    const last = entries.length ? String(entries[entries.length - 1].self_hash ?? "") : "0".repeat(64);
+    const first = entries.length ? String(entries[0].self_hash ?? "") : "0".repeat(64);
+    tipCheck = { ...checkTip(entries.length, last, tip, trustedPubkey, tipNotBefore, first, expectLedgerId), checked: true };
+    if (!tipCheck.ok) errors.push({ line: entries.length, error: tipCheck.error });
+  } else if (requireTip) errors.push({ line: entries.length, error: "tip_missing: a signed chain tip is required and none was found" });
   const chainIntegrity = hashFailures.length === 0 && linkFailures.length === 0 && idxOk && errors.length === 0;
 
   let signatures = null;
@@ -180,7 +237,7 @@ export function verifyLedger(text, { algo = null, pubkey = null } = {}) {
   return {
     verdict: chainIntegrity ? "PASS" : "FAIL", chain_integrity: chainIntegrity, algorithm: use,
     entries: entries.length, hash_failures_idx: hashFailures.map((f) => f.idx), link_failures_idx: linkFailures.map((f) => f.idx),
-    errors, signatures, verifier: "cvverify.mjs (independent, Node stdlib)",
+    errors, signatures, tip: tipCheck, verifier: "cvverify.mjs (independent, Node stdlib)",
     independent_receipt_sha256: createHash("sha256").update(receiptPayload).digest("hex"), // this impl's own fingerprint, NOT the reference receipt
   };
 }
@@ -207,14 +264,25 @@ if (argv[0] === "--conformance") {
 } else if (argv[0]) {
   const algo = argv.includes("--algo") ? argv[argv.indexOf("--algo") + 1] : null;
   const pubkey = argv.includes("--pubkey") ? argv[argv.indexOf("--pubkey") + 1] : null;
+  const trustedPubkey = argv.includes("--trusted-pubkey") ? argv[argv.indexOf("--trusted-pubkey") + 1] : null;
+  const requireTip = argv.includes("--require-tip");
+  const tipNotBefore = argv.includes("--tip-not-before") ? argv[argv.indexOf("--tip-not-before") + 1] : null;
+  const expectLedgerId = argv.includes("--expect-ledger-id") ? argv[argv.indexOf("--expect-ledger-id") + 1] : null;
   let text;
   try { text = readFileSync(argv[0], "utf-8"); }
   catch (e) { console.log(JSON.stringify({ verdict: "FILE_ERROR", error: e.code || e.message }, null, 1)); process.exit(2); }
-  const r = verifyLedger(text, { algo, pubkey });
+  // tip: --tip <file>, else <ledger>.tip.json if present; an unreadable/malformed tip is a failure, never silence
+  let tip = null;
+  const tipPath = argv.includes("--tip") ? argv[argv.indexOf("--tip") + 1] : (existsSync(argv[0] + ".tip.json") ? argv[0] + ".tip.json" : null);
+  if (tipPath !== null) {
+    try { tip = JSON.parse(readFileSync(tipPath, "utf-8")); if (!tip || typeof tip !== "object") throw new Error("not an object"); }
+    catch (e) { tip = { kind: "unreadable:" + (e.code || e.message) }; }
+  }
+  const r = verifyLedger(text, { algo, pubkey, tip, trustedPubkey, requireTip, tipNotBefore, expectLedgerId });
   console.log(JSON.stringify(r, null, 1));
   process.exit(r.verdict === "PASS" ? 0 : 1);
 } else {
-  console.error("usage: node cvverify.mjs <ledger.jsonl> [--algo A] [--pubkey hex] | --conformance <vectors_dir>");
+  console.error("usage: node cvverify.mjs <ledger.jsonl> [--algo A] [--pubkey hex] [--tip f] [--trusted-pubkey hex] [--require-tip] [--tip-not-before iso] [--expect-ledger-id hex] | --conformance <vectors_dir>");
   process.exit(2);
 }
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 )
 
@@ -13,18 +14,31 @@ const Genesis = "000000000000000000000000000000000000000000000000000000000000000
 
 // Verdict mirrors verifier.py's receipt for the fields any auditor reads.
 type Verdict struct {
-	Verdict             string   `json:"verdict"` // PASS | FAIL
-	Algo                string   `json:"algo,omitempty"`
-	Entries             int      `json:"entries_count"`
-	HashRecomputePassed bool     `json:"hash_recompute_passed"`
-	LinkPassed          bool     `json:"link_passed"`
-	Failures            []string `json:"failures"`
-	Scope               string   `json:"scope"`
+	Verdict             string    `json:"verdict"` // PASS | FAIL
+	Algo                string    `json:"algo,omitempty"`
+	Entries             int       `json:"entries_count"`
+	HashRecomputePassed bool      `json:"hash_recompute_passed"`
+	LinkPassed          bool      `json:"link_passed"`
+	Failures            []string  `json:"failures"`
+	FirstSelfHash       string    `json:"first_self_hash,omitempty"` // the chain's identity (ledger_id of its tip)
+	LastSelfHash        string    `json:"last_self_hash,omitempty"`
+	Tip                 *TipCheck `json:"tip,omitempty"` // nil = no signed tip checked (the tail limit applies in full)
+	Scope               string    `json:"scope"`
+}
+
+// TipCheck is the outcome of comparing the snapshot with a signed chain tip (tip.go).
+type TipCheck struct {
+	OK      bool   `json:"ok"`
+	Checked bool   `json:"checked"` // false = a tip was there but could not be checked (no trusted key)
+	Why     string `json:"why"`
+	Trusted bool   `json:"trusted"`
+	Path    string `json:"tip_path,omitempty"`
 }
 
 const scope = "single-snapshot check of the cryptovalid profile (SPEC_EVIDENCE_FORMAT §3-4): self_hash recompute, " +
-	"prev_hash linkage, sequential idx, genesis. Does NOT see a truncated tail (chain still valid): use " +
-	"cryptovalid_monitor / receipts / an external anchor for that. Signatures are not verified here."
+	"prev_hash linkage, sequential idx, genesis. Does NOT see a truncated tail (chain still valid) unless a " +
+	"signed chain tip is checked (tip.go / cvverify -tip): then only a holder of the log key can truncate " +
+	"and re-sign. Entry signatures are not verified here."
 
 // MaxLineBytes bounds one JSONL line (a longer line is a failure, not a crash, and never silently truncated).
 const MaxLineBytes = 64 << 20
@@ -103,6 +117,9 @@ func VerifyLedger(r io.Reader) Verdict {
 			linkOK = false
 			v.Failures = append(v.Failures, fmt.Sprintf("entry %d: prev_hash does not link", i))
 		}
+		if i == 0 {
+			v.FirstSelfHash = self
+		}
 		prev = self
 		i++
 	}
@@ -111,6 +128,7 @@ func VerifyLedger(r io.Reader) Verdict {
 		hashOK = false
 	}
 	v.Entries = i
+	v.LastSelfHash = prev
 	if i == 0 {
 		// zero entries = nothing verified = FAIL, same rule and message as Python/JS (2026-09-11); the Go
 		// reference said "EMPTY" until 15/09/2026 — an undeclared divergence caught by adding Go to the oracle
@@ -122,6 +140,58 @@ func VerifyLedger(r io.Reader) Verdict {
 		v.Verdict = "PASS"
 	} else {
 		v.Verdict = "FAIL"
+	}
+	return v
+}
+
+// VerifyLedgerWithTip verifies the file and, when a tip is given (path "" = `<ledger>.tip.json` if present),
+// compares the snapshot with the signed chain tip: truncation, suffix rewrite and unsealed appends become named
+// failures. requireTip: a missing tip is a failure.
+func VerifyLedgerWithTip(ledgerPath, tipPath, trustedPubkeyHex string, requireTip bool, tipNotBefore, expectLedgerID string) Verdict {
+	f, err := os.Open(ledgerPath)
+	if err != nil {
+		return Verdict{Verdict: "FAIL", Failures: []string{"open: " + err.Error()}, Scope: scope}
+	}
+	defer f.Close()
+	v := VerifyLedger(f)
+	if tipPath == "" {
+		if _, err := os.Stat(TipPath(ledgerPath)); err == nil {
+			tipPath = TipPath(ledgerPath)
+		}
+	}
+	if tipPath == "" {
+		if requireTip {
+			v.Verdict = "FAIL"
+			v.Failures = append(v.Failures, "tip_missing: a signed chain tip is required and none was found")
+		}
+		return v
+	}
+	tc := &TipCheck{Path: tipPath}
+	if trustedPubkeyHex == "" {
+		// a tip is there but no trusted key: NOT checked; the verdict is the bare chain's, FAIL if required
+		tc.Why = "tip_untrusted: a signed tip is present but no trusted log key was given (-trusted-pubkey); the tail limit applies in full"
+		v.Tip = tc
+		if requireTip {
+			v.Verdict = "FAIL"
+			v.Failures = append(v.Failures, fmt.Sprintf("entry %d: %s", v.Entries, tc.Why))
+		}
+		return v
+	}
+	t, err := LoadTip(tipPath)
+	if err != nil {
+		tc.Why = err.Error()
+	} else {
+		first := v.FirstSelfHash
+		if v.Entries == 0 {
+			first = Genesis
+		}
+		tc.OK, tc.Why, tc.Trusted = CheckTip(v.Entries, first, v.LastSelfHash, t, trustedPubkeyHex, tipNotBefore, expectLedgerID)
+		tc.Checked = true
+	}
+	v.Tip = tc
+	if !tc.OK {
+		v.Verdict = "FAIL"
+		v.Failures = append(v.Failures, fmt.Sprintf("entry %d: %s", v.Entries, tc.Why))
 	}
 	return v
 }

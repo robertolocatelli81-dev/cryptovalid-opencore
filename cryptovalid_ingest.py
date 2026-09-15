@@ -115,7 +115,7 @@ class Ingestor:
     def __init__(self, directory: str, prefix: str = "ledger", batch_size: int = 256,
                  rotate_entries: int = 100_000, fsync: bool = True, backend=None,
                  tsa_url: Optional[str] = None, lotl_check: bool = False,
-                 lotl_member_states=None):
+                 lotl_member_states=None, tip_keyfile: Optional[str] = None):
         """`tsa_url`: se impostato, ogni seal() ancora l'STH con un timestamp RFC 3161
         LIVE (token in `<segmento>.sth.tsr` + metadata `.sth.tsr.json`). `lotl_check`:
         certifica anche il token come eIDAS-qualified contro le EU Trusted Lists
@@ -133,6 +133,15 @@ class Ingestor:
         self._lotl_ms = lotl_member_states
         self._request_timestamp = None    # iniettabile nei test; default: cryptovalid_tsa
         self.last_anchor_error: Optional[str] = None
+        # Signed chain tip (15/09/2026, council: «the production writer does not maintain the tip»): with a
+        # log key, every flush() also writes `<segment>.tip.json` (O(1): entries + first/last self_hash are
+        # already known here) under the same lock — a snapshot verifier then sees tail truncation, suffix
+        # rewrite and unsealed appends of the ACTIVE segment (sealed segments have their STH).
+        self._tip_key = None
+        if tip_keyfile:
+            import cryptovalid_tip
+            self._tip_key = cryptovalid_tip.load_key(tip_keyfile)   # loaded ONCE, not at every flush
+        self._first = GENESIS_PREV        # self_hash of entry 0 of the active segment = the chain's identity
         self._lock = threading.RLock()
         self._buf: List[str] = []
         self._fh = None
@@ -155,14 +164,14 @@ class Ingestor:
         else:
             self._seq = (int(os.path.basename(segs[-1]).rsplit("-", 1)[1].split(".")[0]) + 1
                          if segs else 0)
-            self._idx, self._prev = 0, GENESIS_PREV
+            self._idx, self._prev, self._first = 0, GENESIS_PREV, GENESIS_PREV
         self._fh = open(self._seg_path(self._seq), "ab")
         _fsync_dir(self._dir)                     # la voce di directory del nuovo segmento
 
     def _resume(self, path: str):
         """Fail-closed recovery: keep every complete line, truncate a torn tail (it can
         only be an un-acknowledged write: flush() had not returned), resume the chain."""
-        good_end, self._idx, self._prev = 0, 0, GENESIS_PREV
+        good_end, self._idx, self._prev, self._first = 0, 0, GENESIS_PREV, GENESIS_PREV
         with open(path, "rb") as f:
             for line in f:
                 if not line.endswith(b"\n"):
@@ -182,6 +191,8 @@ class Ingestor:
                     raise ValueError(f"{path}: broken/tampered chain at idx {self._idx} — "
                                      "refusing to resume (run the verifier on it)")
                 good_end += len(line)
+                if self._idx == 0:
+                    self._first = e["self_hash"]
                 self._idx += 1
                 self._prev = e["self_hash"]
         size = os.path.getsize(path)
@@ -197,6 +208,8 @@ class Ingestor:
             e = {"idx": self._idx, "ts": _utc_now(), "data": data, "prev_hash": self._prev}
             e["self_hash"] = hashlib.sha256(_canonical(e)).hexdigest()
             self._buf.append(json.dumps(e, sort_keys=True, separators=(",", ":")))
+            if self._idx == 0:
+                self._first = e["self_hash"]
             self._prev = e["self_hash"]
             self._idx += 1
             ref = {"segment": os.path.basename(self._seg_path(self._seq)), "idx": e["idx"]}
@@ -217,6 +230,10 @@ class Ingestor:
                 if self._fsync:
                     os.fsync(self._fh.fileno())
                 self._buf.clear()
+                if self._tip_key is not None:
+                    import cryptovalid_tip
+                    path = self._seg_path(self._seq)
+                    cryptovalid_tip.write_tip(path + ".tip.json", self._tip_key, self._idx, self._first, self._prev)
 
     # ── sealing ──────────────────────────────────────────────────────────────
     def seal(self, min_entries: int = 1) -> Optional[Dict]:
@@ -243,7 +260,7 @@ class Ingestor:
             self._write_head(sth)
             self._fh.close()
             self._seq += 1
-            self._idx, self._prev = 0, GENESIS_PREV
+            self._idx, self._prev, self._first = 0, GENESIS_PREV, GENESIS_PREV
             self._fh = open(self._seg_path(self._seq), "ab")
             _fsync_dir(self._dir)
         # ancora TSA FUORI dal lock: una TSA lenta (fino a 30s) non deve mai

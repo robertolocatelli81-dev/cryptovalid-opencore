@@ -332,8 +332,15 @@ def _linkage_verify(entries: List[Dict], started: str, path: str) -> Optional[Di
     return receipt
 
 
-def verify_ledger(path: str, algo: Optional[str] = None) -> Dict:
-    """Verifica integrità del ledger. Restituisce receipt JSON-serializable."""
+def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = None,
+                  trusted_pubkey_hex: Optional[str] = None, require_tip: bool = False,
+                  tip_not_before: Optional[str] = None, expect_ledger_id: Optional[str] = None) -> Dict:
+    """Verifica integrità del ledger. Restituisce receipt JSON-serializable.
+
+    `tip`: path of a signed chain tip (cryptovalid_tip.py); None = use `<path>.tip.json` when it exists. With a
+    tip the tail limit moves: truncation, suffix rewrite and unsealed appends become named FAILs (the chain
+    alone cannot see them). `require_tip`: a missing tip is a FAIL. `trusted_pubkey_hex`: the log key the
+    relying party trusts (without it the tip's own key is used and the receipt says so: NOT trusted)."""
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     errors: List[Dict] = []
 
@@ -443,6 +450,38 @@ def verify_ledger(path: str, algo: Optional[str] = None) -> Dict:
         chain_integrity = False
         errors.append({"line": 0, "error": "empty_ledger: zero entries, nothing to verify"})
 
+    # Signed chain tip (15/09/2026): the only way a SNAPSHOT verifier can see tail truncation / suffix rewrite.
+    tip_check: Optional[Dict] = None
+    tip_file = tip if tip is not None else (path + ".tip.json" if os.path.exists(path + ".tip.json") else None)
+    if tip_file is not None and not trusted_pubkey_hex:
+        # a tip is there but no trusted log key: it is NOT checked (the key inside the tip proves nothing), and
+        # the verdict is the bare chain's — with require_tip that is a FAIL (council 15/09, Gemini: no fail-open)
+        tip_check = {"ok": False, "checked": False, "tip_path": tip_file,
+                     "error": "tip_untrusted: a signed tip is present but no trusted log key was given (--trusted-pubkey); "
+                              "the tail limit applies in full"}
+        if require_tip:
+            chain_integrity = False
+            errors.append({"line": len(entries), "error": tip_check["error"]})
+    elif tip_file is not None:
+        try:
+            import cryptovalid_tip as _tip
+            last = entries[-1].get("self_hash", "") if entries else _tip.GENESIS
+            first = entries[0].get("self_hash", "") if entries else _tip.GENESIS
+            tip_check = _tip.check_tip(len(entries), last if isinstance(last, str) else "", _tip.load_tip(tip_file),
+                                       trusted_pubkey_hex, tip_not_before,
+                                       first_self_hash=first if isinstance(first, str) else "",
+                                       expect_ledger_id=expect_ledger_id)
+        except (OSError, ValueError, ImportError) as e:
+            tip_check = {"ok": False, "error": f"tip_unreadable: {type(e).__name__}: {str(e)[:120]}"}
+        tip_check["tip_path"] = tip_file
+        tip_check["checked"] = True
+        if not tip_check["ok"]:
+            chain_integrity = False
+            errors.append({"line": len(entries), "error": tip_check["error"]})
+    elif require_tip:
+        chain_integrity = False
+        errors.append({"line": len(entries), "error": "tip_missing: a signed chain tip is required and none was found"})
+
     receipt: Dict = {
         "verified_utc": started,
         "verifier": "OMEGA core.verify_ledger v1.0 (stdlib-only)",
@@ -463,6 +502,7 @@ def verify_ledger(path: str, algo: Optional[str] = None) -> Dict:
         "ts_backwards": ts_backwards[:10],
         "parse_errors": errors[:10],
         "chain_integrity": chain_integrity,
+        "tip": tip_check,   # None = no signed tip checked (the tail limit below applies in full)
         "verdict": "PASS" if chain_integrity else "FAIL",
         # What this verdict does and does not prove. A bare hash chain is internally consistent
         # evidence: anyone with write access to the file can truncate it or rewrite a suffix and
@@ -473,11 +513,20 @@ def verify_ledger(path: str, algo: Optional[str] = None) -> Dict:
             "proves": ["every self_hash recomputes from its entry (canonical JSON)",
                        "every prev_hash links to the previous self_hash (genesis = 64 zeros)",
                        "idx is contiguous from 0"],
-            "does_not_prove": ["no truncation (a shorter prefix is a valid chain)",
-                               "no suffix rewrite by a party with write access (re-chained fork)",
+            "does_not_prove": (["no truncation / suffix rewrite by a party holding the LOG KEY (key custody is "
+                                "the limit: HSM/KMS, copies of the tip outside the writer's reach)",
+                                "no ROLLBACK to an older signed state (truncation + an older genuine tip restored): "
+                                "pass --tip-not-before, or compare with the monitor state / receipts / an anchor",
+                                "not that this is the ledger YOU expect when the log key signs several ledgers: pass "
+                                "--expect-ledger-id (self_hash of entry 0)"]
+                               if tip_check and tip_check.get("ok") else
+                               ["no truncation (a shorter prefix is a valid chain)",
+                                "no suffix rewrite by a party with write access (re-chained fork)"]) + [
                                "authorship (use signer.py / a signed evidence pack)",
                                "wall-clock time (ts is reported, not attested: use RFC 3161 / anchors)"],
-            "to_cover_those": "evidence_pack.py verify <pack>  (signed manifest: entry count + head)",
+            "to_cover_those": ("a signed chain tip (cryptovalid_tip.py, --tip/--require-tip) turns truncation, "
+                               "suffix rewrite and unsealed appends into named FAILs; evidence_pack.py verify <pack> "
+                               "(signed manifest: entry count + head); receipts / monitor for time-ordered proof"),
         },
     }
 
@@ -504,10 +553,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--quiet", action="store_true", help="Stampa solo il verdetto sintetico (PASS/FAIL + exit code)"
     )
     parser.add_argument("--out", default=None, help="Scrivi receipt JSON anche su file")
+    parser.add_argument("--tip", default=None, help="signed chain tip to check (default: <ledger>.tip.json if present)")
+    parser.add_argument("--trusted-pubkey", default=None, help="log key (hex) the tip must be signed with")
+    parser.add_argument("--require-tip", action="store_true", help="FAIL when no signed tip is available")
+    parser.add_argument("--tip-not-before", default=None, help="refuse a tip dated before this ISO-8601 instant (rollback)")
+    parser.add_argument("--expect-ledger-id", default=None, help="the chain identity (self_hash of entry 0) you expect: refuses another ledger's pair")
     args = parser.parse_args(argv)
 
     try:
-        receipt = verify_ledger(args.ledger_path, algo=args.algo)
+        receipt = verify_ledger(args.ledger_path, algo=args.algo, tip=args.tip,
+                                trusted_pubkey_hex=args.trusted_pubkey, require_tip=args.require_tip,
+                                tip_not_before=args.tip_not_before, expect_ledger_id=args.expect_ledger_id)
     except RecursionError as e:  # last-resort fail-closed: a receipt, never a traceback (2026-09-13).
         # Not labelled json_too_deep on purpose: here the cause is unknown (council review 13/09 —
         # a recursion bug in the verifier itself must not be disguised as a malformed input).

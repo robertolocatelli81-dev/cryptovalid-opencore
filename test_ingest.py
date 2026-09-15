@@ -482,5 +482,59 @@ class TestConcurrencyAndThroughput(unittest.TestCase):
         self.assertGreater(eps, 1000, "floor conservativo: sotto 1000 ev/s c'è un problema reale")
 
 
+class TestIngestSignedTip(unittest.TestCase):
+    """The production writer maintains the signed chain tip (council 15/09/2026): after every flush the active
+    segment's `<segment>.tip.json` matches the file; the snapshot verifier sees a truncated tail; the tip is
+    correct after batching, resume and rotation."""
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        try:
+            import signer
+        except Exception:  # noqa: BLE001
+            self.skipTest("cryptography assente")
+        self.k = os.path.join(self.d, "log.key"); self.pk = signer.keygen(self.k)["public_key_hex"]
+
+    def test_tip_follows_every_flush_resume_and_rotation(self):
+        w = ing.Ingestor(self.d, batch_size=8, rotate_entries=50, tip_keyfile=self.k, fsync=False)
+        for i in range(37):
+            w.append({"i": i})
+        w.flush()
+        seg = w._seg_path(w._seq)
+        r = verifier.verify_ledger(seg, trusted_pubkey_hex=self.pk, require_tip=True)
+        self.assertEqual(r["verdict"], "PASS", r.get("parse_errors")); self.assertEqual(r["tip"]["entries"], 37)
+        with open(seg) as f:
+            first_id = json.loads(f.readline())["self_hash"]
+        self.assertEqual(r["tip"]["ledger_id"], first_id)
+        w.close(seal=False)
+        # resume: the new writer continues the chain AND the tip
+        w = ing.Ingestor(self.d, batch_size=8, rotate_entries=50, tip_keyfile=self.k, fsync=False)
+        for i in range(37, 45):
+            w.append({"i": i})
+        w.flush()
+        r = verifier.verify_ledger(seg, trusted_pubkey_hex=self.pk, require_tip=True)
+        self.assertEqual(r["verdict"], "PASS", r.get("parse_errors")); self.assertEqual(r["tip"]["entries"], 45)
+        # a truncated tail is now VISIBLE to the snapshot verifier (positive control: bare verifier passes)
+        lines = open(seg, "rb").read().split(b"\n")
+        open(seg, "wb").write(b"\n".join(lines[:-3]) + b"\n")
+        os.rename(seg + ".tip.json", seg + ".tip.keep")
+        self.assertEqual(verifier.verify_ledger(seg)["verdict"], "PASS")          # bare chain: blind
+        os.rename(seg + ".tip.keep", seg + ".tip.json")
+        r = verifier.verify_ledger(seg, trusted_pubkey_hex=self.pk)
+        self.assertEqual(r["verdict"], "FAIL"); self.assertIn("tail_truncated", r["parse_errors"][0]["error"])
+        # rotation: the next segment gets its own tip with its own identity
+        w.close(seal=False)
+        open(seg, "wb").write(b"\n".join(lines))
+        w = ing.Ingestor(self.d, batch_size=8, rotate_entries=50, tip_keyfile=self.k, fsync=False)
+        for i in range(45, 60):
+            w.append({"i": i})
+        w.flush(); w.close(seal=False)
+        seg2 = w._seg_path(w._seq)
+        self.assertNotEqual(seg2, seg)
+        r2 = verifier.verify_ledger(seg2, trusted_pubkey_hex=self.pk, require_tip=True)
+        self.assertEqual(r2["verdict"], "PASS", r2.get("parse_errors"))
+        self.assertNotEqual(r2["tip"]["ledger_id"], first_id)
+        self.assertTrue(ing.verify_archive(self.d)["ok"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

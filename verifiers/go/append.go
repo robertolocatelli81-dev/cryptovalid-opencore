@@ -26,6 +26,12 @@ import (
 // Note on Go's json.Marshal: a whole-number float64 marshals as an integer (accepted); a non-UTF-8 Go string
 // is replaced with U+FFFD by Marshal before this function sees it — validate strings at the source.
 func Append(path string, ts time.Time, data any, algo string) (selfHash string, err error) {
+	return appendLocked(path, ts, data, algo, nil)
+}
+
+// appendLocked is Append with an optional hook run under the same lock after the fsync, receiving the new
+// entry count and self_hash (used by AppendSigned to write the signed tip atomically with the append).
+func appendLocked(path string, ts time.Time, data any, algo string, after func(f *os.File, entries int, last string) error) (selfHash string, err error) {
 	if algo == "" {
 		algo = "sha256"
 	}
@@ -73,7 +79,15 @@ func Append(path string, ts time.Time, data any, algo string) (selfHash string, 
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		return "", err
 	}
-	return selfHash, f.Sync()
+	if err := f.Sync(); err != nil {
+		return "", err
+	}
+	if after != nil {
+		if err := after(f, idx+1, selfHash); err != nil {
+			return "", fmt.Errorf("entry written, tip NOT signed: %w", err)
+		}
+	}
+	return selfHash, nil
 }
 
 // tail returns (next idx, last self_hash) reading ONLY the last line (backwards from EOF); genesis if empty.

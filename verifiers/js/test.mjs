@@ -3,7 +3,7 @@
 // signature round-trip, AND cross-checks every vector against the REFERENCE Python
 // verifier (verifier.py at the repo root) as an independent oracle — so a bug that makes us
 // wrongly agree with ourselves is caught by disagreement with the reference.
-import { verifyLedger, conformance, jsonNestingDepth, hasLoneSurrogate, MAX_JSON_DEPTH } from "./cvverify.mjs";
+import { verifyLedger, conformance, jsonNestingDepth, hasLoneSurrogate, MAX_JSON_DEPTH, checkTip, tipPayload } from "./cvverify.mjs";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign as edSign } from "node:crypto";
@@ -96,6 +96,50 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
   ok("valid pair still PASS", verifyLedger(JSON.stringify(mk('{"k":"\\ud83d\\ude00"}'))).verdict === "PASS");
   const lone = JSON.stringify(mk('{"k":"\\ud800"}'));   // JSON.stringify keeps \ud800 as an escape
   ok("lone surrogate ledger FAIL (was PASS before 14/09)", verifyLedger(lone).verdict === "FAIL");
+}
+
+// 7) signed chain tip (15/09/2026): the tail limit moves. Positive control first: the bare chain PASSES on a
+//    truncated file; with the tip and the trusted key it is a named FAIL. Cross-language: a tip signed by the
+//    Python reference must verify here (same signed bytes).
+{
+  const canonRef = (o) => execFileSync("python3", ["-c", "import json,sys; print(json.dumps(json.load(sys.stdin), sort_keys=True, separators=(',',':')), end='')"], { input: JSON.stringify(o), encoding: "utf-8" });
+  const chain = []; let prev = "0".repeat(64);
+  for (let i = 0; i < 6; i++) { const e = { idx: i, ts: "t", prev_hash: prev, data: { i } }; e.self_hash = createHash("sha256").update(Buffer.from(canonRef({ ...e }))).digest("hex"); prev = e.self_hash; chain.push(e); }
+  const text = (n) => chain.slice(0, n).map((e) => JSON.stringify(e)).join("\n") + "\n";
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const pkHex = publicKey.export({ type: "spki", format: "der" }).subarray(12).toString("hex");
+  const sign = (entries, tip, ts, lid = chain[0].self_hash) => ({ kind: "cryptovalid_tip/1", entries, ledger_id: lid, tip_sha256: tip, ts, log_pubkey_hex: pkHex, signature_hex: edSign(null, tipPayload(entries, lid, tip, ts), privateKey).toString("hex") });
+  const tip = sign(6, chain[5].self_hash, "2026-09-15T07:00:00+00:00");
+  ok("tip payload bytes = Python oracle", tipPayload(3, "cd".repeat(32), "ab".repeat(32), "T").toString() === '{"entries":3,"kind":"cryptovalid_tip/1","ledger_id":"' + "cd".repeat(32) + '","tip_sha256":"' + "ab".repeat(32) + '","ts":"T"}');
+  ok("tip: another ledger's tip named", verifyLedger(text(6), { tip: sign(6, chain[5].self_hash, "2026-09-15T07:00:00Z", "ef".repeat(32)), trustedPubkey: pkHex }).errors.some((e) => e.error.startsWith("tip_of_another_ledger")));
+  ok("tip: expected ledger id enforced", verifyLedger(text(6), { tip, trustedPubkey: pkHex, expectLedgerId: "ef".repeat(32) }).errors.some((e) => e.error.startsWith("ledger_id_mismatch")) && verifyLedger(text(6), { tip, trustedPubkey: pkHex, expectLedgerId: chain[0].self_hash }).verdict === "PASS");
+  ok("tip: intact PASS trusted", (() => { const r = verifyLedger(text(6), { tip, trustedPubkey: pkHex }); return r.verdict === "PASS" && r.tip.ok && r.tip.trusted; })());
+  ok("positive control: bare chain PASSES on truncated file", verifyLedger(text(5)).verdict === "PASS");
+  ok("tip: truncation named", verifyLedger(text(5), { tip, trustedPubkey: pkHex }).errors.some((e) => e.error.startsWith("tail_truncated")));
+  ok("tip: unsealed append named", verifyLedger(text(6) + JSON.stringify({ ...chain[5], idx: 6, prev_hash: chain[5].self_hash }) + "\n", { tip, trustedPubkey: pkHex }).errors.some((e) => e.error.startsWith("unsealed_tail") || e.error.startsWith("hash")));
+  ok("tip: rewritten tail named", verifyLedger(text(6), { tip: sign(6, "11".repeat(32), "2026-09-15T07:00:00Z"), trustedPubkey: pkHex }).errors.some((e) => e.error.startsWith("tail_rewritten")));
+  ok("tip: non-hex / quoted fields refused before signing", verifyLedger(text(6), { tip: { ...tip, ts: 'a"b' }, trustedPubkey: pkHex }).errors.some((e) => e.error.startsWith("tip_invalid")));
+  ok("tip: foreign key refused", verifyLedger(text(6), { tip, trustedPubkey: "22".repeat(32) }).errors.some((e) => e.error.startsWith("tip_invalid")));
+  ok("tip: tampered field refused", verifyLedger(text(6), { tip: { ...tip, entries: 5 }, trustedPubkey: pkHex }).errors.some((e) => e.error.startsWith("tip_invalid")));
+  ok("tip: no trusted key → tip NOT checked, chain verdict only", (() => { const r = verifyLedger(text(6), { tip }); return r.verdict === "PASS" && r.tip.checked === false && r.tip.error.startsWith("tip_untrusted"); })());
+  ok("tip: no trusted key + required → FAIL (never fail-open)", verifyLedger(text(5), { tip: sign(5, chain[4].self_hash, "2026-09-15T07:00:00Z"), requireTip: true }).verdict === "FAIL");
+  ok("tip: not-before compares instants (Z / +00:00 / +02:00)", ["2026-09-15T07:00:00Z", "2026-09-15T07:00:00+00:00", "2026-09-15T09:00:00+02:00", "2026-09-15T07:00:00"].every((s) => verifyLedger(text(6), { tip, trustedPubkey: pkHex, tipNotBefore: s }).verdict === "PASS") && verifyLedger(text(6), { tip, trustedPubkey: pkHex, tipNotBefore: "2026-09-15T07:00:01Z" }).verdict === "FAIL");
+  ok("tip: required but missing", verifyLedger(text(6), { requireTip: true }).errors.some((e) => e.error.startsWith("tip_missing")));
+  ok("tip: garbage document refused", verifyLedger(text(6), { tip: [1, 2], trustedPubkey: pkHex }).verdict === "FAIL");
+  ok("tip: strict integer entries (Go agrees)", ["6", 6.5, true].every((b) => verifyLedger(text(6), { tip: { ...tip, entries: b }, trustedPubkey: pkHex }).errors.some((e) => e.error.includes("integer"))));
+  ok("tip: rollback passes (declared) and is refused with tipNotBefore", verifyLedger(text(6), { tip, trustedPubkey: pkHex }).verdict === "PASS" && verifyLedger(text(6), { tip, trustedPubkey: pkHex, tipNotBefore: "2026-09-15T09:00:00+00:00" }).errors.some((e) => e.error.startsWith("tip_rolled_back")));
+  // cross-language: Python signs, JS verifies (python cryptography needed)
+  try {
+    execFileSync("python3", ["-c", "import cryptography"]);
+    const dir = mkdtempSync(join(tmpdir(), "cvtip-")); const led = join(dir, "l.jsonl"); const key = join(dir, "k");
+    writeFileSync(led, text(6));
+    const pk = JSON.parse(execFileSync("python3", ["-c", `import sys; sys.path.insert(0, ${JSON.stringify(join(HERE, "..", ".."))}); import signer, json; print(json.dumps(signer.keygen(${JSON.stringify(key)})))`], { encoding: "utf-8" })).public_key_hex;
+    execFileSync("python3", [join(HERE, "..", "..", "cryptovalid_tip.py"), "sign", led, key]);
+    const pyTip = JSON.parse(readFileSync(led + ".tip.json", "utf-8"));
+    ok("cross: Python-signed tip verifies in JS", verifyLedger(text(6), { tip: pyTip, trustedPubkey: pk }).verdict === "PASS");
+    ok("cross: JS sees truncation against the Python tip", verifyLedger(text(4), { tip: pyTip, trustedPubkey: pk }).errors.some((e) => e.error.startsWith("tail_truncated")));
+    ok("cli: <ledger>.tip.json picked up + --require-tip", (() => { try { execFileSync("node", [join(HERE, "cvverify.mjs"), led, "--trusted-pubkey", pk, "--require-tip"], { stdio: "pipe" }); return true; } catch { return false; } })());
+  } catch (e) { console.log("  (cross-language tip check skipped: " + e.message.split("\n")[0] + ")"); }
 }
 
 console.log(`\ncvverify test: ${pass} passed, ${fail} failed`);

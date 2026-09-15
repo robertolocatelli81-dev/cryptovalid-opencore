@@ -46,9 +46,10 @@ def valid_entry(data):
     return json.dumps(e)
 
 
-def verdict(cmd, path):
+def verdict(cmd, path, extra=(), flags_first=False):
+    args = cmd + (list(extra) + [path] if flags_first else [path] + list(extra))   # Go's flag package: flags first
     try:
-        out = subprocess.run(cmd + [path], capture_output=True, text=True, timeout=30)
+        out = subprocess.run(args, capture_output=True, text=True, timeout=30)
         return json.loads(out.stdout)["verdict"]
     except Exception:
         return "NONJSON/CRASH"
@@ -103,6 +104,59 @@ CORPUS["lone-surrogate"] = '{"idx":0,"ts":"t","data":{"k":"\\ud800"},"prev_hash"
 CORPUS["valid-surrogate-pair"] = valid_entry({"k": "\U0001F600"})   # a proper pair (U+1F600) must PASS everywhere
 
 
+# Signed chain tip (15/09/2026): a truncated ledger WITH a tip next to it. Python, JS and Go check the sidecar
+# (named FAIL: tail_truncated); Rust and Swift do not (declared: no Ed25519 without dependencies) → PASS.
+def _tip_case():
+    sys.path.insert(0, ROOT)
+    try:
+        import cryptovalid_tip as T
+        import signer
+    except Exception as e:  # noqa: BLE001 — cryptography absent: the case is skipped, and SAID
+        print("  tip-truncated case NOT measured (%s: %s)" % (type(e).__name__, str(e)[:80]))
+        return None
+    d = tempfile.mkdtemp()
+    led = os.path.join(d, "l.jsonl")
+    chain, prev = [], "0" * 64
+    for i in range(3):
+        e = {"idx": i, "ts": "t", "data": {"i": i}, "prev_hash": prev}
+        e["self_hash"] = hashlib.sha256(canon(e)).hexdigest(); prev = e["self_hash"]; chain.append(e)
+    with open(led, "w") as f:
+        f.write("".join(json.dumps(e) + "\n" for e in chain))
+    pk = signer.keygen(os.path.join(d, "k"))["public_key_hex"]
+    T.sign_tip(led, os.path.join(d, "k"))
+    with open(led + ".tip.json") as f:
+        tip = f.read()
+    # council R3: a SIGNED tip with a garbage ts / uppercase hex was ok in Python, tip_invalid in Go — measured now
+    sk, _ = T._load_sk(os.path.join(d, "k"))
+    def signed(entries, ledger_id, tip_sha256, ts):
+        sig = sk.sign(T.tip_payload(entries, ledger_id, tip_sha256, ts)).hex()
+        return json.dumps({"kind": T.KIND, "entries": entries, "ledger_id": ledger_id, "tip_sha256": tip_sha256, "ts": ts,
+                           "log_pubkey_hex": pk, "signature_hex": sig})
+    full = "".join(json.dumps(e) + "\n" for e in chain)
+    return {"text": "".join(json.dumps(e) + "\n" for e in chain[:2]), "tip": tip, "pubkey": pk, "full": full,
+            "tip_garbage_ts": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "garbage"),
+            "tip_upper_hex": signed(3, chain[0]["self_hash"].upper(), chain[2]["self_hash"], "2026-09-15T07:00:00+00:00")}
+
+
+TIP_CASE = _tip_case()
+TIP_CASES = {}   # name -> (ledger text, tip document)
+if TIP_CASE:
+    TIP_CASES = {"tip-truncated": (TIP_CASE["text"], TIP_CASE["tip"]),
+                 "tip-garbage-ts": (TIP_CASE["full"], TIP_CASE["tip_garbage_ts"]),
+                 "tip-upper-hex": (TIP_CASE["full"], TIP_CASE["tip_upper_hex"])}
+    for name, (text, _) in TIP_CASES.items():
+        CORPUS[name] = text.rstrip("\n")
+    DECLARED_DIVERGENCE["tip-truncated"] = (
+        {"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "PASS", "swift": "PASS"},
+        "tail truncated but a signed chain tip sits next to the file: checked by Python/JS/Go (tail_truncated), "
+        "not by Rust/Swift (declared: no Ed25519 without dependencies)")
+    for name in ("tip-garbage-ts", "tip-upper-hex"):
+        DECLARED_DIVERGENCE[name] = (
+            {"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "PASS", "swift": "PASS"},
+            "intact chain, SIGNED tip outside the profile (ts not ISO-8601 / uppercase hex): tip_invalid on "
+            "Python/JS/Go, unchecked by Rust/Swift (declared)")
+
+
 def _matches(expected, got):
     return got in expected if isinstance(expected, (set, frozenset, tuple, list)) else got == expected
 
@@ -127,7 +181,17 @@ def main():
             p = os.path.join(tmp, "l.jsonl")
             with open(p, "w") as f:
                 f.write(line + "\n")
-            verdicts = {k: verdict(cmd, p) for k, cmd in available.items()}
+            if os.path.exists(p + ".tip.json"):
+                os.remove(p + ".tip.json")
+            if name in TIP_CASES:
+                with open(p + ".tip.json", "w") as f:
+                    f.write(TIP_CASES[name][1])
+            # the tip cases need the TRUSTED log key (without it the tip is, by contract, not checked)
+            extra = {}
+            if name in TIP_CASES:
+                pk = TIP_CASE["pubkey"]
+                extra = {"python": ["--trusted-pubkey", pk], "js": ["--trusted-pubkey", pk], "go": ["-trusted-pubkey", pk]}
+            verdicts = {k: verdict(cmd, p, extra.get(k, ()), flags_first=(k == "go")) for k, cmd in available.items()}
             uniq = set(verdicts.values())
             ok = len(uniq) == 1
             if not ok and name in DECLARED_DIVERGENCE:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cryptovalid-opencore"
-version = "0.10.2"
+version = "0.11.0"
 description = "Verifiable compliance evidence: hash-chained ledgers + standalone offline verifier (flat-layout modules, unchanged declared commands)"
 license = {text = "AGPL-3.0-or-later"}
 requires-python = ">=3.9"
@@ -18,4 +18,4 @@ Homepage = "https://github.com/robertolocatelli81-dev/cryptovalid-opencore"
 cryptovalid-verify = "verify_evidence:main"
 
 [tool.setuptools]
-py-modules = ['ap2_evidence', 'cldma_confidential', 'committed_attestation', 'conformance', 'cryptovalid_heterogeneous', 'cryptovalid_ingest', 'cryptovalid_kms', 'cryptovalid_lotl', 'cryptovalid_mcp', 'cryptovalid_merkle', 'cryptovalid_pruning_probe', 'cryptovalid_qeas', 'cryptovalid_reanchor', 'cryptovalid_report', 'cryptovalid_solana', 'cryptovalid_tsa', 'cryptovalid_worm', 'dora_incident', 'evidence_pack', 'fundcert_canonical', 'fundcert_crosssource', 'microfinance', 'mutation_runner', 'pedersen_commit', 'refresh_regulatory', 'signer', 'tx_evidence', 'verifier', 'verify_evidence', 'cryptovalid_receipt', 'cryptovalid_monitor', 'eidas_ledger_check', 'cryptovalid_jws']
+py-modules = ['ap2_evidence', 'cldma_confidential', 'committed_attestation', 'conformance', 'cryptovalid_heterogeneous', 'cryptovalid_ingest', 'cryptovalid_kms', 'cryptovalid_lotl', 'cryptovalid_mcp', 'cryptovalid_merkle', 'cryptovalid_pruning_probe', 'cryptovalid_qeas', 'cryptovalid_reanchor', 'cryptovalid_report', 'cryptovalid_solana', 'cryptovalid_tsa', 'cryptovalid_worm', 'dora_incident', 'evidence_pack', 'fundcert_canonical', 'fundcert_crosssource', 'microfinance', 'mutation_runner', 'pedersen_commit', 'refresh_regulatory', 'signer', 'tx_evidence', 'verifier', 'verify_evidence', 'cryptovalid_receipt', 'cryptovalid_monitor', 'eidas_ledger_check', 'cryptovalid_jws', 'cryptovalid_tip']
