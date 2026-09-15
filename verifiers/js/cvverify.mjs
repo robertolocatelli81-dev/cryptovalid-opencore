@@ -104,12 +104,49 @@ function hasDuplicateKeys(text) {
   return false;
 }
 
+// --- acceptance-profile pre-scans (linear, no parsing), same rules as verifier.py (14/09/2026):
+//     nesting > MAX_JSON_DEPTH → json_too_deep; unpaired \uD800-\uDFFF escape → lone_surrogate.
+export const MAX_JSON_DEPTH = 512;
+export function jsonNestingDepth(text) {
+  let depth = 0, max = 0, inStr = false, esc = false;
+  for (const ch of text) {
+    if (inStr) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inStr = false; }
+    else if (ch === '"') inStr = true;
+    else if (ch === "[" || ch === "{") { depth++; if (depth > max) max = depth; }
+    else if (ch === "]" || ch === "}") depth--;
+  }
+  return max;
+}
+export function hasLoneSurrogate(text) {
+  let i = 0; const n = text.length, hex = (s) => (/^[0-9a-fA-F]{4}$/.test(s) ? parseInt(s, 16) : NaN);
+  while (i < n) {
+    if (text[i] !== "\\") { i++; continue; }
+    if (text[i + 1] === "u" && i + 5 < n) {
+      const cp = hex(text.slice(i + 2, i + 6));
+      if (Number.isNaN(cp)) { i += 2; continue; }   // malformed escape: the parser refuses it, not this rule
+      if (cp >= 0xd800 && cp <= 0xdbff) {
+        if (text.slice(i + 6, i + 8) !== "\\u") return true;
+        const lo = hex(text.slice(i + 8, i + 12));
+        if (!(lo >= 0xdc00 && lo <= 0xdfff)) return true;
+        i += 12; continue;
+      }
+      if (cp >= 0xdc00 && cp <= 0xdfff) return true;
+      i += 6; continue;
+    }
+    i += 2;
+  }
+  return false;
+}
+
 export function verifyLedger(text, { algo = null, pubkey = null } = {}) {
   const entries = [], errors = [];
   text.split("\n").forEach((ln, i) => {
     if (!ln.trim()) return;
     let v;
-    try { if (hasDuplicateKeys(ln)) throw new Error("duplicate_key"); v = JSON.parse(ln); } catch (e) { errors.push({ line: i, error: "json_decode:" + e.message }); return; }
+    try {
+      const d = jsonNestingDepth(ln); if (d > MAX_JSON_DEPTH) throw new Error(`json_too_deep: nesting ${d} exceeds ${MAX_JSON_DEPTH}`);
+      if (hasLoneSurrogate(ln)) throw new Error("lone_surrogate");
+      if (hasDuplicateKeys(ln)) throw new Error("duplicate_key"); v = JSON.parse(ln); } catch (e) { errors.push({ line: i, error: "json_decode:" + e.message }); return; }
     if (v && typeof v === "object" && !Array.isArray(v)) entries.push(v);
     else errors.push({ line: i, error: "not_a_json_object" });
   });

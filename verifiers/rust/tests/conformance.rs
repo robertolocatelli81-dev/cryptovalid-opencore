@@ -104,3 +104,42 @@ fn duplicate_keys_rejected() {
     let dup = format!("{{\"idx\":0,\"ts\":\"t\",\"data\":{{\"evil\":1}},\"data\":{{\"real\":1}},\"prev_hash\":\"{}\",\"self_hash\":\"x\"}}", "0".repeat(64));
     assert_eq!(verify_ledger(&dup, None).verdict, "FAIL");
 }
+
+fn entry_with(data_json: &str) -> String {
+    // a chained one-entry ledger whose self_hash is computed the reference way (sha256 over the canonical payload)
+    use cvverify::json::{canonical, Parser};
+    let body = format!("{{\"data\":{},\"idx\":0,\"prev_hash\":\"{}\",\"ts\":\"t\"}}", data_json, "0".repeat(64));
+    let v = Parser::parse(&body).unwrap();
+    let h = cvverify::sha256::hex(canonical(&v).as_bytes());
+    format!("{{\"data\":{},\"idx\":0,\"prev_hash\":\"{}\",\"self_hash\":\"{}\",\"ts\":\"t\"}}\n", data_json, "0".repeat(64), h)
+}
+
+#[test]
+fn surrogate_pairs_accepted_lone_surrogates_refused() {
+    // 15/09/2026: a VALID pair (U+1F600) was refused as "bad scalar" — an undeclared divergence from Python/JS/Go
+    let pair = entry_with("{\"k\":\"\\ud83d\\ude00\"}");
+    let r = verify_ledger(&pair, None);
+    assert_eq!(r.verdict, "PASS", "valid surrogate pair must PASS: {:?}", r.to_json());
+    for bad in ["{\"k\":\"\\ud800\"}", "{\"k\":\"\\udc00\"}", "{\"k\":\"\\ud800\\u0041\"}", "{\"k\":\"\\ud800\\uzzzz\"}"] {
+        let line = format!("{{\"idx\":0,\"ts\":\"t\",\"data\":{},\"prev_hash\":\"{}\",\"self_hash\":\"z\"}}\n", bad, "0".repeat(64));
+        let r = verify_ledger(&line, None);
+        assert_eq!(r.verdict, "FAIL");
+        assert_eq!(r.parse_errors, 1, "lone surrogate must be a PARSE refusal, not a hash mismatch: {}", bad);
+    }
+    // a short `\u` tail must not parse "12" as U+0012
+    assert!(cvverify::json::Parser::parse("{\"k\":\"\\u12\"}").is_err());
+}
+
+#[test]
+fn nesting_bound_512() {
+    let nest = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));
+    assert_eq!(verify_ledger(&entry_with(&nest(510)), None).verdict, "PASS", "510 levels inside data (512 total) is AT the bound");
+    // beyond the bound the line cannot even be hashed the reference way (the reference refuses it too):
+    // build it raw and expect a PARSE refusal, not a hash mismatch
+    for n in [598usize, 2000] {
+        let line = format!("{{\"idx\":0,\"ts\":\"t\",\"data\":{},\"prev_hash\":\"{}\",\"self_hash\":\"z\"}}\n", nest(n), "0".repeat(64));
+        let r = verify_ledger(&line, None);
+        assert_eq!(r.verdict, "FAIL");
+        assert_eq!(r.parse_errors, 1, "json_too_deep must be a parse refusal ({} levels)", n);
+    }
+}

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-# Differential cross-oracle: feed an adversarial corpus to ALL FOUR verifiers
-# (Python reference + JS + Rust + Swift) and FAIL on any verdict disagreement.
+# Differential cross-oracle: feed an adversarial corpus to ALL FIVE verifiers
+# (Python reference + JS + Go + Rust + Swift) and FAIL on any verdict disagreement.
 # This turns "we believe they agree" into a machine-checked invariant (Mind 4's rec).
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SWIFT = os.path.join(HERE, "swift", ".build", "debug", "cvverify")
 RUST = os.path.join(HERE, "rust", "target", "release", "cvverify")
+GO_SRC = os.path.join(HERE, "go")
+
+
+def build_go(tmp):
+    """Build verifiers/go/cmd/cvverify into `tmp` when a Go toolchain is on PATH (added 15/09/2026: the Go
+    reference answered "EMPTY" on an empty ledger, an undeclared divergence nobody measured). None if no Go."""
+    if not shutil.which("go"):
+        return None
+    out = os.path.join(tmp, "cvverify-go")
+    r = subprocess.run(["go", "build", "-o", out, "./cmd/cvverify"], cwd=GO_SRC, capture_output=True, text=True)
+    if r.returncode != 0:
+        # a Go toolchain is present but the verifier does not build: that IS a regression of a reference,
+        # never a silent "measured without Go" (council round 4, Gemini)
+        raise SystemExit("go build failed — the Go reference verifier is broken: " + r.stderr.strip()[:400])
+    return out
 
 
 def canon(o):
@@ -71,13 +87,24 @@ def _valid_nested(levels):
 # is FAIL (json_too_deep) on Python and PASS elsewhere. It stays in the corpus so the disagreement is
 # measured on every run and reported as DECLARED, never counted as interop (council review 2026-09-13).
 DECLARED_DIVERGENCE = {
-    # name -> (expected verdict PER verifier, reason). Only this exact pattern is accepted as declared;
-    # anything else on the same case (an inverted regression, a crash) is a real DIFF.
-    "deep-valid-600": ({"python": "FAIL", "js": "PASS", "rust": "PASS", "swift": "PASS"},
-                       "outside the acceptance profile (nesting > MAX_JSON_DEPTH=512): reference FAIL, others PASS"),
+    # name -> (expected verdict PER verifier, reason). A value may be a string (exact) or a set (any of).
+    # Only this pattern is accepted as declared; anything else on the same case (an inverted regression,
+    # a crash) is a real DIFF. Since 15/09/2026 the bound and the surrogate rule are enforced by Python, JS, Go
+    # AND Rust (one rule, four references); Swift was not updated (no toolchain) — declared in CONFORMANCE §.
+    "deep-valid-600": ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "FAIL", "swift": "PASS"},
+                       "outside the acceptance profile (nesting > MAX_JSON_DEPTH=512): references FAIL, Swift PASS"),
+    "lone-surrogate": ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "FAIL", "swift": {"PASS", "FAIL"}},
+                       "unpaired \\ud800 escape: refused by the four references (lone_surrogate); Swift not updated"),
 }
 CORPUS["deep-valid-600"] = _valid_nested(598)
 CORPUS["deep-valid-512"] = _valid_nested(510)   # exactly at the bound: must AGREE (PASS everywhere)
+# an unpaired UTF-16 surrogate escape: not a Unicode scalar, decoders disagree (Go stdlib → U+FFFD) → refused
+CORPUS["lone-surrogate"] = '{"idx":0,"ts":"t","data":{"k":"\\ud800"},"prev_hash":"' + "0" * 64 + '","self_hash":"z"}'
+CORPUS["valid-surrogate-pair"] = valid_entry({"k": "\U0001F600"})   # a proper pair (U+1F600) must PASS everywhere
+
+
+def _matches(expected, got):
+    return got in expected if isinstance(expected, (set, frozenset, tuple, list)) else got == expected
 
 
 def main():
@@ -91,8 +118,11 @@ def main():
                  or os.path.exists(v[0])}
     disagreements = 0
     declared = 0
-    print(f"differential oracle over {len(available)} verifiers: {sorted(available)}")
     with tempfile.TemporaryDirectory() as tmp:
+        go_bin = build_go(tmp)
+        if go_bin:
+            available["go"] = [go_bin]
+        print(f"differential oracle over {len(available)} verifiers: {sorted(available)}")
         for name, line in CORPUS.items():
             p = os.path.join(tmp, "l.jsonl")
             with open(p, "w") as f:
@@ -102,7 +132,7 @@ def main():
             ok = len(uniq) == 1
             if not ok and name in DECLARED_DIVERGENCE:
                 expected, why = DECLARED_DIVERGENCE[name]
-                if all(verdicts[k] == expected.get(k) for k in verdicts):
+                if all(_matches(expected.get(k), verdicts[k]) for k in verdicts):
                     declared += 1
                     print(f"  [DECL] {name:22} {verdicts}  <- declared: {why}")
                     continue

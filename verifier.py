@@ -128,10 +128,48 @@ class JsonTooDeep(ValueError):
     pass
 
 
+def has_lone_surrogate(text: str) -> bool:
+    """True if a `\\uD800-\\uDFFF` escape in the JSON text is not part of a proper high+low pair.
+    Linear scan honouring backslash escapes (a `\\\\uD800` is literal text, not an escape). A lone surrogate is
+    not a Unicode scalar value, cannot be UTF-8 encoded, and the stdlib decoders of the three reference
+    languages disagree on it (Python/JS keep it, Go's replaces it with U+FFFD): the profile refuses it
+    (council 14/09/2026, spec/CONFORMANCE.md)."""
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != "\\":
+            i += 1
+            continue
+        if i + 1 < n and text[i + 1] == "u" and i + 5 < n:
+            try:
+                cp = int(text[i + 2:i + 6], 16)
+            except ValueError:
+                i += 2                           # malformed escape: not this rule's business, the decoder refuses it
+                continue
+            if 0xD800 <= cp <= 0xDBFF:           # high: needs an immediate low
+                if text[i + 6:i + 8] != "\\u":
+                    return True
+                try:
+                    lo = int(text[i + 8:i + 12], 16)
+                except ValueError:
+                    return True                  # a high surrogate followed by a broken escape is still unpaired
+                if not (0xDC00 <= lo <= 0xDFFF):
+                    return True
+                i += 12
+                continue
+            if 0xDC00 <= cp <= 0xDFFF:           # low without a preceding high
+                return True
+            i += 6
+            continue
+        i += 2                                   # any other escape (\\\\, \\", \\n, ...)
+    return False
+
+
 def _loads_strict(text):
     d = json_nesting_depth(text)
     if d > MAX_JSON_DEPTH:
         raise JsonTooDeep(f"json_too_deep: nesting {d} exceeds the acceptance-profile bound {MAX_JSON_DEPTH}")
+    if has_lone_surrogate(text):
+        raise ValueError("lone_surrogate: unpaired UTF-16 surrogate escape is outside the acceptance profile")
     _ensure_recursion_headroom()
     return json.loads(text, object_pairs_hook=_reject_dup, parse_float=_no_float, parse_int=_bounded_int,
                       parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f"JSON constant {c}")))

@@ -15,9 +15,14 @@ pub enum Json {
     Object(BTreeMap<String, Json>),
 }
 
+/// Normative nesting bound of the acceptance profile (spec/CONFORMANCE.md): deeper lines are refused as
+/// `json_too_deep` by every reference (Python, JS, Go since 14/09/2026; Rust since 15/09/2026).
+pub const MAX_JSON_DEPTH: usize = 512;
+
 pub struct Parser {
     s: Vec<char>,
     i: usize,
+    depth: usize,
 }
 
 impl Parser {
@@ -25,6 +30,7 @@ impl Parser {
         let mut p = Parser {
             s: text.chars().collect(),
             i: 0,
+            depth: 0,
         };
         let v = p.value()?;
         p.ws();
@@ -42,8 +48,15 @@ impl Parser {
         self.ws();
         let c = *self.s.get(self.i).ok_or("eof")?;
         match c {
-            '{' => self.object(),
-            '[' => self.array(),
+            '{' | '[' => {
+                self.depth += 1;
+                if self.depth > MAX_JSON_DEPTH {
+                    return Err(format!("json_too_deep: nesting exceeds {}", MAX_JSON_DEPTH));
+                }
+                let v = if c == '{' { self.object() } else { self.array() };
+                self.depth -= 1;
+                v
+            }
             '"' => Ok(Json::Str(self.string()?)),
             't' => {
                 self.lit("true")?;
@@ -143,12 +156,27 @@ impl Parser {
                     '\\' => out.push('\\'),
                     '"' => out.push('"'),
                     'u' => {
-                        let hex: String = self.s[self.i..(self.i + 4).min(self.s.len())]
-                            .iter()
-                            .collect();
-                        self.i += 4;
-                        let code = u32::from_str_radix(&hex, 16).map_err(|_| "bad \\u")?;
-                        out.push(char::from_u32(code).ok_or("bad scalar")?);
+                        // exactly 4 hex digits (a short tail like `\u12"` used to parse "12" as U+0012);
+                        // UTF-16 surrogates: a high one MUST be followed by `\u` + a low one (one scalar),
+                        // anything unpaired is `lone_surrogate` — the same rule as Python/JS/Go
+                        // (spec/CONFORMANCE.md; until 15/09/2026 this parser refused even VALID pairs)
+                        let code = self.hex4()?;
+                        let ch = if (0xD800..=0xDBFF).contains(&code) {
+                            if self.s.get(self.i) != Some(&'\\') || self.s.get(self.i + 1) != Some(&'u') {
+                                return Err("lone_surrogate".into());
+                            }
+                            self.i += 2;
+                            let lo = self.hex4()?;
+                            if !(0xDC00..=0xDFFF).contains(&lo) {
+                                return Err("lone_surrogate".into());
+                            }
+                            0x10000 + ((code - 0xD800) << 10) + (lo - 0xDC00)
+                        } else if (0xDC00..=0xDFFF).contains(&code) {
+                            return Err("lone_surrogate".into());
+                        } else {
+                            code
+                        };
+                        out.push(char::from_u32(ch).ok_or("bad scalar")?);
                     }
                     _ => return Err("bad escape".into()),
                 }
@@ -157,6 +185,17 @@ impl Parser {
             }
         }
         Err("unterminated string".into())
+    }
+    fn hex4(&mut self) -> Result<u32, String> {
+        if self.i + 4 > self.s.len() {
+            return Err("bad \\u".into());
+        }
+        let hex: String = self.s[self.i..self.i + 4].iter().collect();
+        if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err("bad \\u".into());
+        }
+        self.i += 4;
+        u32::from_str_radix(&hex, 16).map_err(|_| "bad \\u".to_string())
     }
     fn number(&mut self) -> Result<Json, String> {
         let start = self.i;

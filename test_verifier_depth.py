@@ -63,14 +63,15 @@ class DeepNesting(unittest.TestCase):
                              capture_output=True, text=True, timeout=60)
         return json.loads(out.stdout)
 
-    def test_js_agrees_at_the_bound_and_diverges_beyond_it(self):
-        # the claim in spec/CONFORMANCE.md, MEASURED: at 512 both PASS; at 600 JS PASS / Python FAIL (declared)
+    def test_js_agrees_at_the_bound_and_beyond_it(self):
+        # spec/CONFORMANCE.md, MEASURED: at 512 both PASS; at 600 both FAIL. Until 13/09 the JS verifier
+        # had no bound (600 → JS PASS, a DECLARED divergence); closed on 14/09 with the same linear pre-scan.
         at = self._valid_chained(V.MAX_JSON_DEPTH)
         self.assertEqual(V.verify_ledger(at)["verdict"], "PASS")
         self.assertEqual(self._js(at)["verdict"], "PASS")
         beyond = self._valid_chained(600)
         self.assertEqual(V.verify_ledger(beyond)["verdict"], "FAIL")
-        self.assertEqual(self._js(beyond)["verdict"], "PASS")
+        self.assertEqual(self._js(beyond)["verdict"], "FAIL")
 
     def test_pass_at_the_bound_does_not_depend_on_caller_stack_depth(self):
         # a deep caller (MCP server, report generator) must not turn an in-profile PASS into a RecursionError FAIL

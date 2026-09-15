@@ -3,7 +3,7 @@
 // signature round-trip, AND cross-checks every vector against the REFERENCE Python
 // verifier (verifier.py at the repo root) as an independent oracle — so a bug that makes us
 // wrongly agree with ourselves is caught by disagreement with the reference.
-import { verifyLedger, conformance } from "./cvverify.mjs";
+import { verifyLedger, conformance, jsonNestingDepth, hasLoneSurrogate, MAX_JSON_DEPTH } from "./cvverify.mjs";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign as edSign } from "node:crypto";
@@ -81,6 +81,21 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
 {
   const dup = '{"idx":0,"ts":"t","data":{"evil":1},"data":{"real":1},"prev_hash":"' + "0".repeat(64) + '","self_hash":"x"}';
   ok("dup-key rejected", verifyLedger(dup).verdict === "FAIL");
+}
+
+// 6) acceptance-profile pre-scans shared with Python and Go (verifiers/go/vectors.json, 14/09/2026)
+{
+  const vec = JSON.parse(readFileSync(join(HERE, "..", "go", "vectors.json"), "utf-8"));
+  for (const r of vec.refuse) ok(`refuse: ${r.why}`, verifyLedger(r.text).verdict === "FAIL");
+  ok("depth scanner ignores brackets in strings", jsonNestingDepth('{"a":"[[[["}') === 1);
+  ok("depth 600 refused", verifyLedger('{"idx":0,"d":' + "[".repeat(600) + "]".repeat(600) + "}").verdict === "FAIL" && MAX_JSON_DEPTH === 512);
+  ok("malformed escape is not labelled lone_surrogate", !hasLoneSurrogate('{"k":"\\uzzzz"}') && verifyLedger('{"k":"\\uzzzz"}').verdict === "FAIL");
+  ok("lone surrogate scanner", hasLoneSurrogate('{"k":"\\ud800"}') && hasLoneSurrogate('{"k":"\\udc00"}') && !hasLoneSurrogate('{"k":"\\ud83d\\ude00"}') && !hasLoneSurrogate('{"k":"\\\\ud800"}'));
+  const mk = (raw) => { const e = { idx: 0, ts: "t", prev_hash: "0".repeat(64), data: JSON.parse(raw) }; const d = { ...e }; e.self_hash = createHash("sha256").update(Buffer.from(canonRef(d))).digest("hex"); return e; };
+  const canonRef = (o) => execFileSync("python3", ["-c", "import json,sys; print(json.dumps(json.load(sys.stdin), sort_keys=True, separators=(',',':')), end='')"], { input: JSON.stringify(o), encoding: "utf-8" });
+  ok("valid pair still PASS", verifyLedger(JSON.stringify(mk('{"k":"\\ud83d\\ude00"}'))).verdict === "PASS");
+  const lone = JSON.stringify(mk('{"k":"\\ud800"}'));   // JSON.stringify keeps \ud800 as an escape
+  ok("lone surrogate ledger FAIL (was PASS before 14/09)", verifyLedger(lone).verdict === "FAIL");
 }
 
 console.log(`\ncvverify test: ${pass} passed, ${fail} failed`);

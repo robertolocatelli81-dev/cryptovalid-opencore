@@ -112,7 +112,17 @@ jobs:
           if cargo run -q --release --manifest-path verifiers/rust/Cargo.toml -- examples/sample_ledger_tampered.jsonl; then
             echo "::error::rust verifier accepted a tampered ledger"; exit 1; fi
           cargo run -q --release --manifest-path verifiers/rust/Cargo.toml -- examples/sample_ledger.jsonl > /dev/null
-      - name: Differential oracle — Python vs JS vs Rust must agree on every hostile input
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Go verifier + writer — race tests, shared vectors, rejects the tampered ledger
+        run: |
+          (cd verifiers/go && go test -race ./...)
+          go build -C verifiers/go -o "$RUNNER_TEMP/cvverify-go" ./cmd/cvverify
+          if "$RUNNER_TEMP/cvverify-go" examples/sample_ledger_tampered.jsonl > /dev/null; then
+            echo "::error::go verifier accepted a tampered ledger"; exit 1; fi
+          "$RUNNER_TEMP/cvverify-go" examples/sample_ledger.jsonl > /dev/null
+      - name: Differential oracle — Python vs JS vs Go vs Rust must agree on every hostile input
         run: python3 verifiers/differential_oracle.py
 
   swift-verifier:

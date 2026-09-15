@@ -55,6 +55,7 @@ python3 conformance.py     # exit 0 = conformant
 | `verifiers/js/cvverify.mjs` | Node (stdlib) | Roberto Locatelli | ✅ 7/7 vectors, cross-oracle vs reference in CI |
 | `verifiers/rust/` | Rust (std) | Roberto Locatelli | ✅ cargo test + tampered-ledger rejection in CI |
 | `verifiers/swift/` | Swift (swift-crypto) | Roberto Locatelli | ✅ swift test + tampered-ledger rejection in CI (macOS job) |
+| `verifiers/go/` | Go (stdlib) — verifier **and writer** (`Append`) | Roberto Locatelli | ✅ go test -race (shared `vectors.json`, refusals, concurrent appends), 6003-tamper bench identical to Python/JS (14/09/2026) |
 | _your implementation here_ | | | |
 
 ## Optional profiles
@@ -76,17 +77,47 @@ is not a verdict. The same pre-scan guards `ap2_evidence.verify_evidence` and `e
 
 Measured on 2026-09-13 (`test_verifier_depth.py`, 9 tests; 8 of them RED when run against the v0.9.3 `verifier.py` = positive control, measured, not assumed):
 - a valid chained entry nested exactly 512 levels → **PASS** on Python and on JS (identical digests);
-- 513 levels → Python **FAIL** `json_too_deep`; a valid 600-level entry → Python FAIL, **JS PASS**. This is the
-  declared divergence *outside* the profile: the other verifiers do not enforce the 512 bound.
-- What bounds the other verifiers is their own stack, not a rule: **JS** uses V8 `JSON.parse`; **Rust** has zero
-  dependencies and a hand-written recursive-descent parser (`verifiers/rust/src/json.rs`) with no explicit depth
-  guard — beyond the thread stack it aborts, and the differential oracle counts a crash as a disagreement
-  (`NONJSON/CRASH`), never as agreement; **Swift** likewise (`JSONValue.swift`), and the Linux CI job does not build
-  the Swift binary, so Swift is not exercised by the oracle in CI (its macOS job runs the Swift suite and the
-  tampered-ledger gate). Oracle corpus: `deep-nesting-2000` (malformed, 2000 levels) = FAIL on Python and JS;
-  `deep-valid-512` (valid, at the bound) = PASS on both; `deep-valid-600` (valid, beyond the bound) = the one
-  **declared divergence** — Python FAIL / JS PASS — kept in the corpus and reported as `[DECL]`, never counted
-  as agreement (local run: 0/14 undeclared disagreements, 1 declared; Rust is checked by the CI oracle).
+- 513 levels → Python **FAIL** `json_too_deep`; a valid 600-level entry → Python FAIL, **JS PASS** (measured 13/09).
+  **Closed on 14/09/2026:** the JS verifier and the Go reference (`verifiers/go`) now apply the same linear
+  pre-scan and the same bound; a 600-level line is FAIL `json_too_deep` in all three.
+
+## Declared profile limit — unpaired UTF-16 surrogates (normative, 2026-09-14)
+
+A `\uD800`–`\uDFFF` escape that is not part of a high+low pair is **outside the acceptance profile** and refused
+fail-closed (`lone_surrogate`) by the three references (Python `verifier.has_lone_surrogate`, JS
+`hasLoneSurrogate`, Go `cryptovalid.Parse`). Reason, measured on 14/09 (council round 1 on the Go reference):
+Python and JS decoders keep a lone surrogate and re-emit `\ud800`, Go's stdlib decoder silently replaces it with
+U+FFFD — same file, different `self_hash`. A lone surrogate is not a Unicode scalar value and cannot be UTF-8
+encoded, so §3's "non-UTF-8 bytes forbidden" already excluded it; this makes the exclusion explicit and testable.
+Valid pairs (`\ud83d\ude00` = U+1F600) are unaffected; a malformed escape (`\uzzzz`) is NOT this rule's
+business — the decoder refuses it as a decode error (council round 2). **Writer note (Go `Append`, declared):** a
+crash between write and fsync can leave a torn last line without newline; the next append refuses to continue
+from it ("torn last line") — recovery is a human decision (verify, truncate the torn bytes, record the incident).
+The check is on the last byte ON DISK, always (council round 3): a *complete* last entry that lost only its `\n` is
+refused too (recovery = verify, append the missing newline), because continuing would write the next entry on the
+same line and the writer itself would corrupt the chain. **Three writer policies, declared (council round 4, 15/09/2026):** (1) Go `Append` REFUSES — it reads only the
+last line, never re-verifies the chain, so it has no right to repair; (2) the Python ingest writer
+(`cryptovalid_ingest._resume`) TRUNCATES an unterminated tail (an un-acknowledged write: `flush()` had not
+returned); (3) OMEGA's operational `PersistentLedger` (private repo) REPAIRS — it re-verifies every hash and link
+of the whole file on open, so a complete, verified last entry that only lost its `\n` is closed with the missing
+newline at once, with a logged warning. Same invariant everywhere: two records are never fused on one line, and a
+tail that does not parse is never continued from. **Rust updated 15/09/2026** (toolchain installed in the sandbox):
+`verifiers/rust/src/json.rs` now enforces the same rule — `MAX_JSON_DEPTH` = 512 (`json_too_deep`), surrogate
+pairs combined into one scalar, unpaired surrogates refused (`lone_surrogate`), exactly four hex digits per
+`\u` escape. Until then the Rust parser refused even a **valid** pair (`\ud83d\ude00` → "bad scalar"): an
+undeclared divergence from Python/JS/Go that nobody had measured because Rust was not in the local oracle run.
+**Declared divergence (remaining): Swift** was not updated (no toolchain): a lone-surrogate line or a line
+deeper than 512 is FAIL on Python/JS/Go/Rust and still parsed by Swift; the oracle accepts only that pattern as
+declared, never as agreement.
+- What bounds the verifiers is now a RULE in four of five: **JS** (V8 `JSON.parse` + linear pre-scan), **Rust**
+  (depth counter in the recursive-descent parser: 2000 levels = one parse refusal, no stack abort), **Go** (linear
+  pre-scan). **Swift** (`JSONValue.swift`) has no guard beyond its stack, and the Linux CI job does not build the
+  Swift binary, so Swift is not exercised by the oracle in CI (its macOS job runs the Swift suite and the
+  tampered-ledger gate). Oracle corpus (16 cases, 15/09/2026): `deep-nesting-2000` = FAIL everywhere;
+  `deep-valid-512` (at the bound) = PASS everywhere; `deep-valid-600`, `lone-surrogate` = FAIL on the four
+  references (Swift declared); `valid-surrogate-pair` = PASS everywhere; `empty` = FAIL everywhere (the Go
+  reference answered a third verdict "EMPTY" until 15/09 — found the day Go joined the oracle). Local run with
+  Python+JS+Go+Rust: 0/16 disagreements.
 - The PASS side is guarded too: the reference raises its own recursion headroom before decoding, so an
   in-profile line is accepted even when `verify_ledger` is called from a deep caller stack (test with a
   700-frame caller; RED without the headroom). Inputs larger than **`MAX_INPUT_BYTES` = 256 MiB** are refused
@@ -95,5 +126,5 @@ Measured on 2026-09-13 (`test_verifier_depth.py`, 9 tests; 8 of them RED when ru
   limit, it cannot enlarge the thread's C stack — on a thread with a very small stack the C decoder could still
   die without a receipt; on CPython ≥ 3.12 the C decoder keeps its own counter, so the "RED without headroom"
   control was reproduced on 3.11 only; the linear pre-scan is pure Python (~seconds per 100 MB), a cost, not a
-  crash. Rust and Swift were **not** executed on the three depth cases locally (no toolchain in the sandbox):
-  the first measurement is the CI oracle run of this release.
+  crash. Rust was executed locally on 15/09/2026 (7 cargo tests + the oracle); Swift was **not** (no toolchain):
+  its first measurement is the macOS CI job.
