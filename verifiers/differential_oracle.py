@@ -111,8 +111,9 @@ def _tip_case():
     try:
         import cryptovalid_tip as T
         import signer
-    except Exception as e:  # noqa: BLE001 — cryptography absent: the case is skipped, and SAID
-        print("  tip-truncated case NOT measured (%s: %s)" % (type(e).__name__, str(e)[:80]))
+        signer._ed()   # 'cryptography' is imported lazily: probe it HERE, not at the first keygen (CI 15/09: traceback)
+    except Exception as e:  # noqa: BLE001 — cryptography absent: the tip cases are skipped, and SAID
+        print("  tip cases NOT measured (%s: %s)" % (type(e).__name__, str(e)[:80]))
         return None
     d = tempfile.mkdtemp()
     led = os.path.join(d, "l.jsonl")

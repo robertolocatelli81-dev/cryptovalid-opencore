@@ -104,6 +104,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Python 'cryptography' — so the signed-tip cases are MEASURED by the oracle, not skipped
+        run: pip install cryptography
       - name: JS verifier — self-test against the spec vectors and the Python reference
         run: node verifiers/js/test.mjs
       - name: Rust verifier — unit tests + rejects the tampered ledger
