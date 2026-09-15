@@ -59,7 +59,7 @@ func isHex64(s string) bool {
 // 15/09/2026: time.Parse accepted a comma fraction, a 10-digit fraction, offset +24:00 and year 0000 that Python
 // refused). YYYY-MM-DDThh:mm:ss[.f{1,9}](Z|±hh:mm); year 0001-9999; real calendar day; hour 0-23; minute and
 // second 0-59 (no leap second); offset hour 0-23, minute 0-59.
-var tsProfile = regexp.MustCompile(`^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$`)
+var tsProfile = regexp.MustCompile(`^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})$`) // [0-9] literally, as in Python/JS (RE2's \d is ASCII anyway)
 
 func plainTS(s string) bool {
 	_, err := parseInstant(s)

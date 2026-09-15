@@ -34,8 +34,8 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
+from datetime import datetime, timezone
+from typing import Dict, Optional, Tuple
 
 KIND = "cryptovalid_tip/1"
 GENESIS = "0" * 64
@@ -78,7 +78,7 @@ def load_key(keyfile: str):
 _TS_FIELDS = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})")
 
 
-def parse_instant(ts: str) -> datetime:
+def parse_instant(ts: str) -> Tuple[int, int]:
     """The ONE timestamp profile of the three checkers, validated by HAND and identically in Python, Go and JS
     (review with Fable 5.1, 15/09/2026: the format rule was shared but the VALUE went to three library parsers
     that disagreed on 2026-02-30, hour 24, year 0000, a comma fraction, a 10-digit fraction, offset +24:00, and
@@ -196,10 +196,11 @@ def check_tip(entries_count: int, last_self_hash: str, tip: Dict, trusted_pubkey
     """Compare the verified file (count + last self_hash) with the signed tip. Returns {ok, error?, ...}.
 
     ROLLBACK (declared limit): a tip proves the file matches SOME state the log key signed, not the LATEST —
-    truncating the file and restoring an OLDER genuine tip passes. `not_before` (an ISO-8601 instant; instants
-    are compared, never strings; resolution = 1 s, two tips in the same second are indistinguishable) lets a
-    relying party who knows a later tip existed refuse older ones (`tip_rolled_back`); the monitor state /
-    receipts / an external anchor are the systematic answer."""
+    truncating the file and restoring an OLDER genuine tip passes. `not_before` (an instant of the same profile
+    as `ts`; instants are compared as the integer pair (seconds, nanoseconds), never as strings, so two tips in
+    the same second ARE distinguishable by their fraction) lets a relying party who knows a later tip existed
+    refuse older ones (`tip_rolled_back`); the monitor state / receipts / an external anchor are the systematic
+    answer."""
     sig = verify_tip_signature(tip, trusted_pubkey_hex)
     if not sig["ok"]:
         return {"ok": False, "error": (sig["why"] if sig["why"].startswith("tip_untrusted") else "tip_invalid: " + sig["why"]),

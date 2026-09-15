@@ -90,8 +90,9 @@ python3 conformance.py     # exit 0 = conformant
   `entries` a non-negative integer, an empty `log_pubkey_hex` = absent — a SIGNED tip outside the profile is
   `tip_invalid` (oracle cases `tip-garbage-ts`, `tip-upper-hex`, `tip-date-only-ts`, `tip-no-seconds-ts`: FAIL on
   Python/JS/Go, unchecked by Rust/Swift, declared; `tip-empty-pubkey`: PASS everywhere). A malformed
-  `--tip-not-before` is the verifier's error (`bad_not_before`), never blamed on the tip; the instant resolution
-  is one second (two tips signed in the same second are indistinguishable to `--tip-not-before`). These were
+  `--tip-not-before` is the verifier's error (`bad_not_before`), never blamed on the tip; the instant is compared
+  as the integer pair (seconds, nanoseconds), so two tips signed in the same second are told apart by their
+  fraction (measured by the `ordering-*` oracle vectors). These were
   measured divergences until 0.11.1 (review with Fable 5.1, 15/09/2026).
   Writers: `cryptovalid_ingest.Ingestor(tip_keyfile=…)` (every flush, O(1), same lock), Go `AppendSigned` /
   `cvappend -tipkey`, `cryptovalid_tip.py sign` (any file, O(n)). Verifiers: Python (reference), JS, Go;
