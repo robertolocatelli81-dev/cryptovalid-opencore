@@ -107,6 +107,33 @@ func TestTipMovesTheTailLimit(t *testing.T) {
 			t.Fatalf("ts %q refused: %v", good, err)
 		}
 	}
+	// round 3 with Fable: ASCII digits only; ordering on the integer pair (seconds, nanos) agrees with Python/JS
+	for _, uni := range []string{"٢٠٢٦-٠٩-١٥T10:00:00Z", "２０２６-０９-１５T１０:２５:００Z"} {
+		if _, err := parseInstant(uni); err == nil {
+			t.Fatalf("non-ASCII digits accepted: %q", uni)
+		}
+	}
+	if x, _ := parseInstant("2026-09-15T10:00:00.0001Z"); x.Unix() != 1789466400 || x.Nanosecond() != 100000 {
+		t.Fatalf("instant pair: %d %d", x.Unix(), x.Nanosecond())
+	}
+	if x, _ := parseInstant("0050-06-15T12:00:00Z"); x.Unix() != -60574996800 {
+		t.Fatalf("year 50: %d", x.Unix())
+	}
+	for _, c := range []struct{ ts, nb, ex string }{
+		{"2026-09-15T10:00:00.0001Z", "2026-09-15T10:00:00.0004Z", "FAIL"},
+		{"2026-09-15T10:00:00.0000001Z", "2026-09-15T10:00:00.0000004Z", "FAIL"},
+		{"2026-09-15T10:00:00.0000004Z", "2026-09-15T10:00:00.0000001Z", "PASS"},
+		{"0050-06-15T12:00:00Z", "0100-01-01T00:00:00Z", "FAIL"},
+	} {
+		os.WriteFile(p, full, 0o600)
+		tsT, _ := parseInstant(c.ts)
+		if _, err := SignTip(p, key, tsT); err != nil {
+			t.Fatal(err)
+		}
+		if v := VerifyLedgerWithTip(p, "", pk, true, c.nb, ""); v.Verdict != c.ex {
+			t.Fatalf("ordering %s vs %s: want %s got %+v", c.ts, c.nb, c.ex, v)
+		}
+	}
 	os.WriteFile(p, []byte(strings.Join(lines[:4], "")), 0o600)
 	if _, err := SignTip(p, other, ts); err != nil {
 		t.Fatal(err)

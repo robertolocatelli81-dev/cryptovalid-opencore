@@ -3,7 +3,7 @@
 // signature round-trip, AND cross-checks every vector against the REFERENCE Python
 // verifier (verifier.py at the repo root) as an independent oracle — so a bug that makes us
 // wrongly agree with ourselves is caught by disagreement with the reference.
-import { verifyLedger, conformance, jsonNestingDepth, hasLoneSurrogate, MAX_JSON_DEPTH, checkTip, tipPayload } from "./cvverify.mjs";
+import { verifyLedger, conformance, jsonNestingDepth, hasLoneSurrogate, MAX_JSON_DEPTH, checkTip, tipPayload, parseInstant } from "./cvverify.mjs";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign as edSign } from "node:crypto";
@@ -125,6 +125,9 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
   ok("tip: no trusted key + required → FAIL (never fail-open)", verifyLedger(text(5), { tip: sign(5, chain[4].self_hash, "2026-09-15T07:00:00Z"), requireTip: true }).verdict === "FAIL");
   ok("tip: not-before compares instants (Z / +00:00 / +02:00)", ["2026-09-15T07:00:00Z", "2026-09-15T07:00:00+00:00", "2026-09-15T09:00:00+02:00", "2026-09-15T06:59:59.5Z"].every((s) => verifyLedger(text(6), { tip, trustedPubkey: pkHex, tipNotBefore: s }).verdict === "PASS") && verifyLedger(text(6), { tip, trustedPubkey: pkHex, tipNotBefore: "2026-09-15T07:00:01Z" }).verdict === "FAIL");
   ok("tip: not-before follows the same profile (date-only / naive → bad_not_before)", ["2026-09-15", "2026-09-15T07:00:00", "x"].every((s) => verifyLedger(text(6), { tip, trustedPubkey: pkHex, tipNotBefore: s }).errors.some((e) => e.error.startsWith("bad_not_before"))));
+  ok("tip: ASCII digits only (Arabic-Indic / fullwidth → tip_invalid)", ["٢٠٢٦-٠٩-١٥T10:00:00Z", "２０２６-０９-１５T１０:２５:００Z"].every((ts) => verifyLedger(text(6), { tip: sign(6, chain[5].self_hash, ts), trustedPubkey: pkHex }).errors.some((e) => e.error.startsWith("tip_invalid"))));
+  ok("tip: instant = integer pair, year-safe (no Date.UTC 1900+ quirk)", JSON.stringify(parseInstant("2026-09-15T10:00:00.0001Z")) === "[1789466400,100000]" && JSON.stringify(parseInstant("0050-06-15T12:00:00Z")) === "[-60574996800,0]");
+  ok("tip: ordering at sub-ms / sub-µs / year<100 boundaries agrees with Python", [["2026-09-15T10:00:00.0001Z", "2026-09-15T10:00:00.0004Z", "FAIL"], ["2026-09-15T10:00:00.0000001Z", "2026-09-15T10:00:00.0000004Z", "FAIL"], ["2026-09-15T10:00:00.0000004Z", "2026-09-15T10:00:00.0000001Z", "PASS"], ["0050-06-15T12:00:00Z", "0100-01-01T00:00:00Z", "FAIL"]].every(([ts, nb, ex]) => verifyLedger(text(6), { tip: sign(6, chain[5].self_hash, ts), trustedPubkey: pkHex, tipNotBefore: nb }).verdict === ex));
   ok("tip: value-layer profile by hand (Feb 30, hour 24, year 0000, comma, 10-digit fraction, +24:00 → tip_invalid)", ["2026-02-30T10:25:00Z", "2026-09-15T24:00:00Z", "0000-01-01T00:00:00Z", "2026-09-15T10:25:00,5Z", "2026-09-15T10:25:00.1234567890Z", "2026-09-15T10:25:00+24:00", "2026-09-15T10:25:60Z"].every((ts) => verifyLedger(text(6), { tip: sign(6, chain[5].self_hash, ts), trustedPubkey: pkHex }).errors.some((e) => e.error.startsWith("tip_invalid"))) && ["2024-02-29T23:59:59Z", "2026-09-15T10:00:00.1234Z"].every((ts) => verifyLedger(text(6), { tip: sign(6, chain[5].self_hash, ts), trustedPubkey: pkHex }).verdict === "PASS"));
   ok("tip: required but missing", verifyLedger(text(6), { requireTip: true }).errors.some((e) => e.error.startsWith("tip_missing")));
   ok("tip: garbage document refused", verifyLedger(text(6), { tip: [1, 2], trustedPubkey: pkHex }).verdict === "FAIL");

@@ -138,6 +138,19 @@ class TestTip(unittest.TestCase):
             self.assertEqual(self._v()["verdict"], "PASS", ok_ts)
         with self.assertRaises(ValueError):
             T.parse_instant("2023-02-29T00:00:00Z")   # not a leap year
+        # round 3 with Fable: ASCII digits only (Python's \d matched Arabic-Indic/fullwidth digits, Go/JS did not)
+        for uni in ("٢٠٢٦-٠٩-١٥T10:00:00Z", "２０２６-０９-１５T１０:２５:００Z"):
+            T.sign_tip(self.led, self.k, ts=uni)
+            r = self._v(); self.assertEqual(r["verdict"], "FAIL", uni); self.assertIn("tip_invalid", self._errors(r))
+        # ordering on the integer pair (seconds, nanoseconds): sub-millisecond and sub-microsecond boundaries, year < 100
+        self.assertEqual(T.parse_instant("2026-09-15T10:00:00.0001Z"), (1789466400, 100000))
+        for ts, nb, expect in (("2026-09-15T10:00:00.0001Z", "2026-09-15T10:00:00.0004Z", "FAIL"),
+                               ("2026-09-15T10:00:00.0000001Z", "2026-09-15T10:00:00.0000004Z", "FAIL"),
+                               ("2026-09-15T10:00:00.0000004Z", "2026-09-15T10:00:00.0000001Z", "PASS"),
+                               ("0050-06-15T12:00:00Z", "0100-01-01T00:00:00Z", "FAIL"),
+                               ("0050-06-15T12:00:00Z", "0050-06-15T12:00:00Z", "PASS")):
+            T.sign_tip(self.led, self.k, ts=ts)
+            self.assertEqual(self._v(tip_not_before=nb)["verdict"], expect, (ts, nb))
         d = json.load(open(self.led + ".tip.json"))
         for bad in ("20", 20.0, True):
             json.dump(dict(d, entries=bad), open(self.led + ".tip.json", "w"))

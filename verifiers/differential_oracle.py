@@ -153,7 +153,18 @@ def _tip_case():
             "tip_off24": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T10:25:00+24:00"),
             "tip_leap60": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T10:25:60Z"),
             "tip_frac4_ok": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T10:25:00.1234Z"),
-            "tip_leapday_ok": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2024-02-29T23:59:59-11:30")}
+            "tip_leapday_ok": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2024-02-29T23:59:59-11:30"),
+            # round 3 with Fable: Python's \d matched Unicode digits (Go/JS: ASCII) → measured, now refused everywhere
+            "tip_arabic_digits": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "٢٠٢٦-٠٩-١٥T10:00:00Z"),
+            "tip_fullwidth_digits": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "２０２６-０９-１５T１０:２５:００Z"),
+            # ORDERING vectors (checked below with --tip-not-before, Python/JS/Go only): same accept set is not
+            # enough — sub-ms / sub-µs fractions and years < 100 ordered differently until 0.11.3
+            "ordering": [(signed(3, chain[0]["self_hash"], chain[2]["self_hash"], ts), nb, ex) for ts, nb, ex in (
+                ("2026-09-15T10:00:00.0001Z", "2026-09-15T10:00:00.0004Z", "FAIL"),
+                ("2026-09-15T10:00:00.0000001Z", "2026-09-15T10:00:00.0000004Z", "FAIL"),
+                ("2026-09-15T10:00:00.0000004Z", "2026-09-15T10:00:00.0000001Z", "PASS"),
+                ("0050-06-15T12:00:00Z", "0100-01-01T00:00:00Z", "FAIL"),
+                ("2026-09-15T12:00:00+02:00", "2026-09-15T10:00:00Z", "PASS"))]}
 
 
 TIP_CASE = _tip_case()
@@ -173,7 +184,9 @@ if TIP_CASE:
                  "tip-off24": (TIP_CASE["full"], TIP_CASE["tip_off24"]),
                  "tip-leap60": (TIP_CASE["full"], TIP_CASE["tip_leap60"]),
                  "tip-frac4-ok": (TIP_CASE["full"], TIP_CASE["tip_frac4_ok"]),
-                 "tip-leapday-ok": (TIP_CASE["full"], TIP_CASE["tip_leapday_ok"])}
+                 "tip-leapday-ok": (TIP_CASE["full"], TIP_CASE["tip_leapday_ok"]),
+                 "tip-arabic-digits": (TIP_CASE["full"], TIP_CASE["tip_arabic_digits"]),
+                 "tip-fullwidth-digits": (TIP_CASE["full"], TIP_CASE["tip_fullwidth_digits"])}
     for name, (text, _) in TIP_CASES.items():
         CORPUS[name] = text.rstrip("\n")
     DECLARED_DIVERGENCE["tip-truncated"] = (
@@ -181,7 +194,8 @@ if TIP_CASE:
         "tail truncated but a signed chain tip sits next to the file: checked by Python/JS/Go (tail_truncated), "
         "not by Rust/Swift (declared: no Ed25519 without dependencies)")
     for name in ("tip-garbage-ts", "tip-upper-hex", "tip-date-only-ts", "tip-no-seconds-ts",
-                 "tip-feb30", "tip-hour24", "tip-year0", "tip-comma-frac", "tip-frac10", "tip-off24", "tip-leap60"):
+                 "tip-feb30", "tip-hour24", "tip-year0", "tip-comma-frac", "tip-frac10", "tip-off24", "tip-leap60",
+                 "tip-arabic-digits", "tip-fullwidth-digits"):
         DECLARED_DIVERGENCE[name] = (
             {"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "PASS", "swift": "PASS"},
             "intact chain, SIGNED tip outside the profile (ts not RFC 3339 with seconds+zone / uppercase hex): "
@@ -236,7 +250,27 @@ def main():
             if not ok:
                 disagreements += 1
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:22} {verdicts}")
-    print(f"\ndisagreements: {disagreements}/{len(CORPUS)} (declared out-of-profile divergences: {declared})")
+        # ORDERING oracle: the three tip checkers must ORDER instants identically, not only accept identically
+        if TIP_CASE:
+            pk = TIP_CASE["pubkey"]
+            p = os.path.join(tmp, "o.jsonl")
+            with open(p, "w") as f:
+                f.write(TIP_CASE["full"])
+            for i, (tipdoc, nb, expect) in enumerate(TIP_CASE["ordering"]):
+                with open(p + ".tip.json", "w") as f:
+                    f.write(tipdoc)
+                vs = {}
+                for k in ("python", "js", "go"):
+                    if k not in available:
+                        continue
+                    ex = {"python": ["--trusted-pubkey", pk, "--tip-not-before", nb], "js": ["--trusted-pubkey", pk, "--tip-not-before", nb],
+                          "go": ["-trusted-pubkey", pk, "-tip-not-before", nb]}[k]
+                    vs[k] = verdict(available[k], p, ex, flags_first=(k == "go"))
+                ok = all(v == expect for v in vs.values())
+                if not ok:
+                    disagreements += 1
+                print(f"  [{'OK ' if ok else 'DIFF'}] ordering-{i:<14} expect {expect}: {vs}")
+    print(f"\ndisagreements: {disagreements}/{len(CORPUS) + (len(TIP_CASE['ordering']) if TIP_CASE else 0)} (declared out-of-profile divergences: {declared})")
     return 0 if disagreements == 0 else 1
 
 

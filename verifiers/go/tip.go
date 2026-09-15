@@ -173,7 +173,7 @@ func firstSelfHash(f *os.File) (string, error) {
 }
 
 func writeTip(ledger string, key ed25519.PrivateKey, entries int, first, last string, ts time.Time) (*Tip, error) {
-	t := &Tip{Kind: TipKind, Entries: entries, LedgerID: first, TipSHA256: last, TS: ts.UTC().Format("2006-01-02T15:04:05+00:00"),
+	t := &Tip{Kind: TipKind, Entries: entries, LedgerID: first, TipSHA256: last, TS: formatTS(ts),
 		LogPubkeyHex: hex.EncodeToString(key.Public().(ed25519.PublicKey))}
 	t.SignatureHex = hex.EncodeToString(ed25519.Sign(key, TipPayload(t.Entries, t.LedgerID, t.TipSHA256, t.TS)))
 	doc, _ := json.Marshal(t)
@@ -265,4 +265,13 @@ func LoadTip(path string) (*Tip, error) {
 		return nil, fmt.Errorf("tip_unreadable: %w", err)
 	}
 	return &t, nil
+}
+
+// formatTS writes the profile form in UTC; the fraction is kept only when non-zero (Python writes none).
+func formatTS(ts time.Time) string {
+	u := ts.UTC()
+	if u.Nanosecond() == 0 {
+		return u.Format("2006-01-02T15:04:05+00:00")
+	}
+	return u.Format("2006-01-02T15:04:05.999999999+00:00")
 }

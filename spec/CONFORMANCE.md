@@ -82,7 +82,11 @@ python3 conformance.py     # exit 0 = conformant
   hour 0-23, minute/second 0-59, offset 00:00-23:59), never by a library date parser: until 0.11.2 the format rule
   was shared but `fromisoformat` / `Date.parse` / `time.Parse` disagreed on `2026-02-30`, hour `24`, year `0000`,
   a comma fraction, a 10-digit fraction and offset `+24:00` (measured, oracle cases `tip-feb30` … `tip-leap60`);
-  `--tip-not-before` follows the same profile in the three checkers,
+  digits are ASCII `0-9` only (Python's `\d` would take Unicode digits — measured, refused since 0.11.3), and the
+  instant is compared as the INTEGER PAIR (epoch seconds, nanoseconds) in the three checkers — never through a
+  library date type, whose fraction precision (µs / ms / ns) ordered two instants differently at a sub-millisecond
+  `--tip-not-before` boundary, and whose `Date.UTC` mapped years 1-99 to 1900+ in JS (both measured, oracle
+  `ordering-*` vectors); `--tip-not-before` follows the same profile in the three checkers,
   `entries` a non-negative integer, an empty `log_pubkey_hex` = absent — a SIGNED tip outside the profile is
   `tip_invalid` (oracle cases `tip-garbage-ts`, `tip-upper-hex`, `tip-date-only-ts`, `tip-no-seconds-ts`: FAIL on
   Python/JS/Go, unchecked by Rust/Swift, declared; `tip-empty-pubkey`: PASS everywhere). A malformed

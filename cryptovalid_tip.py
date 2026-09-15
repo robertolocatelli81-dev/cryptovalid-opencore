@@ -28,6 +28,7 @@ ledgers lets the pair file+tip of B be substituted for A). The verifier checks i
 (`tip_of_another_ledger`) and, out of band, against `--expect-ledger-id` (`ledger_id_mismatch`).
 """
 import argparse
+import calendar
 import hashlib
 import json
 import os
@@ -72,7 +73,9 @@ def load_key(keyfile: str):
     return _load_sk(keyfile)
 
 
-_TS_FIELDS = re.compile(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)")
+# [0-9] and not \d: in Python `\d` matches every Unicode decimal digit (Arabic-Indic, fullwidth…) and int() converts
+# them, while Go (RE2) and JS mean ASCII — measured divergence, review round 3 with Fable 5.1
+_TS_FIELDS = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})")
 
 
 def parse_instant(ts: str) -> datetime:
@@ -81,7 +84,11 @@ def parse_instant(ts: str) -> datetime:
     that disagreed on 2026-02-30, hour 24, year 0000, a comma fraction, a 10-digit fraction, offset +24:00, and
     Python < 3.11 on fraction length). Profile: `YYYY-MM-DDThh:mm:ss[.f{1,9}](Z|±hh:mm)`, year 0001-9999, real
     calendar day (leap years), hour 0-23, minute/second 0-59 (no leap second), offset hour 0-23, minute 0-59.
-    Returns an aware datetime; raises ValueError for anything else."""
+    Returns the instant as the integer pair (epoch seconds, nanoseconds) — compared as a pair in the three
+    checkers, so the fraction precision (µs / ms / ns of the three standard libraries) never orders two instants
+    differently at a `--tip-not-before` boundary (review round 3). Raises ValueError for anything else."""
+    if not isinstance(ts, str):
+        raise ValueError("timestamp is not a string")
     m = _TS_FIELDS.fullmatch(ts)
     if not m:
         raise ValueError("timestamp outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|±hh:mm)")
@@ -93,16 +100,14 @@ def parse_instant(ts: str) -> datetime:
     dim = [31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1]
     if not 1 <= d <= dim:
         raise ValueError("timestamp day does not exist in that month")
-    if off == "Z":
-        tz = timezone.utc
-    else:
+    off_sec = 0
+    if off != "Z":
         oh, om = int(off[1:3]), int(off[4:6])
         if oh > 23 or om > 59:
             raise ValueError("timestamp offset out of range")
-        delta = timedelta(hours=oh, minutes=om)
-        tz = timezone(delta if off[0] == "+" else -delta)
-    micro = int((frac or "0").ljust(6, "0")[:6])
-    return datetime(y, mo, d, h, mi, sec, micro, tzinfo=tz)
+        off_sec = (oh * 3600 + om * 60) * (-1 if off[0] == "-" else 1)
+    nanos = int((frac or "0").ljust(9, "0")[:9])
+    return (calendar.timegm((y, mo, d, h, mi, sec)) - off_sec, nanos)
 
 
 def chain_tip(ledger_path: str) -> Dict:

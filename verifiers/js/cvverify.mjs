@@ -148,20 +148,25 @@ export function tipPayload(entries, ledgerId, tipSha256, ts) {
 }
 const HEX64 = /^[0-9a-f]{64}$/;
 // The ONE timestamp profile of the three checkers, validated by HAND (review with Fable 5.1, 15/09/2026: Date.parse
-// silently rolled 2026-02-30 over to March, accepted hour 24 and year 0000). Returns epoch ms, or NaN.
+// silently rolled 2026-02-30 over to March, accepted hour 24 and year 0000; Date.UTC maps years 1-99 to 1900+y).
+// Returns the instant as the integer pair [epoch seconds, nanoseconds] — compared as a pair in the three checkers
+// (fraction precision differs in the three standard libraries) — or null when outside the profile.
 export function parseInstant(s) {
-  const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$/.exec(String(s));
-  if (!m) return NaN;
+  if (typeof s !== "string") return null;
+  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})$/.exec(s);
+  if (!m) return null;
   const [y, mo, d, h, mi, sec] = m.slice(1, 7).map(Number);
-  if (y < 1 || y > 9999 || mo < 1 || mo > 12 || h > 23 || mi > 59 || sec > 59) return NaN;
+  if (y < 1 || y > 9999 || mo < 1 || mo > 12 || h > 23 || mi > 59 || sec > 59) return null;
   const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
   const dim = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
-  if (d < 1 || d > dim) return NaN;
-  let offMin = 0;
-  if (m[8] !== "Z") { const oh = Number(m[8].slice(1, 3)), om = Number(m[8].slice(4, 6)); if (oh > 23 || om > 59) return NaN; offMin = (oh * 60 + om) * (m[8][0] === "-" ? -1 : 1); }
-  const ms = Number(((m[7] || "0") + "000").slice(0, 3));
-  return Date.UTC(y, mo - 1, d, h, mi, sec, ms) - offMin * 60000;
+  if (d < 1 || d > dim) return null;
+  let offSec = 0;
+  if (m[8] !== "Z") { const oh = Number(m[8].slice(1, 3)), om = Number(m[8].slice(4, 6)); if (oh > 23 || om > 59) return null; offSec = (oh * 3600 + om * 60) * (m[8][0] === "-" ? -1 : 1); }
+  const dt = new Date(0); dt.setUTCFullYear(y, mo - 1, d); dt.setUTCHours(h, mi, sec, 0);   // year-safe, no Date.UTC quirk
+  const nanos = Number(((m[7] || "0") + "000000000").slice(0, 9));
+  return [Math.floor(dt.getTime() / 1000) - offSec, nanos];
 }
+export function instantBefore(a, b) { return a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]); }
 export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = null, notBefore = null, firstSelfHash = null, expectLedgerId = null) {
   if (!tip || typeof tip !== "object" || Array.isArray(tip) || tip.kind !== TIP_KIND) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
   for (const k of ["entries", "ledger_id", "tip_sha256", "ts", "signature_hex"]) if (!(k in tip)) return { ok: false, error: `tip_invalid: tip missing field ${k}` };
@@ -169,7 +174,7 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
   if (typeof tip.entries !== "number" || !Number.isInteger(tip.entries) || tip.entries < 0) return { ok: false, error: "tip_invalid: tip entries must be a non-negative integer" };
   if (!["ledger_id", "tip_sha256", "ts", "signature_hex"].every((k) => typeof tip[k] === "string")) return { ok: false, error: "tip_invalid: tip fields must be strings" };
   // ONE timestamp profile in the three checkers: RFC 3339 with seconds and a zone (Z or ±hh:mm)
-  if (!HEX64.test(tip.ledger_id) || !HEX64.test(tip.tip_sha256) || Number.isNaN(parseInstant(tip.ts))) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
+  if (!HEX64.test(tip.ledger_id) || !HEX64.test(tip.tip_sha256) || parseInstant(tip.ts) === null) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
   // the key inside the tip proves nothing: without the trusted log key there is NO verification (never a
   // "PASS but untrusted" an automation reads as exit 0 — council 15/09, Gemini)
   if (!trustedPubkeyHex) return { ok: false, trusted: false, error: "tip_untrusted: no trusted log key given (--trusted-pubkey); the key inside the tip cannot be trusted" };
@@ -186,8 +191,8 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
   // ROLLBACK (declared): an older genuine tip restored after a truncation passes; notBefore refuses older tips
   if (notBefore) {   // instants, not strings (council 15/09, Opus): 'Z' / '+00:00' / other offsets of the same moment agree
     const a = parseInstant(tip.ts), b = parseInstant(notBefore);
-    if (Number.isNaN(b)) return { ok: false, trusted, error: "bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm)" };   // the verifier's error, not the tip's
-    if (a < b) return { ok: false, trusted, error: `tip_rolled_back: the tip is dated ${tip.ts}, before the required ${notBefore}` };
+    if (b === null) return { ok: false, trusted, error: "bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm)" };   // the verifier's error, not the tip's
+    if (instantBefore(a, b)) return { ok: false, trusted, error: `tip_rolled_back: the tip is dated ${tip.ts}, before the required ${notBefore}` };
   }
   if (entriesCount < n) return { ok: false, trusted, error: `tail_truncated: file has ${entriesCount} entries, the signed tip commits to ${n}` };
   if (entriesCount > n) return { ok: false, trusted, error: `unsealed_tail: file has ${entriesCount} entries, the signed tip commits to ${n} (appended after the last signed head)` };
