@@ -77,9 +77,13 @@ python3 conformance.py     # exit 0 = conformant
   nothing): the verdict is the bare chain's, and a required tip is a FAIL — never a "PASS but untrusted" an
   automation would read as exit 0; (5) `--tip-not-before` compares INSTANTS (ISO-8601 with `Z`, an offset, or
   naive = UTC), never strings; (6) formats are strict and identical in the three checkers — `ledger_id` and
-  `tip_sha256` 64 lowercase hex, `ts` a plain printable ISO-8601 instant (parsed always, not only with
-  `--tip-not-before`), `entries` a non-negative integer — a SIGNED tip outside the profile is `tip_invalid`
-  (oracle cases `tip-garbage-ts`, `tip-upper-hex`: FAIL on Python/JS/Go, unchecked by Rust/Swift, declared).
+  `tip_sha256` 64 lowercase hex, `ts` **RFC 3339 with seconds and a zone** (`Z` or `±hh:mm`; optional fraction),
+  `entries` a non-negative integer, an empty `log_pubkey_hex` = absent — a SIGNED tip outside the profile is
+  `tip_invalid` (oracle cases `tip-garbage-ts`, `tip-upper-hex`, `tip-date-only-ts`, `tip-no-seconds-ts`: FAIL on
+  Python/JS/Go, unchecked by Rust/Swift, declared; `tip-empty-pubkey`: PASS everywhere). A malformed
+  `--tip-not-before` is the verifier's error (`bad_not_before`), never blamed on the tip; the instant resolution
+  is one second (two tips signed in the same second are indistinguishable to `--tip-not-before`). These were
+  measured divergences until 0.11.1 (review with Fable 5.1, 15/09/2026).
   Writers: `cryptovalid_ingest.Ingestor(tip_keyfile=…)` (every flush, O(1), same lock), Go `AppendSigned` /
   `cvappend -tipkey`, `cryptovalid_tip.py sign` (any file, O(n)). Verifiers: Python (reference), JS, Go;
   **declared divergence**: Rust and Swift ignore the tip (measured by the oracle case `tip-truncated`).

@@ -128,7 +128,8 @@ Delivered and tested — the CI badge above is green on every push:
   **Know what `verifier.py` proves**: a bare hash chain is internally consistent evidence — it cannot see
   truncation or a re-chained suffix written by someone with write access to the file. The receipt
   says so in a `scope` field. Since 0.11.0 the **signed chain tip** (`cryptovalid_tip.py`, sidecar
-  `<ledger>.tip.json`, written after every append in O(1)) moves that limit: with the tip and the
+  `<ledger>.tip.json`, written after every append — O(1) for the writers that already know their tail,
+  `Ingestor` and Go `AppendSigned`; `cryptovalid_tip.py sign` reads the file, O(n)) moves that limit: with the tip and the
   trusted log key, `verifier.py --trusted-pubkey <hex> [--require-tip]` names `tail_truncated`,
   `tail_rewritten` and `unsealed_tail`; the JS and Go verifiers check it too (Rust/Swift: declared no).
   Without the trusted log key the tip is not checked at all (`tip_untrusted`): the key inside a tip proves

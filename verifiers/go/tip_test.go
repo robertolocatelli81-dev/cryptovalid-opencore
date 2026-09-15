@@ -83,7 +83,7 @@ func TestTipMovesTheTailLimit(t *testing.T) {
 	if _, err := SignTip(p, key, time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
-	for _, same := range []string{"2026-09-15T10:00:00Z", "2026-09-15T10:00:00+00:00", "2026-09-15T12:00:00+02:00", "2026-09-15T10:00:00"} {
+	for _, same := range []string{"2026-09-15T10:00:00Z", "2026-09-15T10:00:00+00:00", "2026-09-15T12:00:00+02:00", "2026-09-15T10:00:00"} { // notBefore may be naive (UTC); the TIP's ts must carry a zone
 		if v := VerifyLedgerWithTip(p, "", pk, true, same, ""); v.Verdict != "PASS" {
 			t.Fatalf("same instant %q refused: %+v", same, v)
 		}

@@ -157,11 +157,12 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
   // strict types, same as Go's decoder: entries a non-negative integer, the rest strings
   if (typeof tip.entries !== "number" || !Number.isInteger(tip.entries) || tip.entries < 0) return { ok: false, error: "tip_invalid: tip entries must be a non-negative integer" };
   if (!["ledger_id", "tip_sha256", "ts", "signature_hex"].every((k) => typeof tip[k] === "string")) return { ok: false, error: "tip_invalid: tip fields must be strings" };
-  if (!HEX64.test(tip.ledger_id) || !HEX64.test(tip.tip_sha256) || !/^[\x21-\x7e]{1,40}$/.test(tip.ts) || /["\\]/.test(tip.ts) || Number.isNaN(parseInstant(tip.ts))) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
+  // ONE timestamp profile in the three checkers: RFC 3339 with seconds and a zone (Z or ±hh:mm)
+  if (!HEX64.test(tip.ledger_id) || !HEX64.test(tip.tip_sha256) || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,9})?(Z|[+-]\d\d:\d\d)$/.test(tip.ts) || Number.isNaN(parseInstant(tip.ts))) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
   // the key inside the tip proves nothing: without the trusted log key there is NO verification (never a
   // "PASS but untrusted" an automation reads as exit 0 — council 15/09, Gemini)
   if (!trustedPubkeyHex) return { ok: false, trusted: false, error: "tip_untrusted: no trusted log key given (--trusted-pubkey); the key inside the tip cannot be trusted" };
-  if (tip.log_pubkey_hex && tip.log_pubkey_hex !== trustedPubkeyHex) return { ok: false, error: "tip_invalid: tip log key differs from the trusted log key" };
+  if (tip.log_pubkey_hex && tip.log_pubkey_hex !== trustedPubkeyHex) return { ok: false, error: "tip_invalid: tip log key differs from the trusted log key" };   // "" = absent, as in Python/Go
   let sigOk = false;
   try {
     const key = createPublicKey({ key: Buffer.concat([SPKI, Buffer.from(trustedPubkeyHex, "hex")]), format: "der", type: "spki" });
@@ -174,7 +175,7 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
   // ROLLBACK (declared): an older genuine tip restored after a truncation passes; notBefore refuses older tips
   if (notBefore) {   // instants, not strings (council 15/09, Opus): 'Z' / '+00:00' / other offsets of the same moment agree
     const a = parseInstant(tip.ts), b = parseInstant(notBefore);
-    if (Number.isNaN(a) || Number.isNaN(b)) return { ok: false, trusted, error: "tip_invalid: timestamp not ISO-8601" };
+    if (Number.isNaN(b)) return { ok: false, trusted, error: "bad_not_before: --tip-not-before is not ISO-8601" };   // the verifier's error, not the tip's
     if (a < b) return { ok: false, trusted, error: `tip_rolled_back: the tip is dated ${tip.ts}, before the required ${notBefore}` };
   }
   if (entriesCount < n) return { ok: false, trusted, error: `tail_truncated: file has ${entriesCount} entries, the signed tip commits to ${n}` };

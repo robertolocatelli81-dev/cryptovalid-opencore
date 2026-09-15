@@ -39,7 +39,9 @@ from typing import Dict, Optional
 KIND = "cryptovalid_tip/1"
 GENESIS = "0" * 64
 _HEX64 = re.compile(r"[0-9a-f]{64}")
-_PLAIN_TS = re.compile(r"[\x21-\x7e]{1,40}")     # printable ASCII, no space/quote/backslash: what Go admits
+# ONE timestamp profile in the three checkers (review with Fable 5.1, 15/09): RFC 3339 with seconds, 'Z' or an
+# offset — a date-only or minute-resolution value was PASS in Python/JS and tip_invalid in Go
+_TS_PROFILE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-]\d\d:\d\d)")
 
 
 def tip_path_for(ledger_path: str) -> str:
@@ -143,19 +145,19 @@ def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str]) -> Dict:
         return {"ok": False, "why": "tip fields must be strings"}
     if not (_HEX64.fullmatch(tip["ledger_id"]) and _HEX64.fullmatch(tip["tip_sha256"])):
         return {"ok": False, "why": "ledger_id / tip_sha256 must be 64 lowercase hex characters"}
-    if not _PLAIN_TS.fullmatch(tip["ts"]) or '"' in tip["ts"] or "\\" in tip["ts"]:
-        return {"ok": False, "why": "ts must be a plain ISO-8601 timestamp (printable ASCII, no quotes)"}
+    if not _TS_PROFILE.fullmatch(tip["ts"]):
+        return {"ok": False, "why": "ts must be RFC 3339 with seconds and a zone (Z or ±hh:mm)"}
     try:
         parse_instant(tip["ts"])
     except ValueError:
-        return {"ok": False, "why": "ts is not ISO-8601"}
+        return {"ok": False, "why": "ts is not a valid instant"}
     # The key INSIDE the tip is informative only: verifying against it proves nothing (anyone can sign a tip
     # with a key of their own and put it there). Without the trusted log key there is NO verification —
     # ok=False, never a "PASS but untrusted" an automation would read as 0 (council 15/09, Gemini).
     if not trusted_pubkey_hex:
         return {"ok": False, "why": "tip_untrusted: no trusted log key given (pass --trusted-pubkey); the key inside "
                                     "the tip cannot be trusted", "trusted": False}
-    if tip.get("log_pubkey_hex") not in (None, trusted_pubkey_hex):
+    if tip.get("log_pubkey_hex") not in (None, "", trusted_pubkey_hex):   # "" = absent, as in Go/JS
         return {"ok": False, "why": "tip log key differs from the trusted log key"}
     try:
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(trusted_pubkey_hex)).verify(
@@ -171,9 +173,10 @@ def check_tip(entries_count: int, last_self_hash: str, tip: Dict, trusted_pubkey
     """Compare the verified file (count + last self_hash) with the signed tip. Returns {ok, error?, ...}.
 
     ROLLBACK (declared limit): a tip proves the file matches SOME state the log key signed, not the LATEST —
-    truncating the file and restoring an OLDER genuine tip passes. `not_before` (same ISO-8601 form as the
-    tip's `ts`, compared as strings) lets a relying party who knows a later tip existed refuse older ones
-    (`tip_rolled_back`); the monitor state / receipts / an external anchor are the systematic answer."""
+    truncating the file and restoring an OLDER genuine tip passes. `not_before` (an ISO-8601 instant; instants
+    are compared, never strings; resolution = 1 s, two tips in the same second are indistinguishable) lets a
+    relying party who knows a later tip existed refuse older ones (`tip_rolled_back`); the monitor state /
+    receipts / an external anchor are the systematic answer."""
     sig = verify_tip_signature(tip, trusted_pubkey_hex)
     if not sig["ok"]:
         return {"ok": False, "error": (sig["why"] if sig["why"].startswith("tip_untrusted") else "tip_invalid: " + sig["why"]),
@@ -189,10 +192,12 @@ def check_tip(entries_count: int, last_self_hash: str, tip: Dict, trusted_pubkey
                 "signature": sig["why"]}
     if not_before:
         try:
-            older = parse_instant(tip["ts"]) < parse_instant(not_before)
+            nb = parse_instant(not_before)
         except ValueError as e:
-            return {"ok": False, "error": f"tip_invalid: timestamp not ISO-8601 ({str(e)[:60]})", "signature": sig["why"]}
-        if older:
+            # the VERIFIER's argument is wrong, not the tip: never blame the file (review with Fable, Gemini)
+            return {"ok": False, "error": f"bad_not_before: --tip-not-before is not ISO-8601 ({str(e)[:60]})",
+                    "signature": sig["why"]}
+        if parse_instant(tip["ts"]) < nb:
             return {"ok": False, "error": f"tip_rolled_back: the tip is dated {tip['ts']}, before the required {not_before} "
                                           "(an older genuine tip restored after a truncation looks exactly like this)",
                     "signature": sig["why"]}

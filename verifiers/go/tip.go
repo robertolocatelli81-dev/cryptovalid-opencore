@@ -53,8 +53,13 @@ func isHex64(s string) bool {
 	return true
 }
 
+// plainTS = the ONE timestamp profile of the three checkers: RFC 3339 with seconds and a zone (Z or ±hh:mm).
 func plainTS(s string) bool {
-	return s != "" && len(s) <= 40 && !strings.ContainsAny(s, "\"\\") && !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r > 0x7e })
+	if s == "" || len(s) > 40 || strings.ContainsAny(s, "\"\\") {
+		return false
+	}
+	_, err := time.Parse(time.RFC3339Nano, s)
+	return err == nil && len(s) >= len("2006-01-02T15:04:05Z") && s[10] == 'T' && s[13] == ':' && s[16] == ':'
 }
 
 // LoadTipKey reads the 32-byte Ed25519 seed (hex) used by signer.py / cryptovalid_tip.py.
@@ -157,9 +162,7 @@ func CheckTip(entries int, first, last string, t *Tip, trustedPubkeyHex, notBefo
 	if t == nil || t.Kind != TipKind || t.SignatureHex == "" || !isHex64(t.TipSHA256) || !isHex64(t.LedgerID) || !plainTS(t.TS) || t.Entries < 0 {
 		return false, "tip_invalid: not a cryptovalid_tip/1 document", false
 	}
-	if _, err := parseInstant(t.TS); err != nil { // parity with Python/JS: ts is always an instant, not only with notBefore
-		return false, "tip_invalid: ts is not ISO-8601", false
-	}
+
 	// the key inside the tip proves nothing: without the trusted log key there is NO verification (never a
 	// "PASS but untrusted" that an automation reads as exit 0 — council 15/09, Gemini)
 	if trustedPubkeyHex == "" {
@@ -182,12 +185,13 @@ func CheckTip(entries int, first, last string, t *Tip, trustedPubkeyHex, notBefo
 		return false, "tip_of_another_ledger: the tip's ledger_id is not this file's first self_hash", trusted
 	}
 	if notBefore != "" {
-		// instants, not strings (council 15/09, Opus: "…Z" vs "…+00:00" compared as bytes was a false rollback)
-		tipT, e1 := parseInstant(t.TS)
+		// instants, not strings (council 15/09, Opus: "…Z" vs "…+00:00" compared as bytes was a false rollback);
+		// a malformed notBefore is the VERIFIER's error, never the tip's
 		nbT, e2 := parseInstant(notBefore)
-		if e1 != nil || e2 != nil {
-			return false, "tip_invalid: timestamp not ISO-8601", trusted
+		if e2 != nil {
+			return false, "bad_not_before: -tip-not-before is not ISO-8601", trusted
 		}
+		tipT, _ := time.Parse(time.RFC3339Nano, t.TS)
 		if tipT.Before(nbT) {
 			return false, fmt.Sprintf("tip_rolled_back: the tip is dated %s, before the required %s", t.TS, notBefore), trusted
 		}

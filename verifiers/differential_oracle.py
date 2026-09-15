@@ -136,7 +136,13 @@ def _tip_case():
     full = "".join(json.dumps(e) + "\n" for e in chain)
     return {"text": "".join(json.dumps(e) + "\n" for e in chain[:2]), "tip": tip, "pubkey": pk, "full": full,
             "tip_garbage_ts": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "garbage"),
-            "tip_upper_hex": signed(3, chain[0]["self_hash"].upper(), chain[2]["self_hash"], "2026-09-15T07:00:00+00:00")}
+            "tip_upper_hex": signed(3, chain[0]["self_hash"].upper(), chain[2]["self_hash"], "2026-09-15T07:00:00+00:00"),
+            # review with Fable 5.1 (15/09): validly signed, oddly formatted — Python/JS PASSED, Go refused
+            "tip_date_only_ts": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15"),
+            "tip_no_seconds_ts": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T09:00+02:00"),
+            # and the mirror: an EMPTY log_pubkey_hex was tip_invalid in Python, ok in Go/JS → now "absent" everywhere
+            "tip_empty_pubkey": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T07:00:00+00:00").replace(
+                '"log_pubkey_hex": "%s"' % pk, '"log_pubkey_hex": ""')}
 
 
 TIP_CASE = _tip_case()
@@ -144,18 +150,22 @@ TIP_CASES = {}   # name -> (ledger text, tip document)
 if TIP_CASE:
     TIP_CASES = {"tip-truncated": (TIP_CASE["text"], TIP_CASE["tip"]),
                  "tip-garbage-ts": (TIP_CASE["full"], TIP_CASE["tip_garbage_ts"]),
-                 "tip-upper-hex": (TIP_CASE["full"], TIP_CASE["tip_upper_hex"])}
+                 "tip-upper-hex": (TIP_CASE["full"], TIP_CASE["tip_upper_hex"]),
+                 "tip-date-only-ts": (TIP_CASE["full"], TIP_CASE["tip_date_only_ts"]),
+                 "tip-no-seconds-ts": (TIP_CASE["full"], TIP_CASE["tip_no_seconds_ts"]),
+                 "tip-empty-pubkey": (TIP_CASE["full"], TIP_CASE["tip_empty_pubkey"])}
     for name, (text, _) in TIP_CASES.items():
         CORPUS[name] = text.rstrip("\n")
     DECLARED_DIVERGENCE["tip-truncated"] = (
         {"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "PASS", "swift": "PASS"},
         "tail truncated but a signed chain tip sits next to the file: checked by Python/JS/Go (tail_truncated), "
         "not by Rust/Swift (declared: no Ed25519 without dependencies)")
-    for name in ("tip-garbage-ts", "tip-upper-hex"):
+    for name in ("tip-garbage-ts", "tip-upper-hex", "tip-date-only-ts", "tip-no-seconds-ts"):
         DECLARED_DIVERGENCE[name] = (
             {"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "PASS", "swift": "PASS"},
-            "intact chain, SIGNED tip outside the profile (ts not ISO-8601 / uppercase hex): tip_invalid on "
-            "Python/JS/Go, unchecked by Rust/Swift (declared)")
+            "intact chain, SIGNED tip outside the profile (ts not RFC 3339 with seconds+zone / uppercase hex): "
+            "tip_invalid on Python/JS/Go, unchecked by Rust/Swift (declared)")
+    # tip-empty-pubkey: valid everywhere (the trusted key is given; "" = absent) → must AGREE (PASS)
 
 
 def _matches(expected, got):
