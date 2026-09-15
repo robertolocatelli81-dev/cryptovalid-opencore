@@ -561,6 +561,37 @@ operate claim is a universal negative and cannot be proven — pending applicati
 remain invisible by construction. *Technical FTO note, not a legal opinion; a definitive FTO
 requires professional counsel.*
 
+## The next decade (read on 15/09/2026)
+
+What will change under an evidence ledger written today, and what this repository already does about it:
+
+- **Signatures.** NIST IR 8547 (an initial public draft, not a final standard) proposes deprecating the
+  112-bit-strength quantum-vulnerable schemes after 2030 and disallowing all of them — Ed25519 and ECDSA included —
+  after 2035. A ledger kept for the multi-year retention windows of DORA, the CRA (technical documentation for at
+  least 10 years, Art. 13(13)) or eIDAS crosses that line. The `pqcrypto/` suite lets the **AP2 evidence format**
+  carry a hybrid classical + **ML-DSA-65** (FIPS 204) signature through the `cryptography` library, checked against
+  the NIST ACVP ML-DSA-65 signature-verification vectors; the core ledger, its signed tip and the generic evidence
+  pack are still Ed25519-only, as the threat model states — extending the hybrid signer to them is the planned step.
+  After 2035 an RFC 3161 token (itself RSA/ECDSA-signed) proves nothing on its own: hash-only anchors
+  (OpenTimestamps) and periodic re-timestamping are what keep an Ed25519-only ledger load-bearing, which is why
+  anchor coverage is part of the threat model.
+- **Transparency and receipts.** The IETF SCITT architecture is now **RFC 9943** (Proposed Standard, June 2026) and
+  COSE receipts are **RFC 9942**; this repository's receipts follow RFC 9942 (`vds`=1 RFC9162_SHA256, inclusion −1 /
+  consistency −2, alg EdDSA) and its monitor plays the role rekor-monitor and immudb's auditor play (append-only,
+  consistency over time; the blind window between two runs is declared). Registering signed statements with a SCITT
+  transparency service and obtaining its receipts is the natural next step and is not implemented yet.
+- **Qualified ledgers in the EU.** Commission Implementing Regulation (EU) 2025/2531 gives the requirements for
+  *qualified* electronic ledgers under eIDAS 2.0 (Art. 45l); `eidas_ledger_check.py` self-assesses a ledger against
+  them and says what only a QTSP can add. Being qualified is a status a QTSP holds, never something this code confers.
+- **Supply-chain formats.** CycloneDX 1.7 (ECMA-424, October 2025) is the current specification; the CRA evidence
+  packs attached to this project's releases are produced with the public **cra-evidence** tool (CycloneDX 1.6 by
+  choice — the stable schema with mature validators — Art. 14 clock, ENISA SRP fields) and signed with an AWS
+  KMS-held (HSM-backed) key whose public part ships with the release; the Transparency Exchange API (ECMA TC54) is the
+  distribution channel to watch.
+- **Verification without the producer.** The four verifiers in the differential oracle (Python, JavaScript, Go,
+  Rust) plus a reduced-scope Swift one exist so that the evidence outlives this codebase: an auditor in 2035 needs the
+  profile and one independent implementation, not this repository.
+
 ## Install (pip)
 
 ```bash
