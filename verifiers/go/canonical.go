@@ -212,7 +212,7 @@ func writeString(b *bytes.Buffer, s string) {
 func Payload(entry *Object) ([]byte, error) {
 	cp := &Object{Vals: map[string]any{}}
 	for _, k := range entry.Keys {
-		if k == "self_hash" || k == "signature" || k == "signer" {
+		if k == "self_hash" || k == "signature" || k == "signer" || k == "signature_pq" || k == "signer_pq" {
 			continue
 		}
 		cp.Keys = append(cp.Keys, k)

@@ -33,6 +33,10 @@ type TipCheck struct {
 	Why     string `json:"why"`
 	Trusted bool   `json:"trusted"`
 	Path    string `json:"tip_path,omitempty"`
+	// post-quantum layer: true only when the ML-DSA-65 signature verified against the trusted PQ key;
+	// false when absent/invalid/unchecked (never a silent green), with the reason in PQWhy
+	PQProtected *bool  `json:"pq_protected"` // nil = present but unchecked (no trusted PQ key): the Python tri-state
+	PQWhy       string `json:"pq_why,omitempty"`
 }
 
 const scope = "single-snapshot check of the cryptovalid profile (SPEC_EVIDENCE_FORMAT §3-4): self_hash recompute, " +
@@ -148,6 +152,12 @@ func VerifyLedger(r io.Reader) Verdict {
 // compares the snapshot with the signed chain tip: truncation, suffix rewrite and unsealed appends become named
 // failures. requireTip: a missing tip is a failure.
 func VerifyLedgerWithTip(ledgerPath, tipPath, trustedPubkeyHex string, requireTip bool, tipNotBefore, expectLedgerID string) Verdict {
+	return VerifyLedgerWithTipPQ(ledgerPath, tipPath, trustedPubkeyHex, "", requireTip, tipNotBefore, expectLedgerID)
+}
+
+// VerifyLedgerWithTipPQ is VerifyLedgerWithTip plus the trusted ML-DSA-65 key: when given, a tip without a valid
+// post-quantum signature is a FAIL (pq_missing / invalid); when empty, the PQ layer is reported as not protected.
+func VerifyLedgerWithTipPQ(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64 string, requireTip bool, tipNotBefore, expectLedgerID string) Verdict {
 	f, err := os.Open(ledgerPath)
 	if err != nil {
 		return Verdict{Verdict: "FAIL", Failures: []string{"open: " + err.Error()}, Scope: scope}
@@ -157,6 +167,16 @@ func VerifyLedgerWithTip(ledgerPath, tipPath, trustedPubkeyHex string, requireTi
 	if tipPath == "" {
 		if _, err := os.Stat(TipPath(ledgerPath)); err == nil {
 			tipPath = TipPath(ledgerPath)
+		}
+	}
+	if trustedPQPubkeyB64 != "" {
+		// a trusted post-quantum key is a REQUIREMENT: it implies a required tip and needs the trusted log key
+		// (council 15/09, Fable: PQ key alone returned before CheckTipPQ → PASS, a fail-open)
+		requireTip = true
+		if trustedPubkeyHex == "" {
+			v.Verdict = "FAIL"
+			v.Failures = append(v.Failures, "pq_key_without_log_key: -trusted-pq-pubkey needs -trusted-pubkey (the post-quantum layer sits on top of the Ed25519 tip, never instead of it)")
+			return v
 		}
 	}
 	if tipPath == "" {
@@ -180,6 +200,8 @@ func VerifyLedgerWithTip(ledgerPath, tipPath, trustedPubkeyHex string, requireTi
 	t, err := LoadTip(tipPath)
 	if err != nil {
 		tc.Why = err.Error()
+		f := false // unreadable tip: not protected (the Python reference says false here too)
+		tc.PQProtected = &f
 	} else {
 		first := v.FirstSelfHash
 		if v.Entries == 0 {
@@ -187,6 +209,16 @@ func VerifyLedgerWithTip(ledgerPath, tipPath, trustedPubkeyHex string, requireTi
 		}
 		tc.OK, tc.Why, tc.Trusted = CheckTip(v.Entries, first, v.LastSelfHash, t, trustedPubkeyHex, tipNotBefore, expectLedgerID)
 		tc.Checked = true
+		if tc.OK {
+			tc.PQProtected, tc.PQWhy = CheckTipPQ(t, trustedPQPubkeyB64)
+		} else {
+			f := false // hybrid = BOTH hold: a broken classical tip is never "post-quantum protected"
+			tc.PQProtected, tc.PQWhy = &f, "classical tip check failed first"
+		}
+		if trustedPQPubkeyB64 != "" && (tc.PQProtected == nil || !*tc.PQProtected) {
+			tc.OK = false
+			tc.Why = tc.Why + "; " + tc.PQWhy
+		}
 	}
 	v.Tip = tc
 	if !tc.OK {

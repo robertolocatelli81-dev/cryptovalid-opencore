@@ -174,7 +174,14 @@ def _summary_md(m: Dict) -> str:
 
 
 def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance evidence",
-               tsa_url: Optional[str] = None, sign_key: Optional[str] = None) -> Dict:
+               tsa_url: Optional[str] = None, sign_key: Optional[str] = None,
+               pq_pubkey_b64: Optional[str] = None, signer_pubkey_hex: Optional[str] = None) -> Dict:
+    """`pq_pubkey_b64` + `signer_pubkey_hex`: the ML-DSA-65 AND Ed25519 keys the hybrid ledgers must be signed with
+    (both pinned, or neither). Without them a ledger's `pq_protected` is recorded as null (present, unpinned) —
+    never true on a self-declared key (council 15/09). With them, a ledger whose layer does not verify makes the
+    build FAIL (council 16/09: a "hybrid pack" with a broken layer must not be written silently)."""
+    if pq_pubkey_b64 and not signer_pubkey_hex:   # asymmetric, like the library: the PQ key sits on top of the Ed25519 key
+        raise ValueError("pq_pubkey_b64 needs signer_pubkey_hex: hybrid means both keys are pinned (a classical pack may pin the Ed25519 key alone)")
     os.makedirs(out_dir, exist_ok=True)
     ledgers_meta: List[Dict] = []
     file_digests: Dict[str, str] = {}
@@ -189,9 +196,20 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
         entry = {"file": name, "entries": n_entries, "head_self_hash": head,   # commit vs TRONCAMENTO
                  "hash_verdict": rec.get("verdict"), "chain_integrity": rec.get("chain_integrity")}
         if _first_entry(dst).get("signature"):
-            sv = signer.verify_file(dst)
+            sv = signer.verify_file(dst, signer_pubkey_hex, pq_pubkey_b64)
+            if pq_pubkey_b64 and sv.get("pq_protected") is not True:
+                raise RuntimeError(f"{name}: the pinned post-quantum layer does not verify ({sv.get('pq_status')}): "
+                                   "refusing to write a hybrid pack with a broken layer")
             entry["signatures_ok"] = sv["ok"]
             entry["signers"] = sv["signers"]
+            # hybrid (0.12.0): true = every entry also carries a VALID ML-DSA-65 signature by the PINNED key
+            # (pq_pubkey_b64) and Ed25519 holds; null = present but unpinned / unverifiable here; false = absent or
+            # broken. The manifest itself is signed with Ed25519 only (manifest_signature): the flag is a
+            # per-ledger statement, not a post-quantum signature of the pack.
+            entry["pq_protected"] = sv.get("pq_protected", False)
+            entry["pq_status"] = sv.get("pq_status", "absent")
+            if sv.get("pq_signers"):
+                entry["pq_signers"] = sv["pq_signers"]
             signers.update(sv["signers"])
         ledgers_meta.append(entry)
     manifest = {
@@ -229,9 +247,18 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
             "manifest_signed": bool(sign_key)}
 
 
-def verify_pack(pack_dir: str) -> Dict:
+def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubkey_hex: Optional[str] = None,
+                manifest_signer_hex: Optional[str] = None) -> Dict:
     """Verifica INDIPENDENTE dell'intero pack (l'auditor non usa alcun vendor): digest dei file ==
-    manifest, manifest auto-consistente, ogni ledger passa hash + firme. Fail-closed."""
+    manifest, manifest auto-consistente, ogni ledger passa hash + firme. Fail-closed.
+    Post-quantum (council 16/09 round 2 — no circular pin): the layer is confirmed ONLY against keys the caller
+    pins — `pq_pubkey_b64` + `signer_pubkey_hex` directly, or the keys recorded in the manifest when the caller
+    pins the manifest signer (`manifest_signer_hex`) and the manifest signature verifies against it. Otherwise a
+    ledger marked `pq_protected: true` is reported null with `pq_reason: manifest_unpinned` (the pack is NOT
+    quantum-resistant on its own: its manifest is signed with Ed25519 only). A lost/invalid layer → sig_pass false
+    (`pq_layer_lost`); a host that cannot verify ML-DSA → sig_pass false (`pq_unverifiable`)."""
+    if pq_pubkey_b64 and not signer_pubkey_hex:
+        raise ValueError("pq_pubkey_b64 needs signer_pubkey_hex: hybrid means both keys are pinned (a classical pack may pin the Ed25519 key alone)")
     if _too_large(os.path.join(pack_dir, "MANIFEST.json")):
         return {"files_ok": False, "file_ok": {}, "manifest_ok": False, "manifest_authenticated": False,
                 "ledgers_ok": False, "ledgers": [], "rfc3161": {}, "valid": False,
@@ -271,13 +298,36 @@ def verify_pack(pack_dir: str) -> Dict:
         p = os.path.join(pack_dir, lm["file"])
         hp = os.path.exists(p) and verifier.verify_ledger(p).get("verdict") == "PASS"
         sp = True
+        pq, pq_reason = False, ""
         if _first_entry(p).get("signature"):
-            sp = signer.verify_file(p)["ok"]
+            expected_pq, expected_ed = pq_pubkey_b64, signer_pubkey_hex
+            # council 16/09 round 3: the manifest signature covers the DECLARED digest string; the body is bound to it
+            # only by manifest_ok — both must hold before any key recorded in the body is trusted, and the recorded
+            # keys must be exactly one well-formed string each (a malformed manifest is "not pinned", never an exception)
+            manifest_pinned = (bool(manifest_signer_hex) and manifest_authenticated and manifest_ok
+                               and man.get("manifest_signer") == manifest_signer_hex)
+            rec_pq, rec_ed = lm.get("pq_signers"), lm.get("signers")
+            rec_ok = (isinstance(rec_pq, list) and len(rec_pq) == 1 and isinstance(rec_pq[0], str) and signer._b64_strict(rec_pq[0], signer.PQ_PK_LEN) is not None
+                      and isinstance(rec_ed, list) and len(rec_ed) == 1 and isinstance(rec_ed[0], str) and signer._HEX64.fullmatch(rec_ed[0]))
+            if expected_pq is None and lm.get("pq_protected") is True and manifest_pinned and rec_ok:
+                expected_pq, expected_ed = rec_pq[0], rec_ed[0]   # pinned by a manifest the CALLER trusts, digest AND signature verified
+            sv = signer.verify_file(p, expected_ed, expected_pq)
+            sp = sv["ok"]
+            pq = sv.get("pq_protected", False)
+            if lm.get("pq_protected") is True and pq is not True:
+                if expected_pq is None:
+                    if sv.get("pq_status") in ("absent", "partial", "invalid"):
+                        pq_reason = "pq_" + sv["pq_status"]         # refuted by the file itself, whoever pins (round 3: never soften a fact)
+                    else:
+                        pq, pq_reason = None, "manifest_unpinned"   # nobody pinned a key: the claim is not confirmed, not refuted
+                else:
+                    sp = False        # the manifest promised a post-quantum layer and it cannot be confirmed now
+                    pq_reason = "pq_unverifiable" if sv.get("pq_status") == "unverifiable" else "pq_layer_lost"
         # FIX B — anti-troncamento: conteggio+testa devono combaciare col manifest
         n_entries, head = _entries_and_head(p)
         untruncated = (n_entries == lm.get("entries") and head == lm.get("head_self_hash"))
         ledger_results.append({"file": lm["file"], "hash_pass": hp, "sig_pass": sp,
-                               "untruncated": untruncated})
+                               "untruncated": untruncated, "pq_protected": pq, **({"pq_reason": pq_reason} if pq_reason else {})})
         ledgers_ok = ledgers_ok and hp and sp and untruncated
     files_ok = all(file_ok.values()) if file_ok else False
 

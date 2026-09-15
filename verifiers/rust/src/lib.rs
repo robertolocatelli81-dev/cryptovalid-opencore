@@ -14,7 +14,7 @@ use json::{canonical, Json, Parser};
 use std::collections::BTreeMap;
 
 pub const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-const ATTEST: [&str; 3] = ["self_hash", "signature", "signer"];
+const ATTEST: [&str; 5] = ["self_hash", "signature", "signer", "signature_pq", "signer_pq"]; // 0.12.0: ML-DSA-65 companion
 
 #[derive(Debug, PartialEq)]
 pub struct VerifyResult {

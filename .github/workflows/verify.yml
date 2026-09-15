@@ -119,7 +119,7 @@ jobs:
           cargo run -q --release --manifest-path verifiers/rust/Cargo.toml -- examples/sample_ledger.jsonl > /dev/null
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.27"   # crypto/mldsa (ML-DSA-65 hybrid tip) is stdlib since Go 1.27; older toolchains build the compat file (pq_unverifiable)
       - name: Go verifier + writer — race tests, shared vectors, rejects the tampered ledger
         run: |
           (cd verifiers/go && go test -race ./...)

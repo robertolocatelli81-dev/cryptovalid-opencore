@@ -50,7 +50,7 @@ const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const pubRaw = publicKey.export({ type: "spki", format: "der" }).subarray(-32);
 const signerHex = Buffer.from(pubRaw).toString("hex");
 function canonHash(entry) {
-  const d = {}; for (const k of Object.keys(entry).sort()) if (!["self_hash", "signature", "signer"].includes(k)) d[k] = entry[k];
+  const d = {}; for (const k of Object.keys(entry).sort()) if (!["self_hash", "signature", "signer", "signature_pq", "signer_pq"].includes(k)) d[k] = entry[k];
   // reuse the module's canonical by re-verifying a whole ledger below instead of duplicating here
   return d;
 }

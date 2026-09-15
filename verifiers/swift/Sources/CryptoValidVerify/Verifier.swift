@@ -20,7 +20,7 @@ public struct VerifyResult: Codable, Equatable {
 
 public enum CryptoValidVerifier {
     static let GENESIS = String(repeating: "0", count: 64)
-    static let ATTEST: Set<String> = ["self_hash", "signature", "signer"]
+    static let ATTEST: Set<String> = ["self_hash", "signature", "signer", "signature_pq", "signer_pq"] // 0.12.0: ML-DSA-65 companion
 
     static func canonicalPayload(_ entry: [String: JSONValue]) -> [UInt8] {
         var d = entry; for k in ATTEST { d.removeValue(forKey: k) }

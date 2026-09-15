@@ -178,7 +178,8 @@ def canonical_payload(entry: Dict) -> bytes:
     """Stringa canonica dell'entry per ricomputare self_hash. Esclude self_hash E le attestazioni
     aggiunte DOPO (signature/signer): il self_hash impegna il CONTENUTO, la firma impegna il self_hash.
     Così un ledger firmato supera comunque la verifica di hash stdlib-only, senza toccare le firme."""
-    d = {k: v for k, v in entry.items() if k not in ("self_hash", "signature", "signer")}
+    # attestation fields (outside the content hash): classical and, since 0.12.0, the ML-DSA-65 companion
+    d = {k: v for k, v in entry.items() if k not in ("self_hash", "signature", "signer", "signature_pq", "signer_pq")}
     return json.dumps(d, sort_keys=True, separators=(",", ":")).encode()
 
 
@@ -334,7 +335,8 @@ def _linkage_verify(entries: List[Dict], started: str, path: str) -> Optional[Di
 
 def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = None,
                   trusted_pubkey_hex: Optional[str] = None, require_tip: bool = False,
-                  tip_not_before: Optional[str] = None, expect_ledger_id: Optional[str] = None) -> Dict:
+                  tip_not_before: Optional[str] = None, expect_ledger_id: Optional[str] = None,
+                  trusted_pq_pubkey_b64: Optional[str] = None) -> Dict:
     """Verifica integrità del ledger. Restituisce receipt JSON-serializable.
 
     `tip`: path of a signed chain tip (cryptovalid_tip.py); None = use `<path>.tip.json` when it exists. With a
@@ -453,10 +455,18 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
     # Signed chain tip (15/09/2026): the only way a SNAPSHOT verifier can see tail truncation / suffix rewrite.
     tip_check: Optional[Dict] = None
     tip_file = tip if tip is not None else (path + ".tip.json" if os.path.exists(path + ".tip.json") else None)
+    if trusted_pq_pubkey_b64:
+        # a trusted post-quantum key is a REQUIREMENT: it implies a required tip, and it is meaningless without the
+        # trusted log key (council 15/09, Fable: PQ key alone → tip never checked → PASS, a fail-open)
+        require_tip = True
+        if not trusted_pubkey_hex:
+            chain_integrity = False
+            errors.append({"line": len(entries), "error": "pq_key_without_log_key: --trusted-pq-pubkey needs --trusted-pubkey "
+                                                            "(the post-quantum layer sits on top of the Ed25519 tip, never instead of it)"})
     if tip_file is not None and not trusted_pubkey_hex:
         # a tip is there but no trusted log key: it is NOT checked (the key inside the tip proves nothing), and
         # the verdict is the bare chain's — with require_tip that is a FAIL (council 15/09, Gemini: no fail-open)
-        tip_check = {"ok": False, "checked": False, "tip_path": tip_file,
+        tip_check = {"ok": False, "checked": False, "tip_path": tip_file, "pq_protected": None,   # not read: unknown
                      "error": "tip_untrusted: a signed tip is present but no trusted log key was given (--trusted-pubkey); "
                               "the tail limit applies in full"}
         if require_tip:
@@ -470,9 +480,10 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
             tip_check = _tip.check_tip(len(entries), last if isinstance(last, str) else "", _tip.load_tip(tip_file),
                                        trusted_pubkey_hex, tip_not_before,
                                        first_self_hash=first if isinstance(first, str) else "",
-                                       expect_ledger_id=expect_ledger_id)
+                                       expect_ledger_id=expect_ledger_id,
+                                       trusted_pq_pubkey_b64=trusted_pq_pubkey_b64)
         except (OSError, ValueError, ImportError) as e:
-            tip_check = {"ok": False, "error": f"tip_unreadable: {type(e).__name__}: {str(e)[:120]}"}
+            tip_check = {"ok": False, "error": f"tip_unreadable: {type(e).__name__}: {str(e)[:120]}", "pq_protected": False}
         tip_check["tip_path"] = tip_file
         tip_check["checked"] = True
         if not tip_check["ok"]:
@@ -555,6 +566,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--out", default=None, help="Scrivi receipt JSON anche su file")
     parser.add_argument("--tip", default=None, help="signed chain tip to check (default: <ledger>.tip.json if present)")
     parser.add_argument("--trusted-pubkey", default=None, help="log key (hex) the tip must be signed with")
+    parser.add_argument("--trusted-pq-pubkey", default=None,
+                        help="ML-DSA-65 log key (base64) a hybrid tip must ALSO be signed with (FAIL if missing/invalid)")
     parser.add_argument("--require-tip", action="store_true", help="FAIL when no signed tip is available")
     parser.add_argument("--tip-not-before", default=None, help="refuse a tip dated before this ISO-8601 instant (rollback)")
     parser.add_argument("--expect-ledger-id", default=None, help="the chain identity (self_hash of entry 0) you expect: refuses another ledger's pair")
@@ -563,7 +576,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         receipt = verify_ledger(args.ledger_path, algo=args.algo, tip=args.tip,
                                 trusted_pubkey_hex=args.trusted_pubkey, require_tip=args.require_tip,
-                                tip_not_before=args.tip_not_before, expect_ledger_id=args.expect_ledger_id)
+                                tip_not_before=args.tip_not_before, expect_ledger_id=args.expect_ledger_id,
+                                trusted_pq_pubkey_b64=args.trusted_pq_pubkey)
     except RecursionError as e:  # last-resort fail-closed: a receipt, never a traceback (2026-09-13).
         # Not labelled json_too_deep on purpose: here the cause is unknown (council review 13/09 —
         # a recursion bug in the verifier itself must not be disguised as a malformed input).

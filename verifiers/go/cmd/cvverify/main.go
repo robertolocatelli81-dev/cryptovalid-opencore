@@ -19,6 +19,7 @@ func main() {
 	req := flag.Bool("require-tip", false, "FAIL when no signed tip is available")
 	nb := flag.String("tip-not-before", "", "refuse a tip dated before this ISO-8601 instant (rollback)")
 	lid := flag.String("expect-ledger-id", "", "the chain identity (self_hash of entry 0) you expect")
+	pq := flag.String("trusted-pq-pubkey", "", "ML-DSA-65 log key (base64) a hybrid tip must also be signed with (FAIL if missing/invalid)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: cvverify [-tip f] [-trusted-pubkey hex] [-require-tip] [-tip-not-before iso] [-expect-ledger-id hex] <ledger.jsonl>")
 	}
@@ -31,7 +32,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	v := cv.VerifyLedgerWithTip(flag.Arg(0), *tip, *pk, *req, *nb, *lid)
+	v := cv.VerifyLedgerWithTipPQ(flag.Arg(0), *tip, *pk, *pq, *req, *nb, *lid)
 	out, _ := json.MarshalIndent(v, "", " ")
 	fmt.Println(string(out))
 	if v.Verdict == "PASS" {

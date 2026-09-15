@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const GENESIS_PREV = "0".repeat(64);
 const ALGOS = ["sha256", "sha3_256"];
-const ATTEST = new Set(["self_hash", "signature", "signer"]);
+const ATTEST = new Set(["self_hash", "signature", "signer", "signature_pq", "signer_pq"]); // 0.12.0: ML-DSA-65 companion fields
 
 // --- canonical JSON: identical to Python json.dumps(sort_keys=True,
 //     separators=(",",":"), ensure_ascii=True).
@@ -147,6 +147,11 @@ export function tipPayload(entries, ledgerId, tipSha256, ts) {
   return Buffer.from(`{"entries":${entries},"kind":"${TIP_KIND}","ledger_id":"${ledgerId}","tip_sha256":"${tipSha256}","ts":"${ts}"}`, "utf-8");
 }
 const HEX64 = /^[0-9a-f]{64}$/;
+const HEX128 = /^[0-9a-f]{128}$/, HEX6618 = /^[0-9a-f]{6618}$/;   // Ed25519 / ML-DSA-65 signatures, lowercase, no whitespace
+const b64Strict = (s, n) => {   // strict standard base64 of exactly n bytes (canonical re-encoding), else null
+  if (typeof s !== "string" || s.length !== Math.ceil(n / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return null;
+  const raw = Buffer.from(s, "base64"); return raw.length === n && raw.toString("base64") === s ? raw : null;
+};
 // The ONE timestamp profile of the three checkers, validated by HAND (review with Fable 5.1, 15/09/2026: Date.parse
 // silently rolled 2026-02-30 over to March, accepted hour 24 and year 0000; Date.UTC maps years 1-99 to 1900+y).
 // Returns the instant as the integer pair [epoch seconds, nanoseconds] — compared as a pair in the three checkers
@@ -168,36 +173,46 @@ export function parseInstant(s) {
 }
 export function instantBefore(a, b) { return a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]); }
 export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = null, notBefore = null, firstSelfHash = null, expectLedgerId = null) {
-  if (!tip || typeof tip !== "object" || Array.isArray(tip) || tip.kind !== TIP_KIND) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
-  for (const k of ["entries", "ledger_id", "tip_sha256", "ts", "signature_hex"]) if (!(k in tip)) return { ok: false, error: `tip_invalid: tip missing field ${k}` };
+  if (!tip || typeof tip !== "object" || Array.isArray(tip) || tip.kind !== TIP_KIND) return { ok: false, pq_protected: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
+  for (const k of ["entries", "ledger_id", "tip_sha256", "ts", "signature_hex"]) if (!(k in tip)) return { ok: false, pq_protected: false, error: `tip_invalid: tip missing field ${k}` };
   // strict types, same as Go's decoder: entries a non-negative integer, the rest strings
-  if (typeof tip.entries !== "number" || !Number.isInteger(tip.entries) || tip.entries < 0) return { ok: false, error: "tip_invalid: tip entries must be a non-negative integer" };
-  if (!["ledger_id", "tip_sha256", "ts", "signature_hex"].every((k) => typeof tip[k] === "string")) return { ok: false, error: "tip_invalid: tip fields must be strings" };
+  if (typeof tip.entries !== "number" || !Number.isInteger(tip.entries) || tip.entries < 0) return { ok: false, pq_protected: false, error: "tip_invalid: tip entries must be a non-negative integer" };
+  if (!["ledger_id", "tip_sha256", "ts", "signature_hex"].every((k) => typeof tip[k] === "string")) return { ok: false, pq_protected: false, error: "tip_invalid: tip fields must be strings" };
   // ONE timestamp profile in the three checkers: RFC 3339 with seconds and a zone (Z or ±hh:mm)
-  if (!HEX64.test(tip.ledger_id) || !HEX64.test(tip.tip_sha256) || parseInstant(tip.ts) === null) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
+  if (!HEX64.test(tip.ledger_id) || !HEX64.test(tip.tip_sha256) || parseInstant(tip.ts) === null) return { ok: false, pq_protected: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
+  if (!HEX128.test(tip.signature_hex)) return { ok: false, pq_protected: false, error: "tip_invalid: signature_hex must be 128 lowercase hex characters" };
+  // optional hybrid fields: when PRESENT they must be well-formed whoever checks them (same rule in Python/Go)
+  if ("signature_pq_hex" in tip || "log_pq_pubkey_b64" in tip) {
+    if (typeof tip.signature_pq_hex !== "string" || !HEX6618.test(tip.signature_pq_hex) || b64Strict(tip.log_pq_pubkey_b64, 1952) === null)
+      return { ok: false, pq_protected: false, error: "tip_invalid: malformed post-quantum fields (signature_pq_hex 6618 lowercase hex, log_pq_pubkey_b64 strict base64 of 1952 bytes)" };
+  }
   // the key inside the tip proves nothing: without the trusted log key there is NO verification (never a
   // "PASS but untrusted" an automation reads as exit 0 — council 15/09, Gemini)
-  if (!trustedPubkeyHex) return { ok: false, trusted: false, error: "tip_untrusted: no trusted log key given (--trusted-pubkey); the key inside the tip cannot be trusted" };
-  if (tip.log_pubkey_hex && tip.log_pubkey_hex !== trustedPubkeyHex) return { ok: false, error: "tip_invalid: tip log key differs from the trusted log key" };   // "" = absent, as in Python/Go
+  if (!trustedPubkeyHex) return { ok: false, pq_protected: false, trusted: false, error: "tip_untrusted: no trusted log key given (--trusted-pubkey); the key inside the tip cannot be trusted" };
+  if (tip.log_pubkey_hex && tip.log_pubkey_hex !== trustedPubkeyHex) return { ok: false, pq_protected: false, error: "tip_invalid: tip log key differs from the trusted log key" };   // "" = absent, as in Python/Go
   let sigOk = false;
   try {
     const key = createPublicKey({ key: Buffer.concat([SPKI, Buffer.from(trustedPubkeyHex, "hex")]), format: "der", type: "spki" });
     sigOk = edVerify(null, tipPayload(Number(tip.entries), tip.ledger_id, tip.tip_sha256, tip.ts), key, Buffer.from(tip.signature_hex, "hex"));
   } catch (e) { sigOk = false; }
-  if (!sigOk) return { ok: false, error: "tip_invalid: tip signature invalid" };
+  if (!sigOk) return { ok: false, pq_protected: false, error: "tip_invalid: tip signature invalid" };
   const n = Number(tip.entries), trusted = Boolean(trustedPubkeyHex);
-  if (expectLedgerId && tip.ledger_id !== expectLedgerId) return { ok: false, trusted, error: "ledger_id_mismatch: the tip belongs to a different ledger than the one you expect" };
-  if (firstSelfHash !== null && entriesCount > 0 && tip.ledger_id !== firstSelfHash) return { ok: false, trusted, error: "tip_of_another_ledger: the tip's ledger_id is not this file's first self_hash" };
+  if (expectLedgerId && tip.ledger_id !== expectLedgerId) return { ok: false, pq_protected: false, trusted, error: "ledger_id_mismatch: the tip belongs to a different ledger than the one you expect" };
+  if (firstSelfHash !== null && entriesCount > 0 && tip.ledger_id !== firstSelfHash) return { ok: false, pq_protected: false, trusted, error: "tip_of_another_ledger: the tip's ledger_id is not this file's first self_hash" };
   // ROLLBACK (declared): an older genuine tip restored after a truncation passes; notBefore refuses older tips
   if (notBefore) {   // instants, not strings (council 15/09, Opus): 'Z' / '+00:00' / other offsets of the same moment agree
     const a = parseInstant(tip.ts), b = parseInstant(notBefore);
-    if (b === null) return { ok: false, trusted, error: "bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm)" };   // the verifier's error, not the tip's
-    if (instantBefore(a, b)) return { ok: false, trusted, error: `tip_rolled_back: the tip is dated ${tip.ts}, before the required ${notBefore}` };
+    if (b === null) return { ok: false, pq_protected: false, trusted, error: "bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm)" };   // the verifier's error, not the tip's
+    if (instantBefore(a, b)) return { ok: false, pq_protected: false, trusted, error: `tip_rolled_back: the tip is dated ${tip.ts}, before the required ${notBefore}` };
   }
-  if (entriesCount < n) return { ok: false, trusted, error: `tail_truncated: file has ${entriesCount} entries, the signed tip commits to ${n}` };
-  if (entriesCount > n) return { ok: false, trusted, error: `unsealed_tail: file has ${entriesCount} entries, the signed tip commits to ${n} (appended after the last signed head)` };
-  if (lastSelfHash !== tip.tip_sha256) return { ok: false, trusted, error: "tail_rewritten: same entry count but the last self_hash differs from the signed tip" };
-  return { ok: true, trusted, entries: n, tip_sha256: tip.tip_sha256, ts: tip.ts };
+  if (entriesCount < n) return { ok: false, pq_protected: false, trusted, error: `tail_truncated: file has ${entriesCount} entries, the signed tip commits to ${n}` };
+  if (entriesCount > n) return { ok: false, pq_protected: false, trusted, error: `unsealed_tail: file has ${entriesCount} entries, the signed tip commits to ${n} (appended after the last signed head)` };
+  if (lastSelfHash !== tip.tip_sha256) return { ok: false, pq_protected: false, trusted, error: "tail_rewritten: same entry count but the last self_hash differs from the signed tip" };
+  // hybrid tip (0.12.0): this verifier has no ML-DSA-65 (Node 22 / OpenSSL 3.5): the post-quantum layer is NOT
+  // checked here — null when present (unverified, declared), false when absent. Python and Go verify it.
+  const pq_protected = typeof tip.signature_pq_hex === "string" && tip.signature_pq_hex ? null : false;
+  return { ok: true, trusted, entries: n, tip_sha256: tip.tip_sha256, ts: tip.ts, pq_protected,
+           pq_note: pq_protected === null ? "ML-DSA-65 signature present but NOT verified by this verifier (no ML-DSA in Node): use verifier.py / cvverify (Go) with --trusted-pq-pubkey" : "Ed25519-only tip (not quantum-resistant)" };
 }
 
 export function verifyLedger(text, { algo = null, pubkey = null, tip = null, trustedPubkey = null, requireTip = false, tipNotBefore = null, expectLedgerId = null } = {}) {

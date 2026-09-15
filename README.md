@@ -56,7 +56,7 @@ A self-hosted toolkit that turns compliance activities into **evidence anyone ca
 re-execute**:
 
 - append-only **hash-chained ledgers** (canonical JSON, SHA-256);
-- **Ed25519**-signed records;
+- **Ed25519**-signed records (optionally **hybrid Ed25519 + ML-DSA-65**, FIPS 204, since 0.12.0);
 - **RFC 3161** independent timestamps;
 - a **standalone verifier** (`verifier.py`, in this directory): one command, no
   server, no vendor — a third party replays the chain and reaches the same
@@ -179,8 +179,17 @@ python3 verifier.py       ledger.signed.jsonl                 # hash chain still
 python3 signer.py verify  ledger.signed.jsonl                 # signatures PASS (content->self_hash->signature)
 ```
 
-- The signature commits to each entry's `self_hash`; `signature`/`signer` are attestation fields
-  excluded from the content hash, so a signed ledger **still passes the stdlib hash verifier unchanged**.
+- The signature commits to each entry's `self_hash`; `signature`/`signer` (and the hybrid `signature_pq`/
+  `signer_pq`) are attestation fields excluded from the content hash, so a signed ledger **still passes the stdlib
+  hash verifier unchanged** — in all five verifiers.
+- **Hybrid post-quantum (0.12.0):** `keygen signer.key --pq` also writes `signer.key.pq` (ML-DSA-65, FIPS 204,
+  PKCS#8, 0600); `sign … --pq-key signer.key.pq` signs every `self_hash` with BOTH keys (re-signing without
+  `--pq-key` strips stale PQ fields); `verify … --pq-pubkey <b64>` requires the layer and exits 1 unless every entry
+  carries a valid ML-DSA-65 signature by THAT key (`--pq-pubkey` needs `--pubkey`, and `--require-pq` alone is
+  refused: a layer checked against the key inside the file is self-declared). The tip: `--trusted-pq-pubkey` on
+  `verifier.py` and on the Go `cvverify` (implies a required tip and needs `--trusted-pubkey`). Per-entry ML-DSA-65
+  is verified by Python only; the tip's by Python and Go. Needs `cryptography` ≥ 50 (Python) or Go ≥ 1.27; where a
+  REQUIRED layer cannot be verified the result is `pq_unverifiable` with `ok: false` / exit 1, never a green.
 - `signer verify` re-derives `self_hash` from the content too, so it catches content tampering on its
   own: the full chain is *content → self_hash → signature*.
 - **Optional layer, honest scope:** the core hash verifier stays **stdlib-only**; signatures need the
@@ -392,9 +401,25 @@ Adversarial testing (NEMESIS + an independent LLM red-team) found and CLOSED rea
 - **Signing-channel governance:** "non-exportable key" ≠ "custody service incompressible": whoever
   controls the KMS/HSM policy or unseal material can authorize signatures. Policy governance,
   rotation and revocation are part of the security perimeter.
-- **Not post-quantum:** Ed25519 signatures could be forgeable by a future quantum adversary; already-
-  published TSA anchors then become the load-bearing evidence, which makes anchor coverage part of
-  the security perimeter, not an optional extra.
+- **Post-quantum: hybrid, opt-in, pinned.** Since 0.12.0 ledger entries and the signed chain tip MAY carry an
+  **ML-DSA-65** (FIPS 204, pure mode with a domain context) signature next to Ed25519 over the same bytes
+  (`signer.py keygen --pq`, `sign --pq-key`, `cryptovalid_tip.py sign --pq-key`). The layer counts only when the
+  relying party PINS the ML-DSA-65 key (`--pq-pubkey`, `--trusted-pq-pubkey`, both of which REQUIRE the layer): then a
+  missing, foreign, malformed or invalid PQ signature is a FAIL, and `pq_protected: true` also needs every Ed25519
+  signature to hold. Without the pinned key a present layer is reported as `null` (verified against the key inside
+  the file, which anyone can put there), never `true`; an Ed25519-only ledger is still accepted, so stripping the
+  PQ fields is a downgrade the relying party's requirement refuses, not the file. Both keys must be pinned (the
+  library and the CLI refuse a PQ key without the Ed25519 key): with only the PQ key required, a re-signed Ed25519
+  layer by a foreign key would still verify. Who checks what: per-entry
+  ML-DSA-65 — **Python only** (`cryptography` ≥ 50); the tip's ML-DSA-65 — **Python and Go** (`crypto/mldsa`, Go ≥
+  1.27); JS, Rust and Swift verify the hash chain and (JS) Ed25519 only and say the PQ layer is unchecked. The evidence
+  pack is not quantum-resistant on its own: its manifest records `pq_protected` per ledger with the keys it was
+  built against, but the manifest signature is Ed25519 only, so `verify_pack` confirms the layer only against keys
+  the verifier pins (the ledger keys, or the manifest signer); with nothing pinned it reports `null`, never `true`.
+  The PQ private key lives on disk (PKCS#8, 0600): there is no KMS/HSM path for it yet, so its security is the
+  signing host's filesystem, not an HSM. Cost: about 4.4 KB of base64 signature and 2.6 KB of base64 public key per
+  entry. Already-published TSA anchors (RSA/ECDSA) do not survive a quantum adversary either, which keeps hash-only
+  anchor coverage part of the security perimeter.
 
 Honest scope unchanged: the format proves *what/when/order/who-signed + non-alteration*, **not the truth
 of the recorded facts**, and is **not** an HSM or a legal-compliance certification.
@@ -450,6 +475,9 @@ Python, JS or Go verifier. `vectors.json` (generated by Python) is the single by
 languages; on a 200-row audit-log ledger and 6003 enumerated tampers the three verifiers give identical
 verdicts. Two profile rules made explicit the same day in all three: nesting > 512 and unpaired UTF-16
 surrogates are refused fail-closed (`spec/CONFORMANCE.md`).
+Since 0.12.0 `cvverify -trusted-pq-pubkey <b64>` also checks the **ML-DSA-65** signature of a hybrid tip with the
+standard library (`crypto/mldsa`, **Go ≥ 1.27**); a binary built with an older toolchain answers `pq_unverifiable`
+(a FAIL when the key is required), never a silent pass.
 
 ## Receipts, monitor, eIDAS 2.0 self-assessment, JWS (2026-09-13)
 
@@ -570,8 +598,9 @@ What will change under an evidence ledger written today, and what this repositor
   after 2035. A ledger kept for the multi-year retention windows of DORA, the CRA (technical documentation for at
   least 10 years, Art. 13(13)) or eIDAS crosses that line. The `pqcrypto/` suite lets the **AP2 evidence format**
   carry a hybrid classical + **ML-DSA-65** (FIPS 204) signature through the `cryptography` library, checked against
-  the NIST ACVP ML-DSA-65 signature-verification vectors; the core ledger, its signed tip and the generic evidence
-  pack are still Ed25519-only, as the threat model states — extending the hybrid signer to them is the planned step.
+  the NIST ACVP ML-DSA-65 signature-verification vectors; since **0.12.0** the core ledger entries, the signed chain
+  tip carry the same hybrid Ed25519 + ML-DSA-65 layer and the evidence-pack manifest records it per ledger (threat
+  model above: opt-in, pinned by the relying party's PQ key; entries checked by Python, the tip by Python and Go).
   After 2035 an RFC 3161 token (itself RSA/ECDSA-signed) proves nothing on its own: hash-only anchors
   (OpenTimestamps) and periodic re-timestamping are what keep an Ed25519-only ledger load-bearing, which is why
   anchor coverage is part of the threat model.

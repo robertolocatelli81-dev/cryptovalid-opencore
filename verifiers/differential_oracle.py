@@ -55,6 +55,17 @@ def verdict(cmd, path, extra=(), flags_first=False):
         return "NONJSON/CRASH"
 
 
+def tip_pq(cmd, path, extra=(), flags_first=False):
+    """The tri-state `pq_protected` of the tip check (True/False/None), or 'ABSENT' when no tip object is reported."""
+    args = cmd + (list(extra) + [path] if flags_first else [path] + list(extra))
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, timeout=30)
+        t = json.loads(out.stdout).get("tip")
+        return "ABSENT" if not isinstance(t, dict) or "pq_protected" not in t else t["pq_protected"]
+    except Exception:
+        return "NONJSON/CRASH"
+
+
 CORPUS = {
     "valid-string-amount": valid_entry({"amount": "10.00"}),
     "valid-int": valid_entry({"n": 42}),
@@ -134,7 +145,38 @@ def _tip_case():
         return json.dumps({"kind": T.KIND, "entries": entries, "ledger_id": ledger_id, "tip_sha256": tip_sha256, "ts": ts,
                            "log_pubkey_hex": pk, "signature_hex": sig})
     full = "".join(json.dumps(e) + "\n" for e in chain)
-    return {"text": "".join(json.dumps(e) + "\n" for e in chain[:2]), "tip": tip, "pubkey": pk, "full": full,
+    # HYBRID Ed25519 + ML-DSA-65 (0.12.0): entries and tip carry a post-quantum companion signature. The hash
+    # verifiers must all ignore the new attestation fields (signature_pq/signer_pq); the PQ layer of the tip is
+    # checked by Python and Go (crypto/mldsa) only — JS/Rust/Swift declared (Node 22 / OpenSSL 3.5 has no ML-DSA).
+    hybrid = {}
+    try:
+        pq = signer.keygen_pq(os.path.join(d, "k.pq"))["public_key_b64"]
+        hs = os.path.join(d, "h.jsonl")
+        signer.sign_ledger(led, hs, os.path.join(d, "k"), pq_keyfile=os.path.join(d, "k.pq"))
+        with open(hs) as f:
+            hybrid["hybrid_full"] = f.read()
+        tip_h = T.write_tip(os.path.join(d, "t.json"), os.path.join(d, "k"), 3, chain[0]["self_hash"], chain[2]["self_hash"],
+                            "2026-09-15T07:00:00+00:00", pq_keyfile=os.path.join(d, "k.pq"))
+        bad = dict(tip_h); s_ = bytearray(bytes.fromhex(bad["signature_pq_hex"])); s_[7] ^= 1; bad["signature_pq_hex"] = s_.hex()
+        # council 15/09: hostile TYPES / formats in the optional PQ fields, and a lax hex decoder on signature_hex —
+        # measured: three verdicts on one file (Python ok, Go unreadable, JS pq false). Now tip_invalid everywhere.
+        cls = signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T07:00:00+00:00")
+        cls_d = json.loads(cls)
+        hybrid.update({"pq_pubkey": pq, "tip_hybrid": json.dumps(tip_h), "tip_hybrid_bad_pq": json.dumps(bad),
+                       "tip_classical": cls,
+                       "tip_pq_int": json.dumps(dict(tip_h, signature_pq_hex=123)),
+                       "tip_pq_null": json.dumps(dict(tip_h, signature_pq_hex=None)),     # round 2: Go mapped null → "" → absent
+                       "tip_pq_empty": json.dumps(dict(tip_h, signature_pq_hex="")),
+                       # round 3: Go's encoding/json matches struct tags case-insensitively — a case-variant key must be
+                       # IGNORED like Python/JS do (classical tip, PASS), not read as the PQ field
+                       "tip_pq_case": json.dumps(dict(cls_d, Signature_PQ_Hex=tip_h["signature_pq_hex"], Log_PQ_Pubkey_B64=tip_h["log_pq_pubkey_b64"])),
+                       "tip_pq_short": json.dumps(dict(tip_h, signature_pq_hex="abcd")),
+                       "tip_pq_badkey": json.dumps(dict(tip_h, log_pq_pubkey_b64="!!!!")),
+                       "tip_sig_upper": json.dumps(dict(cls_d, signature_hex=cls_d["signature_hex"].upper())),
+                       "tip_sig_space": json.dumps(dict(cls_d, signature_hex=cls_d["signature_hex"][:2] + " " + cls_d["signature_hex"][3:]))})
+    except Exception as e:  # noqa: BLE001 — cryptography < 50: the hybrid cases are skipped, and SAID
+        print("  hybrid (ML-DSA-65) cases NOT measured (%s: %s)" % (type(e).__name__, str(e)[:80]))
+    return {"text": "".join(json.dumps(e) + "\n" for e in chain[:2]), "tip": tip, "pubkey": pk, "full": full, **hybrid,
             "tip_garbage_ts": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "garbage"),
             "tip_upper_hex": signed(3, chain[0]["self_hash"].upper(), chain[2]["self_hash"], "2026-09-15T07:00:00+00:00"),
             # review with Fable 5.1 (15/09): validly signed, oddly formatted — Python/JS PASSED, Go refused
@@ -206,6 +248,25 @@ if TIP_CASE:
             "intact chain, SIGNED tip outside the profile (ts not RFC 3339 with seconds+zone / uppercase hex): "
             "tip_invalid on Python/JS/Go, unchecked by Rust/Swift (declared)")
     # tip-empty-pubkey, tip-frac4-ok, tip-leapday-ok: valid everywhere → must AGREE (PASS)
+    if TIP_CASE.get("pq_pubkey"):
+        CORPUS["hybrid-entries-valid"] = TIP_CASE["hybrid_full"].rstrip("\n")   # new attestation fields: PASS everywhere
+        TIP_CASES["hybrid-tip-valid"] = (TIP_CASE["hybrid_full"], TIP_CASE["tip_hybrid"])
+        TIP_CASES["hybrid-tip-bad-pq"] = (TIP_CASE["hybrid_full"], TIP_CASE["tip_hybrid_bad_pq"])
+        TIP_CASES["hybrid-tip-pq-required-missing"] = (TIP_CASE["hybrid_full"], TIP_CASE["tip_classical"])
+        for hostile in ("tip_pq_int", "tip_pq_null", "tip_pq_empty", "tip_pq_short", "tip_pq_badkey", "tip_sig_upper", "tip_sig_space", "tip_pq_case"):
+            TIP_CASES[hostile.replace("_", "-")] = (TIP_CASE["hybrid_full"], TIP_CASE[hostile])
+        for name in ("hybrid-tip-valid", "hybrid-tip-bad-pq", "hybrid-tip-pq-required-missing",
+                     "tip-pq-int", "tip-pq-null", "tip-pq-empty", "tip-pq-short", "tip-pq-badkey", "tip-sig-upper", "tip-sig-space", "tip-pq-case"):
+            CORPUS[name] = TIP_CASES[name][0].rstrip("\n")   # tip-pq-case: PASS everywhere, pq_protected False everywhere (must AGREE)
+        for name in ("tip-pq-int", "tip-pq-null", "tip-pq-empty", "tip-pq-short", "tip-pq-badkey", "tip-sig-upper", "tip-sig-space"):
+            DECLARED_DIVERGENCE[name] = ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "PASS", "swift": "PASS"},
+                                         "malformed optional PQ field / lax hex in a signed tip: tip_invalid on Python/JS/Go, unchecked by Rust/Swift (declared)")
+        # hybrid-tip-valid: PASS everywhere (must AGREE). The two negatives: Python/Go check the PQ layer against the
+        # trusted ML-DSA-65 key (FAIL: invalid / pq_missing); JS, Rust and Swift cannot (declared, never counted as interop)
+        for name, why in (("hybrid-tip-bad-pq", "tampered ML-DSA-65 tip signature: FAIL on Python/Go (crypto/mldsa), unchecked by JS/Rust/Swift (declared: no ML-DSA)"),
+                          ("hybrid-tip-pq-required-missing", "trusted ML-DSA-65 key given, Ed25519-only tip: pq_missing on Python/Go, unchecked by JS/Rust/Swift (declared)")):
+            DECLARED_DIVERGENCE[name] = ({"python": "FAIL", "js": "PASS", "go": "FAIL", "rust": "PASS", "swift": "PASS"}, why)
+PQ_CASES = {"hybrid-tip-valid", "hybrid-tip-bad-pq", "hybrid-tip-pq-required-missing"}
 
 
 def _matches(expected, got):
@@ -242,9 +303,22 @@ def main():
             if name in TIP_CASES:
                 pk = TIP_CASE["pubkey"]
                 extra = {"python": ["--trusted-pubkey", pk], "js": ["--trusted-pubkey", pk], "go": ["-trusted-pubkey", pk]}
+                if name in PQ_CASES:
+                    extra["python"] += ["--trusted-pq-pubkey", TIP_CASE["pq_pubkey"]]
+                    extra["go"] += ["-trusted-pq-pubkey", TIP_CASE["pq_pubkey"]]
             verdicts = {k: verdict(cmd, p, extra.get(k, ()), flags_first=(k == "go")) for k, cmd in available.items()}
             uniq = set(verdicts.values())
             ok = len(uniq) == 1
+            # the PQ tri-state must agree between the two verifiers that CHECK it (Python, Go); JS reports
+            # null-when-present / false-when-absent and must never say true (council 15/09: the oracle compared
+            # verdicts only, so Go's bool-instead-of-null was invisible)
+            if name in TIP_CASES and "python" in available and "go" in available:
+                pq_py = tip_pq(available["python"], p, extra.get("python", ()))
+                pq_go = tip_pq(available["go"], p, extra.get("go", ()), flags_first=True)
+                pq_js = tip_pq(available["js"], p, extra.get("js", ())) if "js" in available else None
+                if pq_py != pq_go or pq_js is True:
+                    disagreements += 1
+                    print(f"  [DIFF] {name:22} pq_protected python={pq_py!r} go={pq_go!r} js={pq_js!r}")
             if not ok and name in DECLARED_DIVERGENCE:
                 expected, why = DECLARED_DIVERGENCE[name]
                 if all(_matches(expected.get(k), verdicts[k]) for k in verdicts):

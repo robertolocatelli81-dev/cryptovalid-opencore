@@ -4,6 +4,7 @@ package cryptovalid
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,13 @@ type Tip struct {
 	TS           string `json:"ts"`
 	LogPubkeyHex string `json:"log_pubkey_hex"`
 	SignatureHex string `json:"signature_hex"`
+	// hybrid tip (0.12.0): the SAME payload bytes signed with ML-DSA-65 (FIPS 204) — checked with the trusted
+	// post-quantum key (crypto/mldsa, Go standard library); absent or unchecked = not post-quantum protected
+	SignaturePQHex string `json:"signature_pq_hex,omitempty"`
+	LogPQPubkeyB64 string `json:"log_pq_pubkey_b64,omitempty"`
+	// PQFieldsPresent: one of the two optional fields exists in the document (even as null / "" / a wrong type):
+	// then both must be well-formed, as in Python/JS. json.Unmarshal into string maps null to "" (council 16/09).
+	PQFieldsPresent bool `json:"-"`
 }
 
 // TipPath is the sidecar next to the ledger.
@@ -43,8 +51,11 @@ func TipPayload(entries int, ledgerID, tipSHA256, ts string) []byte {
 
 // the payload is built by Sprintf (no JSON escaping): only hex and a plain ISO-8601 timestamp are admitted,
 // anything else would not be the reference bytes (council 15/09, Sonnet)
-func isHex64(s string) bool {
-	if len(s) != 64 {
+func isHex64(s string) bool { return isHexN(s, 64) }
+
+// isHexN: exactly n LOWERCASE hex digits (no whitespace, no uppercase — hex.DecodeString would take "AB")
+func isHexN(s string, n int) bool {
+	if len(s) != n {
 		return false
 	}
 	for _, c := range s {
@@ -206,8 +217,12 @@ func AppendSigned(path string, ts time.Time, data any, algo string, key ed25519.
 // first = this file's first self_hash (Genesis for an empty file); expectLedgerID ("" = no check) = the chain the
 // relying party expects, out of band — the only defence against a whole pair file+tip of another ledger.
 func CheckTip(entries int, first, last string, t *Tip, trustedPubkeyHex, notBefore, expectLedgerID string) (ok bool, why string, trusted bool) {
-	if t == nil || t.Kind != TipKind || t.SignatureHex == "" || !isHex64(t.TipSHA256) || !isHex64(t.LedgerID) || !plainTS(t.TS) || t.Entries < 0 {
+	if t == nil || t.Kind != TipKind || !isHexN(t.SignatureHex, 128) || !isHex64(t.TipSHA256) || !isHex64(t.LedgerID) || !plainTS(t.TS) || t.Entries < 0 {
 		return false, "tip_invalid: not a cryptovalid_tip/1 document", false
+	}
+	// optional hybrid fields: when PRESENT they must be well-formed whoever checks them (same rule in Python/JS)
+	if (t.PQFieldsPresent || t.SignaturePQHex != "" || t.LogPQPubkeyB64 != "") && !pqFieldsWellFormed(t) {
+		return false, "tip_invalid: malformed post-quantum fields (signature_pq_hex 6618 lowercase hex, log_pq_pubkey_b64 strict base64 of 1952 bytes)", false
 	}
 
 	// the key inside the tip proves nothing: without the trusted log key there is NO verification (never a
@@ -264,6 +279,23 @@ func LoadTip(path string) (*Tip, error) {
 	if err := json.Unmarshal(raw, &t); err != nil {
 		return nil, fmt.Errorf("tip_unreadable: %w", err)
 	}
+	// the optional PQ fields are read CASE-SENSITIVELY from the raw map (encoding/json matches struct tags
+	// case-insensitively: "Signature_PQ_Hex" would fill the field here and be ignored by Python/JS — round 3);
+	// present but not a JSON string = present and malformed
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		return nil, fmt.Errorf("tip_unreadable: %w", err)
+	}
+	t.SignaturePQHex, t.LogPQPubkeyB64 = "", ""
+	ra, a := keys["signature_pq_hex"]
+	rb, b := keys["log_pq_pubkey_b64"]
+	t.PQFieldsPresent = a || b
+	if a {
+		_ = json.Unmarshal(ra, &t.SignaturePQHex) // a non-string stays "" → malformed
+	}
+	if b {
+		_ = json.Unmarshal(rb, &t.LogPQPubkeyB64)
+	}
 	return &t, nil
 }
 
@@ -274,4 +306,24 @@ func formatTS(ts time.Time) string {
 		return u.Format("2006-01-02T15:04:05+00:00")
 	}
 	return u.Format("2006-01-02T15:04:05.999999999+00:00")
+}
+
+// pqFieldsWellFormed: signature_pq_hex = 6618 lowercase hex (3309-byte ML-DSA-65 signature), log_pq_pubkey_b64 =
+// strict standard base64 of 1952 bytes (canonical: re-encodes to the same string).
+func pqFieldsWellFormed(t *Tip) bool {
+	if !isHexN(t.SignaturePQHex, 6618) {
+		return false
+	}
+	return decodeB64Strict(t.LogPQPubkeyB64, 1952) != nil
+}
+
+func decodeB64Strict(s string, n int) []byte {
+	if len(s) != ((n+2)/3)*4 {
+		return nil
+	}
+	raw, err := base64.StdEncoding.Strict().DecodeString(s)
+	if err != nil || len(raw) != n || base64.StdEncoding.EncodeToString(raw) != s {
+		return nil
+	}
+	return raw
 }
