@@ -142,7 +142,18 @@ def _tip_case():
             "tip_no_seconds_ts": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T09:00+02:00"),
             # and the mirror: an EMPTY log_pubkey_hex was tip_invalid in Python, ok in Go/JS → now "absent" everywhere
             "tip_empty_pubkey": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T07:00:00+00:00").replace(
-                '"log_pubkey_hex": "%s"' % pk, '"log_pubkey_hex": ""')}
+                '"log_pubkey_hex": "%s"' % pk, '"log_pubkey_hex": ""'),
+            # VALUE layer (review with Fable 5.1, 15/09, measured: JS rolled 02-30 over, accepted 24:00 and year 0000;
+            # Go accepted a comma fraction, 10 digits, +24:00). One hand-written validator now, enumerated here.
+            "tip_feb30": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-02-30T10:25:00Z"),
+            "tip_hour24": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T24:00:00Z"),
+            "tip_year0": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "0000-01-01T00:00:00Z"),
+            "tip_comma_frac": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T10:25:00,5Z"),
+            "tip_frac10": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T10:25:00.1234567890Z"),
+            "tip_off24": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T10:25:00+24:00"),
+            "tip_leap60": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T10:25:60Z"),
+            "tip_frac4_ok": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T10:25:00.1234Z"),
+            "tip_leapday_ok": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2024-02-29T23:59:59-11:30")}
 
 
 TIP_CASE = _tip_case()
@@ -153,19 +164,29 @@ if TIP_CASE:
                  "tip-upper-hex": (TIP_CASE["full"], TIP_CASE["tip_upper_hex"]),
                  "tip-date-only-ts": (TIP_CASE["full"], TIP_CASE["tip_date_only_ts"]),
                  "tip-no-seconds-ts": (TIP_CASE["full"], TIP_CASE["tip_no_seconds_ts"]),
-                 "tip-empty-pubkey": (TIP_CASE["full"], TIP_CASE["tip_empty_pubkey"])}
+                 "tip-empty-pubkey": (TIP_CASE["full"], TIP_CASE["tip_empty_pubkey"]),
+                 "tip-feb30": (TIP_CASE["full"], TIP_CASE["tip_feb30"]),
+                 "tip-hour24": (TIP_CASE["full"], TIP_CASE["tip_hour24"]),
+                 "tip-year0": (TIP_CASE["full"], TIP_CASE["tip_year0"]),
+                 "tip-comma-frac": (TIP_CASE["full"], TIP_CASE["tip_comma_frac"]),
+                 "tip-frac10": (TIP_CASE["full"], TIP_CASE["tip_frac10"]),
+                 "tip-off24": (TIP_CASE["full"], TIP_CASE["tip_off24"]),
+                 "tip-leap60": (TIP_CASE["full"], TIP_CASE["tip_leap60"]),
+                 "tip-frac4-ok": (TIP_CASE["full"], TIP_CASE["tip_frac4_ok"]),
+                 "tip-leapday-ok": (TIP_CASE["full"], TIP_CASE["tip_leapday_ok"])}
     for name, (text, _) in TIP_CASES.items():
         CORPUS[name] = text.rstrip("\n")
     DECLARED_DIVERGENCE["tip-truncated"] = (
         {"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "PASS", "swift": "PASS"},
         "tail truncated but a signed chain tip sits next to the file: checked by Python/JS/Go (tail_truncated), "
         "not by Rust/Swift (declared: no Ed25519 without dependencies)")
-    for name in ("tip-garbage-ts", "tip-upper-hex", "tip-date-only-ts", "tip-no-seconds-ts"):
+    for name in ("tip-garbage-ts", "tip-upper-hex", "tip-date-only-ts", "tip-no-seconds-ts",
+                 "tip-feb30", "tip-hour24", "tip-year0", "tip-comma-frac", "tip-frac10", "tip-off24", "tip-leap60"):
         DECLARED_DIVERGENCE[name] = (
             {"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "PASS", "swift": "PASS"},
             "intact chain, SIGNED tip outside the profile (ts not RFC 3339 with seconds+zone / uppercase hex): "
             "tip_invalid on Python/JS/Go, unchecked by Rust/Swift (declared)")
-    # tip-empty-pubkey: valid everywhere (the trusted key is given; "" = absent) → must AGREE (PASS)
+    # tip-empty-pubkey, tip-frac4-ok, tip-leapday-ok: valid everywhere → must AGREE (PASS)
 
 
 def _matches(expected, got):

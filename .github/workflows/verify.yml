@@ -11,12 +11,15 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11"]   # pyproject declares >=3.9: the reference must hold on the floor too (review with Fable, 15/09)
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install optional deps (hash verifier itself is stdlib-only) + a REAL PKCS#11 HSM bench
         run: |

@@ -83,13 +83,29 @@ func TestTipMovesTheTailLimit(t *testing.T) {
 	if _, err := SignTip(p, key, time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
-	for _, same := range []string{"2026-09-15T10:00:00Z", "2026-09-15T10:00:00+00:00", "2026-09-15T12:00:00+02:00", "2026-09-15T10:00:00"} { // notBefore may be naive (UTC); the TIP's ts must carry a zone
+	for _, same := range []string{"2026-09-15T10:00:00Z", "2026-09-15T10:00:00+00:00", "2026-09-15T12:00:00+02:00", "2026-09-15T09:59:59.5Z"} {
 		if v := VerifyLedgerWithTip(p, "", pk, true, same, ""); v.Verdict != "PASS" {
 			t.Fatalf("same instant %q refused: %+v", same, v)
 		}
 	}
 	if v := VerifyLedgerWithTip(p, "", pk, true, "2026-09-15T10:00:01Z", ""); v.Verdict != "FAIL" {
 		t.Fatalf("later not-before accepted: %+v", v)
+	}
+	for _, bad := range []string{"2026-09-15", "2026-09-15T10:00:00", "x"} { // same profile for the verifier's argument
+		if v := VerifyLedgerWithTip(p, "", pk, true, bad, ""); v.Verdict != "FAIL" || !strings.Contains(v.Tip.Why, "bad_not_before") {
+			t.Fatalf("not-before %q not named bad_not_before: %+v", bad, v)
+		}
+	}
+	// value-layer profile by hand, identical in the three checkers (review with Fable 5.1)
+	for _, bad := range []string{"2026-02-30T10:25:00Z", "2026-09-15T24:00:00Z", "0000-01-01T00:00:00Z", "2026-09-15T10:25:00,5Z", "2026-09-15T10:25:00.1234567890Z", "2026-09-15T10:25:00+24:00", "2026-09-15T10:25:60Z", "2023-02-29T00:00:00Z"} {
+		if _, err := parseInstant(bad); err == nil {
+			t.Fatalf("ts %q accepted by the hand-written validator", bad)
+		}
+	}
+	for _, good := range []string{"2024-02-29T23:59:59Z", "2026-09-15T10:00:00.1234Z", "2026-09-15T10:00:00.123456789-11:30", "9999-12-31T23:59:59+23:59"} {
+		if _, err := parseInstant(good); err != nil {
+			t.Fatalf("ts %q refused: %v", good, err)
+		}
 	}
 	os.WriteFile(p, []byte(strings.Join(lines[:4], "")), 0o600)
 	if _, err := SignTip(p, other, ts); err != nil {

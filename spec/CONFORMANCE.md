@@ -77,7 +77,12 @@ python3 conformance.py     # exit 0 = conformant
   nothing): the verdict is the bare chain's, and a required tip is a FAIL — never a "PASS but untrusted" an
   automation would read as exit 0; (5) `--tip-not-before` compares INSTANTS (ISO-8601 with `Z`, an offset, or
   naive = UTC), never strings; (6) formats are strict and identical in the three checkers — `ledger_id` and
-  `tip_sha256` 64 lowercase hex, `ts` **RFC 3339 with seconds and a zone** (`Z` or `±hh:mm`; optional fraction),
+  `tip_sha256` 64 lowercase hex, `ts` **RFC 3339 with seconds and a zone** (`Z` or `±hh:mm`; optional fraction of 1-9 digits) — validated by
+  a HAND-WRITTEN range check identical in the three checkers (year 0001-9999, real calendar day with leap years,
+  hour 0-23, minute/second 0-59, offset 00:00-23:59), never by a library date parser: until 0.11.2 the format rule
+  was shared but `fromisoformat` / `Date.parse` / `time.Parse` disagreed on `2026-02-30`, hour `24`, year `0000`,
+  a comma fraction, a 10-digit fraction and offset `+24:00` (measured, oracle cases `tip-feb30` … `tip-leap60`);
+  `--tip-not-before` follows the same profile in the three checkers,
   `entries` a non-negative integer, an empty `log_pubkey_hex` = absent — a SIGNED tip outside the profile is
   `tip_invalid` (oracle cases `tip-garbage-ts`, `tip-upper-hex`, `tip-date-only-ts`, `tip-no-seconds-ts`: FAIL on
   Python/JS/Go, unchecked by Rust/Swift, declared; `tip-empty-pubkey`: PASS everywhere). A malformed

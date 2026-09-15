@@ -119,10 +119,25 @@ class TestTip(unittest.TestCase):
         self.assertEqual(r["verdict"], "FAIL"); self.assertIn("tip_rolled_back", self._errors(r))
         # instants, not strings (council R2, Opus): 'Z' form and a different offset of the SAME instant
         _write(self.led, self.base); T.sign_tip(self.led, self.k, ts="2026-09-15T10:00:00+00:00")
-        for same in ("2026-09-15T10:00:00Z", "2026-09-15T10:00:00+00:00", "2026-09-15T12:00:00+02:00", "2026-09-15T10:00:00"):
+        for same in ("2026-09-15T10:00:00Z", "2026-09-15T10:00:00+00:00", "2026-09-15T12:00:00+02:00", "2026-09-15T09:59:59.5Z"):
             self.assertEqual(self._v(tip_not_before=same)["verdict"], "PASS", same)
         self.assertEqual(self._v(tip_not_before="2026-09-15T10:00:01Z")["verdict"], "FAIL")
-        self.assertEqual(self._v(tip_not_before="not-a-date")["verdict"], "FAIL")
+        # the verifier's argument follows the SAME profile as the tip (Gemini: py/js took a date-only, Go did not)
+        for bad in ("not-a-date", "2026-09-15", "2026-09-15T10:00:00", "2026-09-15T10:00Z"):
+            r = self._v(tip_not_before=bad); self.assertEqual(r["verdict"], "FAIL", bad); self.assertIn("bad_not_before", self._errors(r))
+        # VALUE-layer profile, by hand and identical in the three checkers (review with Fable 5.1): impossible
+        # dates, hour 24, year 0000, comma / 10-digit fraction, offset +24:00 are tip_invalid; 4-digit fraction ok
+        _write(self.led, self.base)
+        for bad_ts in ("2026-02-30T10:25:00Z", "2026-04-31T10:25:00Z", "2026-09-15T24:00:00Z", "0000-01-01T00:00:00Z",
+                       "2026-09-15T10:25:60Z", "2026-09-15T10:25:00,5Z", "2026-09-15T10:25:00.1234567890Z",
+                       "2026-09-15T10:25:00+24:00", "2026-09-15T10:25:00+05:60"):
+            T.sign_tip(self.led, self.k, ts=bad_ts)
+            r = self._v(); self.assertEqual(r["verdict"], "FAIL", bad_ts); self.assertIn("tip_invalid", self._errors(r))
+        for ok_ts in ("2024-02-29T23:59:59Z", "2026-09-15T10:00:00.1234Z", "2026-09-15T10:00:00.123456789-11:30", "9999-12-31T23:59:59+23:59"):
+            T.sign_tip(self.led, self.k, ts=ok_ts)
+            self.assertEqual(self._v()["verdict"], "PASS", ok_ts)
+        with self.assertRaises(ValueError):
+            T.parse_instant("2023-02-29T00:00:00Z")   # not a leap year
         d = json.load(open(self.led + ".tip.json"))
         for bad in ("20", 20.0, True):
             json.dump(dict(d, entries=bad), open(self.led + ".tip.json", "w"))

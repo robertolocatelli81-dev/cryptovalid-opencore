@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -53,13 +55,58 @@ func isHex64(s string) bool {
 	return true
 }
 
-// plainTS = the ONE timestamp profile of the three checkers: RFC 3339 with seconds and a zone (Z or ±hh:mm).
+// tsProfile is the ONE timestamp profile of the three checkers, validated by HAND (review with Fable 5.1,
+// 15/09/2026: time.Parse accepted a comma fraction, a 10-digit fraction, offset +24:00 and year 0000 that Python
+// refused). YYYY-MM-DDThh:mm:ss[.f{1,9}](Z|±hh:mm); year 0001-9999; real calendar day; hour 0-23; minute and
+// second 0-59 (no leap second); offset hour 0-23, minute 0-59.
+var tsProfile = regexp.MustCompile(`^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$`)
+
 func plainTS(s string) bool {
-	if s == "" || len(s) > 40 || strings.ContainsAny(s, "\"\\") {
-		return false
+	_, err := parseInstant(s)
+	return err == nil
+}
+
+// parseInstant applies the profile above and returns the instant; every other form is an error.
+func parseInstant(s string) (time.Time, error) {
+	m := tsProfile.FindStringSubmatch(s)
+	if m == nil {
+		return time.Time{}, errors.New("timestamp outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|±hh:mm)")
 	}
-	_, err := time.Parse(time.RFC3339Nano, s)
-	return err == nil && len(s) >= len("2006-01-02T15:04:05Z") && s[10] == 'T' && s[13] == ':' && s[16] == ':'
+	y, _ := strconv.Atoi(m[1])
+	mo, _ := strconv.Atoi(m[2])
+	d, _ := strconv.Atoi(m[3])
+	h, _ := strconv.Atoi(m[4])
+	mi, _ := strconv.Atoi(m[5])
+	sec, _ := strconv.Atoi(m[6])
+	if y < 1 || y > 9999 || mo < 1 || mo > 12 || h > 23 || mi > 59 || sec > 59 {
+		return time.Time{}, errors.New("timestamp field out of range")
+	}
+	leap := (y%4 == 0 && y%100 != 0) || y%400 == 0
+	dim := []int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}[mo-1]
+	if mo == 2 && leap {
+		dim = 29
+	}
+	if d < 1 || d > dim {
+		return time.Time{}, errors.New("timestamp day does not exist in that month")
+	}
+	offSec := 0
+	if m[8] != "Z" {
+		oh, _ := strconv.Atoi(m[8][1:3])
+		om, _ := strconv.Atoi(m[8][4:6])
+		if oh > 23 || om > 59 {
+			return time.Time{}, errors.New("timestamp offset out of range")
+		}
+		offSec = oh*3600 + om*60
+		if m[8][0] == '-' {
+			offSec = -offSec
+		}
+	}
+	nanos := 0
+	if m[7] != "" {
+		n, _ := strconv.Atoi((m[7] + "000000000")[:9])
+		nanos = n
+	}
+	return time.Date(y, time.Month(mo), d, h, mi, sec, nanos, time.FixedZone("", offSec)), nil
 }
 
 // LoadTipKey reads the 32-byte Ed25519 seed (hex) used by signer.py / cryptovalid_tip.py.
@@ -189,9 +236,9 @@ func CheckTip(entries int, first, last string, t *Tip, trustedPubkeyHex, notBefo
 		// a malformed notBefore is the VERIFIER's error, never the tip's
 		nbT, e2 := parseInstant(notBefore)
 		if e2 != nil {
-			return false, "bad_not_before: -tip-not-before is not ISO-8601", trusted
+			return false, "bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm)", trusted
 		}
-		tipT, _ := time.Parse(time.RFC3339Nano, t.TS)
+		tipT, _ := parseInstant(t.TS)
 		if tipT.Before(nbT) {
 			return false, fmt.Sprintf("tip_rolled_back: the tip is dated %s, before the required %s", t.TS, notBefore), trusted
 		}
@@ -218,13 +265,4 @@ func LoadTip(path string) (*Tip, error) {
 		return nil, fmt.Errorf("tip_unreadable: %w", err)
 	}
 	return &t, nil
-}
-
-// parseInstant accepts RFC 3339 with 'Z' or an offset, or a naive "YYYY-MM-DDTHH:MM:SS" taken as UTC.
-func parseInstant(s string) (time.Time, error) {
-	s = strings.TrimSpace(s)
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t, nil
-	}
-	return time.Parse("2006-01-02T15:04:05", s)
 }

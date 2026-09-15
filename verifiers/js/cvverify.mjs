@@ -147,9 +147,20 @@ export function tipPayload(entries, ledgerId, tipSha256, ts) {
   return Buffer.from(`{"entries":${entries},"kind":"${TIP_KIND}","ledger_id":"${ledgerId}","tip_sha256":"${tipSha256}","ts":"${ts}"}`, "utf-8");
 }
 const HEX64 = /^[0-9a-f]{64}$/;
+// The ONE timestamp profile of the three checkers, validated by HAND (review with Fable 5.1, 15/09/2026: Date.parse
+// silently rolled 2026-02-30 over to March, accepted hour 24 and year 0000). Returns epoch ms, or NaN.
 export function parseInstant(s) {
-  const t = String(s).trim();
-  return Date.parse(/(Z|[+-]\d\d:\d\d)$/.test(t) ? t : t + "Z");   // a naive value is UTC, as in Python/Go
+  const m = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)$/.exec(String(s));
+  if (!m) return NaN;
+  const [y, mo, d, h, mi, sec] = m.slice(1, 7).map(Number);
+  if (y < 1 || y > 9999 || mo < 1 || mo > 12 || h > 23 || mi > 59 || sec > 59) return NaN;
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const dim = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
+  if (d < 1 || d > dim) return NaN;
+  let offMin = 0;
+  if (m[8] !== "Z") { const oh = Number(m[8].slice(1, 3)), om = Number(m[8].slice(4, 6)); if (oh > 23 || om > 59) return NaN; offMin = (oh * 60 + om) * (m[8][0] === "-" ? -1 : 1); }
+  const ms = Number(((m[7] || "0") + "000").slice(0, 3));
+  return Date.UTC(y, mo - 1, d, h, mi, sec, ms) - offMin * 60000;
 }
 export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = null, notBefore = null, firstSelfHash = null, expectLedgerId = null) {
   if (!tip || typeof tip !== "object" || Array.isArray(tip) || tip.kind !== TIP_KIND) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
@@ -158,7 +169,7 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
   if (typeof tip.entries !== "number" || !Number.isInteger(tip.entries) || tip.entries < 0) return { ok: false, error: "tip_invalid: tip entries must be a non-negative integer" };
   if (!["ledger_id", "tip_sha256", "ts", "signature_hex"].every((k) => typeof tip[k] === "string")) return { ok: false, error: "tip_invalid: tip fields must be strings" };
   // ONE timestamp profile in the three checkers: RFC 3339 with seconds and a zone (Z or ±hh:mm)
-  if (!HEX64.test(tip.ledger_id) || !HEX64.test(tip.tip_sha256) || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,9})?(Z|[+-]\d\d:\d\d)$/.test(tip.ts) || Number.isNaN(parseInstant(tip.ts))) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
+  if (!HEX64.test(tip.ledger_id) || !HEX64.test(tip.tip_sha256) || Number.isNaN(parseInstant(tip.ts))) return { ok: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
   // the key inside the tip proves nothing: without the trusted log key there is NO verification (never a
   // "PASS but untrusted" an automation reads as exit 0 — council 15/09, Gemini)
   if (!trustedPubkeyHex) return { ok: false, trusted: false, error: "tip_untrusted: no trusted log key given (--trusted-pubkey); the key inside the tip cannot be trusted" };
@@ -175,7 +186,7 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
   // ROLLBACK (declared): an older genuine tip restored after a truncation passes; notBefore refuses older tips
   if (notBefore) {   // instants, not strings (council 15/09, Opus): 'Z' / '+00:00' / other offsets of the same moment agree
     const a = parseInstant(tip.ts), b = parseInstant(notBefore);
-    if (Number.isNaN(b)) return { ok: false, trusted, error: "bad_not_before: --tip-not-before is not ISO-8601" };   // the verifier's error, not the tip's
+    if (Number.isNaN(b)) return { ok: false, trusted, error: "bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm)" };   // the verifier's error, not the tip's
     if (a < b) return { ok: false, trusted, error: `tip_rolled_back: the tip is dated ${tip.ts}, before the required ${notBefore}` };
   }
   if (entriesCount < n) return { ok: false, trusted, error: `tail_truncated: file has ${entriesCount} entries, the signed tip commits to ${n}` };

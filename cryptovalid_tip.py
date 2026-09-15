@@ -33,15 +33,12 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 KIND = "cryptovalid_tip/1"
 GENESIS = "0" * 64
 _HEX64 = re.compile(r"[0-9a-f]{64}")
-# ONE timestamp profile in the three checkers (review with Fable 5.1, 15/09): RFC 3339 with seconds, 'Z' or an
-# offset — a date-only or minute-resolution value was PASS in Python/JS and tip_invalid in Go
-_TS_PROFILE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?(?:Z|[+-]\d\d:\d\d)")
 
 
 def tip_path_for(ledger_path: str) -> str:
@@ -75,14 +72,37 @@ def load_key(keyfile: str):
     return _load_sk(keyfile)
 
 
+_TS_FIELDS = re.compile(r"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)")
+
+
 def parse_instant(ts: str) -> datetime:
-    """ISO-8601 → aware datetime (a naive value is taken as UTC). Instants are compared, never strings
-    (council 15/09, Opus: '…Z' vs '…+00:00' compared as bytes gave a false tip_rolled_back)."""
-    t = ts.strip()
-    if t.endswith("Z") or t.endswith("z"):
-        t = t[:-1] + "+00:00"
-    d = datetime.fromisoformat(t)
-    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    """The ONE timestamp profile of the three checkers, validated by HAND and identically in Python, Go and JS
+    (review with Fable 5.1, 15/09/2026: the format rule was shared but the VALUE went to three library parsers
+    that disagreed on 2026-02-30, hour 24, year 0000, a comma fraction, a 10-digit fraction, offset +24:00, and
+    Python < 3.11 on fraction length). Profile: `YYYY-MM-DDThh:mm:ss[.f{1,9}](Z|±hh:mm)`, year 0001-9999, real
+    calendar day (leap years), hour 0-23, minute/second 0-59 (no leap second), offset hour 0-23, minute 0-59.
+    Returns an aware datetime; raises ValueError for anything else."""
+    m = _TS_FIELDS.fullmatch(ts)
+    if not m:
+        raise ValueError("timestamp outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|±hh:mm)")
+    y, mo, d, h, mi, sec = (int(m.group(i)) for i in range(1, 7))
+    frac, off = m.group(7), m.group(8)
+    if not (1 <= y <= 9999 and 1 <= mo <= 12 and 0 <= h <= 23 and 0 <= mi <= 59 and 0 <= sec <= 59):
+        raise ValueError("timestamp field out of range")
+    leap = (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+    dim = [31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1]
+    if not 1 <= d <= dim:
+        raise ValueError("timestamp day does not exist in that month")
+    if off == "Z":
+        tz = timezone.utc
+    else:
+        oh, om = int(off[1:3]), int(off[4:6])
+        if oh > 23 or om > 59:
+            raise ValueError("timestamp offset out of range")
+        delta = timedelta(hours=oh, minutes=om)
+        tz = timezone(delta if off[0] == "+" else -delta)
+    micro = int((frac or "0").ljust(6, "0")[:6])
+    return datetime(y, mo, d, h, mi, sec, micro, tzinfo=tz)
 
 
 def chain_tip(ledger_path: str) -> Dict:
@@ -145,12 +165,10 @@ def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str]) -> Dict:
         return {"ok": False, "why": "tip fields must be strings"}
     if not (_HEX64.fullmatch(tip["ledger_id"]) and _HEX64.fullmatch(tip["tip_sha256"])):
         return {"ok": False, "why": "ledger_id / tip_sha256 must be 64 lowercase hex characters"}
-    if not _TS_PROFILE.fullmatch(tip["ts"]):
-        return {"ok": False, "why": "ts must be RFC 3339 with seconds and a zone (Z or ±hh:mm)"}
     try:
-        parse_instant(tip["ts"])
-    except ValueError:
-        return {"ok": False, "why": "ts is not a valid instant"}
+        parse_instant(tip["ts"])          # format AND value, by hand, identical in the three checkers
+    except ValueError as e:
+        return {"ok": False, "why": f"ts outside the profile: {e}"}
     # The key INSIDE the tip is informative only: verifying against it proves nothing (anyone can sign a tip
     # with a key of their own and put it there). Without the trusted log key there is NO verification —
     # ok=False, never a "PASS but untrusted" an automation would read as 0 (council 15/09, Gemini).
@@ -192,10 +210,10 @@ def check_tip(entries_count: int, last_self_hash: str, tip: Dict, trusted_pubkey
                 "signature": sig["why"]}
     if not_before:
         try:
-            nb = parse_instant(not_before)
+            nb = parse_instant(not_before)   # same profile as the tip's ts, in the three checkers (Gemini: py/js took a date-only)
         except ValueError as e:
             # the VERIFIER's argument is wrong, not the tip: never blame the file (review with Fable, Gemini)
-            return {"ok": False, "error": f"bad_not_before: --tip-not-before is not ISO-8601 ({str(e)[:60]})",
+            return {"ok": False, "error": f"bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm) ({str(e)[:60]})",
                     "signature": sig["why"]}
         if parse_instant(tip["ts"]) < nb:
             return {"ok": False, "error": f"tip_rolled_back: the tip is dated {tip['ts']}, before the required {not_before} "
