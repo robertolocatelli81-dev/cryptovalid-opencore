@@ -1,0 +1,7 @@
+{"righe": 200, "manomissioni_totali": 6003, "rilevate_dal_verifier": 6002, "non_rilevate": 1, "non_rilevate_elenco": ["delete-row 199"]}
+{"coda_cancellata_rilevata_dal_monitor": true}
+{"ricevuta_riga_123_verifica_offline": true, "ricevuta_su_riga_alterata": false}
+{"js_baseline_rc": 0, "js_mutanti_rc": [1, 1, 1]}
+{"js_sweep_totale": 751, "js_rilevate": 750, "js_non_rilevate": ["delete-row 199"]}
+{"go_baseline_rc": 0, "go_sweep_totale": 6003, "go_rilevate": 6002, "go_non_rilevate": ["delete-row 199"], "go_identico_a_python": true}
+{"tip_manomissioni_totali": 6003, "tip_rilevate": 6003, "tip_non_rilevate": [], "tip_rifirmato_da_attaccante_senza_chiave": "FAIL", "tip_cancellato_e_richiesto": "FAIL", "tip_cancellato_non_richiesto": "PASS", "limite_residuo": "chi possiede la chiave del log pu\u00f2 troncare e rifirmare; custodia della chiave (HSM/KMS) e copie del tip fuori dalla portata del writer"}
