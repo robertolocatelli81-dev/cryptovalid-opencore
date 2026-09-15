@@ -110,6 +110,8 @@ class TestTip(unittest.TestCase):
     def test_rollback_is_declared_and_refusable(self):
         # truncate + restore an OLDER genuine tip: passes (the tip proves "a signed state", not "the latest") —
         # declared limit; --tip-not-before refuses it; strict types: "10" / 10.0 are not the profile (Go agrees)
+        # explicit instants only: signing "now" made this test depend on the clock (CI after 09:00 UTC went red)
+        T.sign_tip(self.led, self.k, ts="2026-09-15T08:00:00+00:00")
         old_tip = open(self.led + ".tip.json").read()
         _write(self.led, _ledger(25)); T.sign_tip(self.led, self.k, ts="2026-09-15T09:00:00+00:00")
         _write(self.led, self.base); open(self.led + ".tip.json", "w").write(old_tip)
