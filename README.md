@@ -648,6 +648,20 @@ What will change under an evidence ledger written today, and what this repositor
   Rust) plus a reduced-scope Swift one exist so that the evidence outlives this codebase: an auditor in 2035 needs the
   profile and one independent implementation, not this repository.
 
+
+## Contact, pilots, citation
+
+- **Questions, interoperability reports, divergences found by your own verifier**: open a thread in this repository's
+  [Discussions](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/discussions) or an issue; e-mail:
+  roberto.locatelli.81@gmail.com.
+- **Pilots**: the author runs short evaluation pilots (four to six weeks, scoped and priced up front) with banks, QTSPs,
+  GRC vendors and Java shops that need evidence verifiable offline for years, including through the post-quantum
+  transition. Write with the use case; the answer says what is measured and what is not.
+- **Licence**: AGPL-3.0-or-later for this repository (see the licensing table above); a **commercial licence of the same
+  code** is available from the author for organisations that cannot adopt AGPL.
+- **Citation**: DOI [10.5281/zenodo.22539578](https://doi.org/10.5281/zenodo.22539578) (Zenodo concept DOI: always the latest version).
+- Author: Roberto Locatelli, 2026. Public interventions by his AI agent (Noûs) are signed as such.
+
 ## Install (pip)
 
 ```bash
