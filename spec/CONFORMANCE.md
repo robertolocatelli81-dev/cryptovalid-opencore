@@ -56,7 +56,21 @@ python3 conformance.py     # exit 0 = conformant
 | `verifiers/rust/` | Rust (std) | Roberto Locatelli | ✅ cargo test + tampered-ledger rejection in CI |
 | `verifiers/swift/` | Swift (swift-crypto) | Roberto Locatelli | ✅ swift test + tampered-ledger rejection in CI (macOS job) |
 | `verifiers/go/` | Go (stdlib) — verifier **and writer** (`Append`) | Roberto Locatelli | ✅ go test -race (shared `vectors.json`, refusals, concurrent appends), 6003-tamper bench identical to Python/JS (14/09/2026); hybrid ML-DSA-65 tip check with `crypto/mldsa` (Go ≥ 1.27, 15/09/2026) |
+| `verifiers/java/CvVerify.java` | Java (JDK stdlib, single file, JDK 24+ for ML-DSA) | Roberto Locatelli | ✅ intact/tampered gate in CI (JDK 27) + in the differential oracle: verdicts, tip tri-state and per-entry Ed25519 + ML-DSA-65 signatures identical to Python/Go (16/09/2026) |
 | _your implementation here_ | | | |
+
+## Line rules and bounds (one rule in the five verifiers, 16/09/2026)
+
+- **Line separator**: LF only. A lone CR is data inside the line (it makes the line undecodable: two entries
+  separated by CR are one line with trailing data). No universal-newline translation.
+- **Blank line**: a line holding nothing but ASCII space (0x20), tab (0x09) and CR (0x0D) is skipped; any other
+  character (U+00A0, U+0085, U+000C…) makes it a line that must decode as an entry, or fails.
+- **`\uXXXX` escapes**: exactly four ASCII hex digits (`0-9a-fA-F`); a sign or a non-ASCII digit is a decode error
+  (Java's `Integer.parseInt` would have taken `\u+041`).
+- **`idx`**: a JSON integer; a boolean is not an index (Python's `True == 1` was measured and refused).
+- **Size**: the Python reference and the Java verifier refuse a file over 256 MiB (`input_too_large`) before
+  reading it; the Go, JS and Rust verifiers bound a single line (Go: 64 MiB) but not the file — a 300 MiB valid
+  ledger is FAIL in Python/Java and PASS elsewhere (declared divergence, outside the acceptance profile).
 
 ## Optional profiles
 
@@ -65,9 +79,19 @@ python3 conformance.py     # exit 0 = conformant
   excluded from the content hash are exactly `self_hash`, `signature`, `signer`, `signature_pq`, `signer_pq`
   (the last two since 0.12.0; a verifier of an earlier version treats them as content and FAILs a hybrid ledger —
   declared, not interop).
-- **Hybrid post-quantum signatures** (0.12.0, optional). Algorithm: **pure ML-DSA-65** (FIPS 204 Algorithm 2, NOT
-  HashML-DSA) with the context string `cryptovalid/entry/1` for entries and `cryptovalid/tip/1` for tips (domain
-  separation between the two message spaces). Entry message = the **UTF-8 bytes of the 64-character lowercase-hex
+- **Hybrid post-quantum signatures** (0.12.0, optional; context changed in 0.13.0). Algorithm: **pure ML-DSA-65**
+  (FIPS 204 pure ML-DSA, NOT HashML-DSA) with the **EMPTY context string**. 0.12.0 used the contexts
+  `cryptovalid/entry/1` / `cryptovalid/tip/1`; 0.13.0 dropped them after checking the ecosystem (16/09/2026): the
+  JDK's built-in ML-DSA provider (JDK 24 → 27, JEP 497) has no API to set a context ("not a goal"), so a plain JDK
+  `verify(pk, msg, sig)` cannot check a context-signed signature (AWS KMS could have produced one through
+  `EXTERNAL_MU`; the constraint was the JDK verifier, not the HSM). Entries and tips are separated by message FORMAT
+  instead: an entry message is 64 lowercase hex characters, a tip message is a JSON object (first byte `{`), so the
+  two byte sets are disjoint and, since every verifier re-derives the message itself, no signature of one can be
+  replayed as the other (declared). That separation covers entry↔tip only: **the ML-DSA key MUST be dedicated to
+  this profile** (with no context, any other application signing a 64-hex string with the same key would produce a
+  valid entry signature — the Ed25519 layer has the same property) and a KMS key policy SHOULD restrict it to the
+  signing principal. 0.12.0 signatures (with a context) do NOT verify under 0.13.0 and vice versa: a 0.12.0 hybrid
+  ledger reads as `invalid` under 0.13.0 (declared; re-sign it). Entry message = the **UTF-8 bytes of the 64-character lowercase-hex
   `self_hash` string** (the identical bytes Ed25519 signs; not the 32 decoded bytes). `signature_pq` = the 3309-byte
   signature (FIPS 204 allows hedged and deterministic signing: two signatures of one message MAY differ, so nothing
   may compare signature bytes), `signer_pq`
@@ -75,7 +99,10 @@ python3 conformance.py     # exit 0 = conformant
   whitespace or foreign characters, canonical length; keys are compared as base64 strings, so a non-canonical
   re-encoding of the right key is a mismatch). Tip: `signature_pq_hex` = 6618 lowercase hex over the same
   canonical tip payload, `log_pq_pubkey_b64` = the key; when either optional field is PRESENT (even as `null` or
-  `""`) both must be well-formed or the tip is `tip_invalid` in Python, JS and Go (Rust and Swift do not read
+  `""`) both must be present AND well-formed or the tip is `tip_invalid` in Python, JS, Go and Java; the tip document
+  itself is parsed with the SAME strict acceptance profile as the entries (no duplicate keys, no floats, bounded
+  integers, depth/surrogate pre-scan, every field a string except `entries`) — it is a signed document, an ambiguous
+  encoding is refused, not guessed (16/09/2026; Rust and Swift do not read
   tips: declared); `signature_hex` too: 128 lowercase hex, and the entries' `signature`/`signer` are decoded
   strictly as well. Semantics of
   `pq_protected`: **true** only when EVERY entry (or the tip) carries a valid ML-DSA-65 signature by the PINNED key
@@ -90,11 +117,17 @@ python3 conformance.py     # exit 0 = conformant
   CLI alike; a trusted PQ key on the tip implies a required tip and needs the trusted Ed25519 log key
   (`pq_key_without_log_key`). Both keys must be pinned for the AND guarantee (with only the PQ key, a re-signed
   Ed25519 layer by a foreign key would still verify).
-  Who checks what: per-entry ML-DSA-65 — the Python reference only (`cryptography` ≥ 50); the tip's ML-DSA-65 —
-  Python and Go (`crypto/mldsa`, Go ≥ 1.27; an older toolchain answers `pq_unverifiable`, a FAIL when the key is
-  required; the compat path is not exercised by CI, declared); JS, Rust and Swift do not verify ML-DSA (the JS tip
-  checker reports null/false, never true; declared in the differential oracle, which also compares the tri-state
-  between Python and Go). **The evidence pack is not quantum-resistant on its own**: its manifest records
+  Who checks what (0.13.0): per-entry Ed25519 + ML-DSA-65 — Python (`signer.py`, `cryptography` ≥ 50), Go
+  (`cvverify -pubkey -pq-pubkey [-require-pq]`, `crypto/mldsa`, Go ≥ 1.27) and Java (`CvVerify.java`, JDK 24+,
+  `Signature.getInstance("ML-DSA-65")`), all with the same tri-state and the same rules (a PQ key needs the Ed25519
+  key and requires the layer; with a caller-given key a failing layer is a FAIL); the tip's ML-DSA-65 — Python, Go
+  and Java; an older Go toolchain or a JDK < 24 answers `pq_unverifiable` (a FAIL when the key is
+  required; the compat path is not exercised by CI, declared); JS verifies per-entry Ed25519 only, Rust and Swift
+  none of the signatures (the JS tip checker reports null/false, never true; declared in the differential oracle,
+  which also compares the tri-state between Python and Go). Any FIPS 204 implementation with a plain
+  `verify(pk, msg, sig)` (JDK 24+, OpenSSL 3.5, .NET 10, Go 1.27) can verify the layer: the message is the bytes
+  above and the context is empty (measured with `cryptography`, Go `crypto/mldsa` and the JDK 27 verifier; OpenSSL
+  3.5 and .NET 10 are expected from their documented APIs, not measured). **The evidence pack is not quantum-resistant on its own**: its manifest records
   `pq_protected`, `pq_status`, `signers` and `pq_signers` per ledger but is signed with Ed25519 only, so
   `verify_pack` confirms a ledger's layer ONLY against keys the caller pins (`pq_pubkey_b64` + `signer_pubkey_hex`,
   or the manifest's recorded keys when the caller pins `manifest_signer_hex` and BOTH the manifest digest and its
@@ -102,8 +135,14 @@ python3 conformance.py     # exit 0 = conformant
   with nothing pinned the manifest's claim is reported `null` with `pq_reason: manifest_unpinned`, never `true`
   (a forged, unsigned manifest cannot promote itself). A pinned build (`build_pack(..., pq_pubkey_b64,
   signer_pubkey_hex)`) refuses to write a pack whose layer does not verify. The PQ private key is a file (PKCS#8,
-  0600) with no KMS/HSM backend. Cost: about 4.4 KB of base64 signature and 2.6 KB of base64 key per entry (the
-  key is repeated on every entry so each line verifies on its own).
+  0600) or, since 0.13.0, an **AWS KMS key** (`KeySpec ML_DSA_65`, `ML_DSA_SHAKE_256`, `MessageType RAW` —
+  `signer.py sign --pq-kms <key>`, `cryptovalid_tip.py sign --pq-kms <key>`; real round-trip 16/09/2026, verified
+  by `cryptography`, Go and the JDK 27 verifier): the same custody model as the Ed25519 `awskms` backend, the
+  private key never in process memory; KMS keys live in FIPS 140-3 validated HSMs (whether ML-DSA is inside the
+  validated boundary is AWS's statement, not measured here); FIPS 204 allows hedged or deterministic signing and
+  the tools never compare signature bytes; every signature is self-verified against the declared key right after
+  signing, and the Sign response's KeyId must match the key whose public key was read. Cost: about 4.4 KB of base64 signature and 2.6 KB of base64 key per entry (the key is repeated
+  on every entry so each line verifies on its own).
 - **Signed chain tip** (`cryptovalid_tip.py`, 15/09/2026): the writer MAY publish `<ledger>.tip.json` =
   `{kind:"cryptovalid_tip/1", entries, ledger_id, tip_sha256, ts, log_pubkey_hex, signature_hex}`, Ed25519 over the
   canonical bytes `{"entries":N,"kind":"cryptovalid_tip/1","ledger_id":"…","tip_sha256":"…","ts":"…"}` (key order

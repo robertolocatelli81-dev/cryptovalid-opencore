@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 )
 
 const Genesis = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -23,7 +22,11 @@ type Verdict struct {
 	FirstSelfHash       string    `json:"first_self_hash,omitempty"` // the chain's identity (ledger_id of its tip)
 	LastSelfHash        string    `json:"last_self_hash,omitempty"`
 	Tip                 *TipCheck `json:"tip,omitempty"` // nil = no signed tip checked (the tail limit applies in full)
-	Scope               string    `json:"scope"`
+	// Signatures (0.13.0): per-entry Ed25519 + ML-DSA-65 attestation, reported when the ledger carries signatures
+	// or a key was given; with a caller-given key a failing layer makes the verdict FAIL (never report-only)
+	Signatures *SignatureCheck `json:"signatures,omitempty"`
+	Scope      string          `json:"scope"`
+	objects    []*Object       // the parsed entries, in order (nil where a line did not parse), for VerifySignatures
 }
 
 // TipCheck is the outcome of comparing the snapshot with a signed chain tip (tip.go).
@@ -60,13 +63,14 @@ func VerifyLedger(r io.Reader) Verdict {
 	for sc.Scan() {
 		line++
 		raw := sc.Bytes()
-		if len(strings.TrimSpace(string(raw))) == 0 {
+		if isBlankLine(raw) { // only ASCII space/tab/CR count as blank (TrimSpace took Unicode spaces) — r5
 			continue
 		}
 		val, err := Parse(raw)
 		if err != nil {
 			v.Failures = append(v.Failures, fmt.Sprintf("line %d: %v", line, err))
 			hashOK = false
+			v.objects = append(v.objects, nil)
 			i++
 			continue
 		}
@@ -74,16 +78,12 @@ func VerifyLedger(r io.Reader) Verdict {
 		if !ok {
 			v.Failures = append(v.Failures, fmt.Sprintf("line %d: entry is not an object", line))
 			hashOK = false
+			v.objects = append(v.objects, nil)
 			i++
 			continue
 		}
+		v.objects = append(v.objects, e)
 		if v.Algo == "" { // profile auto-detection on the first PARSABLE entry (a garbage first line must not desynchronise it)
-			if s0, ok := e.Vals["self_hash"].(string); !ok || len(s0) != 64 {
-				v.Failures = append(v.Failures, fmt.Sprintf("entry %d: self_hash missing or not a 64-hex string", i))
-				v.Entries = i + 1
-				v.Verdict = "FAIL"
-				return v
-			}
 			if p0, err := Payload(e); err == nil {
 				for _, a := range Algos {
 					h, _ := Hash(a, p0)
@@ -93,10 +93,11 @@ func VerifyLedger(r io.Reader) Verdict {
 				}
 			}
 			if v.Algo == "" {
+				// no early return (r5): like the Python reference, fall back to sha256, record the failure and keep
+				// going, so the receipt still carries every later check (idx/link) and the tip block
 				v.Failures = append(v.Failures, fmt.Sprintf("entry %d: self_hash matches no supported profile", i))
-				v.Entries = i + 1
-				v.Verdict = "FAIL"
-				return v
+				hashOK = false
+				v.Algo = "sha256"
 			}
 		}
 		idx, _ := e.Vals["idx"].(json.Number)
@@ -158,12 +159,47 @@ func VerifyLedgerWithTip(ledgerPath, tipPath, trustedPubkeyHex string, requireTi
 // VerifyLedgerWithTipPQ is VerifyLedgerWithTip plus the trusted ML-DSA-65 key: when given, a tip without a valid
 // post-quantum signature is a FAIL (pq_missing / invalid); when empty, the PQ layer is reported as not protected.
 func VerifyLedgerWithTipPQ(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64 string, requireTip bool, tipNotBefore, expectLedgerID string) Verdict {
+	return VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64, "", "", false, requireTip, tipNotBefore, expectLedgerID)
+}
+
+// VerifyLedgerFull adds the per-entry signature layer: `pubkeyHex` / `pqPubkeyB64` pin the entry signers (the same
+// rules as signer.py: a PQ key needs the Ed25519 key and REQUIRES the layer; `requirePQ` needs the PQ key).
+// Signatures are verified whenever the ledger carries them or a key was given; with a caller-given key a
+// failing layer is a FAIL (signatures_failed), never a silent PASS.
+func VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64, pubkeyHex, pqPubkeyB64 string, requirePQ, requireTip bool, tipNotBefore, expectLedgerID string) Verdict {
 	f, err := os.Open(ledgerPath)
 	if err != nil {
 		return Verdict{Verdict: "FAIL", Failures: []string{"open: " + err.Error()}, Scope: scope}
 	}
 	defer f.Close()
 	v := VerifyLedger(f)
+	if requirePQ && pqPubkeyB64 == "" {
+		v.Verdict = "FAIL"
+		v.Failures = append(v.Failures, "require_pq_without_key: -require-pq needs -pq-pubkey (a post-quantum layer verified against the key inside the ledger is self-declared)")
+		return v
+	}
+	if pqPubkeyB64 != "" && pubkeyHex == "" {
+		v.Verdict = "FAIL"
+		v.Failures = append(v.Failures, "pq_key_without_ed25519_key: -pq-pubkey needs -pubkey (hybrid means both keys are pinned)")
+		return v
+	}
+	hasSig := false
+	for _, o := range v.objects {
+		if o != nil {
+			if _, ok := o.Vals["signature"]; ok {
+				hasSig = true
+				break
+			}
+		}
+	}
+	if hasSig || pubkeyHex != "" || pqPubkeyB64 != "" {
+		sc := VerifySignatures(v.objects, pubkeyHex, pqPubkeyB64, requirePQ)
+		v.Signatures = &sc
+		if (pubkeyHex != "" || pqPubkeyB64 != "") && (!sc.OK || (pqPubkeyB64 != "" && (sc.PQProtected == nil || !*sc.PQProtected))) {
+			v.Verdict = "FAIL"
+			v.Failures = append(v.Failures, "signatures_failed: the pinned signature layer does not verify ("+sc.PQStatus+")")
+		}
+	}
 	if tipPath == "" {
 		if _, err := os.Stat(TipPath(ledgerPath)); err == nil {
 			tipPath = TipPath(ledgerPath)
@@ -226,4 +262,14 @@ func VerifyLedgerWithTipPQ(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubke
 		v.Failures = append(v.Failures, fmt.Sprintf("entry %d: %s", v.Entries, tc.Why))
 	}
 	return v
+}
+
+// isBlankLine: nothing but ASCII space / tab / CR (the profile's blank-line rule, identical in the five verifiers).
+func isBlankLine(raw []byte) bool {
+	for _, c := range raw {
+		if c != ' ' && c != '\t' && c != '\r' {
+			return false
+		}
+	}
+	return true
 }

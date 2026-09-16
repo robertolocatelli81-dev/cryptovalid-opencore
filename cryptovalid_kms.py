@@ -199,6 +199,79 @@ class AwsKmsBackend:
                 "signing_algorithm": "ED25519_SHA_512", "key_in_process_memory": False}
 
 
+MLDSA65_SPKI_OID = bytes.fromhex("0609608648016503040312")   # 2.16.840.1.101.3.4.3.18 = id-ml-dsa-65 (RFC 9881)
+MLDSA65_PK_LEN = 1952
+
+
+MLDSA65_SPKI_LEN = 1974          # SEQUENCE { AlgorithmIdentifier { id-ml-dsa-65 }, BIT STRING { 0x00 || pk(1952) } } — RFC 9881
+
+
+def _mldsa65_raw_from_spki(der: bytes) -> bytes:
+    """GetPublicKey returns a DER SubjectPublicKeyInfo (RFC 9881: no parameters, BIT STRING with 0 unused bits); the
+    raw pkEncode bytes are the last 1952. Not a general ASN.1 parser: the exact shape is checked (total length 1974,
+    the id-ml-dsa-65 OID in the header, the BIT STRING unused-bits byte 0x00 right before the key) — anything else is
+    refused, and sign_ledger/write_tip self-verify every signature against the extracted key anyway (fail-safe)."""
+    if len(der) != MLDSA65_SPKI_LEN or MLDSA65_SPKI_OID not in der[:32] or der[-MLDSA65_PK_LEN - 1] != 0:
+        raise RuntimeError("the AWS KMS key is not an ML-DSA-65 SubjectPublicKeyInfo (use KeySpec ML_DSA_65)")
+    return der[-MLDSA65_PK_LEN:]
+
+
+class AwsKmsMlDsaBackend:
+    """AWS KMS, KeySpec ML_DSA_65, SigningAlgorithm ML_DSA_SHAKE_256, MessageType RAW (messages <= 4 KB; ours are
+    64 bytes for an entry and < 300 for a tip). RAW = pure ML-DSA with the EMPTY context: measured 16/09/2026
+    (eu-central-1) — a ledger and a tip signed here verified with `cryptography`, Go `crypto/mldsa` and the JDK 27
+    verifier (JS checked the Ed25519 layer only). AWS KMS runs its keys in FIPS 140-3 validated HSMs; whether the
+    ML-DSA operations fall inside the validated boundary is AWS's statement to check, not measured here. FIPS 204
+    allows hedged or deterministic signing: nothing may compare signature bytes. `EXTERNAL_MU` (client-computed mu,
+    FIPS 204 §6.2: needed above 4 KB, and it COULD carry a context) is documented by AWS and was exercised once, but
+    the profile does not use it. The key MUST be dedicated to this profile (no context = no cross-application guard)
+    and its KMS key policy restricted to the signing principal. Sign responses are checked for the same KeyId ARN
+    as GetPublicKey (an alias re-pointed in between would otherwise sign with another key) and for the algorithm."""
+
+    name = "awskms-mldsa65"
+
+    def __init__(self, key_id: str, region: Optional[str] = None, profile: Optional[str] = None, client=None):
+        self._key_id = key_id
+        if client is not None:          # test/DI hook
+            self._client = client
+        else:  # pragma: no cover - needs boto3 + real credentials
+            try:
+                import boto3
+            except ImportError as e:
+                raise RuntimeError("awskms backend requires 'boto3' (pip install boto3)") from e
+            session = boto3.Session(profile_name=profile) if profile else boto3.Session()
+            self._client = session.client("kms", region_name=region)
+        import base64 as _b64
+        try:
+            r = self._client.get_public_key(KeyId=key_id)
+        except Exception as e:  # noqa: BLE001 — boto3 ClientError / network: one readable error, not a raw stack
+            raise RuntimeError(f"AWS KMS GetPublicKey failed for {key_id}: {type(e).__name__}: {str(e)[:200]}") from e
+        self.key_arn = str(r.get("KeyId") or key_id)
+        self.public_key_b64 = _b64.b64encode(_mldsa65_raw_from_spki(bytes(r["PublicKey"]))).decode()
+
+    def sign(self, message: bytes) -> bytes:
+        if not isinstance(message, (bytes, bytearray)):
+            raise TypeError("message must be bytes")
+        if len(message) > 4096:
+            raise ValueError("AWS KMS RAW signing takes at most 4096 bytes (use EXTERNAL_MU for more)")
+        try:
+            r = self._client.sign(KeyId=self._key_id, Message=bytes(message), MessageType="RAW", SigningAlgorithm="ML_DSA_SHAKE_256")
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"AWS KMS Sign failed for {self._key_id}: {type(e).__name__}: {str(e)[:200]}") from e
+        if r.get("SigningAlgorithm", "ML_DSA_SHAKE_256") != "ML_DSA_SHAKE_256":
+            raise RuntimeError(f"AWS KMS signed with {r.get('SigningAlgorithm')}, not ML_DSA_SHAKE_256")
+        if r.get("KeyId") and r["KeyId"] != self.key_arn:
+            raise RuntimeError("AWS KMS signed with a different key than the one whose public key was read (alias re-pointed?)")
+        sig = bytes(r["Signature"])
+        if len(sig) != 3309:
+            raise RuntimeError(f"expected a 3309-byte ML-DSA-65 signature, got {len(sig)}")
+        return sig
+
+    def describe(self) -> Dict:
+        return {"pq_backend": "awskms", "key_id": self._key_id, "key_spec": "ML_DSA_65",
+                "signing_algorithm": "ML_DSA_SHAKE_256", "message_type": "RAW", "key_in_process_memory": False}
+
+
 # --------------------------------------------------------------------------- #
 #  AWS KMS via HTTP + SigV4, NO SDK (added 2026-08-29)                          #
 #  Same key spec/algorithm as AwsKmsBackend, but stdlib-only (no boto3). The    #

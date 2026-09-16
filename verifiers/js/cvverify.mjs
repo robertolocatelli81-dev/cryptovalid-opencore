@@ -218,7 +218,7 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
 export function verifyLedger(text, { algo = null, pubkey = null, tip = null, trustedPubkey = null, requireTip = false, tipNotBefore = null, expectLedgerId = null } = {}) {
   const entries = [], errors = [];
   text.split("\n").forEach((ln, i) => {
-    if (!ln.trim()) return;
+    if (!ln.replace(/[ \t\r]/g, "")) return;   // blank = ASCII space/tab/CR only (trim() took Unicode spaces) — r5
     let v;
     try {
       const d = jsonNestingDepth(ln); if (d > MAX_JSON_DEPTH) throw new Error(`json_too_deep: nesting ${d} exceeds ${MAX_JSON_DEPTH}`);
@@ -307,7 +307,14 @@ if (argv[0] === "--conformance") {
   let tip = null;
   const tipPath = argv.includes("--tip") ? argv[argv.indexOf("--tip") + 1] : (existsSync(argv[0] + ".tip.json") ? argv[0] + ".tip.json" : null);
   if (tipPath !== null) {
-    try { tip = JSON.parse(readFileSync(tipPath, "utf-8")); if (!tip || typeof tip !== "object") throw new Error("not an object"); }
+    try {   // the tip is a SIGNED document: the same strict profile as the entries (r5: Java was strict, JS lax)
+      const raw = readFileSync(tipPath, "utf-8");
+      const d = jsonNestingDepth(raw); if (d > MAX_JSON_DEPTH) throw new Error("json_too_deep");
+      if (hasLoneSurrogate(raw)) throw new Error("lone_surrogate");
+      if (hasDuplicateKeys(raw)) throw new Error("duplicate_key");
+      if (/[0-9][.eE]/.test(raw.replace(/"(?:[^"\\]|\\.)*"/g, '""'))) throw new Error("float_forbidden");
+      tip = JSON.parse(raw); if (!tip || typeof tip !== "object" || Array.isArray(tip)) throw new Error("not an object");
+    }
     catch (e) { tip = { kind: "unreadable:" + (e.code || e.message) }; }
   }
   const r = verifyLedger(text, { algo, pubkey, tip, trustedPubkey, requireTip, tipNotBefore, expectLedgerId });

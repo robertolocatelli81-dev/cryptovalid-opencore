@@ -43,7 +43,7 @@ public enum CryptoValidVerifier {
         var entries: [[String: JSONValue]] = []
         var parseErrors = 0
         for line in ledgerText.split(separator: "\n", omittingEmptySubsequences: false) {
-            let t = line.trimmingCharacters(in: .whitespaces)
+            let t = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t\r")) // blank = ASCII space/tab/CR only (r5)
             if t.isEmpty { continue }
             if let v = try? JSONParser.parse(t), case .object(let o) = v { entries.append(o) } else { parseErrors += 1 }
         }

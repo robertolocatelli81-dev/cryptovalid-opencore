@@ -7,7 +7,7 @@ package cryptovalid
 
 const PQSupported = false
 
-const PQContextTip = "cryptovalid/tip/1"
+const PQContextTip = ""
 
 func CheckTipPQ(t *Tip, trustedPQPubkeyB64 string) (protected *bool, why string) {
 	f := false

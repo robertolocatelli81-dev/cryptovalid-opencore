@@ -127,7 +127,17 @@ jobs:
           if "$RUNNER_TEMP/cvverify-go" examples/sample_ledger_tampered.jsonl > /dev/null; then
             echo "::error::go verifier accepted a tampered ledger"; exit 1; fi
           "$RUNNER_TEMP/cvverify-go" examples/sample_ledger.jsonl > /dev/null
-      - name: Differential oracle — Python vs JS vs Go vs Rust must agree on every hostile input
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "oracle"   # JDK 27 GA (15/09/2026): ML-DSA-65 (JDK 24+) with the profile's EMPTY context; Ed25519 since 15
+          java-version: "27"
+      - name: Java verifier — JDK standard library only: intact ledger passes, tampered ledger rejected
+        run: |
+          javac -d "$RUNNER_TEMP/cvj" verifiers/java/CvVerify.java
+          if java -cp "$RUNNER_TEMP/cvj" CvVerify examples/sample_ledger_tampered.jsonl > /dev/null; then
+            echo "::error::java verifier accepted a tampered ledger"; exit 1; fi
+          java -cp "$RUNNER_TEMP/cvj" CvVerify examples/sample_ledger.jsonl > /dev/null
+      - name: Differential oracle — Python vs JS vs Go vs Rust vs Java must agree on every hostile input
         run: python3 verifiers/differential_oracle.py
 
   swift-verifier:

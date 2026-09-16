@@ -72,7 +72,7 @@ pub fn verify_ledger(text: &str, algo: Option<&str>) -> VerifyResult {
     let mut entries: Vec<BTreeMap<String, Json>> = Vec::new();
     let mut parse_errors = 0usize;
     for line in text.split('\n') {
-        let t = line.trim();
+        let t = line.trim_matches(|c| c == ' ' || c == '\t' || c == '\r'); // blank = ASCII space/tab/CR only (r5)
         if t.is_empty() {
             continue;
         }

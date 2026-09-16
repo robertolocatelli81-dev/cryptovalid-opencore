@@ -12,8 +12,9 @@ import (
 
 const PQSupported = true
 
-// PQContextTip is the FIPS 204 pure-mode context of tip signatures (entries use "cryptovalid/entry/1").
-const PQContextTip = "cryptovalid/tip/1"
+// PQContextTip: the profile signs with the EMPTY FIPS 204 context (0.13.0 — the JDK 24-27 ML-DSA API has no context,
+// AWS KMS RAW signing is the empty context; entries and tips are separated by message format instead).
+const PQContextTip = ""
 
 // CheckTipPQ verifies the ML-DSA-65 signature of a hybrid tip against the TRUSTED post-quantum key.
 // protected: true = verified against the trusted key; false = absent, invalid, foreign or missing-when-required;
@@ -44,7 +45,7 @@ func CheckTipPQ(t *Tip, trustedPQPubkeyB64 string) (protected *bool, why string)
 	if err != nil {
 		return &f, "tip post-quantum signature is not hex"
 	}
-	if err := mldsa.Verify(pub, TipPayload(t.Entries, t.LedgerID, t.TipSHA256, t.TS), sig, &mldsa.Options{Context: PQContextTip}); err != nil {
+	if err := mldsa.Verify(pub, TipPayload(t.Entries, t.LedgerID, t.TipSHA256, t.TS), sig, nil); err != nil { // nil = empty context
 		return &f, "tip post-quantum signature invalid"
 	}
 	return &tr, "ML-DSA-65 signature verified against the trusted post-quantum key"

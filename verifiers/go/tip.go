@@ -275,6 +275,11 @@ func LoadTip(path string) (*Tip, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tip_unreadable: %w", err)
 	}
+	// the tip is a SIGNED document: same strict acceptance profile as the entries (dup keys, floats, bounds,
+	// depth, surrogates) before the typed decode — one rule in Python, JS, Go and Java (r5)
+	if _, err := Parse(bytes.TrimSpace(raw)); err != nil {
+		return nil, fmt.Errorf("tip_unreadable: %v", err)
+	}
 	var t Tip
 	if err := json.Unmarshal(raw, &t); err != nil {
 		return nil, fmt.Errorf("tip_unreadable: %w", err)

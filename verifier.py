@@ -351,14 +351,20 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
         return {"verdict": "FAIL", "path": path, "verified_utc": started, "entries_count": 0,
                 "parse_errors": [{"line": -1, "error": f"input_too_large: file exceeds {MAX_INPUT_BYTES} bytes"}]}
     try:
-        with open(path) as f:
-            raw_lines = [ln for ln in f if ln.strip()]
+        # ONE line rule in the five verifiers (council 16/09 r5): lines are separated by LF only (no universal
+        # newlines: a lone CR is data inside the line, hence a decode error), and a line is blank when it holds
+        # nothing but ASCII space / tab / CR — never Unicode whitespace (str.strip() took U+00A0).
+        with open(path, encoding="utf-8", errors="surrogateescape", newline="\n") as f:
+            raw_lines = [ln for ln in f if ln.strip(" \t\r\n")]
     except FileNotFoundError:
         return {
             "verdict": "FILE_NOT_FOUND",
             "path": path,
             "verified_utc": started,
         }
+    except OSError as e:   # a directory, a permission error: a receipt, never a traceback
+        return {"verdict": "FAIL", "path": path, "verified_utc": started, "entries_count": 0,
+                "parse_errors": [{"line": -1, "error": f"unreadable: {type(e).__name__}"}]}
 
     entries: List[Dict] = []
     for i, line in enumerate(raw_lines):
@@ -431,7 +437,8 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
     # Idx monotonicity
     idx_ok = True
     for i, e in enumerate(entries):
-        if e.get("idx") != i:
+        idx = e.get("idx")
+        if isinstance(idx, bool) or idx != i:   # True == 1 in Python: a boolean idx is NOT sequential (r5, Fable)
             idx_ok = False
             errors.append({"line": i, "error": f"idx_mismatch: expected {i}, got {e.get('idx')}"})
 

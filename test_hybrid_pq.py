@@ -16,6 +16,7 @@ except Exception:  # noqa: BLE001
     HAVE_PQ = False
 
 GO_BIN = os.environ.get("CVVERIFY_GO")
+JAVA_CMD = os.environ.get("CVVERIFY_JAVA")   # e.g. "/path/jdk-27/bin/java -cp /tmp/cvj CvVerify" (JDK 24+ for ML-DSA)
 
 
 def _canon(e):
@@ -122,14 +123,17 @@ class TestHybridEntries(unittest.TestCase):
         r = signer.verify_file(self.signed, self.pk, self.pq_pk)
         self.assertFalse(r["ok"]); self.assertIs(r["pq_protected"], False); self.assertEqual(r["pq_status"], "classical_broken")
 
-    def test_context_string_separates_domains_and_decoding_is_strict(self):
+    def test_empty_context_and_strict_decoding(self):
+        # 0.13.0: EMPTY FIPS 204 context on purpose — the JDK (24-27, JEP 497) and AWS KMS RAW have no context API;
+        # a plain verify(sig, msg) with no context must succeed, and a context MUST NOT be needed
         from cryptography.hazmat.primitives.asymmetric import mldsa
         sk, pk_b64 = signer.load_pq_key(self.k + ".pq")
         e = json.loads(open(self.signed).readline())
         sig = base64.b64decode(e["signature_pq"]); msg = e["self_hash"].encode()
-        sk.public_key().verify(sig, msg, context=signer.PQ_CTX_ENTRY)
-        with self.assertRaises(Exception):                            # a signature without the context is another domain
-            sk.public_key().verify(sig, msg)
+        sk.public_key().verify(sig, msg)
+        self.assertEqual(signer.PQ_CTX_ENTRY, b"")
+        with self.assertRaises(Exception):                            # a context would make it another domain: not ours
+            sk.public_key().verify(sig, msg, context=b"cryptovalid/entry/1")
         self.assertEqual(len(sig), signer.PQ_SIG_LEN); self.assertEqual(len(base64.b64decode(pk_b64)), signer.PQ_PK_LEN)
         lines = [json.loads(l) for l in open(self.signed)]
         lines[0]["signature_pq"] = lines[0]["signature_pq"][:10] + " " + lines[0]["signature_pq"][10:]   # Python's lenient decoder took this
@@ -160,6 +164,48 @@ class TestHybridEntries(unittest.TestCase):
         e = json.loads(open(out).readline())
         self.assertNotIn("signature_pq", e); self.assertNotIn("signer_pq", e)
 
+    def test_kms_mldsa_backend_with_stub_client(self):
+        # AwsKmsMlDsaBackend shape (GetPublicKey DER SPKI → raw 1952; Sign RAW ML_DSA_SHAKE_256 → 3309 bytes),
+        # exercised with a stub client backed by a local key: the live round-trip against AWS KMS is separate
+        import cryptovalid_kms as K
+        from cryptography.hazmat.primitives import serialization as ser
+        sk, pk_b64 = signer.load_pq_key(self.k + ".pq")
+        spki = sk.public_key().public_bytes(ser.Encoding.DER, ser.PublicFormat.SubjectPublicKeyInfo)
+        self.assertIn(K.MLDSA65_SPKI_OID, spki[:32]); self.assertEqual(spki[-1952:], base64.b64decode(pk_b64))
+        calls = []
+        class Stub:
+            def get_public_key(self, KeyId): return {"PublicKey": spki, "KeyId": "arn:aws:kms:eu-central-1:1:key/x"}
+            def sign(self, KeyId, Message, MessageType, SigningAlgorithm):
+                calls.append((MessageType, SigningAlgorithm)); return {"Signature": sk.sign(Message), "KeyId": "arn:aws:kms:eu-central-1:1:key/x", "SigningAlgorithm": "ML_DSA_SHAKE_256"}
+        be = K.AwsKmsMlDsaBackend("alias/x", client=Stub())
+        self.assertEqual(be.public_key_b64, pk_b64)
+        out = os.path.join(self.tmp, "kms.jsonl")
+        r = signer.sign_ledger(self.led, out, self.k, pq_backend=be)
+        self.assertEqual(r["pq_backend"]["key_in_process_memory"], False); self.assertEqual(set(calls), {("RAW", "ML_DSA_SHAKE_256")})
+        v = signer.verify_file(out, self.pk, pk_b64); self.assertTrue(v["ok"]); self.assertIs(v["pq_protected"], True)
+        tip = T.sign_tip(self.led, self.k, pq_backend=be)
+        self.assertEqual(tip["log_pq_pubkey_b64"], pk_b64)
+        self.assertEqual(V.verify_ledger(self.led, trusted_pubkey_hex=self.pk, trusted_pq_pubkey_b64=pk_b64)["verdict"], "PASS")
+        with self.assertRaises(RuntimeError):
+            K._mldsa65_raw_from_spki(b"\x30\x0a" + b"\x00" * 2000)         # not an ML-DSA-65 SPKI
+        with self.assertRaises(RuntimeError):
+            K._mldsa65_raw_from_spki(spki + b"\x00")                         # round 4: exact length, unused-bits byte
+        # round 4 (Fable): a KMS alias re-pointed between GetPublicKey and Sign → the Sign KeyId differs → refused
+        class Repointed(Stub):
+            def sign(self, KeyId, Message, MessageType, SigningAlgorithm):
+                return {"Signature": sk.sign(Message), "KeyId": "arn:aws:kms:eu-central-1:1:key/OTHER", "SigningAlgorithm": "ML_DSA_SHAKE_256"}
+        with self.assertRaises(RuntimeError):
+            K.AwsKmsMlDsaBackend("alias/x", client=Repointed()).sign(b"m")
+        # and a backend that signs with a key other than the declared one is caught by the tip's self-verify
+        other_sk, _ = signer.load_pq_key(signer.keygen_pq(os.path.join(self.tmp, "o2.pq")) and os.path.join(self.tmp, "o2.pq"))
+        class WrongKey:
+            public_key_b64 = pk_b64
+            def sign(self, m): return other_sk.sign(m)
+        with self.assertRaises(Exception):
+            T.sign_tip(self.led, self.k, pq_backend=WrongKey())
+        with self.assertRaises(ValueError):                                   # backend AND keyfile together
+            signer.sign_ledger(self.led, out, self.k, pq_keyfile=self.k + ".pq", pq_backend=be)
+
     def test_cli_keygen_pq_sign_verify(self):
         d = os.path.join(self.tmp, "cli"); os.makedirs(d); kf = os.path.join(d, "k")
         here = os.path.dirname(os.path.abspath(__file__))
@@ -171,6 +217,73 @@ class TestHybridEntries(unittest.TestCase):
                             capture_output=True, text=True, cwd=here)
         self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
         self.assertIs(json.loads(cp.stdout)["pq_protected"], True)
+
+
+@unittest.skipUnless(HAVE_PQ and GO_BIN and os.path.exists(GO_BIN or ""), "needs ML-DSA and the Go verifier binary (CVVERIFY_GO)")
+class TestGoEntrySignaturesAgreeWithPython(unittest.TestCase):
+    """0.13.0: the Go verifier checks per-entry Ed25519 + ML-DSA-65 with the SAME tri-state as signer.py — a
+    mini-oracle over the cases the council named (valid, stripped, tampered, foreign key, broken Ed25519, malformed)."""
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(); self.led = os.path.join(self.tmp, "l.jsonl"); _write(self.led, _ledger(4))
+        self.k = os.path.join(self.tmp, "k"); self.pk = signer.keygen(self.k)["public_key_hex"]; self.pq_pk = signer.keygen_pq(self.k + ".pq")["public_key_b64"]
+        self.signed = os.path.join(self.tmp, "s.jsonl"); signer.sign_ledger(self.led, self.signed, self.k, pq_keyfile=self.k + ".pq")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _go(self, path, *flags):
+        cp = subprocess.run([GO_BIN, *flags, path], capture_output=True, text=True)
+        return cp.returncode, json.loads(cp.stdout)
+
+    def _both(self, path, ed, pq):
+        py = signer.verify_file(path, ed, pq)
+        flags = [*(["-pubkey", ed] if ed else []), *(["-pq-pubkey", pq] if pq else [])]
+        rc, go = self._go(path, *flags)
+        g = go["signatures"]
+        self.assertEqual((py["ok"], py["pq_protected"], py["pq_status"]), (g["ok"], g["pq_protected"], g["pq_status"]), (path, py, g))
+        if JAVA_CMD:   # the Java verifier must say the same as Python and Go, case by case
+            cp = subprocess.run([*JAVA_CMD.split(), *flags, path], capture_output=True, text=True)
+            jv = json.loads(cp.stdout)["signatures"]
+            self.assertEqual((py["ok"], py["pq_protected"], py["pq_status"]), (jv["ok"], jv["pq_protected"], jv["pq_status"]), (path, "java", jv))
+            self.assertEqual(cp.returncode, rc, "java exit code differs from go")
+        return py, go, rc
+
+    def test_cases_agree(self):
+        py, go, rc = self._both(self.signed, self.pk, self.pq_pk); self.assertEqual(rc, 0); self.assertIs(py["pq_protected"], True)
+        py, go, rc = self._both(self.signed, self.pk, None); self.assertIsNone(py["pq_protected"]); self.assertEqual(rc, 0)
+        lines = [json.loads(l) for l in open(self.signed)]
+        # stripped, key pinned → missing, FAIL in both
+        s1 = os.path.join(self.tmp, "stripped.jsonl"); _write(s1, [{k: v for k, v in e.items() if k not in ("signature_pq", "signer_pq")} for e in lines])
+        py, go, rc = self._both(s1, self.pk, self.pq_pk); self.assertEqual(py["pq_status"], "missing"); self.assertEqual(rc, 1)
+        # tampered PQ signature
+        s2 = os.path.join(self.tmp, "badpq.jsonl"); l2 = json.loads(json.dumps(lines)); raw = bytearray(base64.b64decode(l2[1]["signature_pq"])); raw[9] ^= 1
+        l2[1]["signature_pq"] = base64.b64encode(bytes(raw)).decode(); _write(s2, l2)
+        py, go, rc = self._both(s2, self.pk, self.pq_pk); self.assertEqual(py["pq_status"], "invalid"); self.assertEqual(rc, 1)
+        # foreign PQ key expected
+        other = signer.keygen_pq(os.path.join(self.tmp, "o.pq"))["public_key_b64"]
+        py, go, rc = self._both(self.signed, self.pk, other); self.assertEqual(py["pq_failures"][0]["reason"], "pq_signer_mismatch"); self.assertEqual(rc, 1)
+        # broken Ed25519, valid PQ → classical_broken
+        s3 = os.path.join(self.tmp, "baded.jsonl"); l3 = json.loads(json.dumps(lines)); raw = bytearray(base64.b64decode(l3[2]["signature"])); raw[3] ^= 1
+        l3[2]["signature"] = base64.b64encode(bytes(raw)).decode(); _write(s3, l3)
+        py, go, rc = self._both(s3, self.pk, self.pq_pk); self.assertEqual(py["pq_status"], "classical_broken")
+        # uppercase signer hex → malformed in both
+        s4 = os.path.join(self.tmp, "upper.jsonl"); l4 = json.loads(json.dumps(lines)); l4[0]["signer"] = l4[0]["signer"].upper(); _write(s4, l4)
+        py, go, rc = self._both(s4, None, None); self.assertEqual(py["failures"][0]["reason"], "malformed_signature_field")
+        # partial layer
+        s5 = os.path.join(self.tmp, "partial.jsonl"); l5 = json.loads(json.dumps(lines)); l5[3].pop("signature_pq"); l5[3].pop("signer_pq"); _write(s5, l5)
+        py, go, rc = self._both(s5, self.pk, None); self.assertEqual(py["pq_status"], "partial")
+        # Ed25519-only ledger, no keys → absent
+        ed = os.path.join(self.tmp, "ed.jsonl"); signer.sign_ledger(self.led, ed, self.k)
+        py, go, rc = self._both(ed, None, None); self.assertEqual(py["pq_status"], "absent"); self.assertEqual(rc, 0)
+        # round 4: combinations outside the eight — wrong pinned Ed25519 key with a valid PQ layer (signer_mismatch),
+        # and a stripped ledger under a wrong Ed25519 key: labels may be imprecise but Python/Go/Java must AGREE and FAIL
+        wrong = signer.keygen(os.path.join(self.tmp, "w"))["public_key_hex"]
+        py, go, rc = self._both(self.signed, wrong, self.pq_pk); self.assertFalse(py["ok"]); self.assertEqual(rc, 1)
+        py, go, rc = self._both(s1, wrong, self.pq_pk); self.assertFalse(py["ok"]); self.assertEqual(rc, 1)
+
+    def test_go_refuses_the_same_key_combinations(self):
+        rc, go = self._go(self.signed, "-pq-pubkey", self.pq_pk); self.assertEqual(rc, 1); self.assertIn("pq_key_without_ed25519_key", json.dumps(go["failures"]))
+        rc, go = self._go(self.signed, "-pubkey", self.pk, "-require-pq"); self.assertEqual(rc, 1); self.assertIn("require_pq_without_key", json.dumps(go["failures"]))
 
 
 @unittest.skipUnless(HAVE_PQ, "cryptography >= 50 (ML-DSA) assente")
@@ -235,13 +348,11 @@ class TestHybridTip(unittest.TestCase):
             r = self._v()
             self.assertEqual(r["verdict"], "FAIL", bad); self.assertIn("tip_invalid", r["tip"]["error"])
 
-    def test_tip_context_string(self):
-        from cryptography.hazmat.primitives.asymmetric import mldsa
+    def test_tip_empty_context(self):
         sk, _ = signer.load_pq_key(self.k + ".pq")
         payload = T.tip_payload(self.tip["entries"], self.tip["ledger_id"], self.tip["tip_sha256"], self.tip["ts"])
-        sk.public_key().verify(bytes.fromhex(self.tip["signature_pq_hex"]), payload, context=T.PQ_CTX_TIP)
-        with self.assertRaises(Exception):
-            sk.public_key().verify(bytes.fromhex(self.tip["signature_pq_hex"]), payload, context=signer.PQ_CTX_ENTRY)
+        sk.public_key().verify(bytes.fromhex(self.tip["signature_pq_hex"]), payload)    # empty context, JDK-verifiable
+        self.assertEqual(T.PQ_CTX_TIP, b"")
 
     def test_cli_flag(self):
         here = os.path.dirname(os.path.abspath(__file__))

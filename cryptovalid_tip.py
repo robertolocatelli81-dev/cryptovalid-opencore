@@ -43,7 +43,7 @@ GENESIS = "0" * 64
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _HEX128 = re.compile(r"[0-9a-f]{128}")     # Ed25519 signature: lowercase, no whitespace (bytes.fromhex took "ab cd")
 _HEX6618 = re.compile(r"[0-9a-f]{6618}")   # ML-DSA-65 signature (3309 bytes)
-PQ_CTX_TIP = b"cryptovalid/tip/1"           # FIPS 204 pure ML-DSA context: separates tips from entries ("cryptovalid/entry/1")
+PQ_CTX_TIP = b""    # FIPS 204 pure ML-DSA with the EMPTY context (0.13.0: the JDK and AWS KMS RAW cannot use one; see signer.py)
 PQ_PK_LEN = 1952
 
 
@@ -161,7 +161,7 @@ def load_pq_key(keyfile):
 
 
 def write_tip(out: str, keyfile: str, entries: int, ledger_id: str, tip_sha256: str, ts: Optional[str] = None,
-              pq_keyfile=None) -> Dict:
+              pq_keyfile=None, pq_backend=None) -> Dict:
     """O(1): sign the given tail state and write `out` atomically (fsync). Writers that already know their
     tail (cryptovalid_ingest, Go AppendSigned) use this under their own lock. With `pq_keyfile` the SAME payload
     bytes are also signed with ML-DSA-65 (FIPS 204): `signature_pq_hex` + `log_pq_pubkey_b64` (hybrid tip)."""
@@ -171,10 +171,18 @@ def write_tip(out: str, keyfile: str, entries: int, ledger_id: str, tip_sha256: 
     sig = sk.sign(payload)
     tip = {"kind": KIND, "entries": entries, "ledger_id": ledger_id, "tip_sha256": tip_sha256, "ts": ts,
            "log_pubkey_hex": pk, "signature_hex": sig.hex()}
-    if pq_keyfile is not None:
-        pq_sk, pq_pk = load_pq_key(pq_keyfile)
-        tip["signature_pq_hex"] = pq_sk.sign(payload, context=PQ_CTX_TIP).hex()
-        tip["log_pq_pubkey_b64"] = pq_pk
+    if pq_backend is None and pq_keyfile is not None:
+        from signer import FilePQBackend
+        pq_backend = FilePQBackend(pq_keyfile)
+    if pq_backend is not None:                                      # file key or AWS KMS ML_DSA_65 (cryptovalid_kms)
+        pq_sig = pq_backend.sign(payload)                            # pure ML-DSA, empty context
+        try:                                                         # self-verify against the DECLARED key (council 16/09 r4:
+            from cryptography.hazmat.primitives.asymmetric import mldsa   # a KMS alias re-pointed between GetPublicKey and Sign
+            mldsa.MLDSA65PublicKey.from_public_bytes(base64.b64decode(pq_backend.public_key_b64)).verify(pq_sig, payload)
+        except ImportError:
+            raise RuntimeError("hybrid tip signing needs cryptography >= 50 (ML-DSA) to self-verify the post-quantum signature")
+        tip["signature_pq_hex"] = pq_sig.hex()
+        tip["log_pq_pubkey_b64"] = pq_backend.public_key_b64
     tmp = out + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(tip, f, separators=(",", ":"), sort_keys=True)
@@ -184,10 +192,11 @@ def write_tip(out: str, keyfile: str, entries: int, ledger_id: str, tip_sha256: 
     return tip
 
 
-def sign_tip(ledger_path: str, keyfile: str, tip_path: Optional[str] = None, ts: Optional[str] = None, pq_keyfile=None) -> Dict:
+def sign_tip(ledger_path: str, keyfile: str, tip_path: Optional[str] = None, ts: Optional[str] = None, pq_keyfile=None,
+             pq_backend=None) -> Dict:
     """Write `<ledger>.tip.json` (atomic replace) for the CURRENT file (reads it: O(n)). Call after every append."""
     t = chain_tip(ledger_path)
-    return write_tip(tip_path or tip_path_for(ledger_path), keyfile, t["entries"], t["ledger_id"], t["tip_sha256"], ts, pq_keyfile)
+    return write_tip(tip_path or tip_path_for(ledger_path), keyfile, t["entries"], t["ledger_id"], t["tip_sha256"], ts, pq_keyfile, pq_backend)
 
 
 def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str], trusted_pq_pubkey_b64: Optional[str] = None) -> Dict:
@@ -228,6 +237,8 @@ def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str], trusted_p
     if not trusted_pubkey_hex:
         return {"ok": False, "why": "tip_untrusted: no trusted log key given (pass --trusted-pubkey); the key inside "
                                     "the tip cannot be trusted", "trusted": False, "pq_protected": False}
+    if not _HEX64.fullmatch(trusted_pubkey_hex):   # the VERIFIER's argument, validated like every other hex field
+        return {"ok": False, "why": "bad_trusted_key: --trusted-pubkey must be 64 lowercase hex characters", "trusted": False, "pq_protected": False}
     if tip.get("log_pubkey_hex") not in (None, "", trusted_pubkey_hex):   # "" = absent, as in Go/JS
         return {"ok": False, "why": "tip log key differs from the trusted log key", "pq_protected": False}
     payload = tip_payload(int(tip["entries"]), tip["ledger_id"], tip["tip_sha256"], tip["ts"])
@@ -247,7 +258,7 @@ def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str], trusted_p
             raw_pk = _b64_strict(trusted_pq_pubkey_b64, PQ_PK_LEN)
             if raw_pk is None:
                 return {"ok": False, "why": "bad_trusted_pq_key: --trusted-pq-pubkey must be strict base64 of 1952 bytes", "trusted": True, "pq_protected": False}
-            mldsa.MLDSA65PublicKey.from_public_bytes(raw_pk).verify(bytes.fromhex(sig_pq), payload, context=PQ_CTX_TIP)
+            mldsa.MLDSA65PublicKey.from_public_bytes(raw_pk).verify(bytes.fromhex(sig_pq), payload)   # empty context
             pq = True
         except ImportError:
             return {"ok": False, "why": "pq_unverifiable: ML-DSA-65 needs cryptography >= 50 (a required post-quantum layer cannot be checked here)", "trusted": True, "pq_protected": None}
@@ -313,8 +324,12 @@ def check_tip(entries_count: int, last_self_hash: str, tip: Dict, trusted_pubkey
 
 
 def load_tip(path: str) -> Dict:
+    """The tip is a SIGNED document: it is parsed with the same strict acceptance profile as the entries (no
+    duplicate keys, no floats, bounded integers, depth/surrogate pre-scan) — one rule in Python, JS, Go and Java
+    (council 16/09 r5: Java was strict, Python and Go were lax)."""
+    from verifier import _loads_strict
     with open(path, encoding="utf-8") as f:
-        doc = json.load(f)
+        doc = _loads_strict(f.read().strip(" \t\r\n"))
     if not isinstance(doc, dict):
         raise ValueError("tip file is not a JSON object")
     return doc
@@ -326,13 +341,17 @@ def main(argv=None) -> int:
     s = sub.add_parser("sign", help="write <ledger>.tip.json for the current file")
     s.add_argument("ledger"); s.add_argument("keyfile"); s.add_argument("--out")
     s.add_argument("--pq-key", help="ML-DSA-65 key file (signer.py keygen --pq): HYBRID tip, signed with both keys")
+    s.add_argument("--pq-kms", help="AWS KMS key id/ARN/alias with KeySpec ML_DSA_65: the post-quantum tip signature is made IN KMS")
+    s.add_argument("--pq-kms-region", help="AWS region of --pq-kms")
+    s.add_argument("--pq-kms-profile", help="AWS credentials profile for --pq-kms")
     c = sub.add_parser("check", help="compare a ledger with a tip (chain itself is NOT verified here: use verifier.py --tip)")
     c.add_argument("ledger"); c.add_argument("--tip"); c.add_argument("--trusted-pubkey"); c.add_argument("--not-before")
     c.add_argument("--expect-ledger-id")
     c.add_argument("--trusted-pq-pubkey", help="ML-DSA-65 log key (base64) the tip must ALSO be signed with (FAIL if missing/invalid)")
     a = p.parse_args(argv)
     if a.cmd == "sign":
-        print(json.dumps(sign_tip(a.ledger, a.keyfile, a.out, pq_keyfile=a.pq_key), indent=1))
+        from signer import pq_backend_from_args
+        print(json.dumps(sign_tip(a.ledger, a.keyfile, a.out, pq_backend=pq_backend_from_args(a.pq_key, a.pq_kms, a.pq_kms_region, a.pq_kms_profile)), indent=1))
         return 0
     if not a.trusted_pubkey:
         print(json.dumps({"ok": False, "error": "tip_untrusted: --trusted-pubkey is required (the key inside the tip "

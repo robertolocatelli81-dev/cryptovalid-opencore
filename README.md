@@ -46,6 +46,15 @@ Stated plainly so no one relies on a guarantee that does not exist:
   using a blockchain anchor"), and it varies by jurisdiction — US software/business-method patents
   are broader than the EU (Art. 52 EPC). **AGPL-3.0 §11 grants a patent licence only from this
   project's contributors; it does NOT shield you from a third party's patent.**
+- **Post-quantum layer (0.12.0 → 0.13.0), checked on 16/09/2026 on primary sources:** ML-DSA is FIPS 204, a
+  public NIST standard; NIST's submission rules required signed IP statements from every submitter, and NIST's two
+  royalty-free patent licence agreements (a US portfolio and the CNRS / Université de Limoges portfolio) concern
+  CRYSTALS-Kyber / ML-KEM, which this project does not use; no patent licence was needed for CRYSTALS-Dilithium /
+  ML-DSA, whose submitters declared none. The hybrid here is **two independent signatures** (Ed25519 and ML-DSA-65
+  over the same bytes, separate keys, no combined key or OID): it does NOT implement the IETF LAMPS "composite
+  signatures" draft (draft-ietf-lamps-pq-composite-sigs, RFC Editor queue, one IPR disclosure listed on the
+  datatracker). AWS KMS is used through its public API under AWS's terms. The Java verifier uses only JDK APIs
+  (GPLv2 + Classpath Exception runtime; this file is AGPL-3.0). None of this is an FTO opinion.
 - **Your responsibility:** this project is provided as-is, with no warranty of non-infringement.
   Anyone deploying it — especially commercially or in the United States — should conduct their own
   patent due diligence / FTO. The author has not, and this document is not legal advice.
@@ -182,14 +191,17 @@ python3 signer.py verify  ledger.signed.jsonl                 # signatures PASS 
 - The signature commits to each entry's `self_hash`; `signature`/`signer` (and the hybrid `signature_pq`/
   `signer_pq`) are attestation fields excluded from the content hash, so a signed ledger **still passes the stdlib
   hash verifier unchanged** — in all five verifiers.
-- **Hybrid post-quantum (0.12.0):** `keygen signer.key --pq` also writes `signer.key.pq` (ML-DSA-65, FIPS 204,
-  PKCS#8, 0600); `sign … --pq-key signer.key.pq` signs every `self_hash` with BOTH keys (re-signing without
-  `--pq-key` strips stale PQ fields); `verify … --pq-pubkey <b64>` requires the layer and exits 1 unless every entry
+- **Hybrid post-quantum (0.12.0, 0.13.0):** `keygen signer.key --pq` also writes `signer.key.pq` (ML-DSA-65, FIPS 204,
+  PKCS#8, 0600); `sign … --pq-key signer.key.pq` — or `--pq-kms <AWS KMS key, KeySpec ML_DSA_65>` to sign inside
+  KMS — signs every `self_hash` with BOTH keys (re-signing without a PQ key strips stale PQ fields); `verify …
+  --pq-pubkey <b64>` requires the layer and exits 1 unless every entry
   carries a valid ML-DSA-65 signature by THAT key (`--pq-pubkey` needs `--pubkey`, and `--require-pq` alone is
   refused: a layer checked against the key inside the file is self-declared). The tip: `--trusted-pq-pubkey` on
-  `verifier.py` and on the Go `cvverify` (implies a required tip and needs `--trusted-pubkey`). Per-entry ML-DSA-65
-  is verified by Python only; the tip's by Python and Go. Needs `cryptography` ≥ 50 (Python) or Go ≥ 1.27; where a
-  REQUIRED layer cannot be verified the result is `pq_unverifiable` with `ok: false` / exit 1, never a green.
+  `verifier.py` and on the Go `cvverify` (implies a required tip and needs `--trusted-pubkey`). Per-entry Ed25519 +
+  ML-DSA-65 are verified by Python (`signer.py verify`) and Go (`cvverify -pubkey <hex> -pq-pubkey <b64>`); the tip's
+  by both. The context string is EMPTY (FIPS 204 default) so the JDK, OpenSSL 3.5, .NET and Go verify the same
+  bytes. Needs `cryptography` ≥ 50 (Python) or Go ≥ 1.27; where a REQUIRED layer cannot be verified the result is
+  `pq_unverifiable` with `ok: false` / exit 1, never a green.
 - `signer verify` re-derives `self_hash` from the content too, so it catches content tampering on its
   own: the full chain is *content → self_hash → signature*.
 - **Optional layer, honest scope:** the core hash verifier stays **stdlib-only**; signatures need the
@@ -402,7 +414,8 @@ Adversarial testing (NEMESIS + an independent LLM red-team) found and CLOSED rea
   controls the KMS/HSM policy or unseal material can authorize signatures. Policy governance,
   rotation and revocation are part of the security perimeter.
 - **Post-quantum: hybrid, opt-in, pinned.** Since 0.12.0 ledger entries and the signed chain tip MAY carry an
-  **ML-DSA-65** (FIPS 204, pure mode with a domain context) signature next to Ed25519 over the same bytes
+  **ML-DSA-65** (FIPS 204, pure mode, empty context since 0.13.0 so that the JDK 24+ and AWS KMS can produce and
+  verify it) signature next to Ed25519 over the same bytes
   (`signer.py keygen --pq`, `sign --pq-key`, `cryptovalid_tip.py sign --pq-key`). The layer counts only when the
   relying party PINS the ML-DSA-65 key (`--pq-pubkey`, `--trusted-pq-pubkey`, both of which REQUIRE the layer): then a
   missing, foreign, malformed or invalid PQ signature is a FAIL, and `pq_protected: true` also needs every Ed25519
@@ -411,14 +424,15 @@ Adversarial testing (NEMESIS + an independent LLM red-team) found and CLOSED rea
   PQ fields is a downgrade the relying party's requirement refuses, not the file. Both keys must be pinned (the
   library and the CLI refuse a PQ key without the Ed25519 key): with only the PQ key required, a re-signed Ed25519
   layer by a foreign key would still verify. Who checks what: per-entry
-  ML-DSA-65 — **Python only** (`cryptography` ≥ 50); the tip's ML-DSA-65 — **Python and Go** (`crypto/mldsa`, Go ≥
-  1.27); JS, Rust and Swift verify the hash chain and (JS) Ed25519 only and say the PQ layer is unchecked. The evidence
+  Ed25519 + ML-DSA-65 — **Python and Go** (`cvverify -pubkey … -pq-pubkey …`, `crypto/mldsa`, Go ≥ 1.27); the tip's
+  ML-DSA-65 — Python and Go; JS verifies the hash chain and per-entry Ed25519, Rust and Swift the hash chain only,
+  and all three say the PQ layer is unchecked. The evidence
   pack is not quantum-resistant on its own: its manifest records `pq_protected` per ledger with the keys it was
   built against, but the manifest signature is Ed25519 only, so `verify_pack` confirms the layer only against keys
   the verifier pins (the ledger keys, or the manifest signer); with nothing pinned it reports `null`, never `true`.
-  The PQ private key lives on disk (PKCS#8, 0600): there is no KMS/HSM path for it yet, so its security is the
-  signing host's filesystem, not an HSM. Cost: about 4.4 KB of base64 signature and 2.6 KB of base64 public key per
-  entry. Already-published TSA anchors (RSA/ECDSA) do not survive a quantum adversary either, which keeps hash-only
+  The PQ private key is a file (PKCS#8, 0600) or, since 0.13.0, an **AWS KMS ML-DSA-65 key** (`--pq-kms`: signed in
+  a FIPS 140-3 Level 3 HSM, the key never in process memory — verified live). Cost: about 4.4 KB of base64
+  signature and 2.6 KB of base64 public key per entry. Already-published TSA anchors (RSA/ECDSA) do not survive a quantum adversary either, which keeps hash-only
   anchor coverage part of the security perimeter.
 
 Honest scope unchanged: the format proves *what/when/order/who-signed + non-alteration*, **not the truth
@@ -466,6 +480,18 @@ is beyond exact-fingerprint matching, and production use still wants a contracte
 `0x00` leaves, `0x01` nodes. Third-party verification needs only
 `(entry, index, tree_size, audit_path, root)`. Tests: `python3 test_merkle.py`.
 
+## Java verifier (JDK standard library, 2026-09-16)
+
+`verifiers/java/CvVerify.java` is a single-file, dependency-free Java implementation of the verifier: the strict
+JSON acceptance profile, the canonical hash chain (SHA-256 / SHA3-256), per-entry **Ed25519** (JDK 15+) and
+**ML-DSA-65** (JDK 24+, `Signature.getInstance("ML-DSA-65")`) signatures with the same tri-state as `signer.py`, and
+the signed chain tip including its post-quantum layer. It is possible only because the profile signs with the EMPTY
+FIPS 204 context: the JDK (24 → 27) exposes ML-DSA with no context API. It sits in the differential oracle next to
+Python, JS, Go and Rust (verdicts, tip tri-state and entry signatures compared on every hostile input) and in CI on
+JDK 27. Run: `java verifiers/java/CvVerify.java ledger.jsonl [-pubkey HEX -pq-pubkey B64] [-tip F -trusted-pubkey HEX
+-trusted-pq-pubkey B64]`. Measured on a ledger and tip whose ML-DSA-65 signatures were made inside AWS KMS: PASS,
+entries and tip `pq_protected: true`.
+
 ## Go reference: writer + verifier (2026-09-14)
 
 `verifiers/go/` is a stdlib-only Go implementation of the profile — the first one that also **writes**
@@ -475,9 +501,10 @@ Python, JS or Go verifier. `vectors.json` (generated by Python) is the single by
 languages; on a 200-row audit-log ledger and 6003 enumerated tampers the three verifiers give identical
 verdicts. Two profile rules made explicit the same day in all three: nesting > 512 and unpaired UTF-16
 surrogates are refused fail-closed (`spec/CONFORMANCE.md`).
-Since 0.12.0 `cvverify -trusted-pq-pubkey <b64>` also checks the **ML-DSA-65** signature of a hybrid tip with the
-standard library (`crypto/mldsa`, **Go ≥ 1.27**); a binary built with an older toolchain answers `pq_unverifiable`
-(a FAIL when the key is required), never a silent pass.
+Since 0.12.0 `cvverify -trusted-pq-pubkey <b64>` also checks the **ML-DSA-65** signature of a hybrid tip, and since
+0.13.0 `-pubkey <hex> -pq-pubkey <b64>` verify every entry's Ed25519 + ML-DSA-65 signatures with the standard library
+(`crypto/mldsa`, **Go ≥ 1.27**, the same tri-state as `signer.py`); a binary built with an older toolchain answers
+`pq_unverifiable` (a FAIL when the key is required), never a silent pass.
 
 ## Receipts, monitor, eIDAS 2.0 self-assessment, JWS (2026-09-13)
 
@@ -617,7 +644,7 @@ What will change under an evidence ledger written today, and what this repositor
   choice — the stable schema with mature validators — Art. 14 clock, ENISA SRP fields) and signed with an AWS
   KMS-held (HSM-backed) key whose public part ships with the release; the Transparency Exchange API (ECMA TC54) is the
   distribution channel to watch.
-- **Verification without the producer.** The four verifiers in the differential oracle (Python, JavaScript, Go,
+- **Verification without the producer.** The five verifiers in the differential oracle (Python, JavaScript, Go, Java,
   Rust) plus a reduced-scope Swift one exist so that the evidence outlives this codebase: an auditor in 2035 needs the
   profile and one independent implementation, not this repository.
 

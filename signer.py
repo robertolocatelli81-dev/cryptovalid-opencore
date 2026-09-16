@@ -38,12 +38,18 @@ from typing import Dict, List, Optional
 # attestation fields excluded from the content hash: classical (signature/signer) and, since 0.12.0, the
 # post-quantum companion (signature_pq/signer_pq, ML-DSA-65 FIPS 204 over the same self_hash bytes)
 ATTEST = ("self_hash", "signature", "signer", "signature_pq", "signer_pq")
-# ML-DSA-65 (FIPS 204) profile of the hybrid layer — pure ML-DSA (NOT HashML-DSA) with a DOMAIN-SEPARATION context
-# (council 15/09, five minds: the context costs nothing while the field is new and separates entries from tips);
+# ML-DSA-65 (FIPS 204) profile of the hybrid layer — pure ML-DSA (NOT HashML-DSA) with the EMPTY context string.
+# 0.12.0 used a domain context ("cryptovalid/entry/1"); 0.13.0 dropped it after checking the ecosystem for real
+# (16/09/2026): the JDK's built-in ML-DSA provider (24 → 27) has NO API to set a context (JEP 497 non-goal), so a
+# plain `verify(pk, msg, sig)` there cannot check a context-signed signature (AWS KMS could have signed one via
+# EXTERNAL_MU; the JDK verifier was the real constraint — council 16/09). Entries and tips are separated by message
+# FORMAT instead (64 hex chars vs a JSON object): disjoint byte sets, verified by re-deriving the message, declared.
+# CONSEQUENCE (MUST): the ML-DSA key is DEDICATED to this profile — with no context, any other application signing
+# a 64-hex string with the same key would produce a valid entry signature (the Ed25519 layer has the same property).
 # message = the UTF-8 bytes of the 64-char lowercase-hex `self_hash` string (the same bytes Ed25519 signs);
-# signature 3309 bytes (randomized: two signatures of one message differ), public key 1952 bytes (pkEncode), both
-# base64 standard alphabet with padding, decoded STRICTLY (no whitespace, no stray characters, canonical length).
-PQ_CTX_ENTRY = b"cryptovalid/entry/1"
+# signature 3309 bytes (hedged signing MAY differ per call), public key 1952 bytes (pkEncode), both base64 standard
+# alphabet with padding, decoded STRICTLY (no whitespace, no stray characters, canonical length).
+PQ_CTX_ENTRY = b""     # kept as a named constant: the profile's context is EMPTY, on purpose
 PQ_SIG_LEN, PQ_PK_LEN = 3309, 1952
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 
@@ -118,6 +124,31 @@ def keygen_pq(path: str) -> Dict:
     return {"keyfile": path, "alg": "ml-dsa-65", "public_key_b64": base64.b64encode(sk.public_key().public_bytes_raw()).decode()}
 
 
+class FilePQBackend:
+    """ML-DSA-65 private key on disk (keygen_pq): `.sign(msg)` (pure ML-DSA, empty context) + `.public_key_b64`."""
+    name = "file"
+
+    def __init__(self, path: str):
+        self._sk, self.public_key_b64 = load_pq_key(path)
+
+    def sign(self, message: bytes) -> bytes:
+        return self._sk.sign(message)
+
+    def describe(self) -> Dict:
+        return {"pq_backend": "file", "key_in_process_memory": True}
+
+
+def pq_backend_from_args(pq_keyfile: Optional[str] = None, pq_kms: Optional[str] = None, pq_kms_region: Optional[str] = None,
+                         pq_kms_profile: Optional[str] = None):
+    """The post-quantum signer for a CLI/API call: a key file, or an AWS KMS ML_DSA_65 key (`cryptovalid_kms`)."""
+    if pq_keyfile and pq_kms:
+        raise ValueError("give --pq-key OR --pq-kms, not both")
+    if pq_kms:
+        from cryptovalid_kms import AwsKmsMlDsaBackend
+        return AwsKmsMlDsaBackend(pq_kms, region=pq_kms_region, profile=pq_kms_profile)
+    return FilePQBackend(pq_keyfile) if pq_keyfile else None
+
+
 def load_pq_key(path: str):
     """(private_key, public_key_b64) from a keygen_pq file."""
     m = _mldsa()
@@ -154,7 +185,7 @@ def _pubkey_hex(seed_hex: str) -> str:
 
 
 def sign_ledger(in_path: str, out_path: str, keyfile: Optional[str] = None,
-                backend=None, pq_keyfile: Optional[str] = None) -> Dict:
+                backend=None, pq_keyfile: Optional[str] = None, pq_backend=None) -> Dict:
     """Firma ogni entry di un ledger hash-chained: aggiunge `signature` (Ed25519 sul self_hash) +
     `signer` (pubblica hex). Il file resta verificabile come hash-chain E ora come firmato.
 
@@ -174,7 +205,18 @@ def sign_ledger(in_path: str, out_path: str, keyfile: Optional[str] = None,
     pk_hex = backend.public_key_hex()
     _, Ed25519PublicKey, _ = _ed()
     pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(pk_hex))
-    pq_sk, pq_pk_b64 = load_pq_key(pq_keyfile) if pq_keyfile else (None, None)
+    # post-quantum signer: a key file (FilePQBackend) or a KMS backend (AwsKmsMlDsaBackend: the ML-DSA key never
+    # leaves the HSM, same custody model as the Ed25519 `backend`); the public key is read from the backend
+    if pq_backend is not None and pq_keyfile:
+        raise ValueError("give pq_backend OR pq_keyfile, not both")
+    pq_signer = pq_backend if pq_backend is not None else (FilePQBackend(pq_keyfile) if pq_keyfile else None)
+    pq_pk_b64 = pq_signer.public_key_b64 if pq_signer is not None else None
+    pq_pub = None
+    if pq_signer is not None:
+        m = _mldsa()
+        if m is None:
+            raise RuntimeError("hybrid signing needs cryptography >= 50 (ML-DSA) to self-verify the post-quantum signatures")
+        pq_pub = m.MLDSA65PublicKey.from_public_bytes(base64.b64decode(pq_pk_b64))
     out: List[Dict] = []
     with open(in_path, encoding="utf-8") as f:
         for ln in f:
@@ -188,9 +230,9 @@ def sign_ledger(in_path: str, out_path: str, keyfile: Optional[str] = None,
             pub.verify(sig, sh.encode())   # fail-fast se il backend firma con altra chiave
             e["signature"] = base64.b64encode(sig).decode()
             e["signer"] = pk_hex
-            if pq_sk is not None:   # HYBRID: the same bytes signed by ML-DSA-65 too (own context); both must verify
-                pq_sig = pq_sk.sign(sh.encode(), context=PQ_CTX_ENTRY)
-                pq_sk.public_key().verify(pq_sig, sh.encode(), context=PQ_CTX_ENTRY)
+            if pq_signer is not None:   # HYBRID: the same bytes signed by ML-DSA-65 too (empty context); both must verify
+                pq_sig = pq_signer.sign(sh.encode())
+                pq_pub.verify(pq_sig, sh.encode())   # fail-fast: the backend signed with the declared key, empty context
                 e["signature_pq"] = base64.b64encode(pq_sig).decode()
                 e["signer_pq"] = pq_pk_b64
             else:                   # re-signing WITHOUT a PQ key strips stale PQ fields: never mix keys silently
@@ -200,7 +242,8 @@ def sign_ledger(in_path: str, out_path: str, keyfile: Optional[str] = None,
         for e in out:
             f.write(json.dumps(e) + "\n")
     return {"signed": len(out), "signer": pk_hex, "out": out_path, "signer_pq": pq_pk_b64,
-            "scheme": "hybrid ed25519+ml-dsa-65" if pq_sk is not None else "ed25519"}
+            "scheme": "hybrid ed25519+ml-dsa-65" if pq_signer is not None else "ed25519",
+            **({"pq_backend": pq_signer.describe()} if pq_signer is not None and hasattr(pq_signer, "describe") else {})}
 
 
 def verify_ledger_signatures(entries: List[Dict], expected_pubkey_hex: Optional[str] = None,
@@ -267,7 +310,7 @@ def verify_ledger_signatures(entries: List[Dict], expected_pubkey_hex: Optional[
                 pq_failures.append({"idx": i, "reason": "pq_unverifiable"})
             continue          # present, not verifiable, not required: reported as None below
         try:
-            m.MLDSA65PublicKey.from_public_bytes(raw_pk).verify(raw_sig, sh.encode(), context=PQ_CTX_ENTRY)
+            m.MLDSA65PublicKey.from_public_bytes(raw_pk).verify(raw_sig, sh.encode())   # pure ML-DSA, empty context
             pq_ok += 1
             pq_signers.add(pq_signer)
         except Exception:  # noqa: BLE001
@@ -323,6 +366,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     sg.add_argument("keyfile", nargs="?"); sg.add_argument(
         "--backend", help="KMS/HSM backend URI (vedi cryptovalid_kms), es. pkcs11:module=...;token=...;key=...")
     sg.add_argument("--pq-key", help="ML-DSA-65 key file (keygen --pq): sign every entry with Ed25519 AND ML-DSA-65")
+    sg.add_argument("--pq-kms", help="AWS KMS key id/ARN/alias with KeySpec ML_DSA_65: the post-quantum signature is made IN KMS (the key never leaves the HSM)")
+    sg.add_argument("--pq-kms-region", help="AWS region of --pq-kms")
+    sg.add_argument("--pq-kms-profile", help="AWS credentials profile for --pq-kms (default: the SDK chain)")
     vf = sub.add_parser("verify"); vf.add_argument("ledger"); vf.add_argument("--pubkey")
     vf.add_argument("--pq-pubkey", help="expected ML-DSA-65 public key (base64) of the post-quantum signatures")
     vf.add_argument("--require-pq", action="store_true", help="exit 1 unless every entry carries a VALID ML-DSA-65 signature by --pq-pubkey (which it needs)")
@@ -342,7 +388,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             be = backend_from_uri(a.backend)
         elif not a.keyfile:
             p.error("sign richiede un keyfile oppure --backend <uri>")
-        print(json.dumps(sign_ledger(a.ledger, a.out, a.keyfile, backend=be, pq_keyfile=a.pq_key), indent=1)); return 0
+        print(json.dumps(sign_ledger(a.ledger, a.out, a.keyfile, backend=be,
+                                     pq_backend=pq_backend_from_args(a.pq_key, a.pq_kms, a.pq_kms_region, a.pq_kms_profile)), indent=1)); return 0
     if a.cmd == "verify":
         if a.require_pq and not a.pq_pubkey:
             p.error("verify: --require-pq needs --pq-pubkey (a post-quantum layer verified against the key INSIDE the ledger is self-declared)")

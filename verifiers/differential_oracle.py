@@ -103,11 +103,25 @@ DECLARED_DIVERGENCE = {
     # Only this pattern is accepted as declared; anything else on the same case (an inverted regression,
     # a crash) is a real DIFF. Since 15/09/2026 the bound and the surrogate rule are enforced by Python, JS, Go
     # AND Rust (one rule, four references); Swift was not updated (no toolchain) — declared in CONFORMANCE §.
-    "deep-valid-600": ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "FAIL", "swift": "PASS"},
+    "deep-valid-600": ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "FAIL", "swift": "PASS"},
                        "outside the acceptance profile (nesting > MAX_JSON_DEPTH=512): references FAIL, Swift PASS"),
-    "lone-surrogate": ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "FAIL", "swift": {"PASS", "FAIL"}},
+    "lone-surrogate": ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "FAIL", "swift": {"PASS", "FAIL"}},
                        "unpaired \\ud800 escape: refused by the four references (lone_surrogate); Swift not updated"),
 }
+# council 16/09 r5 — JSON escapes and line rules the 54 cases did not cover (Java took "\\u+041" via Integer.parseInt;
+# Python's universal newlines split on a lone CR; str.strip()/trim()/TrimSpace disagreed on U+00A0; Python took a
+# boolean idx as 1). One rule now: \u = 4 ASCII hex digits; LF is the only separator; blank = ASCII space/tab/CR only.
+CORPUS["u-escape-plus"] = '{"idx":0,"ts":"t","data":{"k":"\\u+041"},"prev_hash":"' + "0" * 64 + '","self_hash":"z"}'
+CORPUS["u-escape-fullwidth"] = '{"idx":0,"ts":"t","data":{"k":"\\uＤ８００"},"prev_hash":"' + "0" * 64 + '","self_hash":"z"}'
+CORPUS["cr-only-newline"] = valid_entry({"a": 1}) + "\r" + valid_entry({"b": 2})     # ONE line with a CR inside → trailing data
+CORPUS["nbsp-only-line"] = "\u00a0\n" + valid_entry({"a": 1})                       # a line of U+00A0 is NOT blank → decode error
+def _idx_bool():
+    out, prev = [], "0" * 64
+    for i, b in enumerate((False, True)):
+        e = {"idx": b, "ts": "t", "data": {"i": i}, "prev_hash": prev}
+        e["self_hash"] = hashlib.sha256(canon(e)).hexdigest(); prev = e["self_hash"]; out.append(e)
+    return "\n".join(json.dumps(x, separators=(",", ":")) for x in out)
+CORPUS["idx-bool"] = _idx_bool()                                                      # True == 1 in Python: refused now
 CORPUS["deep-valid-600"] = _valid_nested(598)
 CORPUS["deep-valid-512"] = _valid_nested(510)   # exactly at the bound: must AGREE (PASS everywhere)
 # an unpaired UTF-16 surrogate escape: not a Unicode scalar, decoders disagree (Go stdlib → U+FFFD) → refused
@@ -165,6 +179,10 @@ def _tip_case():
         hybrid.update({"pq_pubkey": pq, "tip_hybrid": json.dumps(tip_h), "tip_hybrid_bad_pq": json.dumps(bad),
                        "tip_classical": cls,
                        "tip_pq_int": json.dumps(dict(tip_h, signature_pq_hex=123)),
+                       # r5: the tip is a SIGNED document and is parsed with the strict profile everywhere
+                       "tip_dup_key": json.dumps(cls_d)[:-1] + ',"ts":"' + cls_d["ts"] + '"}',
+                       "tip_float_extra": json.dumps(dict(cls_d, note=1.5)),
+                       "tip_logpk_int": json.dumps(dict(cls_d, log_pubkey_hex=123)),
                        "tip_pq_null": json.dumps(dict(tip_h, signature_pq_hex=None)),     # round 2: Go mapped null → "" → absent
                        "tip_pq_empty": json.dumps(dict(tip_h, signature_pq_hex="")),
                        # round 3: Go's encoding/json matches struct tags case-insensitively — a case-variant key must be
@@ -237,36 +255,71 @@ if TIP_CASE:
     for name, (text, _) in TIP_CASES.items():
         CORPUS[name] = text.rstrip("\n")
     DECLARED_DIVERGENCE["tip-truncated"] = (
-        {"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "PASS", "swift": "PASS"},
-        "tail truncated but a signed chain tip sits next to the file: checked by Python/JS/Go (tail_truncated), "
+        {"python": "FAIL", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "PASS", "swift": "PASS"},
+        "tail truncated but a signed chain tip sits next to the file: checked by Python/JS/Go/Java (tail_truncated), "
         "not by Rust/Swift (declared: no Ed25519 without dependencies)")
     for name in ("tip-garbage-ts", "tip-upper-hex", "tip-date-only-ts", "tip-no-seconds-ts",
                  "tip-feb30", "tip-hour24", "tip-year0", "tip-comma-frac", "tip-frac10", "tip-off24", "tip-leap60",
                  "tip-arabic-digits", "tip-fullwidth-digits"):
         DECLARED_DIVERGENCE[name] = (
-            {"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "PASS", "swift": "PASS"},
+            {"python": "FAIL", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "PASS", "swift": "PASS"},
             "intact chain, SIGNED tip outside the profile (ts not RFC 3339 with seconds+zone / uppercase hex): "
-            "tip_invalid on Python/JS/Go, unchecked by Rust/Swift (declared)")
+            "tip_invalid on Python/JS/Go/Java, unchecked by Rust/Swift (declared)")
     # tip-empty-pubkey, tip-frac4-ok, tip-leapday-ok: valid everywhere → must AGREE (PASS)
     if TIP_CASE.get("pq_pubkey"):
         CORPUS["hybrid-entries-valid"] = TIP_CASE["hybrid_full"].rstrip("\n")   # new attestation fields: PASS everywhere
         TIP_CASES["hybrid-tip-valid"] = (TIP_CASE["hybrid_full"], TIP_CASE["tip_hybrid"])
         TIP_CASES["hybrid-tip-bad-pq"] = (TIP_CASE["hybrid_full"], TIP_CASE["tip_hybrid_bad_pq"])
         TIP_CASES["hybrid-tip-pq-required-missing"] = (TIP_CASE["hybrid_full"], TIP_CASE["tip_classical"])
-        for hostile in ("tip_pq_int", "tip_pq_null", "tip_pq_empty", "tip_pq_short", "tip_pq_badkey", "tip_sig_upper", "tip_sig_space", "tip_pq_case"):
+        for hostile in ("tip_pq_int", "tip_pq_null", "tip_pq_empty", "tip_pq_short", "tip_pq_badkey", "tip_sig_upper", "tip_sig_space", "tip_pq_case",
+                        "tip_dup_key", "tip_float_extra", "tip_logpk_int"):
             TIP_CASES[hostile.replace("_", "-")] = (TIP_CASE["hybrid_full"], TIP_CASE[hostile])
         for name in ("hybrid-tip-valid", "hybrid-tip-bad-pq", "hybrid-tip-pq-required-missing",
-                     "tip-pq-int", "tip-pq-null", "tip-pq-empty", "tip-pq-short", "tip-pq-badkey", "tip-sig-upper", "tip-sig-space", "tip-pq-case"):
+                     "tip-pq-int", "tip-pq-null", "tip-pq-empty", "tip-pq-short", "tip-pq-badkey", "tip-sig-upper", "tip-sig-space", "tip-pq-case",
+                     "tip-dup-key", "tip-float-extra", "tip-logpk-int"):
             CORPUS[name] = TIP_CASES[name][0].rstrip("\n")   # tip-pq-case: PASS everywhere, pq_protected False everywhere (must AGREE)
-        for name in ("tip-pq-int", "tip-pq-null", "tip-pq-empty", "tip-pq-short", "tip-pq-badkey", "tip-sig-upper", "tip-sig-space"):
-            DECLARED_DIVERGENCE[name] = ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "rust": "PASS", "swift": "PASS"},
-                                         "malformed optional PQ field / lax hex in a signed tip: tip_invalid on Python/JS/Go, unchecked by Rust/Swift (declared)")
+        for name in ("tip-pq-int", "tip-pq-null", "tip-pq-empty", "tip-pq-short", "tip-pq-badkey", "tip-sig-upper", "tip-sig-space",
+                     "tip-dup-key", "tip-float-extra", "tip-logpk-int"):
+            DECLARED_DIVERGENCE[name] = ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "PASS", "swift": "PASS"},
+                                         "malformed optional PQ field / lax hex in a signed tip: tip_invalid on Python/JS/Go/Java, unchecked by Rust/Swift (declared)")
         # hybrid-tip-valid: PASS everywhere (must AGREE). The two negatives: Python/Go check the PQ layer against the
         # trusted ML-DSA-65 key (FAIL: invalid / pq_missing); JS, Rust and Swift cannot (declared, never counted as interop)
-        for name, why in (("hybrid-tip-bad-pq", "tampered ML-DSA-65 tip signature: FAIL on Python/Go (crypto/mldsa), unchecked by JS/Rust/Swift (declared: no ML-DSA)"),
-                          ("hybrid-tip-pq-required-missing", "trusted ML-DSA-65 key given, Ed25519-only tip: pq_missing on Python/Go, unchecked by JS/Rust/Swift (declared)")):
-            DECLARED_DIVERGENCE[name] = ({"python": "FAIL", "js": "PASS", "go": "FAIL", "rust": "PASS", "swift": "PASS"}, why)
+        for name, why in (("hybrid-tip-bad-pq", "tampered ML-DSA-65 tip signature: FAIL on Python/Go/Java (crypto/mldsa, JDK 24+), unchecked by JS/Rust/Swift (declared: no ML-DSA)"),
+                          ("hybrid-tip-pq-required-missing", "trusted ML-DSA-65 key given, Ed25519-only tip: pq_missing on Python/Go/Java, unchecked by JS/Rust/Swift (declared)")):
+            DECLARED_DIVERGENCE[name] = ({"python": "FAIL", "js": "PASS", "go": "FAIL", "java": "FAIL", "rust": "PASS", "swift": "PASS"}, why)
 PQ_CASES = {"hybrid-tip-valid", "hybrid-tip-bad-pq", "hybrid-tip-pq-required-missing"}
+
+
+def build_java(tmp):
+    """Compile verifiers/java/CvVerify.java with a JDK >= 24 (ML-DSA) if one is available: $JAVA_HOME, then PATH,
+    then ~/.local/jdk/jdk-*; returns the command list or None (the Java verifier is then NOT measured, and said)."""
+    import glob
+    cands = []
+    if os.environ.get("JAVA_HOME"):
+        cands.append(os.path.join(os.environ["JAVA_HOME"], "bin"))
+    if shutil.which("javac"):
+        cands.append(os.path.dirname(shutil.which("javac")))
+    cands += sorted(glob.glob(os.path.expanduser("~/.local/jdk/jdk-*/bin")), reverse=True)
+    for b in cands:
+        javac, java = os.path.join(b, "javac"), os.path.join(b, "java")
+        if not (os.path.exists(javac) and os.path.exists(java)):
+            continue
+        try:
+            ver = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=30).stderr
+            major = int((ver.split('"')[1].split(".")[0]) if '"' in ver else 0)
+        except Exception:  # noqa: BLE001
+            continue
+        if major < 24:
+            print(f"  java verifier NOT measured: JDK {major} at {b} has no ML-DSA (needs 24+)")
+            continue
+        out = os.path.join(tmp, "cvj")
+        r = subprocess.run([javac, "-d", out, os.path.join(HERE, "java", "CvVerify.java")], capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            print("  java verifier NOT measured: javac failed:", r.stderr[:200])
+            return None
+        return [java, "-cp", out, "CvVerify"]
+    print("  java verifier NOT measured: no JDK >= 24 found (JAVA_HOME / PATH / ~/.local/jdk)")
+    return None
 
 
 def _matches(expected, got):
@@ -288,6 +341,9 @@ def main():
         go_bin = build_go(tmp)
         if go_bin:
             available["go"] = [go_bin]
+        java_cmd = build_java(tmp)
+        if java_cmd:
+            available["java"] = java_cmd
         print(f"differential oracle over {len(available)} verifiers: {sorted(available)}")
         for name, line in CORPUS.items():
             p = os.path.join(tmp, "l.jsonl")
@@ -302,11 +358,13 @@ def main():
             extra = {}
             if name in TIP_CASES:
                 pk = TIP_CASE["pubkey"]
-                extra = {"python": ["--trusted-pubkey", pk], "js": ["--trusted-pubkey", pk], "go": ["-trusted-pubkey", pk]}
+                extra = {"python": ["--trusted-pubkey", pk], "js": ["--trusted-pubkey", pk], "go": ["-trusted-pubkey", pk],
+                         "java": ["-trusted-pubkey", pk]}
                 if name in PQ_CASES:
                     extra["python"] += ["--trusted-pq-pubkey", TIP_CASE["pq_pubkey"]]
                     extra["go"] += ["-trusted-pq-pubkey", TIP_CASE["pq_pubkey"]]
-            verdicts = {k: verdict(cmd, p, extra.get(k, ()), flags_first=(k == "go")) for k, cmd in available.items()}
+                    extra["java"] += ["-trusted-pq-pubkey", TIP_CASE["pq_pubkey"]]
+            verdicts = {k: verdict(cmd, p, extra.get(k, ()), flags_first=(k in ("go", "java"))) for k, cmd in available.items()}
             uniq = set(verdicts.values())
             ok = len(uniq) == 1
             # the PQ tri-state must agree between the two verifiers that CHECK it (Python, Go); JS reports
@@ -316,9 +374,10 @@ def main():
                 pq_py = tip_pq(available["python"], p, extra.get("python", ()))
                 pq_go = tip_pq(available["go"], p, extra.get("go", ()), flags_first=True)
                 pq_js = tip_pq(available["js"], p, extra.get("js", ())) if "js" in available else None
-                if pq_py != pq_go or pq_js is True:
+                pq_java = tip_pq(available["java"], p, extra.get("java", ()), flags_first=True) if "java" in available else pq_go
+                if pq_py != pq_go or pq_java != pq_go or pq_js is True:
                     disagreements += 1
-                    print(f"  [DIFF] {name:22} pq_protected python={pq_py!r} go={pq_go!r} js={pq_js!r}")
+                    print(f"  [DIFF] {name:22} pq_protected python={pq_py!r} go={pq_go!r} java={pq_java!r} js={pq_js!r}")
             if not ok and name in DECLARED_DIVERGENCE:
                 expected, why = DECLARED_DIVERGENCE[name]
                 if all(_matches(expected.get(k), verdicts[k]) for k in verdicts):
@@ -329,6 +388,51 @@ def main():
             if not ok:
                 disagreements += 1
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:22} {verdicts}")
+        # SIGNATURE-LAYER oracle (0.13.0): per-entry Ed25519 + ML-DSA-65 — Python (signer.py) vs Go (-pubkey/-pq-pubkey)
+        # must give the same (ok, pq_protected, pq_status); JS verifies Ed25519 only (all_verified) and must agree on it
+        if TIP_CASE and TIP_CASE.get("pq_pubkey") and "go" in available:
+            sys.path.insert(0, ROOT)
+            import signer as _signer
+            hf = TIP_CASE["hybrid_full"]; lines = [json.loads(l) for l in hf.splitlines() if l.strip()]
+            bad = json.loads(json.dumps(lines)); raw = bytearray(__import__("base64").b64decode(bad[1]["signature_pq"])); raw[5] ^= 1
+            bad[1]["signature_pq"] = __import__("base64").b64encode(bytes(raw)).decode()
+            stripped = [{k: v for k, v in e.items() if k not in ("signature_pq", "signer_pq")} for e in lines]
+            SIG_CASES = {"sig-hybrid-valid": lines, "sig-hybrid-bad-pq": bad, "sig-stripped": stripped}
+            pk, pq = TIP_CASE["pubkey"], TIP_CASE["pq_pubkey"]
+            for name, ents in SIG_CASES.items():
+                p = os.path.join(tmp, "s.jsonl")
+                with open(p, "w") as f:
+                    f.write("".join(json.dumps(e) + "\n" for e in ents))
+                if os.path.exists(p + ".tip.json"):
+                    os.remove(p + ".tip.json")
+                py = _signer.verify_file(p, pk, pq)
+                out = subprocess.run(available["go"] + ["-pubkey", pk, "-pq-pubkey", pq, p], capture_output=True, text=True, timeout=30)
+                try:
+                    g = json.loads(out.stdout)["signatures"]
+                    go_t = (g["ok"], g["pq_protected"], g["pq_status"])
+                except Exception:  # noqa: BLE001
+                    go_t = ("NONJSON/CRASH",)
+                py_t = (py["ok"], py["pq_protected"], py["pq_status"])
+                java_t = go_t
+                if "java" in available:
+                    o3 = subprocess.run(available["java"] + ["-pubkey", pk, "-pq-pubkey", pq, p], capture_output=True, text=True, timeout=60)
+                    try:
+                        gj = json.loads(o3.stdout)["signatures"]
+                        java_t = (gj["ok"], gj["pq_protected"], gj["pq_status"])
+                    except Exception:  # noqa: BLE001
+                        java_t = ("NONJSON/CRASH",)
+                js_ok = None
+                if "js" in available:
+                    o2 = subprocess.run(available["js"] + [p, "--pubkey", pk], capture_output=True, text=True, timeout=30)
+                    try:
+                        js_ok = json.loads(o2.stdout)["signatures"]["all_verified"]
+                    except Exception:  # noqa: BLE001
+                        js_ok = "NONJSON/CRASH"
+                ed_ok = not py["failures"] and py["verified"] == py["total"]
+                ok = py_t == go_t == java_t and (js_ok is None or js_ok == ed_ok)
+                if not ok:
+                    disagreements += 1
+                print(f"  [{'OK ' if ok else 'DIFF'}] {name:22} python={py_t} go={go_t} java={java_t} js_ed25519={js_ok}")
         # ORDERING oracle: the three tip checkers must ORDER instants identically, not only accept identically
         if TIP_CASE:
             pk = TIP_CASE["pubkey"]
@@ -339,12 +443,12 @@ def main():
                 with open(p + ".tip.json", "w") as f:
                     f.write(tipdoc)
                 vs = {}
-                for k in ("python", "js", "go"):
+                for k in ("python", "js", "go", "java"):
                     if k not in available:
                         continue
                     ex = {"python": ["--trusted-pubkey", pk, "--tip-not-before", nb], "js": ["--trusted-pubkey", pk, "--tip-not-before", nb],
-                          "go": ["-trusted-pubkey", pk, "-tip-not-before", nb]}[k]
-                    vs[k] = verdict(available[k], p, ex, flags_first=(k == "go"))
+                          "go": ["-trusted-pubkey", pk, "-tip-not-before", nb], "java": ["-trusted-pubkey", pk, "-tip-not-before", nb]}[k]
+                    vs[k] = verdict(available[k], p, ex, flags_first=(k in ("go", "java")))
                 ok = all(v == expect for v in vs.values())
                 if not ok:
                     disagreements += 1

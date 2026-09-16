@@ -156,7 +156,10 @@ class TestTip(unittest.TestCase):
         d = json.load(open(self.led + ".tip.json"))
         for bad in ("20", 20.0, True):
             json.dump(dict(d, entries=bad), open(self.led + ".tip.json", "w"))
-            r = self._v(); self.assertEqual(r["verdict"], "FAIL", repr(bad)); self.assertIn("integer", self._errors(r))
+            r = self._v(); self.assertEqual(r["verdict"], "FAIL", repr(bad))
+            # 16/09 (r5): the tip is parsed with the strict profile, so a float `entries` is refused by the parser
+            # ("non-portable float") before the "non-negative integer" check sees it; both are named FAILs
+            self.assertRegex(self._errors(r), "integer|float")
 
     def test_payload_bytes_are_the_cross_language_oracle(self):
         self.assertEqual(T.tip_payload(3, "cd" * 32, "ab" * 32, "2026-09-15T07:00:00+00:00"),
