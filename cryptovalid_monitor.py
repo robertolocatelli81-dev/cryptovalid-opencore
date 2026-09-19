@@ -20,6 +20,7 @@ signed by the log key when a keyfile is given, so a third party can audit the mo
 """
 from __future__ import annotations
 import json
+import re
 import os
 import sys
 from datetime import datetime, timezone
@@ -41,8 +42,38 @@ def _load_state(path: str) -> Optional[Dict]:
         return json.load(f)
 
 
+def find_matches(ledger_path: str, patterns: List[str], since_index: int = 0) -> Dict:
+    """Identity / subject search over the ledger, the way rekor-monitor searches a log for identities (its README,
+    downloaded 2026-09-19: "monitor to search for identities within a log", subjects as regular expressions): every
+    pattern is a Python regex matched (search) against the CANONICAL bytes of each entry — the same bytes the Merkle
+    leaf commits to — so a match names a leaf that an inclusion receipt (cryptovalid_receipt) can prove. Returns
+    {patterns, scanned, matches: [{index, self_hash, pattern, snippet}], new_matches (index >= since_index)}."""
+    regs = []
+    for pat in patterns:
+        try:
+            regs.append((pat, re.compile(pat)))
+        except re.error as e:
+            raise ValueError(f"bad pattern {pat!r}: {e}") from None
+    matches = []
+    with open(ledger_path, encoding="utf-8") as f:
+        idx = -1
+        for line in f:
+            if not line.strip():
+                continue
+            idx += 1
+            entry = json.loads(line)
+            canon = M.canonical(entry).decode("utf-8")
+            for pat, rg in regs:
+                m = rg.search(canon)
+                if m:
+                    a, b = max(0, m.start() - 40), min(len(canon), m.end() + 40)
+                    matches.append({"index": idx, "self_hash": entry.get("self_hash"), "pattern": pat, "snippet": canon[a:b]})
+    return {"patterns": patterns, "scanned": idx + 1, "matches": matches,
+            "new_matches": [m for m in matches if m["index"] >= since_index]}
+
+
 def run(ledger_path: str, state_path: str, keyfile: Optional[str] = None, max_silence_h: Optional[float] = None,
-        trusted_pubkey_hex: Optional[str] = None, sth_path: Optional[str] = None) -> Dict:
+        trusted_pubkey_hex: Optional[str] = None, sth_path: Optional[str] = None, match: Optional[List[str]] = None) -> Dict:
     """One monitor run. Returns a verdict dict with `ok`, `alerts`, `tree_size`, `root_sha256`.
     Three modes, stated plainly (council 14/09, rounds 2-3):
       * WRITER (keyfile): the saved head is verified on load against the log key; a state without a signed
@@ -116,7 +147,10 @@ def run(ledger_path: str, state_path: str, keyfile: Optional[str] = None, max_si
             except (KeyError, ValueError):
                 pass
     ok = not alerts
-    verdict = {"kind": "cryptovalid_monitor/1", "ts": _now(), "ledger": os.path.abspath(ledger_path),
+    identity = None
+    if match:                              # searched AFTER the append-only checks: a match is only meaningful on a green tree
+        identity = find_matches(ledger_path, match, since_index=int(prev["tree_size"]) if prev else 0)
+    verdict = {"kind": "cryptovalid_monitor/1", "ts": _now(), "ledger": os.path.abspath(ledger_path), "identity": identity,
                "ok": ok, "alerts": alerts, "tree_size": n2, "root_sha256": root2,
                "previous": ({"tree_size": prev["tree_size"], "root_sha256": prev["root_sha256"], "ts": prev.get("ts")} if prev else None),
                "consistency": consistency, "stato_baseline": stato_auth,
@@ -174,8 +208,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--keyfile", help="log key: sign the state's tree head"); p.add_argument("--max-silence-h", type=float)
     p.add_argument("--trusted-pubkey", help="verify the saved tree head against this log key (auditor without the private key)")
     p.add_argument("--sth-file", help="auditor: signed tree head for the current tree, published by the writer")
+    p.add_argument("--match", action="append", default=[], metavar="REGEX",
+                   help="identity/subject search over the canonical entries (repeatable); new matches = entries appended since the last green state")
     a = p.parse_args(argv)
-    v = run(a.ledger, a.state, a.keyfile, a.max_silence_h, a.trusted_pubkey, a.sth_file)
+    try:
+        v = run(a.ledger, a.state, a.keyfile, a.max_silence_h, a.trusted_pubkey, a.sth_file, a.match or None)
+    except ValueError as e:
+        print(json.dumps({"ok": False, "error": str(e)})); return 2
     print(json.dumps(v, indent=1))
     return 0 if v["ok"] else 2
 

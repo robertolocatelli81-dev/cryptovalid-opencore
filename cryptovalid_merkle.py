@@ -123,7 +123,8 @@ def canonical(entry):
 
 
 def leaves_from_ledger(path):
-    return [canonical(json.loads(line)) for line in open(path) if line.strip()]
+    with open(path, encoding="utf-8") as f:     # the file is JSON, so UTF-8 whatever the locale; closed deterministically
+        return [canonical(json.loads(line)) for line in f if line.strip()]
 
 
 def tree_head(leaves):

@@ -397,14 +397,23 @@ Adversarial testing (NEMESIS + an independent LLM red-team) found and CLOSED rea
 
 **Declared limits** (from a further independent adversarial review, 2026-08-17 — stated, not hidden):
 
-- **Split-view / equivocation:** an RFC 3161 TSA stamps *any* hash it is shown — it proves
-  existence-by-T, **not uniqueness**. A signer-key holder could maintain two internally valid chains,
-  anchor both, and serve different views to different verifiers. Certificate Transparency solves this
-  with gossip and independent monitors; a standalone archive has no gossip. Mitigation: publish each
-  STH through more than one channel and compare; treated as future work, not as solved.
-- **Rollback / freshness:** a verifier who does not already know the latest HEAD cannot detect being
-  served an older (integral, anchored) state. The anti-truncation HEAD protects only relative to a
-  known HEAD; TSA anchors do not provide freshness.
+- **Split-view / equivocation** — declared "future work" here from 2026-08-17 to 2026-09-19; since **0.14.0**
+  it is a measured feature, see *Checkpoints, witnesses, split-view* below: a signer-key holder can still write two
+  internally valid chains, but a checkpoint of either is cosigned by a witness only if it extends what that witness
+  already cosigned, so a witness that has cosigned one view refuses the other — and, when the two views have the
+  same size, returns a pair of log-signed checkpoints that is proof by itself. What remains: a log that feeds
+  DISJOINT subsets of the trusted witnesses different views gets both cosigned without any refusal whenever a
+  relying party's quorum N fits inside one subset (M trusted witnesses, M ≥ 2N) — which is why witness policies fix
+  the set and demand N > M/2, and why the monitoring side of the protocol (not implemented here) exists; a log
+  colluding with enough witnesses to reach the quorum; a relying party that trusts no witness is where it was.
+- **Rollback / freshness** — the same section: the witness cosignature carries a timestamp inside the signed
+  bytes, and `verify_witnessed(min_witnesses=N, max_age_s=T)` requires N trusted witnesses each with a cosignature
+  younger than T on this exact checkpoint. A witness that has cosigned a newer tree never cosigns the older one
+  again, so a stale view stays acceptable only for as long as the log can keep N witnesses from seeing the newer
+  tree. What remains: the witnesses' clocks are the reference (not the log's), a stale view younger than T passes,
+  and a log that starves N witnesses of its newer checkpoints keeps them re-cosigning the old one (the spec allows
+  re-cosigning the same checkpoint). Without a witness, the anti-truncation HEAD still protects only relative to a
+  known HEAD and TSA anchors give no freshness.
 - **Pre-anchor window:** between an event and its sealed anchor, a root-level attacker can rewrite and
   re-seal silently. The anchor proves "existed by T"; the per-entry timestamp comes from the local
   clock and is not independently attested.
@@ -535,6 +544,81 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## Checkpoints, witnesses, split-view (2026-09-19, 0.14.0)
+
+The two limits above were the honest gap between this archive and a transparency log. They are closed the way the
+field closes them — with the world's formats, so that the field's own software verifies the result — and the
+closure is measured, not asserted (`test_cryptovalid_witness.py`, 27 tests — 26 without a Go toolchain, 5 without `cryptography`; the bench against
+the reference witness is in the release dossier):
+
+| Module | What it does | Standard (editor's copies downloaded 2026-09-19) |
+|---|---|---|
+| `cryptovalid_checkpoint.py` | A **checkpoint** of a ledger: origin, tree size, RFC 6962 root of the canonical entries (the same leaves the receipts prove against), signed as a **note** by the log key (Ed25519, key id = SHA-256(name ‖ 0x0A ‖ type ‖ pubkey)[:4]); `vkey` strings; strict parsing where the spec is strict (tree size without leading zeroes, canonical base64 root, control characters refused, at most 100 signature lines — the ceiling of the Go implementation, the spec floor being 16) and permissive where the spec says so (any non-empty origin line: "go.sum database tree" parses); every line of a known key is verified (the spec's MUST — the Go library verifies the first line per key and drops repeats, so a note with a bogus repeat opens there and is refused here: declared, fail-closed), byte-identical repeats count once, keys of types nobody verifies here (RFC 6962 THS 0x05, unassigned) are ignored, never accepted — ECDSA (0x02) and ML-DSA-44 (0x06) ARE verified, see below — two different trusted keys colliding on one 4-byte id are refused as ambiguous (measured with a real collision); consistency proofs as base64 lists. | c2sp.org/tlog-checkpoint, c2sp.org/signed-note |
+| `cryptovalid_witness.py` | A **witness**: keeps the last checkpoint it cosigned per origin (trust on first use, stated; several trusted keys per origin for rotation; an origin that differs from the key name is configured explicitly, as for `sum.golang.org`), cosigns a new one only when the log signature verifies **and** the new tree extends the stored one (same size → same root; larger → a consistency proof that verifies; smaller → rollback). Every refusal that involves two log-signed checkpoints returns both (`evidenza`); the pairs that are **proof** — `split-view`, two log-signed roots at one size, anyone can check both signatures — are appended once each to `<state>.evidence.jsonl` (also when the refusal reaches an HTTP client as a bare status), whether the witness meets them at the size it holds, at a size it cosigned earlier (`<state>.cosigned.jsonl`, one line per cosigned checkpoint; the last 4 MiB are searched) or at a size it refused earlier without proof and is now passing; `rollback` and `unproven-extension` are **not** proof (a log genuinely signed the older checkpoint, a missing proof may be a client error): they are returned and counted (distinct ones), and remembered as size/root/time (last 100 per origin); the log-signed notes refused without proof beyond the stored size — whatever old size the request stated — are kept in a `pending` ring (at most 100 per origin and 256 KiB, notes above 16 KiB kept as root only, smallest sizes dropped first) so that a later cosign, a second root at that size or a later rollback to it can turn them into proof (a cosign consumes the pending roots at its own size and leaves the others in the ring). A second root at a size the witness never cosigned pairs with a root it still remembers (pending ring, or the refusals ring as root only → `split-view-unkept`); one it no longer remembers (never seen, or dropped from the rings) is a `rollback`/`unproven-extension` it cannot turn into proof — stated. The cosignature is **cosignature/v1** (timestamp inside the signed bytes). `serve` exposes the `add-checkpoint` endpoint of the **tlog-witness HTTP interface** (`POST <prefix>/add-checkpoint`; 200 with the signature lines, 400, 403, 404, 409 with the size as `text/x.tlog.size`, 422, in the spec's order; 500 when the witness cannot decide — no Ed25519 implementation (the reason in the body), state file unreadable or unwritable or invalid configuration (the reason on stderr); check-and-persist under a process lock and a file lock, state and evidence fsync'ed before the response); `submit` is the log side (old size 0, then 409 → the witness's size and our proof; from the answer it keeps only the lines of the witness keys it trusts, each replacing that key's older line). `verify_witnessed` is the relying party: log signature (one key or a rotation set), the expected origin, ≥ N distinct trusted witnesses on *this* text — every line of a trusted witness key is verified and its newest counts — and, with `max_age_s`, ≥ N of them younger than it (a witness whose newest cosignature is in the future beyond `clock_skew_s` does not count; without `max_age_s` no clock is consulted). | c2sp.org/tlog-cosignature (Ed25519 v1), c2sp.org/tlog-witness |
+| `cryptovalid_scitt.py` | **SCITT** (RFC 9943, Proposed Standard, June 2026): a **Signed Statement** (COSE_Sign1 with the CWT Claims header — iss, sub — content type and kid, payload attached or detached), its **registration** on a cryptovalid ledger (the entry binds the statement's SHA-256), a **Receipt** with the CWT Claims RFC 9943 requires and the RFC 9942 inclusion proof (vds 1, vdp −1; the canonical leaf travels unsigned beside it), and the **Transparent Statement** (receipts under label 394). The relying party verifies offline, fail-closed: Issuer signature, TS signature with ITS trusted key, that the leaf binds THIS statement, and the RFC 6962 path up to the signed root. Measured with **pycose**, an independent COSE implementation: it decodes both messages, verifies both signatures, reads labels 15/394/395, refuses a wrong key or a tampered payload (`test_cryptovalid_scitt.py`, 5 tests, pycose required in CI). Stated: EdDSA only; the `RFC9162_SHA256` profile, not CCF's; no public Transparency Service here. | RFC 9943, RFC 9942, RFC 9052 |
+| `cryptovalid_monitor.py --match REGEX` | **Identity / subject search** while monitoring, the way rekor-monitor searches a log for identities (its README, 2026-09-19): each pattern is matched against the canonical bytes of every entry — the bytes the Merkle leaf commits to — and the run reports the matching leaves (index, self_hash, snippet) and the NEW ones since the last green state, so an inclusion receipt can prove any of them. | rekor-monitor (Sigstore) |
+| `verifiers/note_oracle/` | **Independent verifier** with no cryptovalid code: `golang.org/x/mod/sumdb/note` (the Go checksum database's implementation of signed notes) and `github.com/transparency-dev/formats/note` (cosignature/v1; pinned to the commit the reference witness of 2026-09-18 uses, which also caps cosigner names at 255 bytes — so do we). Built and run in CI; every listed key must have signed, a tampered byte or a missing cosigner is exit 1. | the ecosystem's own libraries |
+
+Measured on 2026-09-19 against the **reference witness** (`github.com/transparency-dev/witness`, commit 55a5a0bf332a of
+2026-09-18, the code the Armored Witness hardware runs), three ways: its in-process `witness.Update` cosigned our
+checkpoint of a 5-entry ledger, refused the 8-entry one without a proof, cosigned it with our RFC 6962 consistency
+proof, refused a fork at size 8 ("roots do not match", logging both checkpoints as inconsistent) and refused rollbacks;
+its HTTP **client** drove our `serve` with the same outcome at every step; our `submit` **client** drove its HTTP
+server (200, 409 then proof, 422 on the fork, 409 on rollbacks) and the cosignature it returned verified in
+`verify_witnessed` and in the Go oracle (`VERIFIED sigs=3 unverified=0` on a note cosigned by both witnesses).
+
+```bash
+python3 signer.py keygen log.key && python3 signer.py keygen witness.key
+python3 cryptovalid_checkpoint.py sign ledger.jsonl --origin example.org/ledger --key log.key --out cp.note
+LOG=$(python3 cryptovalid_checkpoint.py vkey --key log.key --name example.org/ledger)
+WIT=$(python3 cryptovalid_checkpoint.py vkey --key witness.key --name witness.example/w1 --cosigner)
+python3 cryptovalid_witness.py serve --state witness.json --name witness.example/w1 --key witness.key --log-vkey "$LOG" --port 8477 &
+python3 cryptovalid_witness.py submit ledger.jsonl --origin example.org/ledger --key log.key --url http://127.0.0.1:8477 --witness-vkey "$WIT" --out cp.cosigned.note
+python3 cryptovalid_witness.py verify cp.cosigned.note --log-vkey "$LOG" --witness-vkey "$WIT" --min-witnesses 1 --max-age 3600
+```
+
+Log keys: Ed25519 (0x01) and **ECDSA** (0x02, P-256/384/521, the type Rekor v1 uses — key id SHA-256(DER SPKI)[:4], as
+transparency-dev/formats computes it) — measured on the three real `rekor.sigstore.dev` checkpoints of 2026-09-19 in
+`examples/checkpoints/` (2.77 billion entries on the active shard: verified by us and by the Go oracle's
+`NewECDSAVerifier`, refused when tampered, cosigned by our witness). Cosignatures: Ed25519 cosignature/v1 (0x04) and
+**ML-DSA-44** cosignature/v1 (0x06, the type the witness spec now says witnesses SHOULD use; FIPS 204 pure mode, the
+spec's `cosigned_message` over origin/size/root — extension lines are outside it, as the spec states): `serve --pq-key`
+adds the ML-DSA-44 line beside the Ed25519 one, and the Go oracle (filippo.io/mldsa through transparency-dev/formats)
+verifies it. Stated limits of this layer: RFC 6962 THS keys (0x05) are ignored; our own logs sign Ed25519 (ECDSA is
+verified, not emitted); the monitoring (GET) side of tlog-witness is
+not implemented, only `add-checkpoint`; no public witness has cosigned an OMEGA ledger (there is no public OMEGA log — the
+interop above is local, with the reference implementation); the witness state file's integrity is the operator's; the
+per-entry timestamps remain local-clock claims (pre-anchor window) and an append-only log never proves completeness
+(selective omission). Declared divergences from the Go libraries, in the refusing direction: a cosignature
+timestamp above 2^63−1 is refused here because the cosignature spec says it MUST NOT exceed that value, a zero timestamp is
+refused because the witness spec says a witness MUST NOT emit one (Go's Ed25519 cosignature verifier checks neither; its ML-DSA-44 one refuses above 2^63−1 and accepts zero), a second, invalid line
+from a key that already signed validly makes the note invalid here (Go drops repeats), a signature line above 8 KiB of
+decoded material makes the note invalid here even from an unknown key (Go has only the 100-line cap and ignores the
+line); the checkpoint parser demands canonical base64 for the root (the `formats/log` reader does not); and one in the
+accepting direction: the same vkey listed twice is one key here, `ambiguous key` in Go's `VerifierList` (the same key,
+no effect on what verifies). The
+evidence file holds proofs only (one record per distinct pair of log-signed roots at one size), so an unauthenticated
+client replaying the log's public history cannot grow it (measured: 5 replays of one rollback → no record; 291 future
+checkpoints without proof → no record at the 289 fresh sizes, and one record at each of the two sizes that already held
+refused roots, where the third log-signed root is one more genuine proof — one pair per request, so a log signing many
+roots at one size buys one record and one fsync per request, not one per pair). The state it can grow only up to two
+bounded rings per origin — the last 100 refusals as size/root/time and at most 100 pending log-signed notes, 256 KiB
+(UTF-8 bytes) in all, notes above 16 KiB remembered by their root only — a later conflicting root then yields a
+`split-view-unkept` record with the earlier root, not a full pair (measured: 291 replays → 100 pending, file size flat;
+20 notes with 115 extension lines of 8 000 bytes and 60 with 20 KB of four-byte characters → state under 200 KB) — plus
+one index of the last 10 000 recorded proof pairs (≈ 0.75 MB at most; beyond it a very old pair replayed is recorded
+again), which grows only with the log's misbehaviour. A request that adds something to the rings or to the proofs
+(a rollback, an unproven extension, a log-signed root beyond the stored size, a new pair — whatever status it then gets)
+rewrites and fsyncs the state file once; a request that adds nothing (a replay of a refusal already in the ring, a
+replay of a recorded pair, a bad signature, an unknown origin, a malformed body) writes nothing — measured on every
+path with a spy on the writer. The refusals ring counts distinct refusals, not attempts. A rollback is compared with the roots the witness still
+holds at that size and with the last 4 MiB of the cosigned history — one file shared by all the origins a witness
+serves, so a busy origin can push a quiet one's older cosigned checkpoints out of that window (a bounded read: stated). What grows without a bound: the cosigned
+history, one line per checkpoint this witness cosigns (each needed a valid consistency proof), and the proofs, at most one
+per request — a log that signs many roots for one size fills the file with proofs of its own misbehaviour at the rate of
+its requests, each request costing the witness a bounded number of writes. Lines from keys the witness does not know are stripped from
+everything it stores.
+
 ## High-frequency ingestion (Art. 12 logs at scale)
 
 `cryptovalid_ingest.py` turns a high-rate event stream into this same evidence format —
@@ -634,7 +718,9 @@ What will change under an evidence ledger written today, and what this repositor
 - **Transparency and receipts.** The IETF SCITT architecture is now **RFC 9943** (Proposed Standard, June 2026) and
   COSE receipts are **RFC 9942**; this repository's receipts follow RFC 9942 (`vds`=1 RFC9162_SHA256, inclusion −1 /
   consistency −2, alg EdDSA) and its monitor plays the role rekor-monitor and immudb's auditor play (append-only,
-  consistency over time; the blind window between two runs is declared). Registering signed statements with a SCITT
+  consistency over time; the blind window between two runs is declared), and since 0.14.0 its checkpoints and
+  witness speak the C2SP formats and protocol the transparency ecosystem (Sigstore, Tessera, the Go checksum
+  database, the witness network) uses — measured against the reference witness, see above. Registering signed statements with a SCITT
   transparency service and obtaining its receipts is the natural next step and is not implemented yet.
 - **Qualified ledgers in the EU.** Commission Implementing Regulation (EU) 2025/2531 gives the requirements for
   *qualified* electronic ledgers under eIDAS 2.0 (Art. 45l); `eidas_ledger_check.py` self-assesses a ledger against

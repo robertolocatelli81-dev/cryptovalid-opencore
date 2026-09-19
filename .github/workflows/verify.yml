@@ -30,7 +30,7 @@ jobs:
         run: |
           for t in test_*.py; do
             echo "== $t"
-            python3 "$t"
+            CV_REQUIRE_CRYPTO=1 python3 "$t"
           done
           # PQ signature-suite regressions (pinning, require_pq, dup-key, content-binding)
           for t in pqcrypto/test_*.py; do
@@ -40,6 +40,13 @@ jobs:
 
       - name: Conformance — the reference verifier MUST match every test vector
         run: python3 conformance.py
+
+      - name: "Without cryptography (this Python) — parsing and NON_VERIFICATA paths of the witness suite in a clean venv"
+        run: |
+          python3 -m venv --without-pip "$RUNNER_TEMP/nocrypto"
+          if "$RUNNER_TEMP/nocrypto/bin/python" -c "import cryptography" 2>/dev/null; then echo "::error::venv has cryptography"; exit 1; fi
+          "$RUNNER_TEMP/nocrypto/bin/python" test_cryptovalid_witness.py 2>&1 | tee "$RUNNER_TEMP/nocrypto.txt"
+          python3 -c "import re,sys; t=open('$RUNNER_TEMP/nocrypto.txt').read(); ran=re.search(r'^Ran (\d+) tests', t, re.M); sk=re.search(r'skipped=(\d+)', t); ok=re.search(r'^OK', t, re.M); sys.exit(0 if ran and ok and int(ran.group(1)) > int(sk.group(1) if sk else 0) else 1)" || { echo "::error::no test actually ran without cryptography"; exit 1; }
 
       - name: Solana anchor — the verifier MUST reject a fake cluster / wrong hash (offline gate)
         run: |
@@ -94,9 +101,9 @@ jobs:
           python3 signer.py verify "$RUNNER_TEMP/hsm_signed.jsonl"       # HSM signatures PASS
 
   # Independent verifiers of the same spec. The differential oracle asserts ZERO disagreements
-  # across Python, JS and Rust on hostile inputs — "a pack accepted by one is accepted by all, or the
-  # build fails" is only true because this job exists (added 2026-09-11: until then the oracle was
-  # not run in CI, and its shipped copy pointed at a path that did not exist in this layout).
+  # across Python, JS, Go, Rust and Java on hostile inputs (Swift has its own macOS job) — "a pack
+  # accepted by one is accepted by all, or the build fails" is only true because this job exists
+  # (added 2026-09-11 with Python/JS/Rust; Go, Java and the note oracle joined in later releases).
   independent-verifiers:
     runs-on: ubuntu-latest
     steps:
@@ -139,6 +146,14 @@ jobs:
           java -cp "$RUNNER_TEMP/cvj" CvVerify examples/sample_ledger.jsonl > /dev/null
       - name: Differential oracle — Python vs JS vs Go vs Rust vs Java must agree on every hostile input
         run: python3 verifiers/differential_oracle.py
+      - name: "SCITT statements — pycose (independent COSE implementation) as the oracle, required here"
+        run: |
+          pip install "pycose==1.1.0" "cbor2==5.4.*"
+          CV_REQUIRE_PYCOSE=1 python3 test_cryptovalid_scitt.py
+      - name: "Checkpoint notes and witness cosignatures — opened by the ecosystem's own Go libraries (note oracle, required here)"
+        run: |
+          go build -C verifiers/note_oracle -o "$RUNNER_TEMP/cvnote-oracle" .
+          CV_REQUIRE_GO_ORACLE=1 python3 test_cryptovalid_witness.py
 
   swift-verifier:
     runs-on: macos-latest
