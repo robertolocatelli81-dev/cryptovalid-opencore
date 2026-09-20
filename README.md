@@ -544,6 +544,64 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## Signed decision receipts for agents (2026-09-20, 0.15.0)
+
+`cryptovalid_acta.py` implements **draft-farley-acta-signed-receipts-03** (T. Farley, ScopeBlind / Veritas Acta, 29 August
+2026; an individual Internet-Draft, Informational; copy downloaded 2026-09-20): a signed receipt of an access-control
+decision for an AI agent's tool call — the evidence artifact the FINOS AI Governance Framework thread on MI-21 (agent
+decision audit) is converging on, and the profile behind the shared conformance vectors at
+ScopeBlind/agent-governance-testvectors. Transcribed and enforced: the envelope shape `{payload, signature{alg, kid, sig}}`
+(§2.1; the flat shape is read, never emitted), `issuer_id == kid` (§2.2), `protectmcp:decision` payloads (§3.1), PureEdDSA
+over the JCS (RFC 8785) bytes of the payload with no pre-hash (§5, §6.6), `previousReceiptHash = "sha256:" +
+hex(SHA-256(JCS(entire signed receipt)))` with the member omitted on a genesis and an unknown prefix refused (§6.7), the
+normative policy digest `acta-policy-digest-v1` over the exact bytes of every policy file (§6.8), and algorithm agility
+(§6.9: EdDSA emitted; ML-DSA-65 and ES256 read against the declared `alg`, never assumed — the ES256 signature encoding is
+not in the draft, IEEE P1363 r||s is read and said). The kid follows §2.1.1 (`sb:issuer:` + 12 Base58 characters; checked
+against the `base58` 2.1.1 library).
+
+| Measured 2026-09-20 | result |
+|---|---|
+| Fixture policy digest (`expected/chain.jsonl` of the vectors repository, commit 49ad7c1) | reproduced from the `.cedar` bytes: `sha256:81ba074a…` |
+| Fixture key: seed `00…01` → public key `4cb5abf6…` (as published in `fixtures/keys/README.md`); kid `sb:issuer:6ASf5EcmmEHT` computed per §2.1.1 | agrees with the `base58` 2.1.1 library (the repository's own receipts use the kid `conformance`) |
+| Our receipts through the repository's own checks (`conformance/verify.sh`) | schema (ajv, draft-07) 4/4; `@veritasacta/verify` 0.10.18 signatures 4/4; chain/outcomes PASS — **6/6**; each of three tampered sets (decision, link, signature) fails checks 2 and 3 (the schema check passes, as it must: the tampered values are well-formed) |
+| Decisions | from the official Cedar bindings (`cedarpy` 4.12, the cedar-policy Rust crate) — the fixtures' `expected_decision` is never read |
+| Reference receipts of the draft author's implementation (protect-mcp 0.29.0, `sign --cedar`) through `cryptovalid_acta verify` | **4/4**, §6.7 links and §6.8 digest recomputed; the decision altered → refused (`examples/acta/reference_protect-mcp/`) |
+| Algorithm-mixed chain (EdDSA then ML-DSA-65, §6.11) | verifies, each receipt against its own `alg` |
+
+```
+python3 cryptovalid_acta.py policy-digest examples/acta                       # sha256:81ba074a…
+python3 cryptovalid_acta.py sign --key agent.seed --tool Bash --decision deny --policy-dir examples/acta --out r2.json --previous r1.json
+python3 cryptovalid_acta.py verify r1.json r2.json --key sb:issuer:6ASf5EcmmEHT=4cb5abf6…29 --policy-dir examples/acta
+python3 cryptovalid_acta.py run-vectors <agent-governance-testvectors clone> receipts/cryptovalid-opencore --seed 00…01
+```
+
+`examples/acta/testvectors_driver/run.sh` is the driver to drop into that repository's `implementations/`. Review round 1
+(Claude Opus 5, Sonnet 5, Haiku 4.5 — Gemini 3.1 Pro's credits were exhausted that day; every finding re-measured and
+ablated in the tests): the §2.2 `issuer_id == kid` rule was enforced only on the envelope shape — a flat-shape receipt
+signed by any registered key could name another issuer (fixed for both shapes); a valid signature with hostile members
+outside the signed bytes (`NaN` inside the signature object, 600-deep nesting) raised instead of returning a verdict (the
+whole receipt is canonicalized first; the signature object must carry exactly `alg`, `kid`, `sig`; a payload with a
+`signature` member is refused, §6.6); with the policy bytes given, a receipt without `policy_digest` passed as "bound"
+(now a problem) and `policy_digest` / `previousReceiptHash` formats were not checked on read; a chain whose earlier receipt
+failed raised at the next link; a `--policy-dir` without policy files verified nothing and said ok; the CLI printed a
+traceback on 100 000-deep JSON and accepted duplicate JSON keys last-wins (both refused). Round 2: `verify_chain` read the
+link and the policy digest from a `payload` member even on a flat-shape receipt, so a signed decoy `payload` could make a
+broken chain pass and a good one fail (now one shape decision for signature, link and digest, §6.6); ES256 is read low-S only
+(the `(r, n−s)` twin verifies and would change the §6.7 hash of the receipt); `issued_at` must be a real instant, not just
+the RFC 3339 shape; `previous` must be a signed receipt; a tool name that cannot sit in a Cedar entity literal is refused
+before evaluation; the ML-DSA-65 context choice (empty) is declared as ours, not the draft's. Round 3 (the last; its
+findings applied without a further round): an earlier-revision `policy_digest` (16 hex, no prefix — the §6.8
+compatibility note) no longer fails the signature check, it is an opaque label the policy binding refuses to bind on; the
+ML-DSA-65 and ES256 negative controls now reach the signature check itself (a real key that did not sign), not a length or
+format gate; the sentence "tampered sets fail all three checks" was false (the schema check passes on well-formed tampered
+values) and is corrected above. Stated limits: a chain truncated
+at its end is undetectable without an external commitment to its head (§9.7 — cryptovalid's checkpoints and witnesses are
+that commitment); the first receipt of a set may be a genesis or a segment of a longer chain (§2.2 says the format does not
+distinguish them; reported as a warning); whether the policy is the one in force is a separate check (§6.8); commitment
+mode (§6, Merkle-committed selectively disclosable fields), the evidence predicate (§4) and the other five receipt types are
+not implemented; keys come from the relying party — a receipt's embedded `public_key` (the reference implementation adds
+one) is never used (§9.5).
+
 ## Checkpoints, witnesses, split-view (2026-09-19, 0.14.0)
 
 The two limits above were the honest gap between this archive and a transparency log. They are closed the way the

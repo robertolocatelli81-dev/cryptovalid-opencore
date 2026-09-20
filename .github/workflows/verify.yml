@@ -150,6 +150,11 @@ jobs:
         run: |
           pip install "pycose==1.1.0" "cbor2==5.4.*"
           CV_REQUIRE_PYCOSE=1 python3 test_cryptovalid_scitt.py
+
+      - name: "Acta signed receipts — the official Cedar bindings drive the vectors; the reference receipts (protect-mcp 0.29.0) are the positive control"
+        run: |
+          pip install cedarpy
+          CV_REQUIRE_CRYPTO=1 CV_REQUIRE_CEDAR=1 python3 test_cryptovalid_acta.py
       - name: "Checkpoint notes and witness cosignatures — opened by the ecosystem's own Go libraries (note oracle, required here)"
         run: |
           go build -C verifiers/note_oracle -o "$RUNNER_TEMP/cvnote-oracle" .
