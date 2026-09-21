@@ -544,6 +544,29 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## Verifier hygiene from the cra-evidence review (2026-09-21, 0.15.1)
+
+Twelve review rounds on cra-evidence 0.3.0 — whose verifiers are this repository's, re-implemented — found four classes of
+defect in shared code. Measured here on 21/09/2026 with the probe before the fix (a divergence in every case) and with the
+differential oracle after it (76 cases, five verifiers, 0 disagreements, five CLI-grammar cases among them):
+
+- **JavaScript dropped an own `__proto__` key from its canonical form** (`d[k] = …` invokes the prototype setter): an entry
+  with such a key added and its `self_hash` untouched verified PASS in JS alone; an entry legitimately carrying that key
+  failed in JS alone. `Object.fromEntries` keeps the key. Two oracle cases, one in each direction.
+- **Rust's JSON parser accepted `+10`, `010` and raw control characters in strings**, whose canonical form is the same as
+  the escaped one, so a byte-tampered line verified PASS in Rust alone (Python, JS, Go and Java refuse them as not JSON).
+  RFC 8259 number grammar and the control-character rule enforced. Three oracle cases.
+- **A file that is not UTF-8 was `FILE_ERROR` in Rust, and JavaScript decoded it lossily** (a raw byte in a value whose
+  `self_hash` was computed over U+FFFD verified PASS in JS alone — found by the review of this very section) → strict UTF-8
+  and a `FAIL` verdict everywhere; two oracle cases as bytes.
+- **CLI grammar was five grammars**: an unknown flag, a value flag without a value or with `""`, or a second positional
+  was silently taken as the ledger path by the JS and Rust CLIs (a verdict with the constraint the operator asked for
+  dropped — `--trusted-pubkey "$KEY"` with the variable unset verified with the tip unchecked); Go's `flag` and Java
+  accepted an empty value as "not given"; the Python CLI validated five of its seven value flags. Now a usage error (exit 2,
+  no verdict) in all five; the oracle runs the five CLIs on five such inputs.
+
+No verdict changed on an in-profile ledger; the 42 test suites (Python, Go, Rust, JS) are unchanged and green.
+
 ## Signed decision receipts for agents (2026-09-20, 0.15.0)
 
 `cryptovalid_acta.py` implements **draft-farley-acta-signed-receipts-03** (T. Farley, ScopeBlind / Veritas Acta, 29 August

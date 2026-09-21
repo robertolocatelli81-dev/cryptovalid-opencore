@@ -559,7 +559,7 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(allow_abbrev=False, 
         prog="opencore/verifier.py",
         description="Verifica indipendente di un OMEGA ledger .jsonl (auditor-grade, stdlib-only).",
     )
@@ -579,6 +579,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--tip-not-before", default=None, help="refuse a tip dated before this ISO-8601 instant (rollback)")
     parser.add_argument("--expect-ledger-id", default=None, help="the chain identity (self_hash of entry 0) you expect: refuses another ledger's pair")
     args = parser.parse_args(argv)
+    for flag in ("algo", "pubkey", "tip", "trusted_pubkey", "trusted_pq_pubkey", "tip_not_before", "expect_ledger_id"):
+        v = getattr(args, flag, None)
+        if v is not None and (v == "" or v.startswith("-")):   # "" or a flag as a value would silently mean "not given" (21/09/2026: one grammar in the four)
+            parser.error(f"--{flag.replace('_', '-')} needs a value (got {v!r})")
 
     try:
         receipt = verify_ledger(args.ledger_path, algo=args.algo, tip=args.tip,

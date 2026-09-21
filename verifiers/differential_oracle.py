@@ -127,6 +127,27 @@ CORPUS["deep-valid-512"] = _valid_nested(510)   # exactly at the bound: must AGR
 # an unpaired UTF-16 surrogate escape: not a Unicode scalar, decoders disagree (Go stdlib → U+FFFD) → refused
 CORPUS["lone-surrogate"] = '{"idx":0,"ts":"t","data":{"k":"\\ud800"},"prev_hash":"' + "0" * 64 + '","self_hash":"z"}'
 CORPUS["valid-surrogate-pair"] = valid_entry({"k": "\U0001F600"})   # a proper pair (U+1F600) must PASS everywhere
+# 21/09/2026 — classes found on cra-evidence 0.3.0 (same verifier code) and measured here: JS dropped an own "__proto__" key
+# from its canonical form (an entry with that key added and self_hash untouched was PASS in JS alone); Rust's JSON accepted
+# "+10", "010" and raw control characters (same canonical form → PASS in Rust alone); a non-UTF-8 file was FILE_ERROR in Rust
+def _proto_rehashed():
+    e = {"idx": 0, "ts": "t", "data": {"i": 0}, "prev_hash": "0" * 64, "__proto__": {"evil": 1}}
+    e["self_hash"] = hashlib.sha256(canon(e)).hexdigest(); return json.dumps(e)
+CORPUS["proto-key-rehashed"] = _proto_rehashed()                                       # a legal key: PASS everywhere
+_t = valid_entry({"i": 0}); CORPUS["proto-key-hash-untouched"] = _t[:1] + '"__proto__": {"evil": 1}, ' + _t[1:]   # FAIL everywhere
+CORPUS["plus-number-same-canon"] = valid_entry({"n": 10}).replace('"n": 10', '"n": +10')       # not JSON: FAIL everywhere
+CORPUS["leading-zero-same-canon"] = valid_entry({"n": 10}).replace('"n": 10', '"n": 010')
+CORPUS["raw-tab-same-canon"] = valid_entry({"k": "a\tb"}).replace("\\t", "\t")
+CORPUS["crlf-endings"] = valid_entry({"a": 1}).replace("\n", "") + "\r"                       # one entry, CRLF: PASS everywhere
+CORPUS["idx-neg-zero"] = valid_entry({"a": 1}).replace('"idx": 0', '"idx": -0')                # -0 is the integer 0: PASS everywhere
+CORPUS["non-utf8-byte"] = valid_entry({"a": 1}).encode().replace(b'"ts"', b'"t\xffs"', 1)         # bytes: FAIL everywhere (Rust said FILE_ERROR)
+# review 21/09 (Opus): a raw byte INSIDE A VALUE, self_hash computed over U+FFFD — a lossy decoder reads exactly the hashed text and
+# says PASS (JS did, alone); a strict one refuses the file
+def _fffd_line():
+    e = {"idx": 0, "ts": "t", "data": {"k": "\ufffd"}, "prev_hash": "0" * 64}
+    e["self_hash"] = hashlib.sha256(canon(e)).hexdigest()
+    return json.dumps(e, ensure_ascii=False).encode("utf-8").replace("\ufffd".encode("utf-8"), b"\xff", 1)   # the raw byte where U+FFFD was hashed
+CORPUS["non-utf8-byte-hashed-as-fffd"] = _fffd_line()
 
 
 # Signed chain tip (15/09/2026): a truncated ledger WITH a tip next to it. Python, JS and Go check the sidecar
@@ -347,8 +368,8 @@ def main():
         print(f"differential oracle over {len(available)} verifiers: {sorted(available)}")
         for name, line in CORPUS.items():
             p = os.path.join(tmp, "l.jsonl")
-            with open(p, "w") as f:
-                f.write(line + "\n")
+            with open(p, "wb") as f:                      # bytes: the corpus may carry a byte that is not UTF-8
+                f.write((line + "\n").encode("utf-8", "surrogateescape") if isinstance(line, str) else line + b"\n")
             if os.path.exists(p + ".tip.json"):
                 os.remove(p + ".tip.json")
             if name in TIP_CASES:
@@ -453,7 +474,36 @@ def main():
                 if not ok:
                     disagreements += 1
                 print(f"  [{'OK ' if ok else 'DIFF'}] ordering-{i:<14} expect {expect}: {vs}")
-    print(f"\ndisagreements: {disagreements}/{len(CORPUS) + (len(TIP_CASE['ordering']) if TIP_CASE else 0)} (declared out-of-profile divergences: {declared})")
+        # CLI grammar (21/09/2026, found on cra-evidence): an unknown flag, a value flag without a value or with "", a second
+        # positional must be a usage error (exit 2, no verdict) in EVERY CLI — never a verdict with the constraint dropped
+        valid = os.path.join(tmp, "v.jsonl")
+        with open(valid, "w") as f:
+            f.write(valid_entry({"a": 1}) + "\n")
+        cli_cases = {"cli-unknown-flag": ["--no-such-flag"], "cli-trusted-pubkey-empty": ["--trusted-pubkey", ""],
+                     "cli-trusted-pubkey-missing-value": ["--trusted-pubkey"], "cli-two-positionals": [valid],
+                     "cli-algo-empty": ["--algo", ""]}   # review 21/09 (Haiku): Python validated five value flags of seven
+        for name, extra in cli_cases.items():
+            row = {}
+            for k, cmd in available.items():
+                ex = [(a.replace("--", "-", 1) if k in ("go", "java") and a.startswith("--") else a) for a in extra]
+                if k == "rust" and extra[0] == "--trusted-pubkey":
+                    ex = ["--algo"] + extra[1:]   # the Rust CLI has only --algo: same grammar, its own value flag
+                if k == "java" and extra[0] == "--algo":
+                    ex = ["-tip"] + extra[1:]     # the Java CLI has no -algo: same grammar, its own value flag
+                args = cmd + (ex + [valid] if k in ("go", "java") else [valid] + ex)
+                try:
+                    out = subprocess.run(args, capture_output=True, text=True, timeout=30)
+                    try:
+                        v = json.loads(out.stdout).get("verdict"); row[k] = f"verdict:{v}"
+                    except Exception:
+                        row[k] = "usage" if out.returncode == 2 else f"exit{out.returncode}"
+                except Exception:
+                    row[k] = "CRASH"
+            ok = all(v == "usage" for v in row.values())
+            if not ok:
+                disagreements += 1
+            print(f"  [{'OK ' if ok else 'DIFF'}] {name:22} expect usage(exit 2): {row}")
+    print(f"\ndisagreements: {disagreements}/{len(CORPUS) + (len(TIP_CASE['ordering']) if TIP_CASE else 0) + 5} (declared out-of-profile divergences: {declared})")
     return 0 if disagreements == 0 else 1
 
 

@@ -19,6 +19,13 @@ pub enum Json {
 /// `json_too_deep` by every reference (Python, JS, Go since 14/09/2026; Rust since 15/09/2026).
 pub const MAX_JSON_DEPTH: usize = 512;
 
+/// RFC 8259 int: -?(0|[1-9][0-9]*)
+fn json_int_grammar(tok: &str) -> bool {
+    let t = tok.strip_prefix('-').unwrap_or(tok);
+    let b = t.as_bytes();
+    !b.is_empty() && b.iter().all(|c| c.is_ascii_digit()) && (b.len() == 1 || b[0] != b'0')
+}
+
 pub struct Parser {
     s: Vec<char>,
     i: usize,
@@ -180,6 +187,8 @@ impl Parser {
                     }
                     _ => return Err("bad escape".into()),
                 }
+            } else if (c as u32) < 0x20 {
+                return Err("control character in string (RFC 8259 forbids it unescaped)".into());
             } else {
                 out.push(c);
             }
@@ -208,6 +217,8 @@ impl Parser {
         }
         if tok.contains('.') || tok.contains('e') || tok.contains('E') {
             Err(format!("non-portable float {tok:?} (use a string)"))
+        } else if !json_int_grammar(&tok) {
+            Err(format!("number {tok:?} is not JSON (no '+', no leading zero)"))   // Rust's parse::<i64> would take "+10" and "010": same canonical form → PASS here alone
         } else {
             let n: i64 = tok.parse().map_err(|_| "bad int".to_string())?;
             if n.unsigned_abs() > 9_007_199_254_740_991 {

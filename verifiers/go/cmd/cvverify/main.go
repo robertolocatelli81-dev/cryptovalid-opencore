@@ -5,6 +5,7 @@
 package main
 
 import (
+	"strings"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -31,6 +32,12 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
+	flag.Visit(func(f *flag.Flag) { // a value flag given with "" (or a flag as its value) would silently mean "not given": usage error (21/09/2026, one grammar in the four)
+		if v := f.Value.String(); v == "" || strings.HasPrefix(v, "-") { // boolean flags print "true": never caught here
+			fmt.Fprintf(os.Stderr, "usage: -%s needs a value (got %q)\n", f.Name, v)
+			os.Exit(2)
+		}
+	})
 	if _, err := os.Stat(flag.Arg(0)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)

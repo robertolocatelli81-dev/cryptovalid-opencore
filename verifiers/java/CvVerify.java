@@ -274,9 +274,9 @@ public class CvVerify {
             String a = args[k];
             try {
                 switch (a) {
-                    case "-tip": tip = args[++k]; break; case "-trusted-pubkey": tpk = args[++k]; break; case "-trusted-pq-pubkey": tpq = args[++k]; break;
-                    case "-tip-not-before": nb = args[++k]; break; case "-expect-ledger-id": lid = args[++k]; break; case "-pubkey": epk = args[++k]; break;
-                    case "-pq-pubkey": epq = args[++k]; break; case "-require-tip": reqTip = true; break; case "-require-pq": reqPQ = true; break;
+                    case "-tip": tip = val(args, ++k); break; case "-trusted-pubkey": tpk = val(args, ++k); break; case "-trusted-pq-pubkey": tpq = val(args, ++k); break;
+                    case "-tip-not-before": nb = val(args, ++k); break; case "-expect-ledger-id": lid = val(args, ++k); break; case "-pubkey": epk = val(args, ++k); break;
+                    case "-pq-pubkey": epq = val(args, ++k); break; case "-require-tip": reqTip = true; break; case "-require-pq": reqPQ = true; break;
                     default: if (a.startsWith("-") || ledger != null) { usage(); return; } ledger = a;
                 }
             } catch (ArrayIndexOutOfBoundsException e) { usage(); return; }
@@ -286,6 +286,8 @@ public class CvVerify {
         System.out.println(j(out));
         System.exit("PASS".equals(out.get("verdict")) ? 0 : 1);
     }
+    // a value flag given with "" or with a flag as its value would silently mean "not given": usage (21/09/2026, one grammar in the five)
+    static String val(String[] args, int k) { if (k >= args.length || args[k].isEmpty() || args[k].startsWith("-")) usage(); return args[k]; }
     static void usage() { System.err.println("usage: java CvVerify.java <ledger.jsonl> [-tip F] [-trusted-pubkey HEX] [-trusted-pq-pubkey B64] [-require-tip] [-tip-not-before ISO] [-expect-ledger-id HEX] [-pubkey HEX] [-pq-pubkey B64] [-require-pq]"); System.exit(2); }
 
     static Map<String, Object> verify(String ledgerPath, String tipPath, String tpk, String tpq, String epk, String epq, boolean reqPQ, boolean reqTip, String nb, String lid) throws Exception {

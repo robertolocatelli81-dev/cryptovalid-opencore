@@ -48,7 +48,9 @@ function canon(v) {
   throw new Error("unserialisable " + typeof v);
 }
 function canonicalPayload(entry) {
-  const d = {}; for (const k of Object.keys(entry)) if (!ATTEST.has(k)) d[k] = entry[k];
+  // Object.fromEntries keeps an own "__proto__" key (d[k] = … would invoke the setter and silently DROP it: an entry with
+  // that key added and its self_hash untouched verified PASS here alone — found on cra-evidence 0.3.0, 20/09/2026)
+  const d = Object.fromEntries(Object.entries(entry).filter(([k]) => !ATTEST.has(k)));
   return Buffer.from(canon(d), "utf-8");
 }
 function hashWith(algo, buf) { return createHash(algo === "sha3_256" ? "sha3-256" : "sha256").update(buf).digest("hex"); }
@@ -294,21 +296,36 @@ if (argv[0] === "--conformance") {
   console.log(JSON.stringify(r, null, 1));
   process.exit(r.conformant ? 0 : 1);
 } else if (argv[0]) {
-  const algo = argv.includes("--algo") ? argv[argv.indexOf("--algo") + 1] : null;
-  const pubkey = argv.includes("--pubkey") ? argv[argv.indexOf("--pubkey") + 1] : null;
-  const trustedPubkey = argv.includes("--trusted-pubkey") ? argv[argv.indexOf("--trusted-pubkey") + 1] : null;
-  const requireTip = argv.includes("--require-tip");
-  const tipNotBefore = argv.includes("--tip-not-before") ? argv[argv.indexOf("--tip-not-before") + 1] : null;
-  const expectLedgerId = argv.includes("--expect-ledger-id") ? argv[argv.indexOf("--expect-ledger-id") + 1] : null;
+  // one grammar (21/09/2026, found on cra-evidence: an unknown flag, a value flag without a value or with "", a second positional
+  // were silently taken as the ledger path and the constraint the operator asked for vanished): usage error, exit 2, no verdict
+  const VALUE_FLAGS = new Set(["--algo", "--pubkey", "--tip", "--trusted-pubkey", "--tip-not-before", "--expect-ledger-id"]);
+  const usage = () => { console.error("usage: node cvverify.mjs <ledger.jsonl> [--algo A] [--pubkey hex] [--tip f] [--trusted-pubkey hex] [--require-tip] [--tip-not-before iso] [--expect-ledger-id hex] | --conformance <vectors_dir>"); process.exit(2); };
+  const opts = {};
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--require-tip") { opts[a] = true; continue; }
+    if (VALUE_FLAGS.has(a)) { const v = argv[i + 1]; if (v === undefined || v === "" || v.startsWith("-")) usage(); opts[a] = v; i++; continue; }
+    usage();   // unknown flag, --flag=value form, or a second positional
+  }
+  if (argv[0].startsWith("-")) usage();
+  const algo = opts["--algo"] ?? null;
+  const pubkey = opts["--pubkey"] ?? null;
+  const trustedPubkey = opts["--trusted-pubkey"] ?? null;
+  const requireTip = Boolean(opts["--require-tip"]);
+  const tipNotBefore = opts["--tip-not-before"] ?? null;
+  const expectLedgerId = opts["--expect-ledger-id"] ?? null;
   let text;
-  try { text = readFileSync(argv[0], "utf-8"); }
+  let bytes;
+  try { bytes = readFileSync(argv[0]); }
   catch (e) { console.log(JSON.stringify({ verdict: "FILE_ERROR", error: e.code || e.message }, null, 1)); process.exit(2); }
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }   // strict: one invalid byte is a broken ledger (FAIL), never U+FFFD
+  catch (e) { console.log(JSON.stringify({ verdict: "FAIL", error: "ledger is not valid UTF-8" }, null, 1)); process.exit(1); }
   // tip: --tip <file>, else <ledger>.tip.json if present; an unreadable/malformed tip is a failure, never silence
   let tip = null;
-  const tipPath = argv.includes("--tip") ? argv[argv.indexOf("--tip") + 1] : (existsSync(argv[0] + ".tip.json") ? argv[0] + ".tip.json" : null);
+  const tipPath = opts["--tip"] !== undefined ? opts["--tip"] : (existsSync(argv[0] + ".tip.json") ? argv[0] + ".tip.json" : null);
   if (tipPath !== null) {
     try {   // the tip is a SIGNED document: the same strict profile as the entries (r5: Java was strict, JS lax)
-      const raw = readFileSync(tipPath, "utf-8");
+      const raw = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(tipPath));
       const d = jsonNestingDepth(raw); if (d > MAX_JSON_DEPTH) throw new Error("json_too_deep");
       if (hasLoneSurrogate(raw)) throw new Error("lone_surrogate");
       if (hasDuplicateKeys(raw)) throw new Error("duplicate_key");
