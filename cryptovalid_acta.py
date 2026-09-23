@@ -41,7 +41,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 DRAFT = "draft-farley-acta-signed-receipts-03 (2026-08-29, expires 2027-03-02; individual Internet-Draft)"
@@ -130,22 +130,89 @@ def jcs(obj: Any) -> bytes:
         raise ValueError("JCS: lone surrogate is not encodable as UTF-8") from None
 
 
-def _valid_instant(t: str) -> bool:
-    """RFC 3339 form AND a real calendar instant (month/day/hour/minute/second, offset < 24:00 / 60); a leap second (:60)
-    is accepted as the form allows it."""
-    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(\.\d+)?(?:[Zz]|([+-])(\d{2}):(\d{2}))\Z", t)
+_INSTANT_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(\.\d+)?(?:[Zz]|([+-])(\d{2}):(\d{2}))\Z")
+
+
+def _instant(t: Any) -> Optional[datetime]:
+    """RFC 3339 instant -> aware datetime, or None when the text is not one.
+
+    Built from this regex's own groups rather than from `fromisoformat`, because the two disagreed: this form accepts a
+    leap second (:60), which `fromisoformat` rejects, and before Python 3.11 `fromisoformat` also rejected fractional
+    parts other than 3 or 6 digits — while `pyproject` declares a 3.9 floor. Two parsers that disagree meant a value
+    accepted as valid could not be compared, and the caller skipped the comparison: a bypass. There is one parser now.
+
+    A leap second is mapped to :59.999999 of the same minute: it keeps the ordering (it sits before the next minute)
+    without claiming the 61st second exists in the proleptic calendar Python models.
+    """
+    if not isinstance(t, str):
+        return None
+    m = _INSTANT_RE.match(t)
     if not m:
-        return False
+        return None
     y, mo, d, h, mi, se = (int(m.group(i)) for i in range(1, 7))
     if se > 60:
-        return False
+        return None
+    frac = m.group(7)
+    micro = 999999 if se == 60 else (int(round(float(frac) * 1_000_000)) if frac else 0)
+    if m.group(8) is None:
+        off = timezone.utc
+    else:
+        oh, om = int(m.group(9)), int(m.group(10))
+        if oh > 23 or om > 59:
+            return None
+        delta = timedelta(hours=oh, minutes=om)
+        off = timezone(-delta if m.group(8) == "-" else delta)
     try:
-        datetime(y, mo, d, h, mi, 59 if se == 60 else se)
+        return datetime(y, mo, d, h, mi, 59 if se == 60 else se, min(micro, 999999), tzinfo=off)
     except ValueError:
-        return False
-    if m.group(9) is not None and (int(m.group(9)) > 23 or int(m.group(10)) > 59):
-        return False
-    return True
+        return None
+
+
+def _valid_instant(t: str) -> bool:
+    """RFC 3339 form AND a real calendar instant. One parser only: see `_instant`."""
+    return _instant(t) is not None
+
+
+def _outside_window(issued_at: str, entry: Any) -> Optional[str]:
+    """§9.2: 'Verifiers SHOULD check key validity windows when available.' Returns a reason when the receipt's
+    issued_at falls outside the window declared for its key, or None when it does not — including when no window
+    is declared, which is the common case and is not an error.
+
+    The draft states the SHOULD and nothing about the boundaries, so the choice is ours and is declared here:
+    the window is [valid_from, valid_until), start inclusive and end exclusive. The reason is the JOSE convention
+    the draft sits in — RFC 7519 §4.1.5 says `nbf` is met when the time is "after or equal to" it, and §4.1.4 that
+    `exp` is the time "on or after which" a token MUST NOT be accepted. X.509 (RFC 5280 §4.1.2.5) includes both
+    ends instead, which is equally defensible; the two readings differ by exactly one instant, and the exclusive
+    end is the more conservative of the two on expiry. (An earlier note here claimed this was the only reading
+    that keeps consecutive keys disjoint — that was wrong: (from, until] does too.)
+
+    What this does NOT do: it compares an instant the SIGNER asserts against a window the relying party holds.
+    It catches a key used after an honest rotation; it cannot catch a compromised key whose receipts are
+    backdated inside the window. §9.2 is a SHOULD and this check is only as good as the window's source.
+    """
+    if not isinstance(entry, dict):
+        return None
+    vf, vu = entry.get("valid_from"), entry.get("valid_until")
+    if vf is None and vu is None:
+        return None
+    t = _instant(issued_at)
+    if t is None:
+        # A window was declared and the instant cannot be compared against it: refuse rather than skip. Skipping here
+        # was fail-open — the shape that reached it was a leap second, which `_valid_instant` accepts.
+        return "issued_at cannot be compared with the key validity window (§9.2)"
+    if vf is not None:
+        a = _instant(vf)
+        if a is None:
+            return "key valid_from is not an RFC 3339 instant (§9.2)"
+        if t < a:
+            return "issued_at precedes the key validity window (§9.2)"
+    if vu is not None:
+        b = _instant(vu)
+        if b is None:
+            return "key valid_until is not an RFC 3339 instant (§9.2)"
+        if t >= b:
+            return "issued_at is at or after the key validity window ends (§9.2)"
+    return None
 
 
 # ── keys, kids, digests ──────────────────────────────────────────────────────────────────────
@@ -288,6 +355,11 @@ def _shape(receipt: Any) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[s
 def verify_receipt(receipt: Any, keys: Dict[str, Any]) -> Dict[str, Any]:
     """`keys` = {kid: public key} — 32 raw Ed25519 bytes or 64-hex str for EdDSA, 1952 raw bytes or a base64 str for ML-DSA-65,
     P-256 SubjectPublicKeyInfo PEM bytes for ES256. Keys come from the relying party, never from the receipt (§9.5).
+
+    A value may also be `{"key": <material>, "valid_from": <RFC 3339>, "valid_until": <RFC 3339>}`; when a window is
+    present the receipt's `issued_at` must fall in `[valid_from, valid_until)` (§9.2, a SHOULD that applies only when
+    the window is available — see `_outside_window` for why the end is exclusive and what the check cannot catch).
+
     Returns {ok, shape, alg, kid, why, hash}."""
     shape, body, sig, why = _shape(receipt)
     out: Dict[str, Any] = {"ok": False, "shape": shape, "alg": None, "kid": None, "why": why, "hash": None, "notes": []}
@@ -329,9 +401,17 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any]) -> Dict[str, Any]:
         # §6.8 compatibility note: an earlier-revision digest (16 hex, no prefix) is an opaque LABEL, not a commitment —
         # the signature is still checked; the chain's policy binding refuses to bind on it
         out["notes"].append("policy_digest is not an acta-policy-digest-v1 commitment (sha256:<64 hex>): an opaque label, not recomputable (§6.8)")
-    key = keys.get(kid)
-    if key is None:
+    entry = keys.get(kid)
+    if entry is None:
         out["why"] = f"no key for kid {kid!r} (keys come from the relying party, §9.5)"; return out
+    # A key may be given as the material alone (as before) or as {"key": material, "valid_from":…, "valid_until":…}.
+    # The window is only checked when the relying party supplies one: §9.2 is a SHOULD "when available".
+    key = entry.get("key") if isinstance(entry, dict) else entry
+    if key is None:
+        out["why"] = f"key entry for kid {kid!r} has no 'key' member"; return out
+    window = _outside_window(body["issued_at"], entry)
+    if window is not None:
+        out["why"] = window; return out
     raw = bytes.fromhex(sigv)
     try:
         if alg == "EdDSA":

@@ -282,5 +282,101 @@ class TestDriverAndCLI(unittest.TestCase):
             self.assertEqual(recs[0]["payload"]["policy_digest"], POLICY_DIGEST)
 
 
+class KeyValidityWindow(unittest.TestCase):
+    """§9.2: 'Verifiers SHOULD check key validity windows when available.'
+
+    Added after running the conformance corpus published with draft-farley-acta-signed-receipts-03
+    (giskard09/argentum-core, examples/conformance/farley-receipt-signature) against this verifier:
+    its `superseded-key.reject` case — a valid signature under a key whose window had ended — was
+    ACCEPTED here, the same gap its author had just reported in the reference verifier.
+    """
+
+    def _signed(self, issued_at):
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        sk = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b"test-only/window").digest())
+        pk = sk.public_key().public_bytes_raw()
+        kid = A.issuer_kid(pk)
+        body = {"type": "protectmcp:decision", "issued_at": issued_at, "issuer_id": kid,
+                "tool_name": "payments.transfer", "decision": "allow"}
+        receipt = {"payload": body, "signature": {"alg": "EdDSA", "kid": kid,
+                                                  "sig": sk.sign(A.jcs(body)).hex()}}
+        return receipt, kid, pk
+
+    def test_inside_the_window_is_accepted(self):
+        r, kid, pk = self._signed("2026-03-15T12:00:00Z")
+        keys = {kid: {"key": pk, "valid_from": "2026-01-01T00:00:00Z", "valid_until": "2026-06-01T00:00:00Z"}}
+        self.assertTrue(A.verify_receipt(r, keys)["ok"])
+
+    def test_after_the_window_is_refused(self):
+        r, kid, pk = self._signed("2026-07-15T12:00:00Z")
+        keys = {kid: {"key": pk, "valid_from": "2026-01-01T00:00:00Z", "valid_until": "2026-06-01T00:00:00Z"}}
+        out = A.verify_receipt(r, keys)
+        self.assertFalse(out["ok"])
+        self.assertIn("§9.2", out["why"])
+
+    def test_before_the_window_is_refused(self):
+        r, kid, pk = self._signed("2025-12-31T23:59:59Z")
+        keys = {kid: {"key": pk, "valid_from": "2026-01-01T00:00:00Z"}}
+        self.assertFalse(A.verify_receipt(r, keys)["ok"])
+
+    def test_the_end_of_the_window_is_exclusive(self):
+        # The draft states the SHOULD and nothing about boundaries. [from, until) is the only reading under which
+        # two consecutive keys do not both own the instant of a rotation; this test pins the choice so it cannot
+        # drift silently.
+        r, kid, pk = self._signed("2026-06-01T00:00:00Z")
+        keys = {kid: {"key": pk, "valid_until": "2026-06-01T00:00:00Z"}}
+        self.assertFalse(A.verify_receipt(r, keys)["ok"])
+        keys_next = {kid: {"key": pk, "valid_from": "2026-06-01T00:00:00Z"}}
+        self.assertTrue(A.verify_receipt(r, keys_next)["ok"])
+
+    def test_without_a_window_nothing_changes(self):
+        # §9.2 applies "when available": a relying party that supplies no window must see the previous behaviour,
+        # in both the bare and the dict form.
+        r, kid, pk = self._signed("2026-07-15T12:00:00Z")
+        self.assertTrue(A.verify_receipt(r, {kid: pk})["ok"])
+        self.assertTrue(A.verify_receipt(r, {kid: {"key": pk}})["ok"])
+
+    def test_a_leap_second_is_compared_and_not_skipped(self):
+        # `_valid_instant` accepts :60 because RFC 3339 allows the form; before this, parsing it failed and the
+        # window check was skipped, so a receipt could pass a window it should have been compared against.
+        # Found by Gemini Pro reviewing the change, 23/09/2026.
+        r, kid, pk = self._signed("2026-06-30T23:59:60Z")
+        keys = {kid: {"key": pk, "valid_until": "2026-01-01T00:00:00Z"}}
+        out = A.verify_receipt(r, keys)
+        self.assertFalse(out["ok"])
+        self.assertIn("§9.2", out["why"])
+        # A leap second maps to :59.999999 of the same minute: ordered after :59 and before the next minute,
+        # without asserting that a 61st second exists in the calendar Python models.
+        self.assertLess(A._instant("2026-06-30T23:59:59Z"), A._instant("2026-06-30T23:59:60Z"))
+        self.assertLess(A._instant("2026-06-30T23:59:60Z"), A._instant("2026-07-01T00:00:00Z"))
+
+    def test_one_parser_only(self):
+        # The two parsers disagreed before: `_valid_instant` accepted a leap second and the comparison parser did
+        # not, so a value accepted as valid could not be compared and the window check was skipped. Found by Fable
+        # 5.1 and by Gemini Pro independently, 23/09/2026.
+        for t in ("2026-06-30T23:59:60Z", "2026-03-15T12:00:00.12Z", "2026-03-15T12:00:00.1234567Z"):
+            self.assertEqual(A._valid_instant(t), A._instant(t) is not None, t)
+
+    def test_an_extreme_date_gives_a_verdict_not_an_exception(self):
+        # `.astimezone()` raised OverflowError on dates at the edges of the calendar, which `except ValueError`
+        # did not catch: a traceback where the suite requires a verdict.
+        r, kid, pk = self._signed("2026-03-15T12:00:00Z")
+        for t in ("9999-12-31T23:00:00-05:00", "0001-01-01T00:00:00+01:00"):
+            self.assertIsInstance(A._outside_window(t, {"valid_until": "2026-01-01T00:00:00Z"}), (str, type(None)), t)
+
+    def test_an_uncomparable_instant_refuses_when_a_window_is_declared(self):
+        r, kid, pk = self._signed("2026-03-15T12:00:00Z")
+        self.assertIsNotNone(A._outside_window("not-an-instant", {"valid_until": "2026-06-01T00:00:00Z"}))
+        self.assertIsNone(A._outside_window("not-an-instant", {"key": pk}))   # nessuna finestra: nulla da confrontare
+
+    def test_a_malformed_window_refuses_rather_than_ignoring_it(self):
+        r, kid, pk = self._signed("2026-03-15T12:00:00Z")
+        keys = {kid: {"key": pk, "valid_until": "not-an-instant"}}
+        out = A.verify_receipt(r, keys)
+        self.assertFalse(out["ok"])
+        self.assertIn("§9.2", out["why"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
