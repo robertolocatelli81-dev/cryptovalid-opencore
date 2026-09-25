@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""cryptovalid-opencore — Signed Decision Receipts, draft-farley-acta-signed-receipts-03 (0.15.0, 2026-09-20).
+"""cryptovalid-opencore — Signed Decision Receipts, draft-farley-acta-signed-receipts-03 (0.16.0, 2026-09-24).
 
 draft-farley-acta-signed-receipts-03 (T. Farley, ScopeBlind / Veritas Acta, 29 August 2026, expires 2 March 2027;
 individual Internet-Draft, Informational — copy downloaded 2026-09-20): a portable, signed receipt of a machine-to-machine
@@ -352,7 +352,7 @@ def _shape(receipt: Any) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[s
     return "invalid", None, None, "no signature member in either shape (§6.6)"
 
 
-def verify_receipt(receipt: Any, keys: Dict[str, Any]) -> Dict[str, Any]:
+def verify_receipt(receipt: Any, keys: Dict[str, Any], *, keys_are_complete: bool = False) -> Dict[str, Any]:
     """`keys` = {kid: public key} — 32 raw Ed25519 bytes or 64-hex str for EdDSA, 1952 raw bytes or a base64 str for ML-DSA-65,
     P-256 SubjectPublicKeyInfo PEM bytes for ES256. Keys come from the relying party, never from the receipt (§9.5).
 
@@ -362,7 +362,16 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any]) -> Dict[str, Any]:
 
     Returns {ok, shape, alg, kid, why, hash}."""
     shape, body, sig, why = _shape(receipt)
-    out: Dict[str, Any] = {"ok": False, "shape": shape, "alg": None, "kid": None, "why": why, "hash": None, "notes": []}
+    # `assessed` separates the absence side INSIDE the verdict: False = this host could not judge the receipt at all
+    # (a missing library, an algorithm this build cannot verify). ok=False then means "not assessed", not "invalid":
+    # reporting our own missing input as a finding about the artifact is the defect this field exists to prevent.
+    # `key_status` is stated in EVERY outcome (§5.5 of -04): "a verifier that does not check windows cannot be
+    # mistaken for one whose check passed". Values: not_reached (the receipt was refused before the key set was even
+    # consulted — the default, because saying anything else would assert what we did not measure), unknown_key,
+    # no_window, inside, outside, undecidable. `code` is the machine-readable reason, null when there is none.
+    out: Dict[str, Any] = {"ok": False, "verdict": "fail", "assessed": True, "key_status": "not_reached",
+                           "code": None, "shape": shape, "alg": None, "kid": None, "why": why, "hash": None,
+                           "notes": []}
     if shape == "invalid":
         return out
     alg, kid, sigv = sig["alg"], sig["kid"], sig["sig"]
@@ -373,7 +382,7 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any]) -> Dict[str, Any]:
     except (ValueError, TypeError) as ex:
         out["why"] = f"receipt not canonicalizable (§6.7): {ex}"; return out
     if alg not in ALGS:
-        out["why"] = f"alg {alg!r} not in {ALGS} (§6.9): not verifiable here, never a pass"; return out
+        out["why"] = f"alg {alg!r} is outside the §6.9 profile {ALGS}: rejected (a profile judgment, not a missing capability)"; return out
     if not isinstance(kid, str) or not kid:
         out["why"] = "kid missing"; return out
     if body.get("issuer_id") != kid:                  # both shapes: attribution is issuer_id, resolution is kid — they MUST agree
@@ -403,14 +412,35 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any]) -> Dict[str, Any]:
         out["notes"].append("policy_digest is not an acta-policy-digest-v1 commitment (sha256:<64 hex>): an opaque label, not recomputable (§6.8)")
     entry = keys.get(kid)
     if entry is None:
-        out["why"] = f"no key for kid {kid!r} (keys come from the relying party, §9.5)"; return out
+        # A kid absent from `keys` is ambiguous and the caller is the only one who can resolve it: "this IS my complete
+        # trust list, so that issuer is refused" (a judgment) versus "these are the keys I happen to hold" (an absence).
+        # Default is the absence, because answering "invalid" about a signature this host never checked asserts
+        # something it did not measure — the objection @TKCollective raised as AC-11 and @babyblueviper1 independently
+        # reached in preaction-governance-conformance. `ok` stays False either way: fail-closed, never a pass.
+        out["key_status"] = "unknown_key"
+        if keys_are_complete:
+            out["code"] = "issuer_not_trusted"
+            out["why"] = f"no key for kid {kid!r}: not in the relying party's complete trust list (§9.5)"
+        else:
+            out["code"] = "key_not_supplied"
+            out["why"] = f"no key for kid {kid!r}: the relying party supplied no key for this issuer, so the signature was NOT checked (§9.5)"
+            out["assessed"] = False; out["verdict"] = "not_assessed"
+        return out
     # A key may be given as the material alone (as before) or as {"key": material, "valid_from":…, "valid_until":…}.
     # The window is only checked when the relying party supplies one: §9.2 is a SHOULD "when available".
     key = entry.get("key") if isinstance(entry, dict) else entry
     if key is None:
         out["why"] = f"key entry for kid {kid!r} has no 'key' member"; return out
+    has_window = isinstance(entry, dict) and (entry.get("valid_from") is not None or entry.get("valid_until") is not None)
     window = _outside_window(body["issued_at"], entry)
-    if window is not None:
+    if window is None:
+        out["key_status"] = "inside" if has_window else "no_window"
+    else:
+        # "outside" is the receipt falling outside a window that could be read; a window that cannot be applied at all
+        # (unreadable bound, uncomparable instant) is undecidable and says so, per §5.5.
+        outside = "issued_at precedes" in window or "at or after" in window
+        out["key_status"] = "outside" if outside else "undecidable"
+        out["code"] = "key_outside_validity_window" if outside else "key_window_undecidable"
         out["why"] = window; return out
     raw = bytes.fromhex(sigv)
     try:
@@ -424,7 +454,7 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 from cryptography.hazmat.primitives.asymmetric import mldsa
             except ImportError:
-                out["why"] = "ML-DSA-65 not verifiable on this host (cryptography >= 48): NOT verified"; return out
+                out["why"] = "ML-DSA-65 not verifiable on this host (cryptography >= 48): NOT verified"; out["assessed"] = False; out["verdict"] = "not_assessed"; return out
             pk = base64.b64decode(key, validate=True) if isinstance(key, str) else bytes(key)
             if len(pk) != 1952 or len(raw) != 3309:
                 out["why"] = "ML-DSA-65 needs a 1952-byte key and a 3309-byte signature"; return out
@@ -441,30 +471,37 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any]) -> Dict[str, Any]:
                 out["why"] = "ES256 signature is not low-S canonical (malleable twin would change the receipt hash, §6.7)"; return out
             pk.verify(encode_dss_signature(int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")), msg, ec.ECDSA(hashes.SHA256()))
     except ImportError:
-        out["why"] = "cryptography not installed: NOT verified"; return out
+        out["why"] = "cryptography not installed: NOT verified"; out["assessed"] = False; out["verdict"] = "not_assessed"; return out
     except _unsupported() as ex:
-        out["why"] = f"{alg} not verifiable on this host ({ex}): NOT verified"; return out
+        out["why"] = f"{alg} not verifiable on this host ({ex}): NOT verified"; out["assessed"] = False; out["verdict"] = "not_assessed"; return out
     except Exception as ex:  # noqa: BLE001 — any failure is one verdict
         out["why"] = f"signature invalid ({type(ex).__name__})"; return out
-    out.update({"ok": True, "why": "ok", "hash": "sha256:" + hashlib.sha256(whole).hexdigest()})    # §6.7 pre-image: the whole receipt, both shapes
+    out.update({"ok": True, "verdict": "pass", "why": "ok", "hash": "sha256:" + hashlib.sha256(whole).hexdigest()})    # §6.7 pre-image: the whole receipt, both shapes
     return out
 
 
 def verify_chain(receipts: List[Any], keys: Dict[str, Any], policy_files: Optional[Dict[str, bytes]] = None,
-                 engine: str = "cedar") -> Dict[str, Any]:
+                 engine: str = "cedar", *, keys_are_complete: bool = False) -> Dict[str, Any]:
     """Every receipt verified (§5.2); §6.7 links: receipt i's previousReceiptHash == hash of receipt i-1; a genesis omits
     it; a bare-hex link is accepted on read and reported; policy_digest recomputed from `policy_files` when given."""
     problems: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
+    not_assessed: List[Dict[str, Any]] = []
     if not isinstance(receipts, list) or not receipts:
-        return {"ok": False, "problems": [{"i": -1, "why": "no receipts"}], "warnings": [], "verified": 0, "draft": DRAFT}
+        return {"ok": False, "verdict": "fail", "assessed": True, "problems": [{"i": -1, "why": "no receipts"}],
+                "warnings": [], "not_assessed": [], "verified": 0, "draft": DRAFT}
     expected_pd = policy_digest(policy_files, engine) if policy_files is not None else None      # {} raises: no policy is not a policy
     ok_n = 0
     prev: Optional[Dict[str, Any]] = None
+    prev_absent = False        # the preceding receipt was NOT assessed here (not: it failed) — the link inherits that
     for i, r in enumerate(receipts):
-        v = verify_receipt(r, keys)
+        v = verify_receipt(r, keys, keys_are_complete=keys_are_complete)
         if not v["ok"]:
-            problems.append({"i": i, "why": v["why"]})
+            # A not-assessed receipt stays in `problems` on purpose: `ok` must never read True over a receipt this host
+            # could not verify (fail-closed). `not_assessed` says WHY the run is inconclusive rather than adverse.
+            problems.append({"i": i, "why": v["why"], "assessed": v["assessed"]})
+            if not v.get("assessed", True):
+                not_assessed.append({"i": i, "why": v["why"]})
         else:
             ok_n += 1
         _sh, body, _sig, _why = _shape(r)                  # ONE shape decision (§6.6): the same members verify_receipt signed over
@@ -477,7 +514,8 @@ def verify_chain(receipts: List[Any], keys: Dict[str, Any], policy_files: Option
             if link is None:
                 problems.append({"i": i, "why": "no previousReceiptHash: the receipt is not linked to the preceding one (§6.7)"})
             elif prev is None:
-                problems.append({"i": i, "why": "previous receipt did not verify: the link cannot be checked (§6.7)"})
+                why = "previous receipt did not verify: the link cannot be checked (§6.7)"
+                problems.append({"i": i, "why": why, "assessed": True})
             elif v["shape"] != "invalid":
                 exp = receipt_hash(prev)
                 if link == exp:
@@ -495,8 +533,16 @@ def verify_chain(receipts: List[Any], keys: Dict[str, Any], policy_files: Option
                 problems.append({"i": i, "why": "policy binding requested but the receipt's policy_digest is an opaque label, not a recomputable commitment (§6.8)"})
             elif body["policy_digest"] != expected_pd:
                 problems.append({"i": i, "why": f"policy_digest {body['policy_digest']!r} != recomputed {expected_pd!r} from the policy bytes (§6.8)"})
-        prev = r if v["ok"] else None
-    return {"ok": not problems, "problems": problems, "warnings": warnings, "verified": ok_n, "receipts": len(receipts), "draft": DRAFT,
+        # The §6.7 link is a hash: it needs no signature backend. Keeping `prev` over a receipt this host could not
+        # ASSESS (rather than one that failed) keeps the link checkable, so a broken link stays a judgment.
+        prev = r if (v["ok"] or not v.get("assessed", True)) else None
+    # One total order, FAIL > NOT_ASSESSED > PASS: an adverse finding always wins, an absence never hides one and
+    # never becomes a pass. Two independent booleans could not express this — that is how the first fix got it wrong.
+    adverse = any(p.get("assessed", True) for p in problems)
+    verdict = "fail" if adverse else ("not_assessed" if problems else "pass")
+    return {"ok": not problems, "verdict": verdict, "assessed": verdict != "not_assessed",
+            "problems": problems, "warnings": warnings,
+            "not_assessed": not_assessed, "verified": ok_n, "receipts": len(receipts), "draft": DRAFT,
             "scope": "signatures against the relying party's keys, §6.7 links, §6.8 policy digest when the policy bytes are given: integrity "
                      "and attribution only — a chain truncated at its end is undetectable without an external commitment to its head (§9.7), "
                      "the first receipt may be a genesis or a segment, and whether the policy is the one in force is a separate check"}
@@ -588,6 +634,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     s.add_argument("--issued-at"); s.add_argument("--out", required=True)
     v = sub.add_parser("verify", help="verify one receipt or a chain (JSON files in order)")
     v.add_argument("files", nargs="+"); v.add_argument("--key", action="append", default=[], help="kid=<64 hex Ed25519 | file>")
+    v.add_argument("--jwks", help="JWKS file: the relying party's key set, with valid_from/valid_until when it declares them (§5.5)")
+    v.add_argument("--keys-are-complete", action="store_true",
+                   help="declare this key set to be the whole trust list: an unknown kid is then a refusal, not an absence")
     v.add_argument("--policy-dir"); v.add_argument("--policy-ext", default=".cedar")
     d = sub.add_parser("policy-digest"); d.add_argument("policy_dir"); d.add_argument("--engine", default="cedar"); d.add_argument("--ext", default=".cedar")
     r = sub.add_parser("run-vectors", help="drive ScopeBlind/agent-governance-testvectors")
@@ -611,6 +660,31 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(json.dumps({"ok": True, "kid": kid, "hash": receipt_hash(rec)})); return 0
         if a.cmd == "verify":
             keys: Dict[str, Any] = {}
+            if a.jwks:
+                # A JWKS is how a relying party normally holds keys, and it is the invocation the public conformance
+                # vectors declare. Windows are carried over when the set states them: §5.5 applies them to issued_at.
+                with open(a.jwks, encoding="utf-8") as f:
+                    jwks = json.load(f)
+                if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list):
+                    print(json.dumps({"ok": False, "error": "--jwks: expected an object with a 'keys' array"})); return 2
+                for k in jwks["keys"]:
+                    if not isinstance(k, dict) or not isinstance(k.get("kid"), str):
+                        print(json.dumps({"ok": False, "error": "--jwks: every key needs a string kid"})); return 2
+                    if isinstance(k.get("x"), str):                       # OKP/Ed25519, base64url, unpadded
+                        pad = "=" * (-len(k["x"]) % 4)
+                        try:
+                            mat: Any = base64.urlsafe_b64decode(k["x"] + pad)
+                        except Exception:  # noqa: BLE001
+                            print(json.dumps({"ok": False, "error": f"--jwks: kid {k['kid']!r} has an unreadable x"})); return 2
+                    elif isinstance(k.get("public_key_hex"), str) and _HEX.match(k["public_key_hex"]):
+                        mat = bytes.fromhex(k["public_key_hex"])
+                    else:
+                        print(json.dumps({"ok": False, "error": f"--jwks: kid {k['kid']!r} carries no readable key material"})); return 2
+                    entry: Dict[str, Any] = {"key": mat}
+                    for w in ("valid_from", "valid_until"):
+                        if w in k:
+                            entry[w] = k[w]
+                    keys[k["kid"]] = entry
             for spec in a.key:
                 kid, val = spec.split("=", 1)
                 if _HEX.match(val) and len(val) == 64:
@@ -633,8 +707,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                             files[n] = f.read()
                 if not files:
                     raise ValueError(f"--policy-dir {a.policy_dir} holds no {a.policy_ext} file: nothing to bind the receipts to")
-            out = verify_chain(recs, keys, files) if len(recs) > 1 or a.policy_dir else verify_receipt(recs[0], keys)
-            print(json.dumps(out, indent=1)); return 0 if out["ok"] else 1
+            complete = bool(getattr(a, "keys_are_complete", False))
+            out = (verify_chain(recs, keys, files, keys_are_complete=complete) if len(recs) > 1 or a.policy_dir
+                   else verify_receipt(recs[0], keys, keys_are_complete=complete))
+            print(json.dumps(out, indent=1))
+            return {"pass": 0, "fail": 1, "not_assessed": 77}[out["verdict"]]   # 77 only when NOTHING adverse was found
         if a.cmd == "run-vectors":
             print(json.dumps(run_vectors(a.repo_root, a.out_dir, a.seed, a.issued_at_base), indent=1)); return 0
     except (OSError, ValueError, TypeError, KeyError, RecursionError, json.JSONDecodeError) as ex:

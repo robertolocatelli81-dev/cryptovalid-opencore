@@ -3,6 +3,7 @@
 receipts as positive control (every positive has its tampered twin), chain/§6.7/§6.8 rules, hostile inputs, the Cedar
 driver when cedarpy is present. CV_REQUIRE_CRYPTO=1 makes a missing `cryptography` a failure (CI)."""
 import base64, hashlib, json, os, subprocess, sys, tempfile, unittest
+import unittest.mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import cryptovalid_acta as A  # noqa: E402
@@ -376,6 +377,257 @@ class KeyValidityWindow(unittest.TestCase):
         out = A.verify_receipt(r, keys)
         self.assertFalse(out["ok"])
         self.assertIn("§9.2", out["why"])
+
+
+# SHA-256 of the vendored key-window vectors, as merged into ScopeBlind/agent-governance-testvectors main at
+# 1e24b5687 and copied here on 24/09/2026. examples/acta/key-window/SOURCE.md says "copied verbatim"; without this
+# pin nothing in the repository could tell whether that stayed true, and a silently edited vector would make the
+# suite pass for the wrong reason.
+KW_SHA256 = {
+    "after-valid-until.json": "0f53f76d5f4efaa34c698273b1f1b71b2770c09bd7c19fb7d1998ab5d399b047",
+    "at-valid-from.json": "e0b4b42dbf7c963f8521de36a416ef10874ea8b3025ca1df33ec64f77248dee2",
+    "at-valid-until.json": "5baa0a89c12412f783dbbb88906839b942c90e940eba08365ff76100c6529311",
+    "before-valid-from.json": "cb3daa1ce9e88b4309e5d143785d5244d70d70c36597f5fad272bae8e57fbe8a",
+    "index.json": "e206bcd0671f671d2dfe436245be95e9d79f139c2021d72c36266b03655b596f",
+    "inside.json": "a7a971e1611b1dbdda4962a4e50444145338d246afaec4b54573795a5247e033",
+    "jwks-no-window.json": "97a4c73529a3281664178d83652e5c44e5bc2f7126b146b7761cde0d1793a76c",
+    "jwks.json": "1431ea457943455d7852d0d94a016de5a13a27442a9c901d5d09e074fc84a539"
+}
+
+
+class VendoredVectorsAreTheOnesPublished(unittest.TestCase):
+    def test_the_vendored_bytes_match_their_pinned_digests(self):
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "examples", "acta", "key-window")
+        on_disk = sorted(f for f in os.listdir(here) if f.endswith(".json"))
+        self.assertEqual(on_disk, sorted(KW_SHA256), "a vendored vector was added or removed")
+        for name, want in sorted(KW_SHA256.items()):
+            with open(os.path.join(here, name), "rb") as fh:
+                got = hashlib.sha256(fh.read()).hexdigest()
+            self.assertEqual(got, want, f"{name} no longer matches the bytes we vendored")
+
+
+class AbsenceSideOfTheVerdict(unittest.TestCase):
+    """A missing tool on this host must not be reported with the same verdict value as a bad signature.
+
+    Measured before the fix: with `cryptography` absent, a valid receipt and a forged one both returned
+    ok=False and CLI exit 1 — our own missing input reported as a finding about the artifact. The
+    `assessed` field carries the absence side inside the verdict; `why` remains the sibling reason.
+    """
+
+    def _pair(self):
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        sk = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b"test-only/absence").digest())
+        pk = sk.public_key().public_bytes_raw()
+        kid = A.issuer_kid(pk)
+        body = {"type": "protectmcp:decision", "issued_at": "2026-03-15T12:00:00Z", "issuer_id": kid,
+                "tool_name": "payments.transfer", "decision": "allow"}
+        good = {"payload": body, "signature": {"alg": "EdDSA", "kid": kid, "sig": sk.sign(A.jcs(body)).hex()}}
+        forged = json.loads(json.dumps(good))
+        forged["signature"]["sig"] = ("0" if forged["signature"]["sig"][0] != "0" else "1") + forged["signature"]["sig"][1:]
+        return good, forged, {kid: pk}
+
+    def test_a_judgment_is_marked_assessed(self):
+        good, forged, keys = self._pair()
+        self.assertTrue(A.verify_receipt(good, keys)["ok"])
+        v = A.verify_receipt(forged, keys)
+        self.assertFalse(v["ok"])
+        self.assertTrue(v["assessed"], "a forged signature is a judgment about the receipt, not an absence")
+
+    def test_a_missing_library_is_not_a_finding_about_the_receipt(self):
+        good, forged, keys = self._pair()
+        with unittest.mock.patch.object(A, "_ed", side_effect=ImportError("cryptography not installed")):
+            for name, r in (("valid", good), ("forged", forged)):
+                v = A.verify_receipt(r, keys)
+                self.assertFalse(v["ok"], name)                  # fail-closed: never a pass
+                self.assertFalse(v["assessed"], f"{name}: the host could not judge it at all")
+                self.assertEqual(v["verdict"], "not_assessed", name)
+                self.assertIn("NOT verified", v["why"])
+
+    def test_every_algorithm_of_the_profile_reports_its_own_absence(self):
+        """The EdDSA path is not the only one: §6.9 names three algorithms and each has its own backend."""
+        good, _forged, keys = self._pair()
+        pq_kid, es_kid = "sb:issuer:PQPQPQPQPQPQ", "sb:issuer:ESESESESESES"
+        keys = dict(keys, **{pq_kid: {"key": base64.b64encode(b"\0" * 1952).decode()}, es_kid: {"key": b"-----BEGIN PUBLIC KEY-----\n"}})
+        pq = {"payload": {"type": "protectmcp:decision", "issued_at": "2026-03-15T12:00:01Z", "issuer_id": pq_kid,
+                          "tool_name": "t", "decision": "allow"},
+              "signature": {"alg": "ML-DSA-65", "kid": pq_kid, "sig": "ab" * 3309}}
+        with self._no_pq_backend():
+            v = A.verify_receipt(pq, keys)
+        self.assertEqual(v["verdict"], "not_assessed", "a missing ML-DSA backend is an absence, not a bad signature")
+        with unittest.mock.patch.object(A, "_ed", side_effect=ImportError("no backend")):
+            self.assertEqual(A.verify_receipt(good, keys)["verdict"], "not_assessed")
+
+    def test_the_chain_reports_which_receipts_were_not_assessed(self):
+        good, _forged, keys = self._pair()
+        with unittest.mock.patch.object(A, "_ed", side_effect=ImportError("cryptography not installed")):
+            out = A.verify_chain([good], keys)
+        self.assertFalse(out["ok"])                              # fail-closed
+        self.assertFalse(out["assessed"])
+        self.assertEqual([x["i"] for x in out["not_assessed"]], [0])
+        self.assertTrue(out["problems"], "a not-assessed receipt still counts as a problem: ok must never read True")
+
+    def _no_pq_backend(self):
+        """An import hook that removes the ML-DSA backend, the way a host without cryptography>=48 has it."""
+        import builtins
+        real = builtins.__import__
+
+        def hooked(name, *a, **k):
+            if "mldsa" in name:
+                raise ImportError("no ML-DSA backend on this host")
+            if name.endswith("asymmetric") and len(a) > 2 and a[2] and "mldsa" in a[2]:
+                raise ImportError("no ML-DSA backend on this host")
+            return real(name, *a, **k)
+        return unittest.mock.patch.object(builtins, "__import__", hooked)
+
+    def test_an_absence_in_one_receipt_does_not_hide_a_judgment_on_another(self):
+        """The level rule cuts both ways. A chain whose problems are ALL absences is not assessed; one that also
+        carries a forged receipt is a judgment, and must not exit as "I could not look"."""
+        good, forged, keys = self._pair()
+        pq_kid = "sb:issuer:PQPQPQPQPQPQ"
+        pq = {"payload": {"type": "protectmcp:decision", "issued_at": "2026-03-15T12:00:01Z", "issuer_id": pq_kid,
+                          "tool_name": "payments.transfer", "decision": "allow"},
+              "signature": {"alg": "ML-DSA-65", "kid": pq_kid, "sig": "ab" * 3309}}
+        keys = dict(keys, **{pq_kid: {"key": base64.b64encode(b"\0" * 1952).decode()}})
+        with self._no_pq_backend():
+            mixed = A.verify_chain([forged, pq], keys)
+            only_absent = A.verify_chain([pq], keys)
+        self.assertFalse(mixed["ok"])
+        self.assertEqual(mixed["verdict"], "fail", "a forged receipt beside an unverifiable one is still a judgment")
+        self.assertEqual([x["i"] for x in mixed["not_assessed"]], [1])
+        self.assertFalse(only_absent["ok"])
+        self.assertEqual(only_absent["verdict"], "not_assessed", "every problem here is an absence")
+
+    def test_a_broken_link_above_an_unassessed_receipt_is_still_a_judgment(self):
+        """The §6.7 link is a hash: it needs no signature backend, so it stays checkable over a receipt this host
+        could not verify. Skipping it there would hand a real finding to the absence side."""
+        _good, _forged, keys = self._pair()
+        pq_kid = "sb:issuer:PQPQPQPQPQPQ"
+        keys = dict(keys, **{pq_kid: {"key": base64.b64encode(b"\0" * 1952).decode()}})
+        pq = {"payload": {"type": "protectmcp:decision", "issued_at": "2026-03-15T12:00:01Z", "issuer_id": pq_kid,
+                          "tool_name": "t", "decision": "allow"},
+              "signature": {"alg": "ML-DSA-65", "kid": pq_kid, "sig": "ab" * 3309}}
+        kid = next(k for k in keys if k != pq_kid)
+        import hashlib as _h
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        sk = Ed25519PrivateKey.from_private_bytes(_h.sha256(b"test-only/absence").digest())
+
+        def linked(prev_hash):
+            b = {"type": "protectmcp:decision", "issued_at": "2026-03-15T12:00:02Z", "issuer_id": kid,
+                 "tool_name": "t", "decision": "allow", "previousReceiptHash": prev_hash}
+            return {"payload": b, "signature": {"alg": "EdDSA", "kid": kid, "sig": sk.sign(A.jcs(b)).hex()}}
+        with self._no_pq_backend():
+            right = A.verify_chain([pq, linked(A.receipt_hash(pq))], keys)
+            wrong = A.verify_chain([pq, linked("sha256:" + "0" * 64)], keys)
+        self.assertEqual(right["verdict"], "not_assessed", "only the unverifiable signature remains")
+        self.assertEqual(wrong["verdict"], "fail", "the broken link is a finding and must outrank the absence")
+
+    def test_an_unknown_issuer_is_an_absence_unless_the_caller_declares_its_list_complete(self):
+        """A kid absent from `keys` is ambiguous: "not in my complete trust list" is a judgment, "I hold no key for
+        that issuer" is an absence. Only the caller knows which, so it declares it; the default is the absence,
+        because answering "invalid" about a signature never checked asserts something this host did not measure.
+        Raised as AC-11 by @TKCollective and reached independently by @babyblueviper1 (x402-foundation/tsc#4)."""
+        good, forged, keys = self._pair()
+        v = A.verify_receipt(good, {})                       # valid receipt, issuer unknown here
+        self.assertFalse(v["ok"])                            # fail-closed: never a pass
+        self.assertEqual(v["verdict"], "not_assessed")
+        self.assertIn("NOT checked", v["why"])
+        v2 = A.verify_receipt(good, {}, keys_are_complete=True)
+        self.assertEqual(v2["verdict"], "fail", "a complete trust list makes an unknown issuer a refusal")
+        self.assertEqual(A.verify_receipt(forged, keys)["verdict"], "fail")   # a checked signature still judges
+        self.assertEqual(A.verify_receipt(good, keys)["verdict"], "pass")
+
+    def test_the_public_key_window_vectors_agree_on_all_three_columns(self):
+        """The bench of ScopeBlind/agent-governance-testvectors (verifier-vectors/key-window, vendored from main at
+        1e24b5687) states a verdict, a `code` and a `key_status` per case. Scoring only the verdict would pass a
+        verifier that reaches the right answer for the wrong reason — which is what §5.5 exists to prevent."""
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "examples", "acta", "key-window")
+        with open(os.path.join(here, "index.json"), encoding="utf-8") as fh:
+            idx = json.load(fh)
+
+        def key_set(name):
+            with open(os.path.join(here, name), encoding="utf-8") as fh:
+                ks = {}
+                for k in json.load(fh)["keys"]:
+                    raw = (base64.urlsafe_b64decode(k["x"] + "=" * (-len(k["x"]) % 4)) if "x" in k
+                           else bytes.fromhex(k["public_key_hex"]))
+                    e = {"key": raw}
+                    for w in ("valid_from", "valid_until"):
+                        if w in k:
+                            e[w] = k[w]
+                    ks[k["kid"]] = e
+                return ks
+
+        self.assertEqual(len(idx["cases"]), 6)
+        for case in idx["cases"]:
+            with open(os.path.join(here, case["file"]), encoding="utf-8") as fh:
+                receipt = json.load(fh)
+            out = A.verify_receipt(receipt, key_set(case["jwks"]))
+            got = "ACCEPT" if out["ok"] else "REJECT"
+            label = f"{case['file']} / {case['jwks']}"
+            self.assertEqual(got, case["expected"], label)
+            self.assertEqual(out["code"], case["code"], label)
+            self.assertEqual(out["key_status"], case["key_status"], label)
+
+    def test_key_status_never_asserts_what_was_not_measured(self):
+        """The cases the public bench does NOT exercise. A receipt refused before the key set is consulted must not
+        claim anything about the key: it reports `not_reached`, not `unknown_key`."""
+        good, _forged, keys = self._pair()
+        kid = next(iter(keys))
+        windowed = {kid: {"key": keys[kid], "valid_from": "2026-01-01T00:00:00Z", "valid_until": "2026-06-01T00:00:00Z"}}
+        early = json.loads(json.dumps(good))
+        early["signature"]["alg"] = "RS256"                       # refused at §6.9, long before the key set
+        self.assertEqual(A.verify_receipt(early, windowed)["key_status"], "not_reached")
+        del early["payload"]["tool_name"]
+        self.assertEqual(A.verify_receipt(early, windowed)["key_status"], "not_reached")
+
+        self.assertEqual(A.verify_receipt(good, {})["key_status"], "unknown_key")
+        self.assertEqual(A.verify_receipt(good, {})["code"], "key_not_supplied")
+        declared = A.verify_receipt(good, {}, keys_are_complete=True)
+        self.assertEqual(declared["key_status"], "unknown_key")
+        self.assertEqual(declared["code"], "issuer_not_trusted")
+
+        bad_window = {kid: {"key": keys[kid], "valid_from": "not-an-instant"}}
+        undec = A.verify_receipt(good, bad_window)
+        self.assertEqual(undec["key_status"], "undecidable")
+        self.assertEqual(undec["code"], "key_window_undecidable")
+
+    def test_the_cli_reads_a_jwks_so_the_bench_runs_on_the_product(self):
+        """The bench's declared invocation passes a JWKS. Without `--jwks` our §5.5 conformance would live only in
+        the library, reachable through an adapter we wrote ourselves."""
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "examples", "acta", "key-window")
+        for name, want in (("inside.json", 0), ("after-valid-until.json", 1)):
+            r = subprocess.run([sys.executable, A.__file__, "verify", os.path.join(here, name),
+                                "--jwks", os.path.join(here, "jwks.json")], capture_output=True, text=True)
+            self.assertEqual(r.returncode, want, r.stdout[:200])
+            out = json.loads(r.stdout)
+            self.assertIn(out["key_status"], ("inside", "outside"))
+
+    def test_the_cli_exit_code_separates_absence_from_invalidity(self):
+        good, forged, keys = self._pair()
+        kid, pk = next(iter(keys.items()))
+        with tempfile.TemporaryDirectory() as d:
+            gp, fp = os.path.join(d, "g.json"), os.path.join(d, "f.json")
+            for path, obj in ((gp, good), (fp, forged)):
+                with open(path, "w") as fh:
+                    fh.write(json.dumps(obj))
+            key = f"{kid}={pk.hex()}"
+            env = dict(os.environ)
+            # A host without the signing library: exit 77 (not assessed), never 1 (invalid).
+            stub = os.path.join(d, "stub")
+            os.makedirs(stub)
+            with open(os.path.join(stub, "cryptography.py"), "w") as fh:
+                fh.write("raise ImportError('cryptography not installed')\n")
+            env["PYTHONPATH"] = stub + os.pathsep + os.path.dirname(os.path.abspath(A.__file__))
+            for path in (gp, fp):
+                r = subprocess.run([sys.executable, A.__file__, "verify", "--key", key, path],
+                                   capture_output=True, text=True, env=env)
+                self.assertEqual(r.returncode, 77, f"{path}: {r.stdout[:200]}")
+            # With the library present the verdicts stand apart: 0 for the valid one, 1 for the forged one.
+            self.assertEqual(subprocess.run([sys.executable, A.__file__, "verify", "--key", key, gp],
+                                            capture_output=True, text=True).returncode, 0)
+            self.assertEqual(subprocess.run([sys.executable, A.__file__, "verify", "--key", key, fp],
+                                            capture_output=True, text=True).returncode, 1)
 
 
 if __name__ == "__main__":

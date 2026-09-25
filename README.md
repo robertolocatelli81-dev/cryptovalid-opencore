@@ -598,6 +598,33 @@ python3 cryptovalid_acta.py verify r1.json r2.json --key sb:issuer:6ASf5EcmmEHT=
 python3 cryptovalid_acta.py run-vectors <agent-governance-testvectors clone> receipts/cryptovalid-opencore --seed 00…01
 ```
 
+**Key status is always stated (§5.5).** Every outcome carries `key_status` and a machine-readable `code`.
+`key_status` is one of `not_reached` (the receipt was refused before the key set was consulted — the default, because
+saying anything else would assert what was not measured), `unknown_key`, `no_window`, `inside`, `outside`,
+`undecidable`. `verify --jwks <file>` reads a relying party's key set with its `valid_from`/`valid_until`. The vectors' own
+declared invocation is `verify <file> --jwks <jwks> --mode receipt --json`; `--mode` and `--json` are flags of the
+reference verifier and this CLI does not implement them, so the run is driven with `--jwks` alone. `--keys-are-complete` declares that set to be the whole trust list. draft-farley-acta-signed-receipts-04 §5.5 (proposed in VeritasActa/drafts#3, not yet published) requires the window to be applied to `issued_at` and the output to say which case applied, "so that a verifier that does not check windows cannot be mistaken for one whose check passed". Measured against the six key-window vectors of ScopeBlind/agent-governance-testvectors (merged to `main` in
+`1e24b5687`, vendored under `examples/acta/key-window/`), scoring all three columns the bench states — verdict, `code`
+and `key_status` — through the CLI with `--jwks`: **6/6, 6/6, 6/6**. The same vectors on 0.15.1, with the bare key material that release accepts, give **3/6 verdicts, 3/6 `code`,
+0/6 `key_status`**: it has no window check at all (`valid_from` and `valid_until` do not occur in that file), so it
+accepts all six and gets the three rejections wrong. An earlier version of this paragraph said 6/6 verdicts for
+0.15.1; that was wrong and is corrected here.
+
+**The absence side of the verdict.** A check this host could not run is not a finding about the receipt.
+`verify_receipt` and `verify_chain` report `verdict` with a total order `FAIL > NOT_ASSESSED > PASS`, and the CLI maps
+it to exit `1 / 77 / 0`; `ok` and `assessed` are derived from it for existing readers, and `ok` stays false under
+`NOT_ASSESSED` (fail-closed — a signature that was never checked is never a pass). `not_assessed` lists which receipts
+of a chain were affected.
+
+The boundary is declared, not left implicit: a capability of **this host** (a missing `cryptography`, no ML-DSA
+backend) is an absence; an input the **relying party** supplies (keys, policy bytes) and the **profile** itself (an
+`alg` outside §6.9) are judgments — an unknown `kid` is a "could not look" unless the relying party passes `keys_are_complete=True`, declaring its set to be the whole trust list — answering "invalid" about a signature this host never checked asserts what it did not measure. An absence never hides a
+finding: a forged receipt beside an unverifiable one gives `fail`, and a broken §6.7 link is still checked above an
+unassessed receipt, because the link is a hash and needs no signature backend.
+
+Measured 24/09/2026 on a host without `cryptography`: before this, a valid receipt and a forged one both returned
+`ok=false` and exit 1 — our own missing library reported with the value of a bad signature.
+
 `examples/acta/testvectors_driver/run.sh` is the driver to drop into that repository's `implementations/`. Review round 1
 (Claude Opus 5, Sonnet 5, Haiku 4.5 — Gemini 3.1 Pro's credits were exhausted that day; every finding re-measured and
 ablated in the tests): the §2.2 `issuer_id == kid` rule was enforced only on the envelope shape — a flat-shape receipt

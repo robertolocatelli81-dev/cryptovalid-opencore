@@ -5,8 +5,8 @@ type: software
 authors:
   - family-names: Locatelli
     given-names: Roberto
-version: 0.15.1
-date-released: 2026-09-20
+version: 0.16.0
+date-released: 2026-09-24
 doi: 10.5281/zenodo.22539578
 repository-code: "https://github.com/robertolocatelli81-dev/cryptovalid-opencore"
 license: AGPL-3.0-or-later
