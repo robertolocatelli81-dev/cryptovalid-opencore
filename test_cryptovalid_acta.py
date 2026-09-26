@@ -253,7 +253,11 @@ class TestDriverAndCLI(unittest.TestCase):
             os.makedirs(os.path.join(tmp, "nopolicy"))
             r = run("verify", os.path.join(tmp, "r1.json"), "--key", f"{KID}={PUB_HEX}", "--policy-dir", os.path.join(tmp, "nopolicy")); self.assertEqual(r.returncode, 2)
             r = run("verify", os.path.join(tmp, "r1.json"), "--key", f"{KID}={os.path.join(tmp, 'seed')}")            # a hex keyfile: not a public key → refused
-            self.assertEqual(r.returncode, 1)
+            # 25/09: 32 seed bytes that are not even a curve point are unusable key material, refused at load (exit 2);
+            # seed bytes that happen to decode stay a failed signature check (exit 1)
+            with open(os.path.join(tmp, "seed")) as sf:
+                seed_bytes = bytes.fromhex(sf.read().strip())
+            self.assertEqual(r.returncode, 2 if A._ed25519_problem(seed_bytes) else 1, r.stdout)
             with open(os.path.join(tmp, "pub.hex"), "w") as f:
                 f.write(PUB_HEX + "\n")
             r = run("verify", os.path.join(tmp, "r1.json"), "--key", f"{KID}={os.path.join(tmp, 'pub.hex')}"); self.assertEqual(r.returncode, 0, r.stdout)
@@ -364,7 +368,7 @@ class KeyValidityWindow(unittest.TestCase):
         # did not catch: a traceback where the suite requires a verdict.
         r, kid, pk = self._signed("2026-03-15T12:00:00Z")
         for t in ("9999-12-31T23:00:00-05:00", "0001-01-01T00:00:00+01:00"):
-            self.assertIsInstance(A._outside_window(t, {"valid_until": "2026-01-01T00:00:00Z"}), (str, type(None)), t)
+            self.assertIsInstance(A._outside_window(t, {"valid_until": "2026-01-01T00:00:00Z"}), (tuple, type(None)), t)   # (kind, reason) since 26/09
 
     def test_an_uncomparable_instant_refuses_when_a_window_is_declared(self):
         r, kid, pk = self._signed("2026-03-15T12:00:00Z")
@@ -628,6 +632,366 @@ class AbsenceSideOfTheVerdict(unittest.TestCase):
                                             capture_output=True, text=True).returncode, 0)
             self.assertEqual(subprocess.run([sys.executable, A.__file__, "verify", "--key", key, fp],
                                             capture_output=True, text=True).returncode, 1)
+
+
+B64U = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
+class MalformedInputsFound20260925(unittest.TestCase):
+    """Malformed-input review of 25/09/2026 (NEMESIS + three Opus minds + Gemini Pro; each finding reproduced before
+    the fix). Every test here was red on 0.16.0 and names the finding it pins."""
+
+    def setUp(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        self.sk = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b"test-only/malformed").digest())
+        self.pk = self.sk.public_key().public_bytes_raw()
+        self.kid = A.issuer_kid(self.pk)
+        self.x = base64.urlsafe_b64encode(self.pk).rstrip(b"=").decode()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _receipt(self, issued_at="2026-09-25T00:00:00Z"):
+        body = {"type": "protectmcp:decision", "issued_at": issued_at, "issuer_id": self.kid, "tool_name": "t", "decision": "allow"}
+        return {"payload": body, "signature": {"alg": "EdDSA", "kid": self.kid, "sig": self.sk.sign(A.jcs(body)).hex()}}
+
+    def _write(self, name, text):
+        path = os.path.join(self.d, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text if isinstance(text, str) else json.dumps(text))
+        return path
+
+    def _cli(self, *args):
+        r = subprocess.run([sys.executable, A.__file__, "verify", *args], capture_output=True, text=True)
+        return r.returncode, r.stdout, r.stderr
+
+    def _jwk(self, **over):
+        """A JWK for the test key; a member set to None is removed."""
+        k = {"kty": "OKP", "crv": "Ed25519", "kid": self.kid, "x": self.x, "use": "sig"}
+        k.update(over)
+        return {k2: v for k2, v in k.items() if v is not None}
+
+    # 1 — a kid twice in the JWKS: the verdict depended on the order of the entries
+    def test_1_a_duplicate_kid_in_the_jwks_is_refused_in_either_order(self):
+        rp = self._write("r.json", self._receipt())
+        expired, open_ = self._jwk(valid_until="2020-01-01T00:00:00Z"), self._jwk()
+        for keys in ([expired, open_], [open_, expired]):
+            code, out, err = self._cli(rp, "--jwks", self._write("j.json", {"keys": keys}))
+            self.assertEqual(code, 2, out)
+            self.assertIn("twice", json.loads(out)["error"])
+        # the same ambiguity across sources: --jwks with a window, then --key for the same kid without one
+        code, out, _ = self._cli(rp, "--jwks", self._write("j.json", {"keys": [expired]}), "--key", f"{self.kid}={self.pk.hex()}")
+        self.assertEqual(code, 2, out)
+        code, out, _ = self._cli(rp, "--key", f"{self.kid}={self.pk.hex()}", "--key", f"{self.kid}={self.pk.hex()}")
+        self.assertEqual(code, 2, out)
+
+    # 2 — the JWKS was read with plain json.load: a duplicate member resolved last-wins
+    def test_2_the_jwks_is_read_with_the_strict_parser(self):
+        rp = self._write("r.json", self._receipt())
+        text = ('{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"%s","x":"%s","valid_until":"2020-01-01T00:00:00Z","valid_until":null}]}'
+                % (self.kid, self.x))
+        code, out, _ = self._cli(rp, "--jwks", self._write("j.json", text))
+        self.assertEqual(code, 2, out)
+        self.assertIn("duplicate", json.loads(out)["error"])
+        code, out, _ = self._cli(rp, "--jwks", self._write("j.json", '{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"%s","x":"%s","valid_until":NaN}]}' % (self.kid, self.x)))
+        self.assertEqual(code, 2, out)
+
+    # 3 — kty/crv/alg/use were never read; x was decoded by a non-validating decoder
+    def test_3_jwk_members_must_describe_an_ed25519_signature_key(self):
+        rp = self._write("r.json", self._receipt())
+        code, out, _ = self._cli(rp, "--jwks", self._write("ok.json", {"keys": [self._jwk(alg="EdDSA")]}))
+        self.assertEqual(code, 0, out)                                       # positive control: a well-formed JWK passes
+        # 26/09/2026 (A3): a JWK of another type or for another use is IGNORED (RFC 7517 §5), no longer refused with the
+        # set: the receipt under its kid then finds no key — exit 77, never a pass — and the CLI says what it ignored.
+        other = {"kty EC": self._jwk(kty="EC"), "crv X25519": self._jwk(crv="X25519"), "use enc": self._jwk(use="enc"),
+                 "alg RS256": self._jwk(alg="RS256"), "key_ops sign only": self._jwk(key_ops=["sign"])}
+        for name, jwk in other.items():
+            code, out, err = self._cli(rp, "--jwks", self._write("j.json", {"keys": [jwk]}))
+            self.assertEqual(code, 77, f"{name}: {out[:300]}")
+            self.assertIn("ignored", err, name)
+        # a key of OUR type that is malformed stays a configuration error of the key set: exit 2
+        bad = {"no kty": self._jwk(kty=None), "no crv": self._jwk(crv=None),
+               "x padded": self._jwk(x=self.x + "="), "x trailing junk": self._jwk(x=self.x + "!!"),
+               "x trailing chars": self._jwk(x=self.x + "AAAA"), "x !!!!": self._jwk(x="!!!!"),
+               "x standard alphabet": self._jwk(x="+" + self.x[1:]),
+               "x non-canonical last char": self._jwk(x=self.x[:42] + B64U[B64U.index(self.x[42]) | 1]),   # same 32 bytes, other text
+               "x and public_key_hex": self._jwk(public_key_hex=self.pk.hex())}
+        for name, jwk in bad.items():
+            code, out, _ = self._cli(rp, "--jwks", self._write("j.json", {"keys": [jwk]}))
+            self.assertEqual(code, 2, f"{name}: {out[:300]}")
+            self.assertIn("--jwks", json.loads(out)["error"], name)
+
+    # 4 — `\d` is Unicode in Python: an issued_at in Arabic-Indic or fullwidth digits passed, and "inside" a window
+    def test_4_issued_at_digits_are_ascii_only(self):
+        window = {self.kid: {"key": self.pk, "valid_from": "2020-01-01T00:00:00Z", "valid_until": "2030-01-01T00:00:00Z"}}
+        for t in ("٢٠٢٦-٠٩-٢٥T٠٠:٠٠:٠٠Z", "２０２６-０９-２５T００:００:００Z", "2026-09-25T00:00:0٠Z", "2026-09-25T00:00:00.٥Z"):
+            self.assertIsNone(A._instant(t), t)
+            self.assertFalse(A._valid_instant(t), t)
+            self.assertIsNone(A._RFC3339.match(t), t)
+            for keys in ({self.kid: self.pk}, window):
+                v = A.verify_receipt(self._receipt(t), keys)
+                self.assertEqual(v["verdict"], "fail", t)
+                self.assertIn("RFC 3339", v["why"], t)
+            with self.assertRaises(ValueError):
+                A.decision_payload("t", "allow", self.kid, t)
+        # the audit, as a guard: every compiled pattern of the module is ASCII-only
+        import re as _re
+        pats = {n: o for n, o in vars(A).items() if isinstance(o, _re.Pattern)}
+        self.assertGreaterEqual(len(pats), 5)
+        for n, o in pats.items():
+            self.assertTrue(o.flags & _re.ASCII, f"{n} is not compiled with re.ASCII")
+            self.assertNotIn(r"\d", o.pattern, n)
+
+    # 5 — the relying party's unusable key was reported as a finding about the receipt
+    def test_5_unusable_key_material_is_not_a_finding_about_the_receipt(self):
+        r = self._receipt()
+        for name, key in (("float", 1.5), ("int", 7), ("bool", True), ("list", [1, 2]), ("None in dict", {}),
+                          ("empty str", ""), ("!!!!", "!!!!"), ("odd hex", "abc"), ("non-hex 64", "zz" * 32),
+                          ("5 bytes", b"12345"), ("empty bytes", b""), ("broken PEM", b"-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n")):
+            entry = key if name == "None in dict" else {"key": key}
+            v = A.verify_receipt(r, {self.kid: entry})
+            self.assertEqual(v["verdict"], "not_assessed", name)
+            self.assertFalse(v["ok"], name)                                    # fail-closed: never a pass
+            self.assertFalse(v["assessed"], name)
+            self.assertEqual(v["code"], "key_material_invalid", name)
+            self.assertEqual(v["key_status"], "no_window", name)               # the key set WAS consulted
+        # uppercase hex is a key, not a defect
+        self.assertEqual(A.verify_receipt(r, {self.kid: self.pk.hex().upper()})["verdict"], "pass")
+        # a USABLE key of another type than the receipt's alg stays a judgment: flipping the unsigned alg of a forged
+        # receipt must not buy it "could not look"
+        flipped = json.loads(json.dumps(r)); flipped["signature"]["alg"] = "ES256"
+        self.assertEqual(A.verify_receipt(flipped, {self.kid: self.pk.hex()})["verdict"], "fail")
+        flipped["signature"]["alg"] = "ML-DSA-65"
+        self.assertEqual(A.verify_receipt(flipped, {self.kid: self.pk})["verdict"], "fail")
+        forged = json.loads(json.dumps(r)); forged["payload"]["decision"] = "deny"
+        self.assertEqual(A.verify_receipt(forged, {self.kid: self.pk})["verdict"], "fail")
+        # a `keys` argument that is not a mapping is a programming error, named as such
+        for bad_keys in (None, [self.kid], "abc"):
+            with self.assertRaises(TypeError):
+                A.verify_receipt(r, bad_keys)
+        # the total order still holds in a chain: a forged receipt beside an unusable key is a fail
+        other = "sb:issuer:OTHEROTHEROT"
+        body = dict(r["payload"], issuer_id=other)
+        r2 = {"payload": body, "signature": {"alg": "EdDSA", "kid": other, "sig": self.sk.sign(A.jcs(body)).hex()}}
+        mixed = A.verify_chain([forged, r2], {self.kid: self.pk, other: 1.5})
+        self.assertEqual(mixed["verdict"], "fail")
+        only = A.verify_chain([r2], {other: 1.5})
+        self.assertEqual(only["verdict"], "not_assessed")
+        # CLI: refused at load (exit 2); uppercase hex accepted, inline and in a keyfile
+        rp = self._write("r.json", r)
+        self.assertEqual(self._cli(rp, "--key", f"{self.kid}={self.pk.hex().upper()}")[0], 0)
+        self.assertEqual(self._cli(rp, "--key", f"{self.kid}={self._write('up.hex', self.pk.hex().upper() + chr(10))}")[0], 0)
+        for name, content in (("empty", ""), ("junk", "not a key\n"), ("63 hex", self.pk.hex()[:63])):
+            code, out, _ = self._cli(rp, "--key", f"{self.kid}={self._write('k.' + name, content)}")
+            self.assertEqual(code, 2, f"{name}: {out[:300]}")
+            self.assertIn("unusable key material", json.loads(out)["error"], name)
+        code, out, _ = self._cli(rp, "--jwks", self._write("j.json", {"keys": [self._jwk(x="!!!!")]}))
+        self.assertEqual(code, 2, out)
+
+    # 6 — internal exceptions reached the user as the error message
+    def test_6_malformed_arguments_and_deep_nesting_get_explicit_messages(self):
+        rp = self._write("r.json", self._receipt())
+        code, out, err = self._cli(rp, "--key", self.pk.hex())
+        self.assertEqual(code, 2, out)
+        msg = json.loads(out)["error"]
+        self.assertIn("kid=", msg)
+        self.assertNotIn("unpack", msg)
+        for flag in ("receipt", "--jwks"):
+            deep = self._write("deep.json", "[" * 200000 + "]" * 200000)
+            args = (deep,) if flag == "receipt" else (rp, "--jwks", deep)
+            code, out, err = self._cli(*args)
+            self.assertEqual(code, 2, out[:300])
+            msg = json.loads(out)["error"]
+            self.assertIn("nesting deeper than 512", msg, flag)
+            self.assertNotIn("Recursion", msg, flag)
+            self.assertNotIn("Traceback", err, flag)
+        # brackets inside strings are not nesting
+        shallow = self._receipt(); shallow["payload"]["reason"] = "[" * 5000
+        body = shallow["payload"]; shallow["signature"]["sig"] = self.sk.sign(A.jcs(body)).hex()
+        self.assertEqual(self._cli(self._write("s.json", shallow), "--key", f"{self.kid}={self.pk.hex()}")[0], 0)
+
+
+class SmallOrderKeys20260925(unittest.TestCase):
+    """A small-order Ed25519 key makes R=identity, S=0 a signature on EVERY message, and OpenSSL accepts it (measured
+    25/09/2026, 4-mind review round 2, finding A1). Red before the check: the forged receipt passed."""
+    TORSION = ["01" + "00" * 31, "ec" + "ff" * 30 + "7f", "00" * 32, "00" * 31 + "80",
+               "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+               "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+               "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+               "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa"]
+
+    def setUp(self):
+        self.seed = "33" * 32
+        self.kid = A.issuer_kid(A.pubkey_from_seed(self.seed))
+        self.rec = A.sign_receipt(A.decision_payload("t", "allow", self.kid, "2026-09-25T00:00:00Z", None, "s", "r"), self.seed, self.kid)
+
+    def _forged(self, key_hex):
+        f = json.loads(json.dumps(self.rec))
+        f["payload"]["tool_name"] = "anything-at-all"
+        f["signature"]["sig"] = ("01" + "00" * 31) + "00" * 32      # R = identity, S = 0
+        return f
+
+    def test_library_never_passes_a_small_order_key(self):
+        for h in self.TORSION:
+            for key in (bytes.fromhex(h), h):
+                out = A.verify_receipt(self._forged(h), {self.kid: key})
+                self.assertNotEqual(out["verdict"], "pass", h)
+                self.assertEqual((out["verdict"], out.get("code")), ("not_assessed", "key_material_invalid"), h)
+
+    def test_non_canonical_encodings_refused(self):
+        p = 2 ** 255 - 19
+        for y in (p, p + 1):
+            self.assertIsNotNone(A._ed25519_problem(y.to_bytes(32, "little")))
+
+    def test_real_keys_are_not_refused(self):
+        for i in range(200):
+            pk = A.pubkey_from_seed(hashlib.sha256(bytes([i])).hexdigest())
+            self.assertIsNone(A._ed25519_problem(pk))
+        self.assertEqual(A.verify_receipt(self.rec, {self.kid: A.pubkey_from_seed(self.seed)})["verdict"], "pass")
+
+    def test_cli_and_jwks_refuse_at_load(self):
+        ident = "01" + "00" * 31
+        x = base64.urlsafe_b64encode(bytes.fromhex(ident)).decode().rstrip("=")
+        with self.assertRaises(ValueError):
+            A.keys_from_jwks({"keys": [{"kid": self.kid, "kty": "OKP", "crv": "Ed25519", "x": x}]})
+        with self.assertRaises(ValueError):
+            A.keys_from_jwks({"keys": [{"kid": self.kid, "public_key_hex": ident}]})
+        with self.assertRaises(ValueError):
+            A._cli_key(f"{self.kid}={ident}")
+
+
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
+class RefusalCodes20260926(unittest.TestCase):
+    """26/09: agent-evidence-vectors 0.13.0 (vectors-receipt-signature) requires `code` on every refusal. All 26 verdicts
+    agreed, but 8 refusals carried code null: the reason was only in the free-text `why`."""
+
+    def _signed(self):
+        p = A.decision_payload("Read", "allow", KID, "2026-09-20T09:00:00.001Z", POLICY_DIGEST, "s1", extra={"sequence": 1})
+        return A.sign_receipt(p, SEED)
+
+    def test_bad_signature_is_signature_invalid(self):
+        r = self._signed(); sig = r["signature"]["sig"]
+        r["signature"]["sig"] = ("0" if sig[0] != "0" else "1") + sig[1:]
+        v = A.verify_receipt(r, {KID: PUB_HEX})
+        self.assertEqual((v["verdict"], v["code"]), ("fail", "signature_invalid"))
+
+    def test_signature_member_in_payload_is_signature_in_signing_input(self):
+        for member in (None, "", "abc"):
+            r = self._signed(); r["payload"]["signature"] = member
+            v = A.verify_receipt(r, {KID: PUB_HEX})
+            self.assertEqual((v["verdict"], v["code"]), ("fail", "signature_in_signing_input"), member)
+
+    def test_valid_receipt_still_has_no_code(self):
+        v = A.verify_receipt(self._signed(), {KID: PUB_HEX})
+        self.assertEqual((v["verdict"], v["code"]), ("pass", None))
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
+class OpenPointsA3_20260926(unittest.TestCase):
+    """The seven ACTA points left open on 25/09, each measured on the code of 26/09 before the fix (probe in the
+    session): 2 undue PASS, 2 undue FAIL, 1 whole-set refusal, 1 accepted impossible leap second, 1 hang."""
+
+    def setUp(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization as S
+        self.S = S
+        self.sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(SEED))
+        pub = self.sk.public_key().public_bytes(S.Encoding.Raw, S.PublicFormat.Raw)
+        self.okp = {"kty": "OKP", "crv": "Ed25519", "kid": KID, "x": base64.urlsafe_b64encode(pub).rstrip(b"=").decode()}
+
+    def _rec(self, issued_at="2026-09-20T09:00:00.001Z"):
+        return A.sign_receipt(A.decision_payload("Read", "allow", KID, issued_at, POLICY_DIGEST, "s1", extra={"sequence": 1}), SEED)
+
+    def test_1_a_key_this_reader_does_not_understand_is_ignored_not_the_whole_set(self):
+        ec = {"kty": "EC", "crv": "P-256", "kid": "other-ec", "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+              "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}
+        keys = A.keys_from_jwks({"keys": [ec, self.okp]})            # RFC 7517 §5: SHOULD ignore kty not understood
+        self.assertNotIn("other-ec", keys)
+        self.assertEqual(A.verify_receipt(self._rec(), keys)["verdict"], "pass")
+        with self.assertRaises(ValueError):                           # a duplicate kid stays refused, ignored entry or not
+            A.keys_from_jwks({"keys": [dict(ec, kid=KID), self.okp]})
+
+    def test_2_key_ops_without_verify_does_not_verify(self):
+        keys = A.keys_from_jwks({"keys": [dict(self.okp, key_ops=["encrypt"])]})
+        self.assertNotEqual(A.verify_receipt(self._rec(), keys)["verdict"], "pass")
+        keys = A.keys_from_jwks({"keys": [dict(self.okp, key_ops=["verify"])]})
+        self.assertEqual(A.verify_receipt(self._rec(), keys)["verdict"], "pass")
+
+    def test_3_a_leap_second_exists_only_at_23_59_utc(self):
+        self.assertFalse(A._valid_instant("2026-09-20T10:15:60Z"))
+        self.assertTrue(A._valid_instant("2016-12-31T23:59:60Z"))
+        self.assertTrue(A._valid_instant("2017-01-01T00:59:60+01:00"))     # 23:59:60 UTC written with an offset
+
+    def test_4_window_bounds_are_compared_exactly_not_at_microseconds(self):
+        keys = A.keys_from_jwks({"keys": [dict(self.okp, valid_from="2026-09-20T09:00:00.0000001Z")]})
+        v = A.verify_receipt(self._rec("2026-09-20T09:00:00.0000000Z"), keys)
+        self.assertEqual((v["verdict"], v["code"]), ("fail", "key_outside_validity_window"))
+        v = A.verify_receipt(self._rec("2026-09-20T09:00:00.0000001Z"), keys)
+        self.assertEqual(v["verdict"], "pass")
+
+    def test_5_a_malformed_window_of_the_relying_party_is_not_a_finding_about_the_receipt(self):
+        v = A.verify_receipt(self._rec(), {KID: {"key": self.okp and bytes.fromhex(PUB_HEX), "valid_until": "tomorrow"}})
+        self.assertEqual((v["verdict"], v["assessed"]), ("not_assessed", False))
+        with self.assertRaises(ValueError):                           # and the CLI loader refuses it (exit 2)
+            A.keys_from_jwks({"keys": [dict(self.okp, valid_until="tomorrow")]})
+
+    def test_6_an_ed25519_key_file_in_pem_or_der_verifies(self):
+        with tempfile.TemporaryDirectory() as d:
+            for enc, name in ((self.S.Encoding.PEM, "k.pem"), (self.S.Encoding.DER, "k.der")):
+                p = os.path.join(d, name)
+                open(p, "wb").write(self.sk.public_key().public_bytes(enc, self.S.PublicFormat.SubjectPublicKeyInfo))
+                kid, mat = A._cli_key(f"{KID}={p}")
+                self.assertEqual(A.verify_receipt(self._rec(), {kid: mat})["verdict"], "pass", name)
+
+    def test_7_a_fifo_is_refused_not_waited_on(self):
+        import threading
+        with tempfile.TemporaryDirectory() as d:
+            fifo = os.path.join(d, "f.json"); os.mkfifo(fifo)
+            res = {}
+            def run():
+                try:
+                    A.load_json_strict(fifo); res["r"] = "read"
+                except (OSError, ValueError) as e:
+                    res["r"] = "refused: " + str(e)
+            th = threading.Thread(target=run, daemon=True); th.start(); th.join(3)
+            self.assertIn("not a regular file", res.get("r", "blocked"))     # the reason, not any refusal (a JSON error would pass)
+        with self.assertRaises(OSError) as cm:                                  # a device is refused before any read
+            A.load_json_strict("/dev/zero")
+        self.assertIn("not a regular file", str(cm.exception))
+
+
+class ReviewFindings20260926(unittest.TestCase):
+    """Independent Opus review of the A3 change (26/09/2026), each finding reproduced before the fix."""
+
+    def test_leap_second_orders_after_every_digit_of_59(self):
+        # the 12-digit offset used for :60 let a 13-digit :59 bound sort after it: a receipt issued at 23:59:60.5 passed
+        # a valid_until of 23:59:59.99999999999999 (PASS after valid_until)
+        self.assertLess(A._instant_exact("2016-12-31T23:59:59.9999999999999999Z"), A._instant_exact("2016-12-31T23:59:60Z"))
+        self.assertLess(A._instant_exact("2016-12-31T23:59:60.999999999999999Z"), A._instant_exact("2017-01-01T00:00:00Z"))
+        w = A._outside_window("2016-12-31T23:59:60.5Z", {"valid_until": "2016-12-31T23:59:59.99999999999999Z"})
+        self.assertEqual(w[0] if w else None, "outside")
+
+    def test_a_very_long_fraction_gives_a_verdict_not_an_exception(self):
+        # Gemini Pro 26/09: int() of >4300 digits raised ValueError out of verify_receipt (Python >= 3.11)
+        t = "2026-09-20T09:00:00." + "1" * 5000 + "Z"
+        key = A._instant_exact(t)
+        self.assertIsNotNone(key)
+        self.assertLess(A._instant_exact("2026-09-20T09:00:00.1111Z"), key)
+        self.assertLess(key, A._instant_exact("2026-09-20T09:00:00.2Z"))
+        self.assertEqual(A._instant_exact("2026-09-20T09:00:00.50Z"), A._instant_exact("2026-09-20T09:00:00.5Z"))
+        self.assertEqual(A._instant_exact("2026-09-20T09:00:00.000Z"), A._instant_exact("2026-09-20T09:00:00Z"))
+        self.assertIsNone(A._outside_window(t, {"valid_from": "2026-01-01T00:00:00Z"}))
+
+    def test_a_readable_bound_that_excludes_the_receipt_wins_over_a_malformed_one(self):
+        w = A._outside_window("2026-01-01T00:00:00Z", {"valid_from": "2026-06-01T00:00:00Z", "valid_until": "garbage"})
+        self.assertEqual(w[0], "outside")
+        w = A._outside_window("2026-07-01T00:00:00Z", {"valid_from": "2026-06-01T00:00:00Z", "valid_until": "garbage"})
+        self.assertEqual(w[0], "bound")                       # inside the readable bound: the unreadable one decides nothing
 
 
 if __name__ == "__main__":

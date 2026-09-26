@@ -544,6 +544,120 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## Key status, refusal codes and strict inputs (2026-09-26, 0.16.0)
+
+Code: `cryptovalid_acta.py` and its tests; the other modules are unchanged since 0.15.1 (the README, the packaging
+metadata and the vendored key-window vectors also change). The public master already carried part of this work as
+`8de0b72` (25 September, version string 0.16.0, never tagged or released); this is the release. The "before" figures
+below are measured on 2026-09-26, unless dated otherwise, on that commit and on the 0.15.1 tag, with the author's probe scripts (not part of this
+repository). This release also removes `.nocrypto_test/`, a test virtualenv skeleton (activation scripts, interpreter
+and lib symlinks and a `pyvenv.cfg` naming a local path; no packages) that the repository had carried by mistake since the
+0.14.0 release commit (`c12d847`, 19 September). Tests: `test_cryptovalid_acta.py` 51/51 with `cedarpy` and
+`cryptography` installed (one test is skipped without `cedarpy`).
+
+**Key status is always stated (§5.5).** Every verification outcome — the library's result, and the CLI's output on
+exit 0, 1 or 77 — carries `key_status` and a machine-readable `code`; a refusal at load (exit 2: an unusable key set, key
+file or input file) reports only `ok: false` and `error`. `key_status` is one of `not_reached` (the receipt was refused
+before the key set was consulted — the default, because saying anything else would assert what was not measured),
+`unknown_key`, `no_window`, `inside`, `outside`, `undecidable`. `code` is `null` or one of `key_outside_validity_window`,
+`key_window_undecidable`, `key_not_supplied`, `issuer_not_trusted`, `key_material_invalid`, `signature_invalid` (the
+signature does not verify under the key) and `signature_in_signing_input` (a payload that carries a `signature` member,
+§6.6); every other refusal — a malformed envelope, a `sig` that is not lowercase hex — carries its reason in `why` with
+`code` null. On `8de0b72` a signature with one bit flipped and a payload carrying `signature` both came back with `code`
+null.
+
+**Small-order keys.** A relying-party Ed25519 key that is a point of small order is unusable key material: with such a
+key anyone can forge a signature on any message. An invalid or non-canonical encoding (y >= p, or the sign bit set with
+x = 0) is refused too, because it does not name one point unambiguously; no forgery is claimed for it. With the identity as key, R=identity and S=0 verifies on every message. With a small-order
+key of order n (2, 4 or 8), pick S, guess g = k mod n, set R = [S]B − [g]A and retry until k = H(R‖A‖M) matches the
+guess: each try succeeds with probability about 1/n. Measured 2026-09-26 with the probe's own curve arithmetic and
+OpenSSL (Python `cryptography`) as the verifier: a signature on a message of the forger's choice verified for all 8
+small-order keys, after 1 to 16 tries; the same construction against an ordinary key verified 0 times in 2000 (null
+control). Measured 2026-09-25: a receipt forged with R=identity, S=0 against the identity key passed.
+`--key`, a key file and `--jwks` refuse such a key at load (exit 2); the library returns
+`not_assessed` with `code: key_material_invalid`. The check is curve arithmetic (canonical decoding, then [8]P is not the
+identity). Measured 2026-09-26 on the check itself: the 8 distinct small-order points (computed with the probe's own curve
+arithmetic, not the library's, as the torsion part of random points), the 2 encodings with the sign bit on x = 0 and 4
+encodings with y >= p are all refused, and an ordinary key is accepted; through the CLI, the identity key is refused at
+load given as a `--key` hex argument, as a key file (hex, PEM or DER) and inside `--jwks` (exit 2), and the library returns
+`not_assessed` / `key_material_invalid`.
+
+**The relying party's keys.** `verify --jwks <file>` reads an Ed25519 key set with its `valid_from`/`valid_until`,
+through the same strict JSON parser as the receipts (duplicate member names, `NaN` and nesting deeper than 512 refused).
+A key held for another purpose is **ignored and named on stderr**: a `kty` other than `OKP`, a `crv` other than
+`Ed25519`, an `alg` other than `EdDSA` or `Ed25519`, a `use` other than `sig`, and `key_ops` without `verify` (RFC 7517 §5
+asks implementations to ignore keys whose `kty` they do not understand or whose values are outside the supported
+ranges). Refused — exit 2, never resolved
+by order or skipped — are a kid that appears twice (in the set, or again through `--key`), a JWK with `x` but without
+`kty` or `crv`, an `x` that is not the canonical unpadded base64url encoding of 32 bytes, and a `valid_from` or
+`valid_until` that is not an RFC 3339 instant. On a JWK with `x` but without `kty` or `crv`, or with an `x` that does not
+decode to 32 bytes, this is stricter than RFC 7517 §5, which would ignore a key missing a required member or with a value
+out of range: such an entry is more likely a defect in the relying party's own list than a foreign key, and ignoring it
+would turn a configuration error into "key not supplied". On `8de0b72` a
+duplicate kid and a JWK without `kty` both verified the receipt (exit 0).
+
+`--key kid=<hex|file>` accepts 64 hex digits in either case, and a key file in SubjectPublicKeyInfo form, PEM or DER; it
+refuses at load key material it cannot read as a key (an empty file, a malformed argument). On `8de0b72` a valid Ed25519
+key file, PEM or DER, made a valid receipt FAIL (exit 1, "EdDSA needs a 32-byte key and a 64-byte sig…").
+
+**Instants.** Dates are read in ASCII digits only (RFC 3339 §5.6, ABNF `DIGIT`): on 0.15.1 and on `8de0b72` an `issued_at`
+written in Arabic-Indic digits was accepted, because Python's `\d` matches every Unicode decimal digit. A leap second is
+accepted only when it is 23:59:60 once the offset is applied (RFC 3339 §5.7; `00:59:60+01:00` is accepted); §5.7 also
+limits it to the end of a month in which a leap second occurs, which is not checked here — 23:59:60 UTC is accepted on
+any day. It sorts after every `23:59:59.x` and before the next second (the comparison is exact by construction;
+measured with an 18-digit `.999…`); 0.15.1 and `8de0b72` accepted
+`:60` at another minute (`12:00:60Z`, measured). Window comparisons use every fractional digit: on `8de0b72` an
+`issued_at` 100 ns before `valid_from` compared equal to it (the comparison had microsecond resolution) and the receipt
+passed as `inside`; it is now `outside`. Through the CLI, a receipt whose `issued_at` is one unit in the last digit
+before `valid_from` is `outside`, and `inside` when it equals `valid_from`; measured in two runs, one where `issued_at`
+and `valid_from` both carry 20 fractional digits and one where both carry 5000.
+
+**Every file is read the same way.** Receipts, `--previous`, `--jwks`, key files and policy files must be regular files
+of at most 64 MiB, opened without blocking and judged on the open descriptor: a FIFO, a device or a directory is refused
+at once (exit 2). On `8de0b72` a FIFO given as the receipt blocked the verifier until the probe's 10 s timeout, and a
+symlink to `/dev/zero` given as the receipt or as `--jwks` was read until the process died of a SIGKILL sent from outside
+the probe, before its 20 s timeout ran out (sender not identified). A receipt can still come from standard input through
+a redirect (`verify /dev/stdin < r.json`); a pipe is a FIFO and is refused.
+
+**Key validity windows (§9.2 of -03).** `--keys-are-complete` declares the key set to be the whole trust list. The
+proposed -04 text of the draft (VeritasActa/drafts#3; the IETF datatracker still lists -03 on 2026-09-26) requires the
+window to be applied to `issued_at` and the output to say which case applied, "so that a verifier that does not check
+windows cannot be mistaken for one whose check passed". Measured against the six key-window vectors of
+ScopeBlind/agent-governance-testvectors (merged to `main` in `1e24b5687`, vendored under `examples/acta/key-window/`),
+scoring all three columns the bench states — verdict, `code` and `key_status` — through the CLI with `--jwks`: **6/6,
+6/6, 6/6** on this release, and also on `8de0b72` (the window check predates it; the differences between the two are the
+ones measured above, which these six vectors do not exercise). The same vectors on 0.15.1, with the bare key material that
+release accepts, give **3/6 verdicts, 3/6 `code` (a missing field scored as null), 0/6 `key_status`**: it has no window
+check at all (`valid_from` and `valid_until` do not occur in that file), so it accepts all six and gets the three
+rejections wrong. The vectors' own declared invocation is `verify <file> --jwks <jwks> --mode receipt --json`; `--mode`
+and `--json` are flags of the reference verifier and this CLI does not implement them, so the run is driven with `--jwks`
+alone. An earlier version of this paragraph said 6/6 verdicts for 0.15.1; that was wrong and is corrected here.
+
+**The absence side of the verdict.** A check this host could not run is not a finding about the receipt.
+`verify_receipt` and `verify_chain` report `verdict` with a total order `FAIL > NOT_ASSESSED > PASS`, and the CLI maps
+it to exit `1 / 77 / 0`; `ok` and `assessed` are derived from it for existing readers, and `ok` stays false under
+`NOT_ASSESSED` (fail-closed — a signature that was never checked is never a pass). `not_assessed` lists which receipts
+of a chain were affected. Measured 2026-09-26 in a virtualenv without `cryptography`: on 0.15.1 a valid receipt and a
+forged one both returned `ok: false` and exit 1 — our own missing library reported with the value of a bad signature;
+on this release (and already on `8de0b72`) both return `not_assessed` and exit 77; on this release the output reads
+`key_status: no_window`, `code: null`.
+
+The boundary is declared, not left implicit. A capability of **this host** (a missing `cryptography`, no ML-DSA
+backend) is an absence. A usable input the **relying party** supplies (keys, policy bytes) and the **profile** itself (an
+`alg` outside §6.9) are judgments; an unusable one is the relying party's configuration defect (below). An unknown `kid`
+is a "could not look" unless the relying party passes `keys_are_complete=True`, declaring its set to be the whole trust
+list: answering "invalid" about a signature this host never checked asserts what it did not measure. Key material of the relying party that is not a key in any form read here
+(a number, an empty or non-hex string, 5 bytes, a PEM that does not load) is the relying party's configuration defect,
+not a finding about the receipt: `not_assessed` with code `key_material_invalid` in the library, exit 2 at load in the
+CLI. That test looks at the material alone, never at the receipt, so a usable key of another type than the receipt's
+`alg` stays a `fail` — otherwise flipping the unsigned `alg` of a forged receipt would buy it "could not look". An
+absence never hides a finding: a forged receipt beside an unverifiable one gives `fail`, and a broken §6.7 link is still
+checked above an unassessed receipt, because the link is a hash and needs no signature backend. A window bound of the
+relying party that is not an instant is its configuration defect too: the CLI refuses the key set at load, and the
+library — given such an entry directly — returns `not_assessed` with `key_window_undecidable` (on `8de0b72`: `fail`). A
+bound that CAN be read and excludes the receipt still decides, even when the other bound is unreadable: `fail`,
+`key_outside_validity_window` (on `8de0b72`: `key_window_undecidable`).
+
 ## Verifier hygiene from the cra-evidence review (2026-09-21, 0.15.1)
 
 Twelve review rounds on cra-evidence 0.3.0 — whose verifiers are this repository's, re-implemented — found four classes of
@@ -597,33 +711,6 @@ python3 cryptovalid_acta.py sign --key agent.seed --tool Bash --decision deny --
 python3 cryptovalid_acta.py verify r1.json r2.json --key sb:issuer:6ASf5EcmmEHT=4cb5abf6…29 --policy-dir examples/acta
 python3 cryptovalid_acta.py run-vectors <agent-governance-testvectors clone> receipts/cryptovalid-opencore --seed 00…01
 ```
-
-**Key status is always stated (§5.5).** Every outcome carries `key_status` and a machine-readable `code`.
-`key_status` is one of `not_reached` (the receipt was refused before the key set was consulted — the default, because
-saying anything else would assert what was not measured), `unknown_key`, `no_window`, `inside`, `outside`,
-`undecidable`. `verify --jwks <file>` reads a relying party's key set with its `valid_from`/`valid_until`. The vectors' own
-declared invocation is `verify <file> --jwks <jwks> --mode receipt --json`; `--mode` and `--json` are flags of the
-reference verifier and this CLI does not implement them, so the run is driven with `--jwks` alone. `--keys-are-complete` declares that set to be the whole trust list. draft-farley-acta-signed-receipts-04 §5.5 (proposed in VeritasActa/drafts#3, not yet published) requires the window to be applied to `issued_at` and the output to say which case applied, "so that a verifier that does not check windows cannot be mistaken for one whose check passed". Measured against the six key-window vectors of ScopeBlind/agent-governance-testvectors (merged to `main` in
-`1e24b5687`, vendored under `examples/acta/key-window/`), scoring all three columns the bench states — verdict, `code`
-and `key_status` — through the CLI with `--jwks`: **6/6, 6/6, 6/6**. The same vectors on 0.15.1, with the bare key material that release accepts, give **3/6 verdicts, 3/6 `code`,
-0/6 `key_status`**: it has no window check at all (`valid_from` and `valid_until` do not occur in that file), so it
-accepts all six and gets the three rejections wrong. An earlier version of this paragraph said 6/6 verdicts for
-0.15.1; that was wrong and is corrected here.
-
-**The absence side of the verdict.** A check this host could not run is not a finding about the receipt.
-`verify_receipt` and `verify_chain` report `verdict` with a total order `FAIL > NOT_ASSESSED > PASS`, and the CLI maps
-it to exit `1 / 77 / 0`; `ok` and `assessed` are derived from it for existing readers, and `ok` stays false under
-`NOT_ASSESSED` (fail-closed — a signature that was never checked is never a pass). `not_assessed` lists which receipts
-of a chain were affected.
-
-The boundary is declared, not left implicit: a capability of **this host** (a missing `cryptography`, no ML-DSA
-backend) is an absence; an input the **relying party** supplies (keys, policy bytes) and the **profile** itself (an
-`alg` outside §6.9) are judgments — an unknown `kid` is a "could not look" unless the relying party passes `keys_are_complete=True`, declaring its set to be the whole trust list — answering "invalid" about a signature this host never checked asserts what it did not measure. An absence never hides a
-finding: a forged receipt beside an unverifiable one gives `fail`, and a broken §6.7 link is still checked above an
-unassessed receipt, because the link is a hash and needs no signature backend.
-
-Measured 24/09/2026 on a host without `cryptography`: before this, a valid receipt and a forged one both returned
-`ok=false` and exit 1 — our own missing library reported with the value of a bad signature.
 
 `examples/acta/testvectors_driver/run.sh` is the driver to drop into that repository's `implementations/`. Review round 1
 (Claude Opus 5, Sonnet 5, Haiku 4.5 — Gemini 3.1 Pro's credits were exhausted that day; every finding re-measured and

@@ -36,10 +36,12 @@ unchained (§2.2 says the format does not distinguish).
 from __future__ import annotations
 import argparse
 import base64
+import binascii
 import hashlib
 import json
 import os
 import re
+import stat
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -47,8 +49,15 @@ from typing import Any, Dict, List, Optional, Tuple
 DRAFT = "draft-farley-acta-signed-receipts-03 (2026-08-29, expires 2027-03-02; individual Internet-Draft)"
 DECISIONS = ("allow", "deny", "rate_limit", "require_approval")
 ALGS = ("EdDSA", "ML-DSA-65", "ES256")
-_RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})\Z")
-_HEX = re.compile(r"^[0-9a-f]+\Z")
+# Every pattern here is ASCII-only, by construction ([0-9], never \d) AND by flag (re.ASCII): in Python `\d` matches any
+# Unicode decimal digit, and up to 0.16.0 an `issued_at` written in Arabic-Indic or fullwidth digits was accepted,
+# signed and compared against the key window as if it were an RFC 3339 instant. RFC 3339 §5.6 is ABNF: DIGIT is %x30-39.
+_RFC3339 = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})\Z", re.ASCII)
+_HEX = re.compile(r"^[0-9a-f]+\Z", re.ASCII)
+_HEX64_ANYCASE = re.compile(r"^[0-9a-fA-F]{64}\Z", re.ASCII)
+_SHA256_PREFIXED = re.compile(r"^sha256:[0-9a-f]{64}\Z", re.ASCII)
+_PREV_HASH = re.compile(r"^(sha256:)?[0-9a-f]{64}\Z", re.ASCII)
+_UTC_SECONDS = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z", re.ASCII)
 _B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 JCS_MAX_DEPTH = 512
 
@@ -130,7 +139,7 @@ def jcs(obj: Any) -> bytes:
         raise ValueError("JCS: lone surrogate is not encodable as UTF-8") from None
 
 
-_INSTANT_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(\.\d+)?(?:[Zz]|([+-])(\d{2}):(\d{2}))\Z")
+_INSTANT_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?(?:[Zz]|([+-])([0-9]{2}):([0-9]{2}))\Z", re.ASCII)
 
 
 def _instant(t: Any) -> Optional[datetime]:
@@ -152,6 +161,16 @@ def _instant(t: Any) -> Optional[datetime]:
     y, mo, d, h, mi, se = (int(m.group(i)) for i in range(1, 7))
     if se > 60:
         return None
+    if se == 60:
+        # RFC 3339 §5.7: a leap second exists only as 23:59:60 UTC. At any other position (10:15:60) it is not an
+        # instant; before 26/09/2026 this parser accepted :60 at every minute (measured).
+        if m.group(8) is None:
+            utc_min = h * 60 + mi
+        else:
+            off = int(m.group(9)) * 60 + int(m.group(10))
+            utc_min = (h * 60 + mi - (off if m.group(8) == "+" else -off)) % 1440
+        if utc_min != 23 * 60 + 59:
+            return None
     frac = m.group(7)
     micro = 999999 if se == 60 else (int(round(float(frac) * 1_000_000)) if frac else 0)
     if m.group(8) is None:
@@ -168,12 +187,32 @@ def _instant(t: Any) -> Optional[datetime]:
         return None
 
 
+def _instant_exact(t: Any) -> Optional[Tuple[int, int, str]]:
+    """The same instant as `_instant`, as an EXACT ordered key: every fractional digit counts.
+    `_instant` rounds to microseconds, and a window bound 100 ns after issued_at compared equal to it — a receipt
+    issued BEFORE valid_from came back `inside` (measured 26/09/2026). Window comparisons use this.
+
+    Returned as an ordered key (whole UTC second, leap flag, fractional digits with trailing zeros removed): digit
+    strings normalized that way compare, as strings, exactly as the fractions they write — in linear time, with no int()
+    (a first version used int() and raised ValueError past 4300 digits on Python >= 3.11: Gemini Pro review 26/09/2026).
+    A leap second 23:59:60.f is (:59, 1, f), after
+    every :59.x — however many digits x has — and before the next second. A first version added a 12-digit offset
+    instead, and a 13-digit :59 bound then sorted after :60 (independent review 26/09/2026: PASS after valid_until)."""
+    d = _instant(t)
+    if d is None:
+        return None
+    m = _INSTANT_RE.match(t)
+    frac = m.group(7)[1:].rstrip("0") if m.group(7) else ""
+    whole = int((d.replace(microsecond=0) - datetime(1970, 1, 1, tzinfo=timezone.utc)).total_seconds())
+    return (whole, 1 if int(m.group(6)) == 60 else 0, frac)
+
+
 def _valid_instant(t: str) -> bool:
     """RFC 3339 form AND a real calendar instant. One parser only: see `_instant`."""
     return _instant(t) is not None
 
 
-def _outside_window(issued_at: str, entry: Any) -> Optional[str]:
+def _outside_window(issued_at: str, entry: Any) -> Optional[Tuple[str, str]]:
     """§9.2: 'Verifiers SHOULD check key validity windows when available.' Returns a reason when the receipt's
     issued_at falls outside the window declared for its key, or None when it does not — including when no window
     is declared, which is the common case and is not an error.
@@ -190,28 +229,30 @@ def _outside_window(issued_at: str, entry: Any) -> Optional[str]:
     It catches a key used after an honest rotation; it cannot catch a compromised key whose receipts are
     backdated inside the window. §9.2 is a SHOULD and this check is only as good as the window's source.
     """
+    # Returns None, or (kind, reason) with kind "outside" (the receipt falls outside a window that could be read),
+    # "bound" (the RELYING PARTY's bound is not an instant: a configuration defect, never a finding about the receipt)
+    # or "instant" (the receipt's issued_at cannot be compared). The kind used to be inferred from the reason's wording.
     if not isinstance(entry, dict):
         return None
     vf, vu = entry.get("valid_from"), entry.get("valid_until")
     if vf is None and vu is None:
         return None
-    t = _instant(issued_at)
+    a = _instant_exact(vf) if vf is not None else None
+    b = _instant_exact(vu) if vu is not None else None
+    t = _instant_exact(issued_at)
     if t is None:
-        # A window was declared and the instant cannot be compared against it: refuse rather than skip. Skipping here
-        # was fail-open — the shape that reached it was a leap second, which `_valid_instant` accepts.
-        return "issued_at cannot be compared with the key validity window (§9.2)"
-    if vf is not None:
-        a = _instant(vf)
-        if a is None:
-            return "key valid_from is not an RFC 3339 instant (§9.2)"
-        if t < a:
-            return "issued_at precedes the key validity window (§9.2)"
-    if vu is not None:
-        b = _instant(vu)
-        if b is None:
-            return "key valid_until is not an RFC 3339 instant (§9.2)"
-        if t >= b:
-            return "issued_at is at or after the key validity window ends (§9.2)"
+        # A window was declared and the instant cannot be compared against it: refuse rather than skip.
+        return "instant", "issued_at cannot be compared with the key validity window (§9.2)"
+    # A bound that CAN be read and excludes the receipt decides, even if the other bound is unreadable: an unreadable
+    # bound must not turn a definite "outside" into "not assessed" (independent review 26/09/2026).
+    if a is not None and t < a:
+        return "outside", "issued_at precedes the key validity window (§9.2)"
+    if b is not None and t >= b:
+        return "outside", "issued_at is at or after the key validity window ends (§9.2)"
+    if vf is not None and a is None:
+        return "bound", "the relying party's key valid_from is not an RFC 3339 instant (§9.2)"
+    if vu is not None and b is None:
+        return "bound", "the relying party's key valid_until is not an RFC 3339 instant (§9.2)"
     return None
 
 
@@ -241,12 +282,34 @@ def policy_digest(files: Dict[str, bytes], engine: str = "cedar") -> str:
     return "sha256:" + hashlib.sha256(jcs(m)).hexdigest()
 
 
+MAX_INPUT_BYTES = 64 * 1024 * 1024       # every file this module reads: receipts, --previous, --jwks, key files, policies
+
+
+def read_regular(path: str, limit: int = MAX_INPUT_BYTES) -> bytes:
+    """The bytes of a REGULAR file of at most `limit` bytes. Opened without blocking and judged on the OPEN descriptor,
+    so a FIFO, a device (/dev/zero) or a directory is refused at once instead of blocking or filling memory (measured
+    26/09/2026: a FIFO given as a JSON input blocked the verifier indefinitely). Raises OSError."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0))
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError(f"{path} is not a regular file")
+        if st.st_size > limit:
+            raise OSError(f"{path} is larger than {limit} bytes")
+        with os.fdopen(os.dup(fd), "rb") as f:
+            data = f.read(limit + 1)
+        if len(data) > limit:
+            raise OSError(f"{path} is larger than {limit} bytes")
+        return data
+    finally:
+        os.close(fd)
+
+
 def policy_digest_from_dir(path: str, engine: str = "cedar", ext: str = ".cedar") -> str:
     files = {}
     for n in os.listdir(path):
         if n.endswith(ext):
-            with open(os.path.join(path, n), "rb") as f:
-                files[n] = f.read()
+            files[n] = read_regular(os.path.join(path, n))
     return policy_digest(files, engine)
 
 
@@ -298,7 +361,7 @@ def decision_payload(tool_name: str, decision: str, issuer_id: str, issued_at: O
     p: Dict[str, Any] = {"type": "protectmcp:decision", "tool_name": tool_name, "decision": decision,
                          "issued_at": ts, "issuer_id": issuer_id}
     if policy_digest_value is not None:
-        if not re.match(r"^sha256:[0-9a-f]{64}\Z", policy_digest_value):
+        if not _SHA256_PREFIXED.match(policy_digest_value):
             raise ValueError("policy_digest must be sha256:<64 lowercase hex> (§6.8)")
         p["policy_digest"] = policy_digest_value
     if session_id is not None:
@@ -332,6 +395,95 @@ def sign_receipt(payload: Dict[str, Any], seed_hex: str, kid: Optional[str] = No
 
 
 # ── verify ───────────────────────────────────────────────────────────────────────────────────
+def _pem_problem(data: bytes) -> Optional[str]:
+    try:
+        from cryptography.hazmat.primitives import serialization
+    except ImportError:
+        return None                    # cannot tell on this host: the verification path reports the absence itself
+    try:
+        serialization.load_pem_public_key(data)
+    except Exception as ex:  # noqa: BLE001 — any failure means the PEM is not a public key
+        return f"PEM that does not load as a public key ({type(ex).__name__})"
+    return None
+
+
+_ED_P = 2 ** 255 - 19
+_ED_D = (-121665 * pow(121666, _ED_P - 2, _ED_P)) % _ED_P
+
+
+def _ed25519_problem(pk: bytes) -> Optional[str]:
+    """Why 32 bytes cannot be an Ed25519 verification key, or None. A canonical encoding of a point of SMALL order (the
+    identity, and the other torsion points) makes R=identity, S=0 a valid signature on EVERY message, and OpenSSL — hence
+    `cryptography` — accepts it (measured 25/09/2026). So the key must be a canonical encoding (y < p, and no sign bit on
+    x = 0) of a curve point whose [8]P is not the identity. Pure integer arithmetic (RFC 8032 §5.1.3 decoding)."""
+    if len(pk) != 32:
+        return f"Ed25519 key is {len(pk)} bytes, not 32"
+    y = int.from_bytes(pk, "little") & ((1 << 255) - 1)
+    sign = pk[31] >> 7
+    if y >= _ED_P:
+        return "Ed25519 key is a non-canonical encoding (y >= p)"
+    u, v = (y * y - 1) % _ED_P, (_ED_D * y * y + 1) % _ED_P
+    x = (u * pow(v, 3, _ED_P) * pow(u * pow(v, 7, _ED_P), (_ED_P - 5) // 8, _ED_P)) % _ED_P
+    if (v * x * x - u) % _ED_P != 0:
+        x = (x * pow(2, (_ED_P - 1) // 4, _ED_P)) % _ED_P
+        if (v * x * x - u) % _ED_P != 0:
+            return "Ed25519 key does not decode to a curve point"
+    if x == 0 and sign:
+        return "Ed25519 key is a non-canonical encoding (sign bit set on x = 0)"
+    if (x & 1) != sign:
+        x = _ED_P - x
+    # [8]P with extended coordinates (X:Y:Z:T); identity is X = 0, Y = Z
+    X, Y, Z, T = x, y, 1, (x * y) % _ED_P
+    for _ in range(3):
+        A, B = (X * X) % _ED_P, (Y * Y) % _ED_P
+        C, H = (2 * Z * Z) % _ED_P, (A + B) % _ED_P
+        E, G = (H - (X + Y) * (X + Y)) % _ED_P, (A - B) % _ED_P
+        F = (C + G) % _ED_P
+        X, Y, Z, T = (E * F) % _ED_P, (G * H) % _ED_P, (F * G) % _ED_P, (E * H) % _ED_P
+    if X % _ED_P == 0 and (Y - Z) % _ED_P == 0:
+        return "Ed25519 key is a point of small order: anyone can forge a signature on any message (R=identity, S=0 for the identity key; a few tries for the other small-order points)"
+    return None
+
+
+def _key_material_problem(key: Any) -> Optional[str]:
+    """Why the relying party's key material cannot be a key in ANY form this module reads, or None when it can.
+
+    It is a function of the material alone, never of the receipt, on purpose: the answer turns a verdict into
+    `not_assessed` (a configuration defect of the relying party, not a finding about the receipt), so nothing the
+    receipt carries may reach it. A usable key of another type than the receipt's `alg` (an Ed25519 key under a receipt
+    that declares ES256) is NOT covered here and stays a judgment: otherwise flipping the unsigned `alg` of a forged
+    receipt would downgrade its `fail` to "could not look". Forms read: 32 bytes or 64 hex (Ed25519), 1952 bytes or
+    their base64 (ML-DSA-65), a PEM public key (ES256)."""
+    if key is None:
+        return "no key material (the entry has no 'key' member)"
+    if isinstance(key, bool) or not isinstance(key, (bytes, bytearray, str)):
+        return f"key material is a {type(key).__name__}, not bytes or a string"
+    if isinstance(key, str):
+        if _HEX64_ANYCASE.match(key):
+            return _ed25519_problem(bytes.fromhex(key))
+        if "-----BEGIN" in key:
+            return _pem_problem(key.encode("utf-8", "replace"))
+        try:
+            if len(base64.b64decode(key, validate=True)) == 1952:
+                return None
+        except (binascii.Error, ValueError):
+            pass
+        return "key material string is neither 64 hex (Ed25519), base64 of 1952 bytes (ML-DSA-65) nor a PEM public key"
+    b = bytes(key)
+    if len(b) == 32:
+        return _ed25519_problem(b)
+    if len(b) == 1952:
+        return None
+    if b.lstrip().startswith(b"-----BEGIN"):
+        return _pem_problem(b)
+    return f"key material is {len(b)} bytes: neither 32 (Ed25519), 1952 (ML-DSA-65) nor a PEM public key"
+
+
+# The §6.6 refusal for a signing input that carries a signature member (null and "" included). A constant, so that
+# verify_receipt attaches its code by identity with THIS return, never by searching the free text.
+SIGNATURE_IN_SIGNING_INPUT_WHY = "payload contains a signature member (§6.6 MUST NOT)"
+
+
 def _shape(receipt: Any) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]], str]:
     """(shape, signing-input object, signature object {alg, kid, sig}, why). §6.6: envelope = exactly {payload, signature{}}."""
     if not isinstance(receipt, dict):
@@ -343,7 +495,7 @@ def _shape(receipt: Any) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[s
         if set(s) != {"alg", "kid", "sig"}:
             return "invalid", None, None, "signature object must carry exactly alg, kid and sig (§2.1.1/§6.6)"
         if "signature" in receipt["payload"]:
-            return "invalid", None, None, "payload contains a signature member (§6.6 MUST NOT)"
+            return "invalid", None, None, SIGNATURE_IN_SIGNING_INPUT_WHY
         return "envelope", receipt["payload"], {"alg": s.get("alg"), "kid": s.get("kid"), "sig": s.get("sig")}, ""
     if isinstance(receipt.get("signature"), str):
         body = {k: v for k, v in receipt.items() if k != "signature"}
@@ -360,19 +512,33 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any], *, keys_are_complete: boo
     present the receipt's `issued_at` must fall in `[valid_from, valid_until)` (§9.2, a SHOULD that applies only when
     the window is available — see `_outside_window` for why the end is exclusive and what the check cannot catch).
 
-    Returns {ok, shape, alg, kid, why, hash}."""
+    Key material that cannot be a key in any form read here (a float, an empty string, "!!!!", 5 bytes, a PEM that does
+    not load) is the relying party's configuration defect, not the receipt's: the verdict is `not_assessed` with code
+    `key_material_invalid`, never `fail` (see `_key_material_problem` for why it looks at the material only).
+
+    Returns {ok, verdict, assessed, key_status, code, shape, alg, kid, why, hash, notes}. `keys` must be a mapping:
+    anything else is a programming error and raises TypeError."""
+    if not isinstance(keys, dict):
+        raise TypeError(f"keys must be a dict {{kid: key}}, not {type(keys).__name__}")
     shape, body, sig, why = _shape(receipt)
     # `assessed` separates the absence side INSIDE the verdict: False = this host could not judge the receipt at all
-    # (a missing library, an algorithm this build cannot verify). ok=False then means "not assessed", not "invalid":
+    # (a missing library, an algorithm this build cannot verify, key material of the relying party that is not a key in
+    # any form read here). ok=False then means "not assessed", not "invalid":
     # reporting our own missing input as a finding about the artifact is the defect this field exists to prevent.
     # `key_status` is stated in EVERY outcome (§5.5 of -04): "a verifier that does not check windows cannot be
     # mistaken for one whose check passed". Values: not_reached (the receipt was refused before the key set was even
     # consulted — the default, because saying anything else would assert what we did not measure), unknown_key,
-    # no_window, inside, outside, undecidable. `code` is the machine-readable reason, null when there is none.
+    # no_window, inside, outside, undecidable. `code` is the machine-readable reason, null when there is none; the codes
+    # emitted are issuer_not_trusted, key_not_supplied, key_outside_validity_window, key_window_undecidable and
+    # key_material_invalid, and — since 26/09/2026, because agent-evidence-vectors requires a code on every refusal —
+    # signature_invalid (the signature does not verify under the key) and signature_in_signing_input (§6.6). Every
+    # other refusal still carries its reason in `why` and code null.
     out: Dict[str, Any] = {"ok": False, "verdict": "fail", "assessed": True, "key_status": "not_reached",
                            "code": None, "shape": shape, "alg": None, "kid": None, "why": why, "hash": None,
                            "notes": []}
     if shape == "invalid":
+        if why is SIGNATURE_IN_SIGNING_INPUT_WHY:
+            out["code"] = "signature_in_signing_input"
         return out
     alg, kid, sigv = sig["alg"], sig["kid"], sig["sig"]
     out.update({"alg": alg, "kid": kid})
@@ -404,9 +570,9 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any], *, keys_are_complete: boo
             out["why"] = "previousReceiptHash is not a non-empty string (§2.2: omit it on a genesis, never null or empty)"; return out
         if ":" in v and not v.startswith("sha256:"):
             out["why"] = f"previousReceiptHash names an algorithm this verifier does not implement: {v.split(':')[0]!r} (§6.7)"; return out
-        if not re.match(r"^(sha256:)?[0-9a-f]{64}\Z", v):
+        if not _PREV_HASH.match(v):
             out["why"] = "previousReceiptHash is not sha256:<64 lowercase hex> (§6.7)"; return out
-    if "policy_digest" in body and not (isinstance(body["policy_digest"], str) and re.match(r"^sha256:[0-9a-f]{64}\Z", body["policy_digest"])):
+    if "policy_digest" in body and not (isinstance(body["policy_digest"], str) and _SHA256_PREFIXED.match(body["policy_digest"])):
         # §6.8 compatibility note: an earlier-revision digest (16 hex, no prefix) is an opaque LABEL, not a commitment —
         # the signature is still checked; the chain's policy binding refuses to bind on it
         out["notes"].append("policy_digest is not an acta-policy-digest-v1 commitment (sha256:<64 hex>): an opaque label, not recomputable (§6.8)")
@@ -429,23 +595,34 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any], *, keys_are_complete: boo
     # A key may be given as the material alone (as before) or as {"key": material, "valid_from":…, "valid_until":…}.
     # The window is only checked when the relying party supplies one: §9.2 is a SHOULD "when available".
     key = entry.get("key") if isinstance(entry, dict) else entry
-    if key is None:
-        out["why"] = f"key entry for kid {kid!r} has no 'key' member"; return out
     has_window = isinstance(entry, dict) and (entry.get("valid_from") is not None or entry.get("valid_until") is not None)
     window = _outside_window(body["issued_at"], entry)
     if window is None:
         out["key_status"] = "inside" if has_window else "no_window"
     else:
-        # "outside" is the receipt falling outside a window that could be read; a window that cannot be applied at all
-        # (unreadable bound, uncomparable instant) is undecidable and says so, per §5.5.
-        outside = "issued_at precedes" in window or "at or after" in window
-        out["key_status"] = "outside" if outside else "undecidable"
-        out["code"] = "key_outside_validity_window" if outside else "key_window_undecidable"
-        out["why"] = window; return out
+        kind, why_w = window
+        out["why"] = why_w
+        if kind == "outside":
+            out.update(key_status="outside", code="key_outside_validity_window")
+        elif kind == "bound":
+            # the relying party's window is unreadable: like unusable key material, a configuration defect — NOT a
+            # finding about the receipt (26/09/2026: this was a FAIL on a valid receipt)
+            out.update(key_status="undecidable", code="key_window_undecidable", assessed=False, verdict="not_assessed")
+        else:
+            out.update(key_status="undecidable", code="key_window_undecidable")
+        return out
+    problem = _key_material_problem(key)
+    if problem is not None:
+        out.update({"code": "key_material_invalid", "assessed": False, "verdict": "not_assessed",
+                    "why": f"the relying party's key for kid {kid!r} is unusable: {problem} — a configuration defect, not a "
+                           "finding about the receipt: the signature was NOT checked"})
+        return out
     raw = bytes.fromhex(sigv)
     try:
         if alg == "EdDSA":
             _, Ed25519PublicKey, _ = _ed()
+            if isinstance(key, str) and not _HEX64_ANYCASE.match(key):
+                out["why"] = f"the key for kid {kid!r} is not an Ed25519 key, and the receipt declares EdDSA"; return out
             pk = bytes.fromhex(key) if isinstance(key, str) else bytes(key)
             if len(pk) != 32 or len(raw) != 64:
                 out["why"] = "EdDSA needs a 32-byte key and a 64-byte signature"; return out
@@ -455,7 +632,10 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any], *, keys_are_complete: boo
                 from cryptography.hazmat.primitives.asymmetric import mldsa
             except ImportError:
                 out["why"] = "ML-DSA-65 not verifiable on this host (cryptography >= 48): NOT verified"; out["assessed"] = False; out["verdict"] = "not_assessed"; return out
-            pk = base64.b64decode(key, validate=True) if isinstance(key, str) else bytes(key)
+            try:
+                pk = base64.b64decode(key, validate=True) if isinstance(key, str) else bytes(key)
+            except (binascii.Error, ValueError):
+                out["why"] = f"the key for kid {kid!r} is not an ML-DSA-65 key, and the receipt declares ML-DSA-65"; return out
             if len(pk) != 1952 or len(raw) != 3309:
                 out["why"] = "ML-DSA-65 needs a 1952-byte key and a 3309-byte signature"; return out
             mldsa.MLDSA65PublicKey.from_public_bytes(pk).verify(raw, msg)
@@ -463,7 +643,10 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any], *, keys_are_complete: boo
             from cryptography.hazmat.primitives import hashes, serialization
             from cryptography.hazmat.primitives.asymmetric import ec
             from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
-            pk = serialization.load_pem_public_key(key if isinstance(key, bytes) else str(key).encode())
+            try:
+                pk = serialization.load_pem_public_key(bytes(key) if isinstance(key, (bytes, bytearray)) else str(key).encode())
+            except ValueError:
+                out["why"] = f"the key for kid {kid!r} is not a PEM public key, and the receipt declares ES256"; return out
             if not isinstance(pk, ec.EllipticCurvePublicKey) or pk.curve.name != "secp256r1" or len(raw) != 64:
                 out["why"] = "ES256 needs a P-256 key and a 64-byte r||s signature (encoding declared, not in the draft)"; return out
             s_int = int.from_bytes(raw[32:], "big")
@@ -475,7 +658,7 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any], *, keys_are_complete: boo
     except _unsupported() as ex:
         out["why"] = f"{alg} not verifiable on this host ({ex}): NOT verified"; out["assessed"] = False; out["verdict"] = "not_assessed"; return out
     except Exception as ex:  # noqa: BLE001 — any failure is one verdict
-        out["why"] = f"signature invalid ({type(ex).__name__})"; return out
+        out["why"] = f"signature invalid ({type(ex).__name__})"; out["code"] = "signature_invalid"; return out
     out.update({"ok": True, "verdict": "pass", "why": "ok", "hash": "sha256:" + hashlib.sha256(whole).hexdigest()})    # §6.7 pre-image: the whole receipt, both shapes
     return out
 
@@ -572,8 +755,7 @@ def run_vectors(repo_root: str, out_dir: str, seed_hex: str, issued_at_base: Opt
     files = {}
     for n in sorted(os.listdir(policy_dir)):
         if n.endswith(".cedar"):
-            with open(os.path.join(policy_dir, n), "rb") as f:
-                files[n] = f.read()
+            files[n] = read_regular(os.path.join(policy_dir, n))
     pd = policy_digest(files, "cedar")
     policy_text = "\n".join(f.decode("utf-8") for f in files.values())
     pub = pubkey_from_seed(seed_hex)
@@ -583,14 +765,13 @@ def run_vectors(repo_root: str, out_dir: str, seed_hex: str, issued_at_base: Opt
     summary = {"kid": kid, "public_key_hex": pub.hex(), "policy_digest": pd, "receipts": []}
     inputs = sorted(f for f in os.listdir(inputs_dir) if f.endswith(".json"))
     for n, fname in enumerate(inputs, 1):
-        with open(os.path.join(inputs_dir, fname), encoding="utf-8") as f:
-            inp = json.load(f)
+        inp = json.loads(read_regular(os.path.join(inputs_dir, fname)).decode("utf-8"))
         seq = inp.get("sequence", n)
         if not isinstance(seq, int) or isinstance(seq, bool) or not 1 <= seq <= 999:
             raise ValueError(f"{fname}: sequence must be an integer in 1..999 (it becomes the millisecond of issued_at)")
         decision, reasons = evaluate_cedar(policy_text, inp["tool_name"], inp.get("context") or {})
         # issued_at: the run's UTC clock, or a fixed base (reproducible signatures across runs); the sequence is the millisecond
-        if issued_at_base is not None and not (re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z", issued_at_base) and _valid_instant(issued_at_base)):
+        if issued_at_base is not None and not (isinstance(issued_at_base, str) and _UTC_SECONDS.match(issued_at_base) and _valid_instant(issued_at_base)):
             raise ValueError("issued_at_base must be a UTC instant of the form YYYY-MM-DDThh:mm:ssZ")
         base = issued_at_base[:19] if issued_at_base else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         ts = f"{base}.{seq:03d}Z"
@@ -623,6 +804,176 @@ def _no_dup_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
     return d
 
 
+def _json_nesting_exceeds(text: str, limit: int) -> bool:
+    """True when `text` nests arrays/objects deeper than `limit`. A linear scan that skips string contents, run BEFORE
+    the parser: Python's json module recurses once per level and raised RecursionError on 100 000-deep input, whose
+    message named the interpreter rather than the input."""
+    depth, in_str, esc = 0, False, False
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "[{":
+            depth += 1
+            if depth > limit:
+                return True
+        elif ch in "]}":
+            depth -= 1
+    return False
+
+
+def load_json_strict(path: str, what: str = "JSON") -> Any:
+    """The one reader for every JSON input of the CLI (receipts, --previous, --jwks): duplicate member names refused
+    (RFC 8785 §3.1 — last-wins would let the file say two things), NaN/Infinity refused, and nesting deeper than
+    JCS_MAX_DEPTH (512) refused before parsing, with a message that says so."""
+    text = read_regular(path).decode("utf-8")
+    if _json_nesting_exceeds(text, JCS_MAX_DEPTH):
+        raise ValueError(f"{what} {path}: nesting deeper than {JCS_MAX_DEPTH} levels refused (the JCS limit of this module)")
+    return json.loads(text, parse_constant=_no_constant, object_pairs_hook=_no_dup_keys)
+
+
+def _b64url_ed25519_x(kid: str, x: Any) -> bytes:
+    """RFC 8037 §2 `x` of an Ed25519 key: base64url WITHOUT padding (RFC 7515 §2), exactly 32 bytes, canonical. The
+    decoder of the standard library is not validating — it drops characters outside the alphabet and accepts padding —
+    so a JWK with `=` or trailing junk used to load as the same key; here the text itself is checked: decoded, it must
+    be 32 bytes, and re-encoded it must give back exactly `x` (which admits only the 43 url-safe characters, no padding,
+    no alternative last character)."""
+    bad = ValueError(f"kid {kid!r}: x is not the canonical unpadded base64url encoding of 32 bytes (RFC 8037 §2, RFC 7515 §2)")
+    if not isinstance(x, str):
+        raise bad
+    try:
+        raw = base64.urlsafe_b64decode(x + "=" * (-len(x) % 4))
+    except (binascii.Error, ValueError):
+        raise bad from None
+    if len(raw) != 32 or base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii") != x:
+        raise bad
+    problem = _ed25519_problem(raw)
+    if problem:
+        raise ValueError(f"kid {kid!r}: {problem}")
+    return raw
+
+
+# JWK members that name what a key is for. When present they must say "Ed25519 signature verification": a key published
+# for encryption (`use: enc`) or for another algorithm must not verify receipts because this reader never looked.
+_JWK_COMPATIBLE = {"kty": ("OKP",), "crv": ("Ed25519",), "alg": ("EdDSA", "Ed25519"), "use": ("sig",)}
+
+
+def keys_from_jwks(doc: Any, ignored: Optional[List[str]] = None) -> Dict[str, Any]:
+    """A JWK Set (RFC 7517 §5, `{"keys": [...]}`) → the `keys` argument of `verify_receipt`: {kid: {"key": 32 bytes,
+    "valid_from"?, "valid_until"?}}. Ed25519 verification keys only (OKP, RFC 8037).
+
+    IGNORED (RFC 7517 §5: "SHOULD ignore JWKs ... not understood ... or out of the supported ranges"; since 26/09/2026,
+    before which one such key made the whole set unusable): a JWK whose `kty`/`crv`/`alg`/`use` do not say OKP /
+    Ed25519 / EdDSA or Ed25519 / sig, or whose `key_ops` does not include "verify". An ignored key verifies nothing — a
+    receipt under its kid finds no key — and is listed in `ignored` when the caller passes a list (the CLI prints it).
+    Library callers that pass no list are not told.
+
+    REFUSED (ValueError), never skipped or resolved by order: a kid that appears twice, ignored entries included (RFC 7517
+    §4.5); a JWK of OUR type with `x` but without `kty` or `crv`; `x` that is not strict base64url of 32 bytes; a small-
+    order key; `x` and `public_key_hex` together; a valid_from/valid_until that is not an RFC 3339 instant (null =
+    absent). `public_key_hex` (64 hex) is read as a non-JWK extension, with the same compatibility rule."""
+    if not isinstance(doc, dict) or not isinstance(doc.get("keys"), list):
+        raise ValueError("expected an object with a 'keys' array (RFC 7517 §5)")
+    out: Dict[str, Any] = {}
+    seen = set()
+    for n, k in enumerate(doc["keys"]):
+        if not isinstance(k, dict) or not isinstance(k.get("kid"), str) or not k["kid"]:
+            raise ValueError(f"keys[{n}]: every key needs a non-empty string kid")
+        kid = k["kid"]
+        if kid in seen:        # over EVERY entry, ignored ones included: two entries under one kid stay ambiguous
+            raise ValueError(f"kid {kid!r} appears twice: ambiguous (RFC 7517 §4.5), refused rather than resolved by order")
+        seen.add(kid)
+        # RFC 7517 §5: implementations SHOULD IGNORE JWKs whose kty they do not understand or whose values are outside
+        # the supported ranges. Refusing the whole set for one EC key beside ours made the set unusable (measured
+        # 26/09/2026). An ignored key verifies nothing: a receipt under its kid finds no key (never a pass).
+        # key_ops (RFC 7517 §4.3), when present, must include "verify": a key published only for other operations
+        # verified receipts before 26/09/2026 because this reader never looked at the member (measured).
+        why_not = next((f"{member}={k[member]!r}" for member, allowed in _JWK_COMPATIBLE.items()
+                        if member in k and k[member] not in allowed), None)
+        if why_not is None and "key_ops" in k and not (isinstance(k["key_ops"], list) and "verify" in k["key_ops"]):
+            why_not = f"key_ops={k['key_ops']!r} does not include verify"
+        if why_not is not None:
+            if ignored is not None:
+                ignored.append(f"kid {kid!r} ignored: {why_not} (not an Ed25519 verification key; RFC 7517 §5)")
+            continue
+        if "x" in k and "public_key_hex" in k:
+            raise ValueError(f"kid {kid!r}: carries both x and public_key_hex: ambiguous, refused")
+        if "x" in k:
+            for member in ("kty", "crv"):
+                if member not in k:
+                    raise ValueError(f"kid {kid!r}: a JWK must carry {member} (RFC 7517 §4.1 / RFC 8037 §2)")
+            mat: Any = _b64url_ed25519_x(kid, k["x"])
+        elif isinstance(k.get("public_key_hex"), str) and _HEX64_ANYCASE.match(k["public_key_hex"]):
+            mat = bytes.fromhex(k["public_key_hex"])
+            problem = _ed25519_problem(mat)
+            if problem:
+                raise ValueError(f"kid {kid!r}: {problem}")
+        else:
+            raise ValueError(f"kid {kid!r} carries no readable key material (x per RFC 8037, or public_key_hex of 64 hex)")
+        entry: Dict[str, Any] = {"key": mat}
+        for w in ("valid_from", "valid_until"):
+            if w in k and k[w] is not None:            # null = absent
+                if _instant_exact(k[w]) is None:
+                    raise ValueError(f"kid {kid!r}: {w}={k[w]!r} is not an RFC 3339 instant: the key set is unusable as given")
+                entry[w] = k[w]
+        out[kid] = entry
+    return out
+
+
+def _cli_key(spec: str) -> Tuple[str, Any]:
+    """`--key kid=<64 hex | file>` → (kid, material). The material is checked here, at load: a keyfile the verifier
+    cannot read as a key is a usage error (exit 2), never a verdict on the receipt."""
+    if "=" not in spec:
+        raise ValueError(f"--key expects kid=<64 hex Ed25519 public key | file>, got {spec!r} (no '=')")
+    kid, val = spec.split("=", 1)
+    if not kid or not val:
+        raise ValueError(f"--key expects kid=<64 hex Ed25519 public key | file>, got {spec!r} (empty kid or value)")
+    if _HEX64_ANYCASE.match(val):
+        problem = _ed25519_problem(bytes.fromhex(val))
+        if problem:
+            raise ValueError(f"--key {kid}=…: unusable key material: {problem}")
+        return kid, val.lower()
+    data = read_regular(val)
+    try:
+        txt = data.decode("ascii").strip()
+    except UnicodeDecodeError:
+        txt = ""
+    mat: Any = txt.lower() if _HEX64_ANYCASE.match(txt) else _spki_material(data)   # hex keyfile (any case), or raw / PEM / DER
+    problem = _key_material_problem(mat)
+    if problem is not None:
+        raise ValueError(f"--key {kid}={val}: unusable key material: {problem}")
+    return kid, mat
+
+
+def _spki_material(data: bytes) -> Any:
+    """A public key file in SubjectPublicKeyInfo form, PEM or DER. An Ed25519 key becomes its 32 raw bytes — what
+    verify_receipt expects for EdDSA; before, a VALID Ed25519 PEM key was loaded as PEM text and every receipt it should
+    have verified came back FAIL "EdDSA needs a 32-byte key" (measured 26/09/2026), and DER was refused. A P-256 key is
+    kept (DER re-encoded as PEM) for ES256. Anything else is returned unchanged for the material check to judge."""
+    try:
+        from cryptography.hazmat.primitives import serialization as ser
+        from cryptography.hazmat.primitives.asymmetric import ec, ed25519
+    except ImportError:
+        return data
+    for load in (ser.load_pem_public_key, ser.load_der_public_key):
+        try:
+            pk = load(data)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(pk, ed25519.Ed25519PublicKey):
+            return pk.public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw)
+        if isinstance(pk, ec.EllipticCurvePublicKey):
+            return pk.public_bytes(ser.Encoding.PEM, ser.PublicFormat.SubjectPublicKeyInfo)
+        return data
+    return data
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="cryptovalid-acta", description=DRAFT)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -633,8 +984,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     s.add_argument("--session"); s.add_argument("--reason"); s.add_argument("--previous", help="preceding signed receipt (JSON file)")
     s.add_argument("--issued-at"); s.add_argument("--out", required=True)
     v = sub.add_parser("verify", help="verify one receipt or a chain (JSON files in order)")
-    v.add_argument("files", nargs="+"); v.add_argument("--key", action="append", default=[], help="kid=<64 hex Ed25519 | file>")
-    v.add_argument("--jwks", help="JWKS file: the relying party's key set, with valid_from/valid_until when it declares them (§5.5)")
+    v.add_argument("files", nargs="+", help="receipt files; every input must be a regular file (a FIFO or device is refused, "
+                                            "so a pipe or /dev/stdin is not accepted: use a redirect, `verify /dev/stdin < r.json`)")
+    v.add_argument("--key", action="append", default=[],
+                                                       help="kid=<64 hex Ed25519 | file>; unusable key material is refused at load (exit 2)")
+    v.add_argument("--jwks", help="JWKS file: the relying party's Ed25519 key set, with valid_from/valid_until when it declares them "
+                                  "(§5.5). Keys of another type or use (kty/crv/alg/use, key_ops without verify) are ignored and named on stderr "
+                                  "(RFC 7517 §5); duplicate kids, a malformed Ed25519 key or window are refused (exit 2)")
     v.add_argument("--keys-are-complete", action="store_true",
                    help="declare this key set to be the whole trust list: an unknown kid is then a refusal, not an absence")
     v.add_argument("--policy-dir"); v.add_argument("--policy-ext", default=".cedar")
@@ -646,13 +1002,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         if a.cmd == "policy-digest":
             print(policy_digest_from_dir(a.policy_dir, a.engine, a.ext)); return 0
         if a.cmd == "sign":
-            with open(a.key, encoding="utf-8") as f:
-                seed = f.read().strip()
+            seed = read_regular(a.key, 4096).decode("utf-8").strip()      # a FIFO/device seed file no longer blocks
             pub = pubkey_from_seed(seed); kid = issuer_kid(pub)
             prev = None
             if a.previous:
-                with open(a.previous, encoding="utf-8") as f:
-                    prev = json.load(f, parse_constant=_no_constant, object_pairs_hook=_no_dup_keys)
+                prev = load_json_strict(a.previous, "--previous")
             pd = policy_digest_from_dir(a.policy_dir, "cedar", a.policy_ext) if a.policy_dir else None
             rec = sign_receipt(decision_payload(a.tool, a.decision, kid, a.issued_at, pd, a.session, a.reason, prev), seed, kid)
             with open(a.out, "w", encoding="utf-8") as f:
@@ -663,48 +1017,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             if a.jwks:
                 # A JWKS is how a relying party normally holds keys, and it is the invocation the public conformance
                 # vectors declare. Windows are carried over when the set states them: §5.5 applies them to issued_at.
-                with open(a.jwks, encoding="utf-8") as f:
-                    jwks = json.load(f)
-                if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list):
-                    print(json.dumps({"ok": False, "error": "--jwks: expected an object with a 'keys' array"})); return 2
-                for k in jwks["keys"]:
-                    if not isinstance(k, dict) or not isinstance(k.get("kid"), str):
-                        print(json.dumps({"ok": False, "error": "--jwks: every key needs a string kid"})); return 2
-                    if isinstance(k.get("x"), str):                       # OKP/Ed25519, base64url, unpadded
-                        pad = "=" * (-len(k["x"]) % 4)
-                        try:
-                            mat: Any = base64.urlsafe_b64decode(k["x"] + pad)
-                        except Exception:  # noqa: BLE001
-                            print(json.dumps({"ok": False, "error": f"--jwks: kid {k['kid']!r} has an unreadable x"})); return 2
-                    elif isinstance(k.get("public_key_hex"), str) and _HEX.match(k["public_key_hex"]):
-                        mat = bytes.fromhex(k["public_key_hex"])
-                    else:
-                        print(json.dumps({"ok": False, "error": f"--jwks: kid {k['kid']!r} carries no readable key material"})); return 2
-                    entry: Dict[str, Any] = {"key": mat}
-                    for w in ("valid_from", "valid_until"):
-                        if w in k:
-                            entry[w] = k[w]
-                    keys[k["kid"]] = entry
+                # Read with the same strict parser as the receipts, and by `keys_from_jwks`: every refusal is exit 2.
+                try:
+                    ignored: List[str] = []
+                    keys.update(keys_from_jwks(load_json_strict(a.jwks, "file"), ignored))
+                    for note in ignored:
+                        print(f"note: --jwks {note}", file=sys.stderr)
+                except ValueError as ex:
+                    print(json.dumps({"ok": False, "error": f"--jwks: {ex}"})); return 2
             for spec in a.key:
-                kid, val = spec.split("=", 1)
-                if _HEX.match(val) and len(val) == 64:
-                    keys[kid] = val
-                else:
-                    with open(val, "rb") as f:
-                        data = f.read()
-                    txt = data.decode("ascii", "replace").strip()
-                    keys[kid] = txt if (_HEX.match(txt) and len(txt) == 64) else data       # a cryptovalid hex keyfile, or raw / PEM bytes
+                kid, mat = _cli_key(spec)
+                if kid in keys:
+                    # Two sources for one kid: the later one used to replace the earlier one silently, dropping its window.
+                    raise ValueError(f"--key {kid}: this kid is already supplied (by --jwks or an earlier --key): ambiguous, refused")
+                keys[kid] = mat
             recs = []
             for fn in a.files:
-                with open(fn, encoding="utf-8") as f:
-                    recs.append(json.load(f, parse_constant=_no_constant, object_pairs_hook=_no_dup_keys))
+                recs.append(load_json_strict(fn, "receipt"))
             files = None
             if a.policy_dir:
                 files = {}
                 for n in os.listdir(a.policy_dir):
                     if n.endswith(a.policy_ext):
-                        with open(os.path.join(a.policy_dir, n), "rb") as f:
-                            files[n] = f.read()
+                        files[n] = read_regular(os.path.join(a.policy_dir, n))
                 if not files:
                     raise ValueError(f"--policy-dir {a.policy_dir} holds no {a.policy_ext} file: nothing to bind the receipts to")
             complete = bool(getattr(a, "keys_are_complete", False))
