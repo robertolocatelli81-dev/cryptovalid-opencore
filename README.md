@@ -544,6 +544,17 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## Vendored key-window vectors restored to the upstream bytes (2026-09-26, 0.16.2)
+
+- **The vendored key-window vectors are now the upstream bytes.** `examples/acta/key-window/SOURCE.md` said the eight
+  files were "copied verbatim" from ScopeBlind/agent-governance-testvectors at `1e24b5687`. Compared byte for byte with
+  that commit on 2026-09-26, each copy shipped in 0.16.0 and 0.16.1 lacked the file's final newline (one byte); the
+  JSON content was identical, so no verdict changes: 6/6 on verdict, `code` and `key_status`, both before and after.
+  The files now carry the upstream bytes and `KW_SHA256` pins them; removing the final newline from one file makes the
+  pin test fail. The re-fetch recipe in `SOURCE.md` is replaced: the previous command does not run (`gh api` 2.92.0
+  rejects `--ref` as an unknown flag, exit 1). The new recipe, run on 2026-09-26, reproduces the eight files byte for
+  byte.
+
 ## OpenTimestamps anchoring in a public install (2026-09-26, 0.16.1)
 
 - **`committed_attestation.anchor_commitment` works in a public install.** From its introduction (0.9.0) through 0.16.0

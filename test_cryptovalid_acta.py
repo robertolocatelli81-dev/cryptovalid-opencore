@@ -384,18 +384,19 @@ class KeyValidityWindow(unittest.TestCase):
 
 
 # SHA-256 of the vendored key-window vectors, as merged into ScopeBlind/agent-governance-testvectors main at
-# 1e24b5687 and copied here on 24/09/2026. examples/acta/key-window/SOURCE.md says "copied verbatim"; without this
-# pin nothing in the repository could tell whether that stayed true, and a silently edited vector would make the
+# 1e24b5687 (the upstream bytes, re-fetched 26/09/2026: the 24/09 copies lacked their final newline, one byte per
+# file, although SOURCE.md said "copied verbatim"). SOURCE.md documents the source and the re-fetch recipe; without this
+# pin nothing in the repository could tell whether the bytes stayed the upstream ones, and a silently edited vector would make the
 # suite pass for the wrong reason.
 KW_SHA256 = {
-    "after-valid-until.json": "0f53f76d5f4efaa34c698273b1f1b71b2770c09bd7c19fb7d1998ab5d399b047",
-    "at-valid-from.json": "e0b4b42dbf7c963f8521de36a416ef10874ea8b3025ca1df33ec64f77248dee2",
-    "at-valid-until.json": "5baa0a89c12412f783dbbb88906839b942c90e940eba08365ff76100c6529311",
-    "before-valid-from.json": "cb3daa1ce9e88b4309e5d143785d5244d70d70c36597f5fad272bae8e57fbe8a",
-    "index.json": "e206bcd0671f671d2dfe436245be95e9d79f139c2021d72c36266b03655b596f",
-    "inside.json": "a7a971e1611b1dbdda4962a4e50444145338d246afaec4b54573795a5247e033",
-    "jwks-no-window.json": "97a4c73529a3281664178d83652e5c44e5bc2f7126b146b7761cde0d1793a76c",
-    "jwks.json": "1431ea457943455d7852d0d94a016de5a13a27442a9c901d5d09e074fc84a539"
+    "after-valid-until.json": "a673b681b782dc21037038c5ee0a48f4147e842001ae54f52511be99a7a16083",
+    "at-valid-from.json": "865ca94a14445cc5d7bd48351b7b9f7bd9df91f6c358484f47b4ae02894a25cb",
+    "at-valid-until.json": "0b5751d679e10cbb1641253a02405d8a7e39fe1565314f120a091e232c01a631",
+    "before-valid-from.json": "40ef841a77e51b27da749250ff33f7c0073e6637b89d42700344cb7f12f8b2bd",
+    "index.json": "ba1ff57c97cb06bedee035dceeaa50bfb6fac4fbe9af21a4c91e00bbbca3e8f0",
+    "inside.json": "ba3e6b02f2f1a0c9f6bb2339d7834404ae8603f5808ebabefa4c45885ab6dcbc",
+    "jwks-no-window.json": "2c202b2a8618274325ead9855838cf454b4e51a33fd747e2bf1d9d4cc12e53b4",
+    "jwks.json": "12652824994ccfbaa54cef1dc69ed55d62dbadcc288c4c6032e44ce0ed5a7111"
 }
 
 
