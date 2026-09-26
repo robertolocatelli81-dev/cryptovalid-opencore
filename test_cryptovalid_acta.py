@@ -944,7 +944,8 @@ class OpenPointsA3_20260926(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             for enc, name in ((self.S.Encoding.PEM, "k.pem"), (self.S.Encoding.DER, "k.der")):
                 p = os.path.join(d, name)
-                open(p, "wb").write(self.sk.public_key().public_bytes(enc, self.S.PublicFormat.SubjectPublicKeyInfo))
+                with open(p, "wb") as f:
+                    f.write(self.sk.public_key().public_bytes(enc, self.S.PublicFormat.SubjectPublicKeyInfo))
                 kid, mat = A._cli_key(f"{KID}={p}")
                 self.assertEqual(A.verify_receipt(self._rec(), {kid: mat})["verdict"], "pass", name)
 

@@ -544,6 +544,31 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## OpenTimestamps anchoring in a public install (2026-09-26, 0.16.1)
+
+- **`committed_attestation.anchor_commitment` works in a public install.** From its introduction (0.9.0) through 0.16.0
+  it imported a module that is not part of this repository. 0.16.0 installed from the index in a clean virtualenv, run
+  with an isolated Python (`-I`), answers `ok: false`, "No module named 'core'" (measured 2026-09-26). It now uses the
+  public OpenTimestamps library (python-opentimestamps, LGPL-3.0) as an optional dependency:
+  `pip install cryptovalid-opencore[ots]`. Without it the answer is `ok: false` with an `error` that names the missing
+  library; with no calendar reachable it is `ok: false`, `status: "failed"`, and `errors` says per calendar what went
+  wrong; a root that is not 32 bytes is `ok: false` with an `error`. The return value keeps its fields; `errors` is
+  new, and a new `calendars` argument replaces the library's default calendars (an empty list means no calendar).
+  Measured 2026-09-26, with this code built as a wheel and installed with `[ots]` and `cryptography` in a clean
+  virtualenv, isolated Python: the function committed on 4/4 calendars — `https://a.pool.opentimestamps.org`,
+  `https://b.pool.opentimestamps.org`, `https://a.pool.eternitywall.com`, `https://ots.btc.catallaxy.com`. In the same
+  install, the test file run against the installed module passed 14/14 with the live test enabled; that test decodes
+  each returned proof as an OpenTimestamps Timestamp rooted at the commitment hash (the message is an input to the
+  decoder, not carried by the proof) and checks that it holds at least one attestation and that every attestation is
+  pending (not yet Bitcoin-confirmed). Upgrading a proof to a confirmed one is not part of this function.
+  Tests: two new offline ones — one without the library, one with a stand-in calendar that has three entries:
+  committed, unreachable, and answering for another message (a defensive guard: with python-opentimestamps 0.4.5 the
+  message is set from the digest we pass, so it cannot trip there) — and one live test, reported as skipped unless
+  `CV_ONLINE_OTS=1`. Removing the message guard or the per-calendar error handling turns the offline tests red.
+- `test_cryptovalid_acta.py` closes the PEM/DER key files it writes (a `ResourceWarning` in the 0.16.0 CI log).
+- A source comment in `cryptovalid_acta.py` said Arabic-Indic and fullwidth digits were accepted "up to 0.16.0";
+  0.16.0 refuses them, and they were accepted by 0.15.1 and by the untagged `8de0b72` (measured 2026-09-26).
+
 ## Key status, refusal codes and strict inputs (2026-09-26, 0.16.0)
 
 Code: `cryptovalid_acta.py` and its tests; the other modules are unchanged since 0.15.1 (the README, the packaging

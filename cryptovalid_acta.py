@@ -50,7 +50,7 @@ DRAFT = "draft-farley-acta-signed-receipts-03 (2026-08-29, expires 2027-03-02; i
 DECISIONS = ("allow", "deny", "rate_limit", "require_approval")
 ALGS = ("EdDSA", "ML-DSA-65", "ES256")
 # Every pattern here is ASCII-only, by construction ([0-9], never \d) AND by flag (re.ASCII): in Python `\d` matches any
-# Unicode decimal digit, and up to 0.16.0 an `issued_at` written in Arabic-Indic or fullwidth digits was accepted,
+# Unicode decimal digit, and before 0.16.0 (0.15.1 and the untagged 8de0b72, measured) an `issued_at` written in Arabic-Indic or fullwidth digits was accepted,
 # signed and compared against the key window as if it were an RFC 3339 instant. RFC 3339 §5.6 is ABNF: DIGIT is %x30-39.
 _RFC3339 = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?([Zz]|[+-][0-9]{2}:[0-9]{2})\Z", re.ASCII)
 _HEX = re.compile(r"^[0-9a-f]+\Z", re.ASCII)

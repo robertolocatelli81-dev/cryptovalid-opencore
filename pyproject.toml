@@ -4,12 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cryptovalid-opencore"
-version = "0.16.0"
+version = "0.16.1"
 description = "Verifiable compliance evidence: hash-chained ledgers + standalone offline verifier (flat-layout modules, unchanged declared commands)"
 license = {text = "AGPL-3.0-or-later"}
 requires-python = ">=3.9"
 authors = [{name = "Roberto Locatelli"}]
 readme = "README.md"
+
+[project.optional-dependencies]
+# anchor_commitment: OpenTimestamps calendars (python-opentimestamps, LGPL-3.0)
+ots = ["opentimestamps>=0.4.5"]
 
 [project.urls]
 Homepage = "https://github.com/robertolocatelli81-dev/cryptovalid-opencore"

@@ -436,32 +436,49 @@ def detection_probability(fraction_bad: float, k: int) -> float:
 # --------------------------------------------------------------------------- #
 #  ANCORA ESTERNA ONLINE — timestamp pubblico indipendente della radice (OpenTimestamps/Bitcoin)
 # --------------------------------------------------------------------------- #
-def anchor_commitment(c: Commitment, timeout: int = 20) -> Dict:
+def anchor_commitment(c: Commitment, timeout: int = 20, calendars: Optional[List[str]] = None) -> Dict:
     """Ancora ONLINE il root_hash a un testimone pubblico indipendente (OpenTimestamps -> Bitcoin), via i
-    calendar server HTTP (stdlib, no account, no costo). Chiude un buco che lo schema interno NON copre:
-    prova che l'attestazione ESISTEVA a un certo tempo e non e' stata RETRODATATA/rigenerata a posteriori.
-    Riusa `core.ots_anchor.submit`. HONEST-SCOPE: subito = IMPEGNO del calendar (pending Bitcoin); la conferma
-    on-chain e' asincrona (~ore) e si fa con l'upgrade della proof. Ancora l'ESISTENZA-NEL-TEMPO della radice,
-    NON il contenuto ne' la completezza (E4). Degrada onesto: se offline -> {ok: False, error}."""
-    digest = bytes.fromhex(c.root_hash)  # 32 byte
+    calendar pubblici (no account, no costo). Serve a provare che l'attestazione ESISTEVA a un certo tempo e non e'
+    stata RETRODATATA/rigenerata a posteriori: un buco che lo schema interno non copre.
+
+    Usa la libreria pubblica `opentimestamps` (python-opentimestamps, LGPL-3.0; `pip install cryptovalid-opencore[ots]`),
+    dipendenza OPZIONALE. Dalla 0.9.0 alla 0.16.0 questa funzione importava un modulo che non fa parte di questo repository:
+    la 0.16.0 installata dall'indice in un venv pulito, con Python isolato (-I), risponde ok=False "No module named
+    'core'" (misurato 26/09/2026). `calendars` sostituisce i calendar di default della libreria.
+
+    HONEST-SCOPE: subito = IMPEGNO del calendar (pending Bitcoin); la conferma on-chain e' asincrona (~ore) e si fa
+    con l'upgrade della proof, che questa funzione NON fa. Ancora l'ESISTENZA-NEL-TEMPO della radice, NON il
+    contenuto ne' la completezza (E4). Degrada onesto: libreria assente -> {ok: False, error}; nessun calendar
+    raggiungibile -> {ok: False, status: "failed", errors per calendar}. `proofs` contiene, per ogni calendar
+    impegnato, il Timestamp OpenTimestamps serializzato (base64) che ha come messaggio i 32 byte della radice."""
+    digest = bytes.fromhex(c.root_hash)
+    if len(digest) != 32:
+        return {"ok": False, "error": "root_hash is not 32 bytes", "root_hash": c.root_hash}
     try:
-        import sys as _sys
-        import os as _os
-        _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-        if _root not in _sys.path:
-            _sys.path.insert(0, _root)
-        from core import ots_anchor  # riuso dell'infra esistente
-    except Exception as e:
-        return {"ok": False, "error": f"ots_anchor non disponibile: {e}", "root_hash": c.root_hash}
-    try:
-        res = ots_anchor.submit(digest, timeout=timeout)
-    except Exception as e:
-        return {"ok": False, "error": f"submit fallita (offline?): {e}", "root_hash": c.root_hash}
-    committed = [k for k, v in res.items() if isinstance(v, dict) and v.get("ok")]
+        from opentimestamps.calendar import RemoteCalendar, DEFAULT_AGGREGATORS
+        from opentimestamps.core.serialize import BytesSerializationContext
+    except ImportError as e:
+        return {"ok": False, "error": f"opentimestamps not installed ({e}); pip install 'cryptovalid-opencore[ots]'",
+                "root_hash": c.root_hash}
+    import base64 as _b64
+    urls = list(calendars) if calendars is not None else list(DEFAULT_AGGREGATORS)
+    res: Dict[str, Dict] = {}
+    for url in urls:
+        try:
+            ts = RemoteCalendar(url).submit(digest, timeout=timeout)
+            if ts.msg != digest:        # defensive invariant: python-opentimestamps 0.4.5 sets msg from OUR digest
+                raise ValueError("calendar returned a timestamp for another message")   # (so it cannot trip there)
+            ctx = BytesSerializationContext()
+            ts.serialize(ctx)
+            res[url] = {"ok": True, "proof_b64": _b64.b64encode(ctx.getbytes()).decode()}
+        except Exception as e:          # one calendar down must not hide the others
+            res[url] = {"ok": False, "error": f"{type(e).__name__}: {str(e).splitlines()[0][:100] if str(e) else ''}"}
+    committed = [k for k, v in res.items() if v.get("ok")]
     return {
         "ok": len(committed) > 0, "root_hash": c.root_hash, "digest_hex": c.root_hash,
         "witness": "opentimestamps", "calendars_committed": committed,
         "calendars_total": len(res), "status": "pending-bitcoin" if committed else "failed",
-        "proofs": {k: v.get("proof_b64") for k, v in res.items() if isinstance(v, dict) and v.get("ok")},
-        "raw": {k: (v.get("ok") if isinstance(v, dict) else v) for k, v in res.items()},
+        "proofs": {k: v["proof_b64"] for k, v in res.items() if v.get("ok")},
+        "raw": {k: v.get("ok") for k, v in res.items()},
+        "errors": {k: v["error"] for k, v in res.items() if not v.get("ok")},
     }

@@ -166,8 +166,132 @@ def test_cldma_verifier_ignores_declared_num_le_den():
     assert not C.verify_metric_consistency(bad)["ok"]           # KNOWN_BOUNDED[PAR30]=True vince -> FAIL
 
 
+def _with_fake_ots(calendars):
+    """Inject a minimal stand-in for the `opentimestamps` package (no network, no dependency): each url maps to a
+    callable digest -> message the fake calendar claims to commit, or to an exception to raise."""
+    import sys
+    import types
+
+    class _Ts:
+        def __init__(self, msg):
+            self.msg = msg
+
+        def serialize(self, ctx):
+            ctx.buf += b"TS" + self.msg
+
+    class _Ctx:
+        def __init__(self):
+            self.buf = b""
+
+        def getbytes(self):
+            return self.buf
+
+    class _Remote:
+        def __init__(self, url):
+            self.url = url
+
+        def submit(self, digest, timeout=None):
+            behaviour = calendars[self.url]
+            if isinstance(behaviour, Exception):
+                raise behaviour
+            return _Ts(behaviour(digest))
+
+    cal = types.ModuleType("opentimestamps.calendar")
+    cal.RemoteCalendar, cal.DEFAULT_AGGREGATORS = _Remote, tuple(calendars)
+    ser = types.ModuleType("opentimestamps.core.serialize")
+    ser.BytesSerializationContext = _Ctx
+    names = ("opentimestamps", "opentimestamps.calendar", "opentimestamps.core", "opentimestamps.core.serialize")
+    saved = {n: sys.modules.get(n) for n in names}
+    sys.modules.update({"opentimestamps": types.ModuleType("opentimestamps"), "opentimestamps.calendar": cal,
+                        "opentimestamps.core": types.ModuleType("opentimestamps.core"),
+                        "opentimestamps.core.serialize": ser})
+    return saved
+
+
+def _restore(saved):
+    import sys
+    for n, m in saved.items():
+        if m is None:
+            sys.modules.pop(n, None)
+        else:
+            sys.modules[n] = m
+
+
+def test_anchor_without_the_library_says_so():
+    """26/09/2026: up to 0.16.0 this imported a module outside the repository and always answered "not available"
+    in a public install. Without the optional library the answer must still be an honest ok=False, never a raise."""
+    import sys
+    c = C.commit_ledger(_ledger(5), SALT, C.SPEC_PAR30, AS_OF)
+    names = ("opentimestamps", "opentimestamps.calendar", "opentimestamps.core", "opentimestamps.core.serialize")
+    saved = {n: sys.modules.get(n) for n in names}
+    sys.modules.update({n: None for n in names})     # None in sys.modules makes the import fail
+    try:
+        r = C.anchor_commitment(c)
+    finally:
+        _restore(saved)
+    assert r["ok"] is False and "opentimestamps not installed" in r["error"], r
+
+
+def test_anchor_counts_each_calendar_and_guards_the_message():
+    """One calendar committed, one unreachable, one returning a timestamp for another message: only the first counts.
+    The third case tests the defensive invariant msg == root; python-opentimestamps 0.4.5 builds the Timestamp from the
+    digest WE pass, so with the real library that guard cannot trip — it is kept for other client implementations."""
+    c = C.commit_ledger(_ledger(5), SALT, C.SPEC_PAR30, AS_OF)
+    saved = _with_fake_ots({"https://good": lambda d: d, "https://down": OSError("unreachable"),
+                            "https://liar": lambda d: bytes(32)})
+    try:
+        r = C.anchor_commitment(c)
+    finally:
+        _restore(saved)
+    assert r["ok"] is True and r["calendars_committed"] == ["https://good"], r
+    assert r["calendars_total"] == 3 and r["status"] == "pending-bitcoin"
+    assert r["raw"] == {"https://good": True, "https://down": False, "https://liar": False}, r["raw"]
+    assert set(r["errors"]) == {"https://down", "https://liar"} and "another message" in r["errors"]["https://liar"]
+    import base64
+    assert base64.b64decode(r["proofs"]["https://good"]) == b"TS" + bytes.fromhex(c.root_hash)
+    saved = _with_fake_ots({"https://down": OSError("unreachable")})
+    try:
+        r = C.anchor_commitment(c)
+    finally:
+        _restore(saved)
+    assert r["ok"] is False and r["status"] == "failed" and r["calendars_committed"] == [], r
+    saved = _with_fake_ots({"https://good": lambda d: d})
+    try:
+        r = C.anchor_commitment(c, calendars=[])          # an empty list replaces the defaults: no calendar at all
+    finally:
+        _restore(saved)
+    assert r["ok"] is False and r["calendars_total"] == 0, r
+
+
+def test_anchor_live_opt_in():
+    """Real calendars, only with CV_ONLINE_OTS=1 and the library installed: the returned proof must decode to an
+    OpenTimestamps Timestamp whose message is our root."""
+    import os
+    import sys
+    if os.environ.get("CV_ONLINE_OTS") != "1":
+        print("[SKIP] test_anchor_live_opt_in: set CV_ONLINE_OTS=1 (and install the [ots] extra) to run it", file=sys.stderr)
+        return "skip"
+    import base64
+    from opentimestamps.core.notary import PendingAttestation
+    from opentimestamps.core.serialize import BytesDeserializationContext
+    from opentimestamps.core.timestamp import Timestamp
+    c = C.commit_ledger(_ledger(5), SALT, C.SPEC_PAR30, AS_OF)
+    r = C.anchor_commitment(c, timeout=30)
+    assert r["ok"] is True, r
+    for url, b64 in r["proofs"].items():
+        ts = Timestamp.deserialize(BytesDeserializationContext(base64.b64decode(b64)), bytes.fromhex(c.root_hash))
+        atts = [att for _, att in ts.all_attestations()]
+        assert ts.msg == bytes.fromhex(c.root_hash) and atts, url
+        assert all(isinstance(att, PendingAttestation) for att in atts), (url, atts)   # pending, measured not labelled
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    skipped = 0
     for fn in fns:
-        fn(); print(f"[OK] {fn.__name__}")
-    print(f">>> CLDMA: {len(fns)}/{len(fns)} test verdi (positivi colgono, null passa, conformance congelato)")
+        if fn() == "skip":
+            skipped += 1
+        else:
+            print(f"[OK] {fn.__name__}")
+    ran = len(fns) - skipped
+    print(f">>> CLDMA: {ran}/{ran} test verdi, {skipped} saltati (positivi colgono, null passa, conformance congelato)")

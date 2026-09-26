@@ -56,9 +56,14 @@ e ha corretto un mio **overclaim** (novita' del primitivo -> e' applicazione/pat
 
 ## Ancora esterna ONLINE (OpenTimestamps / Bitcoin) — `anchor_commitment`
 Lo schema interno prova coerenza ma NON che la radice non sia stata **retrodatata/rigenerata**. `anchor_commitment(c)`
-sottopone il `root_hash` (32 byte) ai calendar OpenTimestamps pubblici (HTTP stdlib, no account, no costo; riusa
-`core/ots_anchor.py`) -> testimone pubblico indipendente su Bitcoin. **Live 2026-08-20:** 3/3 calendar impegnati
-(a.pool, b.pool, alice.btc), status `pending-bitcoin`. Honest-scope: subito = impegno del calendar (conferma
+sottopone il `root_hash` (32 byte) ai calendar OpenTimestamps pubblici (no account, no costo) tramite la libreria
+pubblica `opentimestamps` (python-opentimestamps, LGPL-3.0, dipendenza opzionale: `pip install cryptovalid-opencore[ots]`)
+-> testimone pubblico indipendente su Bitcoin. Dalla 0.9.0 alla 0.16.0 la funzione importava un modulo che non fa parte
+di questo repository: la 0.16.0 installata in un venv pulito, con Python isolato, risponde "No module named 'core'"
+(misurato 2026-09-26); la misura del 2026-08-20 (3/3 calendar, `pending-bitcoin`) era stata fatta nell'ambiente
+dell'autore. **Rimisurato 2026-09-26 con la libreria pubblica:** 4/4
+calendar impegnati (a.pool e b.pool di opentimestamps.org, eternitywall, catallaxy), ogni prova decodificata come
+Timestamp a partire dalla radice, con almeno un'attestazione, tutte pending. Honest-scope: subito = impegno del calendar (conferma
 on-chain asincrona ~ore, via upgrade della proof); ancora l'**esistenza-nel-tempo** della radice, NON il contenuto
 ne' la completezza (E4). Degrada onesto se offline.
 
