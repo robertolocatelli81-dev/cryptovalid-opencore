@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cryptovalid-opencore"
-version = "0.17.0"
+version = "0.17.1"
 description = "Verifiable compliance evidence: hash-chained ledgers + standalone offline verifier (flat-layout modules, unchanged declared commands)"
 license = {text = "AGPL-3.0-or-later"}
 requires-python = ">=3.9"
@@ -14,6 +14,9 @@ readme = "README.md"
 [project.optional-dependencies]
 # anchor_commitment: OpenTimestamps calendars (python-opentimestamps, LGPL-3.0)
 ots = ["opentimestamps>=0.4.5"]
+# signatures (Ed25519, ECDSA, ML-DSA-65, COSE, JWS, AP2): `cryptography` >= 50, the version ML-DSA-65 needs. Declared in
+# 0.17.1, because it was not; the core hash verifier stays stdlib-only and needs no extra.
+sign = ["cryptography>=50"]
 
 [project.urls]
 Homepage = "https://github.com/robertolocatelli81-dev/cryptovalid-opencore"
@@ -22,4 +25,7 @@ Homepage = "https://github.com/robertolocatelli81-dev/cryptovalid-opencore"
 cryptovalid-verify = "verify_evidence:main"
 
 [tool.setuptools]
+# 0.17.1: pqcrypto/ (sigsuite, imported by ap2_evidence) was left out of the wheel, so AP2 verification from a
+# pip install always failed with ModuleNotFoundError: sigsuite. Shipped as in ap2-evidence-pack.
+packages = ["pqcrypto"]
 py-modules = ['ap2_evidence', 'cldma_confidential', 'committed_attestation', 'conformance', 'cryptovalid_heterogeneous', 'cryptovalid_ingest', 'cryptovalid_kms', 'cryptovalid_lotl', 'cryptovalid_mcp', 'cryptovalid_merkle', 'cryptovalid_pruning_probe', 'cryptovalid_qeas', 'cryptovalid_reanchor', 'cryptovalid_report', 'cryptovalid_solana', 'cryptovalid_tsa', 'cryptovalid_worm', 'dora_incident', 'evidence_pack', 'fundcert_canonical', 'fundcert_crosssource', 'microfinance', 'mutation_runner', 'pedersen_commit', 'refresh_regulatory', 'signer', 'tx_evidence', 'verifier', 'verify_evidence', 'cryptovalid_receipt', 'cryptovalid_monitor', 'eidas_ledger_check', 'cryptovalid_jws', 'cryptovalid_tip', 'cryptovalid_checkpoint', 'cryptovalid_witness', 'cryptovalid_scitt', 'cryptovalid_cose_receipts', 'cryptovalid_cedulon', 'cryptovalid_aps', 'cryptovalid_vaara_receipt', 'cryptovalid_acta']

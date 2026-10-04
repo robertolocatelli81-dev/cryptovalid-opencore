@@ -304,6 +304,11 @@ def verify_transparent_statement(cose: bytes, issuer_pubkey_hex: str, ts_pubkey_
     return out
 
 
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
 def main(argv=None) -> int:
     import argparse
     ap = argparse.ArgumentParser(description="SCITT (RFC 9943) signed / transparent statements over a cryptovalid ledger")
@@ -327,7 +332,7 @@ def main(argv=None) -> int:
         if a.cmd == "register":
             with open(a.signed, "rb") as f:
                 cose = f.read()
-            pl = open(a.statement, "rb").read() if a.statement else None
+            pl = _read_bytes(a.statement) if a.statement else None
             reg = register(cose, a.ledger, a.issuer_pubkey, pl)
             rc = receipt(a.ledger, reg["index"], a.ts_key, a.ts_iss)
             ts = transparent_statement(cose, [rc])
@@ -336,7 +341,7 @@ def main(argv=None) -> int:
             print(json.dumps({"stato": "OK", **reg, "transparent_bytes": len(ts)})); return 0
         with open(a.transparent, "rb") as f:
             ts = f.read()
-        pl = open(a.statement, "rb").read() if a.statement else None
+        pl = _read_bytes(a.statement) if a.statement else None
         res = verify_transparent_statement(ts, a.issuer_pubkey, a.ts_pubkey, pl, a.ts_iss)
         print(json.dumps(res, ensure_ascii=False)); return 0 if res["ok"] else 1
     except (ScittError, OSError, ValueError) as e:

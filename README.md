@@ -544,6 +544,21 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## What the wheel ships (2026-10-04, 0.17.1)
+
+- **AP2 verification works from a pip install.** `ap2_evidence` imports `sigsuite` from `pqcrypto/`, which the 0.17.0
+  wheel did not contain: installed from the index, `cryptovalid-verify ap2` and the MCP tool
+  `verify_ap2_evidence` failed on every file with `ModuleNotFoundError: sigsuite` (a refusal, never a pass). The wheel
+  now ships `pqcrypto/`. From a clone nothing changes.
+- **`cryptography` is declared, as the `sign` extra.** The wheel declared no dependency, so a plain install had no
+  signature layer. `pip install 'cryptovalid-opencore[sign]'` installs `cryptography` >= 50 (the version ML-DSA-65
+  needs). The hash-chain verifier still needs only the standard library, so the extra stays optional.
+- **Eleven file and URL handles closed.** Eleven `open()`/`urlopen()` calls in shipped modules did not close what they
+  opened (one wrote a cache file through an unclosed handle); each is now a `with` block. The two long-lived segment
+  handles of `cryptovalid_ingest` are closed on rollover and in `close()`, and stay as they are.
+- `test_packaging.py` gains three tests, one per point, read from `pyproject.toml` and the shipped sources; on 0.17.0
+  each of the three fails.
+
 ## Four clean-room verifiers, an audit of the verifiers, and RFC 3161 marks only for a granted token (2026-10-04, 0.17.0)
 
 - **RFC 3161: `anchored: true` only for a granted token for this digest.** `evidence_pack._rfc3161_stamp` recorded any HTTP
@@ -1019,6 +1034,13 @@ What will change under an evidence ledger written today, and what this repositor
 
 ```bash
 pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ cryptovalid-opencore
+```
+
+The hash-chain verifier needs only the standard library. Signing and signature verification (Ed25519, ECDSA,
+ML-DSA-65, COSE, JWS, AP2) need `cryptography` ≥ 50, installed with the `sign` extra:
+
+```bash
+pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ 'cryptovalid-opencore[sign]'
 ```
 
 Release artifacts are attached to GitHub Releases; the index links carry `#sha256=` fragments verified by pip. All documented `python3 <file>.py` commands keep working unchanged from a clone.

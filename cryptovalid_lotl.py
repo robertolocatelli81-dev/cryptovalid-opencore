@@ -24,7 +24,8 @@ _QTST = "Svctype/TSA/QTST"                 # qualified timestamping service type
 _GRANTED = "Svcstatus/granted"
 
 def _get(url, timeout=45):
-    return urllib.request.urlopen(url, timeout=timeout).read()
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return r.read()
 
 def lotl_pointers(lotl_xml: bytes):
     """National Trusted List URLs from the LOTL (excludes the LOTL self-pointer)."""
@@ -69,7 +70,8 @@ def load_qualified_fingerprints(member_states=None, cache_path=None, timeout=45,
     """Build the set of qualified-TSA cert fingerprints from the EU LOTL.
     member_states: optional iterable of 2-letter codes to restrict fetching (else all)."""
     if cache_path and os.path.exists(cache_path):
-        d = json.load(open(cache_path))
+        with open(cache_path) as f:
+            d = json.load(f)
         return set(d["fingerprints"]), d.get("coverage", [])
     lotl = _get(LOTL_URL, timeout)
     ptrs = lotl_pointers(lotl)
@@ -84,7 +86,8 @@ def load_qualified_fingerprints(member_states=None, cache_path=None, timeout=45,
         except Exception as e:  # una TL irraggiungibile non e' fatale
             log(f"TL skip: {url} ({type(e).__name__})")
     if cache_path:
-        json.dump({"fingerprints": sorted(fprs), "coverage": coverage}, open(cache_path, "w"))
+        with open(cache_path, "w") as f:
+            json.dump({"fingerprints": sorted(fprs), "coverage": coverage}, f)
     return fprs, coverage
 
 def token_cert_fingerprints(token_der: bytes):

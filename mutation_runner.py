@@ -92,7 +92,8 @@ def run_mutation(target_path: str, test_cmd: List[str], limit: int = 0) -> Dict:
     suite fallisce. Restore GARANTITO del file. limit>0 tronca (e lo DICHIARA). Ritorna il report."""
     bak = target_path + ".mutbak"
     shutil.copy(target_path, bak)
-    base_src = open(target_path, encoding="utf-8").read()
+    with open(target_path, encoding="utf-8") as f:
+        base_src = f.read()
     tgt_dir = os.path.dirname(os.path.abspath(target_path))
 
     def _clear_pyc():

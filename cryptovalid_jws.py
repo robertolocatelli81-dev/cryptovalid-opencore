@@ -101,7 +101,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     v = sub.add_parser("verify"); v.add_argument("jws_file"); v.add_argument("trusted_pubkey_hex")
     args = p.parse_args(argv)
     if args.cmd == "sign":
-        entries = [json.loads(l) for l in open(args.ledger, encoding="utf-8") if l.strip()]
+        with open(args.ledger, encoding="utf-8") as f:
+            entries = [json.loads(l) for l in f if l.strip()]
         print(sign_entry(entries[args.index], args.keyfile, args.x5c)); return 0
     with open(args.jws_file, encoding="utf-8") as f:
         r = verify(f.read().strip(), args.trusted_pubkey_hex)

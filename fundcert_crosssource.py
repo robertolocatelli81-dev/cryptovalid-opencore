@@ -29,9 +29,11 @@ def _load(path: str, kind: str):
     if kind == "ssga-xlsx":
         return parse_ssga_xlsx(path)
     if kind == "nport-xml":
-        return parse_nport_xml(open(path, encoding="utf-8").read())
+        with open(path, encoding="utf-8") as f:
+            return parse_nport_xml(f.read())
     if kind == "csv":
-        return parse_holdings_csv(open(path, encoding="utf-8").read())
+        with open(path, encoding="utf-8") as f:
+            return parse_holdings_csv(f.read())
     raise SystemExit(f"type sconosciuto: {kind} (usa ssga-xlsx | csv | nport-xml)")
 
 

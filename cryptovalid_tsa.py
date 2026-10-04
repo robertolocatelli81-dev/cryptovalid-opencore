@@ -67,7 +67,8 @@ def request_timestamp(digest: bytes, tsa_url: str, timeout: int = 30):
     req_der = build_timestamp_request(digest)
     r = urllib.request.Request(tsa_url, data=req_der,
                                headers={"Content-Type": "application/timestamp-query"})
-    raw = urllib.request.urlopen(r, timeout=timeout).read()
+    with urllib.request.urlopen(r, timeout=timeout) as resp:
+        raw = resp.read()
     # TimeStampResp ::= SEQUENCE { status PKIStatusInfo, timeStampToken OPTIONAL }
     _, respval, _ = _parse_seq_children(_parse_seq_children(raw)[0][2])[0], None, None  # noqa
     top = _parse_seq_children(raw)[0][1]                       # inner of outer SEQUENCE

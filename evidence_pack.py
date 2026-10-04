@@ -146,7 +146,8 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
             req = f.read()
         http = urllib.request.Request(tsa_url, data=req, method="POST",
                                       headers={"Content-Type": "application/timestamp-query"})
-        resp = urllib.request.urlopen(http, timeout=timeout).read()  # nosec B310 - schema validato http/https sopra
+        with urllib.request.urlopen(http, timeout=timeout) as r:  # nosec B310 - schema validato http/https sopra
+            resp = r.read()
         tsr_b64 = base64.b64encode(resp).decode()
         # anchored only on a token whose imprint is THIS digest (2026-10-03: any HTTP body — an error page, a rejection, a token
         # for another digest — was recorded as anchored: True)
