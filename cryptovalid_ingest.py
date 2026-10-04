@@ -324,13 +324,17 @@ class Ingestor:
         return GENESIS_PREV
 
     def close(self, seal: bool = True):
+        """Seal (or only flush) and close the segment handle — also when seal()/flush() raise (a signing backend that
+        fails, a full disk): the exception propagates, the handle does not stay open (0.17.1)."""
         with self._lock:
-            if seal:
-                self.seal()
-            else:
-                self.flush()
-            if self._fh and not self._fh.closed:
-                self._fh.close()
+            try:
+                if seal:
+                    self.seal()
+                else:
+                    self.flush()
+            finally:
+                if self._fh and not self._fh.closed:
+                    self._fh.close()
 
 
 # ── auditor path (read-only) ─────────────────────────────────────────────────

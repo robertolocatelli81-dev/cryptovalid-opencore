@@ -556,5 +556,21 @@ class TestIngestSignedTip(unittest.TestCase):
         self.assertTrue(ing.verify_archive(self.d)["ok"])
 
 
+class TestCloseOnError(unittest.TestCase):
+    """close() closes the segment handle even when seal() raises (0.17.1); before, a signing backend that failed inside
+    close() left the handle open with no call left to close it."""
+    def test_close_closes_handle_when_seal_raises(self):
+        class FailingBackend:
+            def sign(self, data): raise RuntimeError("signing backend unavailable")
+            def public_key_hex(self): return "00" * 32
+        with tempfile.TemporaryDirectory() as d:
+            w = ing.Ingestor(d, backend=FailingBackend(), fsync=False)
+            w.append({"event": "x"})
+            fh = w._fh
+            with self.assertRaises(RuntimeError):
+                w.close()
+            self.assertTrue(fh.closed)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

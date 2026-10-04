@@ -14,8 +14,9 @@ readme = "README.md"
 [project.optional-dependencies]
 # anchor_commitment: OpenTimestamps calendars (python-opentimestamps, LGPL-3.0)
 ots = ["opentimestamps>=0.4.5"]
-# signatures (Ed25519, ECDSA, ML-DSA-65, COSE, JWS, AP2): `cryptography` >= 50, the version ML-DSA-65 needs. Declared in
-# 0.17.1, because it was not; the core hash verifier stays stdlib-only and needs no extra.
+# signatures (Ed25519, ECDSA, ML-DSA-65, COSE, JWS, AP2): `cryptography` >= 50, the version this release is measured with
+# (ML-DSA-65 itself works from 48.0.0; 47.0.0 raises UnsupportedAlgorithm). Declared in 0.17.1, because it was not; the
+# core hash verifier stays stdlib-only and needs no extra.
 sign = ["cryptography>=50"]
 
 [project.urls]

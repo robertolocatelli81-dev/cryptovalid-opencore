@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import json
 import os
 from typing import Dict, List, Optional, Tuple
@@ -49,7 +50,14 @@ def _b64(b: bytes) -> str:
 
 
 def _unb64(s: str) -> bytes:
-    return base64.b64decode(s)
+    """RFC 4648 base64, strict (1.1.0): alphabet only, length a multiple of 4, canonical padding/trailing bits. The lenient
+    decoder skipped a space inside a signature and still verified, while the independent JS verifier refused it."""
+    if not isinstance(s, str) or not s or len(s) % 4 or not re.fullmatch(r"[A-Za-z0-9+/]*={0,2}", s):
+        raise ValueError("non-canonical base64")
+    raw = base64.b64decode(s, validate=True)
+    if base64.b64encode(raw).decode() != s:
+        raise ValueError("non-canonical base64")
+    return raw
 
 
 # --- keygen -------------------------------------------------------------------
@@ -86,6 +94,28 @@ def sign(alg: str, private_key, message: bytes) -> str:
     raise SigError(f"unknown signature class {alg!r}")
 
 
+
+# small-order / non-canonical Ed25519 keys: with the identity key R=identity, S=0 verifies on every message and OpenSSL accepts it (measured 25/09/2026); with any small-order key a signature on any message can be built by choosing R, measured 26/09/2026; same list in verifiers/js/ap2-verify.mjs
+WEAK_ED25519_KEYS = frozenset(bytes.fromhex(h) for h in (
+    "0100000000000000000000000000000000000000000000000000000000000000",
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "0000000000000000000000000000000000000000000000000000000000000080",
+    "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+    "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+    "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+    "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+    "0100000000000000000000000000000000000000000000000000000000000080",
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+))
+
+
+def weak_ed25519_key(pk: bytes) -> bool:
+    if len(pk) != 32 or pk in WEAK_ED25519_KEYS:
+        return True
+    return (int.from_bytes(pk, "little") & ((1 << 255) - 1)) >= 2 ** 255 - 19
+
+
 # --- verify (fail-closed; None = unsupported class, never a false green) -------
 
 def verify(alg: str, public_key_b64: str, signature_b64: str, message: bytes) -> Optional[bool]:
@@ -96,6 +126,8 @@ def verify(alg: str, public_key_b64: str, signature_b64: str, message: bytes) ->
         return False
     try:
         if alg == "ed25519":
+            if weak_ed25519_key(pk):
+                return False
             ed25519.Ed25519PublicKey.from_public_bytes(pk).verify(sig, message)
             return True
         if alg == "ecdsa-p256":
@@ -230,10 +262,15 @@ def verify_producer_block(block: Dict, message: bytes, trusted: Optional[Dict[st
     results, pq = [], False
     all_keys_pinned = trusted is not None
     n_pass = n_fail = n_skip = 0
-    for s in block.get("signatures", []):
+    sigs = block.get("signatures", []) if isinstance(block, dict) else []
+    for s in (sigs if isinstance(sigs, list) else []):
+        if not isinstance(s, dict):   # 1.1.0 r1: a non-object entry is a FAIL entry, never a traceback
+            n_fail += 1; results.append({"sig_alg": None, "status": "FAIL", "post_quantum": False, "key_trusted": None}); all_keys_pinned = False; continue
         alg = s.get("sig_alg")
+        if not isinstance(alg, str):   # 1.1.0 r2: a non-string sig_alg was `trusted.get(list)` -> TypeError traceback under pins
+            n_fail += 1; results.append({"sig_alg": None, "status": "FAIL", "post_quantum": False, "key_trusted": None}); all_keys_pinned = False; continue
         pub = s.get("public_key_b64", "")
-        v = verify(alg, pub, s.get("signature_b64", ""), message)
+        v = verify(alg, pub if isinstance(pub, str) else "", s.get("signature_b64", "") if isinstance(s.get("signature_b64"), str) else "", message)
         status = "PASS" if v is True else ("SKIP" if v is None else "FAIL")
         if v is True:
             n_pass += 1

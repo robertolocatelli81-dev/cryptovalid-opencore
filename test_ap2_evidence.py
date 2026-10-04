@@ -201,10 +201,6 @@ class TestPositive(_Base):
         self.assertEqual(ap2.main(["verify", self.out]), 0)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
-
 class TestProLevelSelfAttack(_Base):
     """Trovati dall'auto-attacco a rigore Pro (2026-08-21): correzioni nei DUE sensi."""
 
@@ -254,8 +250,8 @@ class TestKbJwtHolderBinding(_Base):
                           {"amount": "10.00"}, header_extra={"jwk": self.jwk})
         presentation = sd            # termina gia' con '~'
         sd_hash = _b64u(hashlib.sha256(presentation.encode("ascii")).digest())
-        if tamper_sd_hash:
-            sd_hash = "X" + sd_hash[1:]
+        if tamper_sd_hash:   # a character that differs from the real one: "X" + rest was a no-op 1 run in 64 (0.17.1)
+            sd_hash = ("Y" if sd_hash[0] == "X" else "X") + sd_hash[1:]
         kb = _sign_jwt(holder_sk, {"alg": "ES256", "typ": "kb+jwt"},
                        {"aud": "merchant", "nonce": "n1", "sd_hash": sd_hash})
         return presentation + kb
@@ -384,5 +380,33 @@ class TestProducerSignatureContentBinding(_Base):
         self.assertFalse(r["valid"])
 
 
+class WeakEd25519Keys20260925(unittest.TestCase):
+    """A producer signature under a small-order Ed25519 key: with the identity key, R=identity and S=0 verifies on every
+    message under OpenSSL (measured 2026-09-25 in ap2-evidence-pack). The sigsuite shipped by 0.17.0 accepted it; the one
+    shipped by 0.17.1 (the same file as ap2-evidence-pack 1.2.2) refuses the key before any curve arithmetic."""
+    def test_pinned_small_order_key_never_verifies(self):
+        import copy
+        sys.path.insert(0, os.path.join(_HERE, "pqcrypto"))
+        import sigsuite
+        with open(os.path.join(_HERE, "spec", "vectors", "ap2", "valid_signed.json"), encoding="utf-8") as f:
+            d = json.load(f)
+        ident = base64.b64encode(bytes([1]) + bytes(31)).decode()
+        forged = base64.b64encode(bytes([1]) + bytes(63)).decode()
+        f_ = copy.deepcopy(d)
+        f_["producer_signatures"]["signatures"] = [x for x in f_["producer_signatures"]["signatures"] if x["sig_alg"] == "ed25519"]
+        f_["producer_signatures"]["signatures"][0].update(public_key_b64=ident, signature_b64=forged)
+        with tempfile.TemporaryDirectory() as t:
+            fp = os.path.join(t, "f.json")
+            with open(fp, "w", encoding="utf-8") as f:
+                json.dump(f_, f)
+            r = ap2.verify_evidence(fp, trusted_producer_keys={"ed25519": [ident]})
+            st = [x for x in r["producer_signatures"]["signatures"] if x["sig_alg"] == "ed25519"][0]["status"]
+            self.assertEqual(st, "FAIL")
+        for msg in (b"any", b"other"):
+            self.assertFalse(sigsuite.verify("ed25519", ident, forged, msg))
+        for h in ("ec" + "ff" * 31, "ed" + "ff" * 30 + "7f"):
+            self.assertTrue(sigsuite.weak_ed25519_key(bytes.fromhex(h)))
+
+
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)

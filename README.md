@@ -200,7 +200,8 @@ python3 signer.py verify  ledger.signed.jsonl                 # signatures PASS 
   `verifier.py` and on the Go `cvverify` (implies a required tip and needs `--trusted-pubkey`). Per-entry Ed25519 +
   ML-DSA-65 are verified by Python (`signer.py verify`) and Go (`cvverify -pubkey <hex> -pq-pubkey <b64>`); the tip's
   by both. The context string is EMPTY (FIPS 204 default) so the JDK, OpenSSL 3.5, .NET and Go verify the same
-  bytes. Needs `cryptography` ≥ 50 (Python) or Go ≥ 1.27; where a REQUIRED layer cannot be verified the result is
+  bytes. Needs `cryptography` ≥ 48 (Python; measured 2026-10-04 with 48.0.0, 49.0.0, 50.0.1 — 47.0.0 raises
+  `UnsupportedAlgorithm`) or Go ≥ 1.27; where a REQUIRED layer cannot be verified the result is
   `pq_unverifiable` with `ok: false` / exit 1, never a green.
 - `signer verify` re-derives `self_hash` from the content too, so it catches content tampering on its
   own: the full chain is *content → self_hash → signature*.
@@ -551,11 +552,29 @@ certified devices — `eidas_ledger_check.py` tells you exactly which of those y
   `verify_ap2_evidence` failed on every file with `ModuleNotFoundError: sigsuite` (a refusal, never a pass). The wheel
   now ships `pqcrypto/`. From a clone nothing changes.
 - **`cryptography` is declared, as the `sign` extra.** The wheel declared no dependency, so a plain install had no
-  signature layer. `pip install 'cryptovalid-opencore[sign]'` installs `cryptography` >= 50 (the version ML-DSA-65
-  needs). The hash-chain verifier still needs only the standard library, so the extra stays optional.
+  signature layer. `pip install 'cryptovalid-opencore[sign]'` installs `cryptography` >= 50, the version this release is
+  measured with (ML-DSA-65 itself works from 48.0.0: generate, sign and verify measured with 48.0.0, 49.0.0 and 50.0.1;
+  47.0.0 ships the `mldsa` module but raises `UnsupportedAlgorithm`). The hash-chain verifier still needs only the
+  standard library, so the extra stays optional.
 - **Eleven file and URL handles closed.** Eleven `open()`/`urlopen()` calls in shipped modules did not close what they
   opened (one wrote a cache file through an unclosed handle); each is now a `with` block. The two long-lived segment
-  handles of `cryptovalid_ingest` are closed on rollover and in `close()`, and stay as they are.
+  handles of `cryptovalid_ingest` are closed on rollover and in `close()` (see below for the one path that missed).
+- **`pqcrypto/sigsuite.py` is the code of ap2-evidence-pack 1.2.2** (byte-identical except its first lines: there a
+  three-line Apache-2.0 header and a one-line title, here this repository's one-line title). The copy shipped here was older: it did not refuse
+  small-order Ed25519 keys (with the identity key, R=identity and S=0 verified on every message — the forgery measured
+  2026-09-25 and closed in ap2-evidence-pack 1.1.0/1.2.x), it decoded base64 leniently and it crashed on a non-object
+  signature entry. `test_ap2_evidence.py` carries the small-order test; on 0.17.0 it fails.
+- **Same files as ap2-evidence-pack: install one of the two per environment.** Both wheels install `ap2_evidence.py` and
+  `pqcrypto/sigsuite.py`; pip overwrites them silently in the order of installation (`pip check` says nothing) and
+  uninstalling either package removes them for the other (`ModuleNotFoundError: ap2_evidence`, measured 2026-10-04 with
+  1.2.2 and 0.17.1). Their `ap2_evidence.py` still differ (1.2.2 is ahead); unifying them is open.
+- `test_ap2_evidence.py` had two `if __name__ == "__main__"` blocks: run as a script (as the CI does) it stopped after
+  the first one and 13 of its 27 tests never ran; they run now. One of them, `test_kb_tampered_sd_hash_refuses_build`,
+  tampered the `sd_hash` by setting its first character to `X`, a no-op whenever the digest already began with `X`
+  (1 run in 64; measured 2026-10-04: 1 failure in 200 runs, 0 in 200 after the fix); it now puts a character that
+  differs from the real one.
+- `cryptovalid_ingest.Ingestor.close()` closes the segment handle also when `seal()` raises (a signing backend that
+  fails); before, that handle stayed open with no call left to close it.
 - `test_packaging.py` gains three tests, one per point, read from `pyproject.toml` and the shipped sources; on 0.17.0
   each of the three fails.
 
@@ -1037,7 +1056,8 @@ pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ cry
 ```
 
 The hash-chain verifier needs only the standard library. Signing and signature verification (Ed25519, ECDSA,
-ML-DSA-65, COSE, JWS, AP2) need `cryptography` ≥ 50, installed with the `sign` extra:
+ML-DSA-65, COSE, JWS, AP2) need `cryptography` (≥ 50 is what the `sign` extra asks for and what this release is
+measured with; ML-DSA-65 works from 48.0.0), installed with the `sign` extra:
 
 ```bash
 pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ 'cryptovalid-opencore[sign]'
