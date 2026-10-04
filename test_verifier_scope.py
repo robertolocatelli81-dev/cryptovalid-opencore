@@ -98,5 +98,29 @@ class TestBareLedgerScope(unittest.TestCase):
         self.assertEqual(self._verify(_rechain(gap))["verdict"], "FAIL")
 
 
+class TestNonObjectLines(unittest.TestCase):
+    """audit V1 #3 (30/09/2026): a JSON line that is not an object made verifier.py raise (no receipt)."""
+
+    def test_non_object_line_is_a_named_fail_never_a_crash(self):
+        import hashlib
+        import subprocess
+        d = tempfile.mkdtemp()
+        prev, rows = "0" * 64, []
+        for i in range(3):
+            e = {"idx": i, "ts": "t", "data": {"i": i}, "prev_hash": prev}
+            e["self_hash"] = hashlib.sha256(json.dumps(e, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            prev = e["self_hash"]
+            rows.append(json.dumps(e))
+        for extra in ("[]", "1", '"x"', "null", "[1,2]"):
+            for lines in (rows + [extra], [extra] + rows):
+                p = os.path.join(d, "l.jsonl")
+                open(p, "w").write("\n".join(lines) + "\n")
+                r = V.verify_ledger(p)
+                self.assertEqual(r["verdict"], "FAIL", extra)
+                self.assertIn("not_a_json_object", json.dumps(r), extra)
+                cp = subprocess.run([sys.executable, "-B", os.path.join(os.path.dirname(os.path.abspath(__file__)), "verifier.py"), p], capture_output=True, text=True, timeout=60)
+                self.assertEqual((cp.returncode, "Traceback" in cp.stderr), (1, False), extra)
+
+
 if __name__ == "__main__":
     unittest.main()

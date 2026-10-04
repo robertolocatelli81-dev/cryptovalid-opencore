@@ -44,6 +44,19 @@ class TestPackLayer(unittest.TestCase):
         r = VE.verify_pack(self.pack)
         self.assertFalse(r["valid"], "manomissione non rilevata!")
 
+    def test_pack_firma_presente_rotta_invalido(self):
+        # audit V1 #1 (30/09/2026): one byte of manifest_signature changed -> evidence_pack says invalid; so must this front-end
+        import base64
+        p = os.path.join(self.pack, "MANIFEST.json")
+        man = json.load(open(p))
+        sig = bytearray(base64.b64decode(man["manifest_signature"]))
+        sig[0] ^= 1
+        man["manifest_signature"] = base64.b64encode(bytes(sig)).decode()
+        json.dump(man, open(p, "w"), indent=2, sort_keys=True)
+        r = VE.verify_pack(self.pack)
+        self.assertFalse(r["valid"], r)
+        self.assertIn("FAIL", [x["status"] for x in r["layers"] if x["layer"].startswith("manifest autenticato")])
+
     def test_auto_detect_pack(self):
         r = VE.verify_auto(self.pack)
         self.assertEqual(r["kind"], "pack")
@@ -71,6 +84,32 @@ class TestAp2Layer(unittest.TestCase):
         json.dump(ev, open(self.out, "w"))
         r = VE.verify_ap2(self.out)
         self.assertFalse(r["valid"], "manomissione ap2 non rilevata!")
+
+    def test_ap2_firma_producer_presente_rotta_invalido(self):
+        # audit V1 #2 (30/09/2026): one byte of the producer signature changed -> ap2_evidence says invalid; so must this front-end
+        import ap2_evidence
+        ap2_evidence.sign_evidence(self.out)
+        self.assertTrue(VE.verify_ap2(self.out)["valid"])          # control: the signed pack passes
+        ev = json.load(open(self.out))
+        s0 = ev["producer_signatures"]["signatures"][0]
+        v = s0["signature_b64"]
+        s0["signature_b64"] = v[:-2] + ("A" if v[-2] != "A" else "B") + v[-1:]   # the digest stays valid: only the signature breaks
+        json.dump(ev, open(self.out, "w"), ensure_ascii=False, indent=1, sort_keys=True)
+        r = VE.verify_ap2(self.out)
+        self.assertFalse(r["valid"], r)
+
+    def test_ap2_without_artifacts_is_invalid(self):
+        # NEMESIS V1 (01/10/2026), mutant VE6: an evidence with no artifacts proves nothing; only the reference-verdict
+        # layer catches it here (the per-artifact layer is vacuously true on an empty list)
+        import hashlib
+        import ap2_evidence
+        ev = json.load(open(self.out))
+        ev["artifacts"] = []
+        body = {k: v for k, v in ev.items() if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
+        ev["evidence_digest_sha256"] = hashlib.sha256(ap2_evidence._canon(body)).hexdigest()
+        json.dump(ev, open(self.out, "w"))
+        self.assertTrue(ap2_evidence.verify_evidence(self.out)["digest_ok"])        # control: the digest itself is right
+        self.assertFalse(VE.verify_ap2(self.out)["valid"])
 
     def test_auto_detect_ap2(self):
         r = VE.verify_auto(self.out)

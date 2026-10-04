@@ -173,6 +173,8 @@ def verify_sth(sth: Dict, trusted_pubkey_hex: Optional[str] = None) -> Dict:
     """The STH signature is checked against the TRUSTED log key given by the relying party (the key
     inside the STH is informative only — trusting it would let anyone forge a tree head)."""
     _, Ed25519PublicKey, _ = _ed()
+    if sth.get("kind") != "cryptovalid_sth/1":     # the signed payload fixes this kind: a head that declares another is not ours
+        return {"ok": False, "why": f"unsupported tree head kind {sth.get('kind')!r}"}
     pk = trusted_pubkey_hex or sth.get("log_pubkey_hex")
     if not trusted_pubkey_hex:
         note = "log key taken from the receipt itself: NOT trusted (pass trusted_pubkey_hex)"
@@ -234,9 +236,13 @@ def verify_receipt(r: Dict, trusted_pubkey_hex: str, leaf_canonical: Optional[by
     equal the signed STH size; the path must connect trusted root_1 to the signed root_2."""
     if not trusted_pubkey_hex:
         return {"ok": False, "why": "trusted_pubkey_hex is required: the key inside a receipt is never trusted"}
-    if r.get("kind") != KIND:
+    if not isinstance(r, dict) or r.get("kind") != KIND:   # a list/number/null is not a receipt (audit V1 #7, 30/09/2026)
         return {"ok": False, "why": "not a cryptovalid receipt"}
+    if r.get("ok") is not False and r.get("vds") != "RFC9162_SHA256":    # as the COSE path: an unknown or absent VDS is refused,
+        return {"ok": False, "why": f"unsupported vds {r.get('vds')!r}"}  # never verified as if it were RFC9162_SHA256
     sth = r.get("sth") or {}
+    if not isinstance(sth, dict):
+        return {"ok": False, "why": "STH: not a JSON object"}
     s = verify_sth(sth, trusted_pubkey_hex)
     if not s.get("ok"):
         return {"ok": False, "why": f"STH: {s.get('why')}"}
@@ -393,6 +399,8 @@ def verify_cose(cose: bytes, trusted_pubkey_hex: str, leaf_hash_hex: Optional[st
                 return {"ok": False, "why": "inclusion receipt with detached payload not supported by this verifier"}
             pk.verify(sig, _sig_structure(protected, payload))
             ts, idx, path = cbor_decode(vdp[PROOF_INCLUSION][0])
+            if not (type(ts) is int and type(idx) is int and ts >= 0 and idx >= 0 and isinstance(path, list)):
+                return {"ok": False, "why": "malformed inclusion proof: tree-size and leaf-index are uint (RFC 9942)"}   # audit V1 #9
             if leaf_hash_hex is None:
                 return {"ok": False, "why": "inclusion receipt: pass leaf_hash_hex (YOUR entry's leaf hash)"}
             ok = _verify_inclusion_from_leaf_hash(idx, ts, bytes.fromhex(leaf_hash_hex), list(path), payload)
@@ -442,12 +450,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             old = json.load(f)
         r = consistency_receipt(old.get("sth", old), args.ledger, args.keyfile)
         print(json.dumps(r, indent=1)); return 0 if r.get("ok", True) else 1
-    with open(args.receipt_json, encoding="utf-8") as f:
-        rcpt = json.load(f)
+    def _load(path, what):   # unreadable / not JSON / not an object: a verdict, never a traceback (audit V1 #7)
+        try:
+            with open(path, encoding="utf-8") as f:
+                obj = json.load(f)
+        except (OSError, ValueError, RecursionError) as e:
+            return None, f"{what} unreadable: {type(e).__name__}"
+        return (obj, None) if isinstance(obj, dict) else (None, f"{what} is not a JSON object")
+    rcpt, why = _load(args.receipt_json, "receipt")
+    if why:
+        print(json.dumps({"ok": False, "why": why}, indent=1)); return 1
     leaf = None
     if args.entry_json:
-        with open(args.entry_json, encoding="utf-8") as f:
-            leaf = M.canonical(json.load(f))
+        entry, why = _load(args.entry_json, "entry")
+        if why:
+            print(json.dumps({"ok": False, "why": why}, indent=1)); return 1
+        leaf = M.canonical(entry)
     res = verify_receipt(rcpt, args.trusted_pubkey_hex, leaf_canonical=leaf, trusted_root_1_hex=args.trusted_root_1)
     print(json.dumps(res, indent=1)); return 0 if res["ok"] else 1
 

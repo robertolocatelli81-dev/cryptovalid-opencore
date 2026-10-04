@@ -43,6 +43,54 @@ class TestEvidencePack(unittest.TestCase):
         signer.keygen(self.key)
         signer.sign_ledger(self.ledger, self.signed, self.key)
 
+    def test_malformed_manifest_is_a_named_fail_never_a_crash(self):
+        # audit V1 #5 (30/09/2026): these MANIFEST shapes raised tracebacks; a file name outside the pack was read
+        import shutil
+        evidence_pack.build_pack([self.signed], self.pack, sign_key=None)
+        man = json.load(open(os.path.join(self.pack, "MANIFEST.json")))
+        cases = {"notjson": b"{x", "list": b"[]", "notutf8": b"\xff\xfe",
+                 "digests_list": json.dumps(dict(man, file_digests_sha256=[1])).encode(),
+                 "ledger_nofile": json.dumps(dict(man, ledgers=[{"x": 1}])).encode(),
+                 "traversal": json.dumps(dict(man, file_digests_sha256={"../../etc/hostname": "00" * 32})).encode(),
+                 "absolute": json.dumps(dict(man, ledgers=[{"file": "/etc/hostname"}])).encode(),
+                 "ledger_int": json.dumps(dict(man, ledgers=[5])).encode(),
+                 "ledger_list": json.dumps(dict(man, ledgers=[[1]])).encode(),
+                 "empty_name": json.dumps(dict(man, file_digests_sha256={"": "00" * 32})).encode()}
+        for name, raw in list(cases.items()) + [("missing", None), ("dir", None)]:
+            d = os.path.join(self.d, "c_" + name)
+            shutil.copytree(self.pack, d)
+            p = os.path.join(d, "MANIFEST.json")
+            if name == "missing":
+                os.remove(p)
+            elif name == "dir":
+                os.remove(p); os.mkdir(p)
+            else:
+                open(p, "wb").write(raw)
+            r = evidence_pack.verify_pack(d)
+            self.assertFalse(r["valid"], name)
+            self.assertTrue(r.get("error"), name)
+
+    def test_backslash_is_an_ordinary_character_on_posix(self):
+        # NEMESIS V1 P2 (01/10/2026): "\\" was treated as a separator, so a legitimate POSIX name with "\\..\\" failed
+        if os.sep != "/":
+            self.skipTest("POSIX only")
+        odd = os.path.join(self.d, "a\\..\\b.jsonl")
+        import shutil
+        shutil.copy(self.signed, odd)
+        evidence_pack.build_pack([odd], self.pack)
+        self.assertTrue(evidence_pack.verify_pack(self.pack)["valid"])
+
+    def test_symlink_out_of_the_pack_is_not_read(self):
+        # NEMESIS V1 P3 (01/10/2026): a symlink inside the pack pointing outside counted as a matching file
+        import hashlib
+        evidence_pack.build_pack([self.signed], self.pack)
+        outside = os.path.join(self.d, "outside.txt"); open(outside, "w").write("secret")
+        os.symlink(outside, os.path.join(self.pack, "link.txt"))
+        p = os.path.join(self.pack, "MANIFEST.json"); man = json.load(open(p))
+        man["file_digests_sha256"]["link.txt"] = hashlib.sha256(b"secret").hexdigest()
+        json.dump(man, open(p, "w"))
+        self.assertFalse(evidence_pack.verify_pack(self.pack)["file_ok"]["link.txt"])
+
     def test_build_produces_files(self):
         evidence_pack.build_pack([self.signed], self.pack, subject="t")
         for name in ("MANIFEST.json", "SUMMARY.md", "signed.jsonl"):

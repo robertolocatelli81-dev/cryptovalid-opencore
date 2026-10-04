@@ -70,6 +70,34 @@ const rBad = verifyLedger(JSON.stringify(badSig));
 ok("signature: forged signature not all_verified", rBad.signatures && !rBad.signatures.all_verified);
 ok("signature: pubkey pin mismatch flagged", !verifyLedger(JSON.stringify(signed), { pubkey: "00".repeat(32) }).signatures.all_verified);
 
+// 4b) audit V1 #12 and A16 (30/09/2026): strict signature/signer decoding, as Python signer.py and Java; and with --pubkey a
+//     signature layer that does not verify fails the run (verdict FAIL, exit 1), as Java -pubkey
+{
+  const pk = signerHex;
+  const variants = {
+    "junk chars in signature": sig.slice(0, 10) + "!\n " + sig.slice(10),
+    "signature without padding": sig.replace(/=+$/, ""),
+    "URL-safe alphabet": sig.replace(/\+/g, "-").replace(/\//g, "_"),
+  };
+  for (const [name, s] of Object.entries(variants)) {
+    if (s === sig) continue;   // this signature happens not to contain the character the variant changes
+    const r = verifyLedger(JSON.stringify({ ...signed, signature: s }));
+    ok(`strict b64: ${name} not all_verified`, r.signatures && !r.signatures.all_verified && r.signatures.failures[0].reason === "malformed_signature_field");
+  }
+  for (const [name, sg] of Object.entries({ "signer upper-case": pk.toUpperCase(), "signer 65 hex": pk + "0", "signer with zz": pk.slice(0, 62) + "zz" })) {
+    const r = verifyLedger(JSON.stringify({ ...signed, signer: sg }));
+    ok(`strict signer: ${name} not all_verified`, r.signatures && !r.signatures.all_verified);
+  }
+  ok("pinned pubkey + valid signature: PASS", verifyLedger(JSON.stringify(signed), { pubkey: pk }).verdict === "PASS");
+  const broken = verifyLedger(JSON.stringify(badSig), { pubkey: pk });
+  ok("pinned pubkey + broken signature: verdict FAIL", broken.verdict === "FAIL" && broken.errors.some((e) => e.error.startsWith("signatures_failed")));
+  ok("the independent receipt carries the FAIL too (NEMESIS JS6)", broken.independent_receipt_sha256 !== verifyLedger(JSON.stringify(badSig)).independent_receipt_sha256);
+  const { signature: _s, signer: _g, ...unsignedValid } = signed;   // a valid chain entry, no signature fields
+  ok("control: unsigned valid entry PASSES without --pubkey", verifyLedger(JSON.stringify(unsignedValid)).verdict === "PASS");
+  ok("pinned pubkey + no signature at all: verdict FAIL", verifyLedger(JSON.stringify(unsignedValid), { pubkey: pk }).verdict === "FAIL");
+  ok("no pubkey: broken signature reported, chain verdict unchanged (declared)", verifyLedger(JSON.stringify(badSig)).verdict === "PASS" && !verifyLedger(JSON.stringify(badSig)).signatures.all_verified);
+}
+
 // 5) robustness: never throws on garbage
 for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
   try { const r = verifyLedger(g); ok("robust: " + JSON.stringify(g).slice(0, 14), r.verdict === "FAIL" || r.verdict === "PASS"); }

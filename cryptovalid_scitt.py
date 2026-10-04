@@ -281,7 +281,8 @@ def verify_transparent_statement(cose: bytes, issuer_pubkey_hex: str, ts_pubkey_
             if not (isinstance(dec, list) and len(dec) == 3):
                 res["why"] = "malformed inclusion proof"; continue
             n, idx, path = dec
-            if not (isinstance(n, int) and isinstance(idx, int) and isinstance(path, list) and all(isinstance(h, bytes) and len(h) == 32 for h in path)):
+            # RFC 9942: tree-size and leaf-index are uint — a CBOR true/false is not (audit V1 #8, 30/09/2026)
+            if not (type(n) is int and type(idx) is int and n >= 0 and idx >= 0 and isinstance(path, list) and all(isinstance(h, bytes) and len(h) == 32 for h in path)):
                 res["why"] = "malformed inclusion proof"; continue
             if idx != entry.get("idx"):
                 res["why"] = "leaf index differs from the entry's idx"; continue

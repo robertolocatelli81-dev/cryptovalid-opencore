@@ -16,6 +16,7 @@ and the CA validation are the user's and the QTSP's; the toolkit only puts them 
 """
 from __future__ import annotations
 import base64
+import re
 import json
 import os
 import sys
@@ -29,8 +30,18 @@ def _b64u(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 
 
+_B64U = re.compile(r"[A-Za-z0-9_-]*")
+
+
 def _b64u_dec(s: str) -> bytes:
-    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+    """Strict BASE64URL of RFC 7515 §2: URL alphabet, no '=' padding, canonical (re-encoding gives back the input).
+    audit V1 #10 (30/09/2026): '==' and the standard alphabet '+' '/' were accepted, a second encoding of one signature."""
+    if not isinstance(s, str) or not _B64U.fullmatch(s) or len(s) % 4 == 1:
+        raise ValueError("not strict base64url (RFC 7515)")
+    raw = base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+    if _b64u(raw) != s:
+        raise ValueError("non-canonical base64url (RFC 7515)")
+    return raw
 
 
 def _ed():

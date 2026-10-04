@@ -64,13 +64,17 @@ function detectAlgo(entries) {
 
 // --- Ed25519 over the self_hash hex string bytes; signer = raw 32-byte pubkey hex
 const SPKI = Buffer.from("302a300506032b6570032100", "hex");
+// strict decoding with b64Strict and HEX64 (defined below), as Python's signer._b64_strict and Java's b64Strict (audit V1 #12, 30/09/2026):
+// Node's Buffer.from(s, "base64") skips junk characters and takes the URL alphabet and non-canonical padding bits
 function verifySig(entry, expectedPubHex) {
   const { signature, signer, self_hash } = entry;
   if (!signature || !signer || !self_hash) return { ok: false, reason: "missing signature/signer/self_hash" };
   if (expectedPubHex && signer !== expectedPubHex) return { ok: false, reason: "signer_mismatch" };
+  const rawSig = b64Strict(signature, 64);
+  if (rawSig === null || typeof signer !== "string" || !HEX64.test(signer)) return { ok: false, reason: "malformed_signature_field" };
   try {
     const key = createPublicKey({ key: Buffer.concat([SPKI, Buffer.from(signer, "hex")]), format: "der", type: "spki" });
-    const ok = edVerify(null, Buffer.from(self_hash, "utf-8"), key, Buffer.from(signature, "base64"));
+    const ok = edVerify(null, Buffer.from(self_hash, "utf-8"), key, rawSig);
     return ok ? { ok: true } : { ok: false, reason: "bad_signature" };
   } catch (e) { return { ok: false, reason: "verify_error" }; }
 }
@@ -260,16 +264,21 @@ export function verifyLedger(text, { algo = null, pubkey = null, tip = null, tru
   const chainIntegrity = hashFailures.length === 0 && linkFailures.length === 0 && idxOk && errors.length === 0;
 
   let signatures = null;
-  if (entries.some((e) => e.signature)) {
+  if (entries.some((e) => e.signature) || pubkey) {
     const failures = []; let verified = 0; const signers = new Set();
     entries.forEach((e, i) => { const r = verifySig(e, pubkey); if (r.ok) { verified++; signers.add(e.signer); } else failures.push({ idx: e.idx ?? i, reason: r.reason }); });
-    signatures = { all_verified: failures.length === 0, verified, failures, signers: [...signers] };
+    signatures = { all_verified: failures.length === 0 && entries.length > 0, verified, failures, signers: [...signers] };
   }
+  // with --pubkey the caller PINNED the signer: a signature layer that does not verify fails the run, as in Java -pubkey
+  // (audit V1 A16, 30/09/2026: before, a broken signature gave all_verified false but verdict PASS, exit 0)
+  const pinnedSigFail = Boolean(pubkey) && !(signatures && signatures.all_verified);
+  if (pinnedSigFail) errors.push({ error: "signatures_failed: the pinned signature layer does not verify" });
+  const verdictPass = chainIntegrity && !pinnedSigFail;
   const receiptPayload = Buffer.from(canon({ algorithm: use, chain_integrity: chainIntegrity, entries: entries.length,
     hash_failures_idx: hashFailures.map((f) => f.idx), link_failures_idx: linkFailures.map((f) => f.idx),
-    verdict: chainIntegrity ? "PASS" : "FAIL" }), "utf-8");
+    verdict: verdictPass ? "PASS" : "FAIL" }), "utf-8");
   return {
-    verdict: chainIntegrity ? "PASS" : "FAIL", chain_integrity: chainIntegrity, algorithm: use,
+    verdict: verdictPass ? "PASS" : "FAIL", chain_integrity: chainIntegrity, algorithm: use,
     entries: entries.length, hash_failures_idx: hashFailures.map((f) => f.idx), link_failures_idx: linkFailures.map((f) => f.idx),
     errors, signatures, tip: tipCheck, verifier: "cvverify.mjs (independent, Node stdlib)",
     independent_receipt_sha256: createHash("sha256").update(receiptPayload).digest("hex"), // this impl's own fingerprint, NOT the reference receipt

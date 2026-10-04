@@ -101,7 +101,8 @@ python3 conformance.py     # exit 0 = conformant
   canonical tip payload, `log_pq_pubkey_b64` = the key; when either optional field is PRESENT (even as `null` or
   `""`) both must be present AND well-formed or the tip is `tip_invalid` in Python, JS, Go and Java; the tip document
   itself is parsed with the SAME strict acceptance profile as the entries (no duplicate keys, no floats, bounded
-  integers, depth/surrogate pre-scan, every field a string except `entries`) — it is a signed document, an ambiguous
+  integers, depth/surrogate pre-scan, every field a string except `entries`; `log_pubkey_hex` may also be `null`, read as
+  absent like `""`) — it is a signed document, an ambiguous
   encoding is refused, not guessed (16/09/2026; Rust and Swift do not read
   tips: declared); `signature_hex` too: 128 lowercase hex, and the entries' `signature`/`signer` are decoded
   strictly as well. Semantics of
@@ -168,7 +169,9 @@ python3 conformance.py     # exit 0 = conformant
   library date type, whose fraction precision (µs / ms / ns) ordered two instants differently at a sub-millisecond
   `--tip-not-before` boundary, and whose `Date.UTC` mapped years 1-99 to 1900+ in JS (both measured, oracle
   `ordering-*` vectors); `--tip-not-before` follows the same profile in the three checkers,
-  `entries` a non-negative integer, an empty `log_pubkey_hex` = absent — a SIGNED tip outside the profile is
+  `entries` a non-negative integer, an empty or `null` `log_pubkey_hex` = absent (measured identical in Python, JS and Java,
+  01/10/2026; Go by code reading, not measured — no Go toolchain on the measuring host: it reads it into a string field, where
+  `null` leaves `""`; any other non-string is `tip_invalid`) — a SIGNED tip outside the profile is
   `tip_invalid` (oracle cases `tip-garbage-ts`, `tip-upper-hex`, `tip-date-only-ts`, `tip-no-seconds-ts`: FAIL on
   Python/JS/Go, unchecked by Rust/Swift, declared; `tip-empty-pubkey`: PASS everywhere). A malformed
   `--tip-not-before` is the verifier's error (`bad_not_before`), never blamed on the tip; the instant is compared

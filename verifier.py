@@ -282,7 +282,7 @@ def _generic_recompute_verify(entries: List[Dict], started: str, path: str) -> O
 
 def _linkage_verify(entries: List[Dict], started: str, path: str) -> Optional[Dict]:
     """Verifica di LINKAGE per ledger OMEGA con schema di hash module-specifico
-    (lens/nous/m5/qraft ecc.): questi non hanno `idx` e usano una regola di hashing
+    (ledger di altri moduli OMEGA): questi non hanno `idx` e usano una regola di hashing
     propria che verify_ledger non ricomputa indipendentemente. Qui verifichiamo che la
     CATENA sia integra — ogni `prev_hash` == hash dell'entry precedente — il che rileva
     riordino / cancellazione / inserimento. Verdetto onesto: LINKED (non PASS: la
@@ -369,7 +369,13 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
     entries: List[Dict] = []
     for i, line in enumerate(raw_lines):
         try:
-            entries.append(_loads_strict(line))
+            obj = _loads_strict(line)
+            if not isinstance(obj, dict):
+                # a line that is JSON but not an object ([], 1, "x", null): named, like JS/Java/Rust — never a crash
+                # further down (audit V1 #3, 30/09/2026: AttributeError/TypeError tracebacks, no receipt)
+                errors.append({"line": i, "error": "not_a_json_object"})
+                continue
+            entries.append(obj)
         except JsonTooDeep as e:
             # Nesting beyond the NORMATIVE bound (MAX_JSON_DEPTH, measured by a linear scan, never by
             # recursion): a FAIL with a named error, never a crash (2026-09-13).

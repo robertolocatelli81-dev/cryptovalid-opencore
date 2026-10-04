@@ -62,6 +62,26 @@ class TestIngestBasic(unittest.TestCase):
         self.assertFalse(r2["ok"])
         self.assertIn("hash_chain_fail", [f["reason"] for f in r2["failures"]])
 
+    def test_unreadable_sth_or_head_is_a_named_failure(self):
+        # audit V1 #6 (30/09/2026): a HEAD or STH that is not JSON / not an object raised a traceback
+        import shutil
+        w = ing.Ingestor(self.d, batch_size=32, rotate_entries=50)
+        for i in range(120):
+            w.append({"i": i})
+        w.close(seal=False)
+        self.assertTrue(ing.verify_archive(self.d)["ok"])           # control: the intact archive passes
+        for target, reason in (("ledger.head.json", "head_unreadable"), ("ledger-000000.jsonl.sth.json", "sth_unreadable")):
+            for raw in (b"{x", b"[]", b"null", b"\xff"):
+                d = tempfile.mkdtemp()
+                shutil.rmtree(d)
+                shutil.copytree(self.d, d)
+                open(os.path.join(d, target), "wb").write(raw)
+                r = ing.verify_archive(d)
+                self.assertFalse(r["ok"], (target, raw))
+                self.assertTrue(any(f["reason"].startswith(reason) for f in r["failures"]), (target, raw))
+                if target == "ledger.head.json":   # the HEAD exists: "no_head_manifest" would be false (NEMESIS IN4)
+                    self.assertFalse(any(w.startswith("no_head_manifest") for w in r.get("warnings", [])), raw)
+
     def test_tail_segment_removal_detected_by_head(self):
         # il buco trovato dalla review avversariale: senza HEAD la coda era invisibile
         w = ing.Ingestor(self.d, batch_size=32, rotate_entries=50)

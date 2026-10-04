@@ -272,6 +272,12 @@ def verify_ledger_signatures(entries: List[Dict], expected_pubkey_hex: Optional[
     verified, failures, signers = 0, [], set()
     pq_ok, pq_failures, pq_signers, pq_present = 0, [], set(), 0
     for i, e in enumerate(entries):
+        if isinstance(e, _Undecodable):
+            failures.append({"idx": i, "reason": "json_decode"})          # audit V1 #4 (30/09/2026): never a traceback
+            continue
+        if not isinstance(e, dict):
+            failures.append({"idx": i, "reason": "not_a_json_object"})    # [], 1, "x", null — named, like the verifiers
+            continue
         sig, signer, sh = e.get("signature"), e.get("signer"), e.get("self_hash")
         if not (sig and signer and sh):
             failures.append({"idx": i, "reason": "missing signature/signer/self_hash"})
@@ -349,10 +355,21 @@ def verify_ledger_signatures(entries: List[Dict], expected_pubkey_hex: Optional[
             "pq_signers": sorted(pq_signers), "pq_note": pq_note}
 
 
+class _Undecodable:
+    """A ledger line that is not JSON: kept in place so the failure keeps its index."""
+
+
+def _load_line(ln):
+    try:
+        return json.loads(ln)
+    except (ValueError, RecursionError):
+        return _Undecodable()
+
+
 def verify_file(path: str, pubkey_hex: Optional[str] = None, pq_pubkey_b64: Optional[str] = None,
                 require_pq: bool = False) -> Dict:
     with open(path, encoding="utf-8") as f:
-        entries = [json.loads(ln) for ln in f if ln.strip()]
+        entries = [_load_line(ln) for ln in f if ln.strip()]
     return verify_ledger_signatures(entries, pubkey_hex, pq_pubkey_b64, require_pq=require_pq)
 
 

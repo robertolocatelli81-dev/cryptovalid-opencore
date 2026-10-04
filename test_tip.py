@@ -107,6 +107,13 @@ class TestTip(unittest.TestCase):
             open(p, "w").write(garbage)
             r = self._v(); self.assertEqual(r["verdict"], "FAIL"); self.assertIn("tip_", self._errors(r))
 
+    def test_log_pubkey_null_is_absent_and_a_non_string_is_refused(self):
+        # audit V1 #13 (30/09/2026) + spec/CONFORMANCE.md (01/10/2026): null = absent, as in JS and Java (measured); 5 -> tip_invalid
+        tip = T.load_tip(T.tip_path_for(self.led))
+        for value, ok in ((None, True), ("", True), (5, False), (self.pk.upper(), False)):
+            t = dict(tip, log_pubkey_hex=value)
+            self.assertEqual(T.verify_tip_signature(t, self.pk)["ok"], ok, value)
+
     def test_rollback_is_declared_and_refusable(self):
         # truncate + restore an OLDER genuine tip: passes (the tip proves "a signed state", not "the latest") —
         # declared limit; --tip-not-before refuses it; strict types: "10" / 10.0 are not the profile (Go agrees)

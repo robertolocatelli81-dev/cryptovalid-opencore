@@ -22,6 +22,19 @@ class TestMerkle(unittest.TestCase):
         lv = [os.urandom(20) for _ in range(20)]; root = M.mth(lv)
         self.assertFalse(M.verify_inclusion(5, 20, lv[5] + b"x", M.inclusion_proof(5, lv), root))
         self.assertFalse(M.verify_inclusion(6, 20, lv[5], M.inclusion_proof(5, lv), root))
+    def test_consistency_verdict_is_three_valued(self):
+        lv = [b"e%d" % i for i in range(12)]
+        r = lambda k: M.mth(lv[:k])  # noqa: E731
+        self.assertEqual(M.consistency_verdict(3, 12, M.consistency_proof(3, lv[:12]), r(3), r(12)), "consistent")
+        self.assertEqual(M.consistency_verdict(12, 12, [], r(12), r(12)), "consistent")
+        bad = M.consistency_proof(3, lv[:12]); bad[0] = bytes([bad[0][0] ^ 1]) + bad[0][1:]
+        self.assertEqual(M.consistency_verdict(3, 12, bad, r(3), r(12)), "inconsistent")
+        self.assertEqual(M.consistency_verdict(3, 12, M.consistency_proof(3, lv[:12]), r(3), r(11)), "inconsistent")
+        for m, n in ((0, 12), (8, 4), (-1, 3), (True, 3)):
+            with self.subTest(m=m, n=n):
+                self.assertEqual(M.consistency_verdict(m, n, [], r(1), r(4)), "could_not_compare")
+                self.assertFalse(M.verify_consistency(m, n, [], r(1), r(4)) if not isinstance(m, bool) and m >= 0 else False)
+
     def test_consistency_append_only(self):
         lv = [os.urandom(20) for _ in range(37)]
         for m in (1, 10, 32, 37):

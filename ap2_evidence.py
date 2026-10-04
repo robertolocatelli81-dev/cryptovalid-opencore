@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import re
 import hashlib
 import json
 try:  # depth bound shared with the reference verifier (same repo, flat layout)
@@ -109,12 +110,17 @@ def _no_dup_pairs(pairs):
 
 
 def _b64url_decode(s: str) -> bytes:
-    s = s.strip()
-    pad = -len(s) % 4
+    """Strict BASE64URL (RFC 7515 §2, used by SD-JWT): URL alphabet, no '=' padding, no whitespace, canonical.
+    audit V1 #11 (30/09/2026): '=', the standard alphabet and a trailing space were accepted on a signature segment."""
+    if not isinstance(s, str) or not re.fullmatch(r"[A-Za-z0-9_-]*", s) or len(s) % 4 == 1:
+        raise Ap2EvidenceError("invalid base64url segment: not strict RFC 7515 base64url")
     try:
-        return base64.urlsafe_b64decode(s + "=" * pad)
+        raw = base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
     except Exception as e:  # noqa: BLE001
         raise Ap2EvidenceError(f"invalid base64url segment: {type(e).__name__}") from e
+    if base64.urlsafe_b64encode(raw).rstrip(b"=").decode() != s:
+        raise Ap2EvidenceError("invalid base64url segment: non-canonical encoding")
+    return raw
 
 
 def _b64url(b: bytes) -> str:
@@ -498,7 +504,26 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
                 "bindings_ok": False, "rfc3161": {}, "provenance_classes": [], "self_asserted_only": False,
                 "policy_ok": False, "valid": False, "honest_scope": None,
                 "error": f"json_too_deep: nesting {depth} exceeds the acceptance-profile bound {_MAX_JSON_DEPTH}"}
-    ev = json.loads(raw, object_pairs_hook=_no_dup_pairs)
+    def refusal(msg):
+        # same key set as the normal receipt, every field at its fail value + error (as for json_too_deep)
+        return {"digest_ok": False, "artifacts": [], "producer_signatures": {}, "pq_protected": False,
+                "bindings_ok": False, "rfc3161": {}, "provenance_classes": [], "self_asserted_only": False,
+                "policy_ok": False, "valid": False, "honest_scope": None, "error": f"malformed_evidence: {msg}"}
+
+    ev = json.loads(raw, object_pairs_hook=_no_dup_pairs)     # duplicate key -> Ap2EvidenceError (contract: test_pqsig)
+    # Shape of the top-level fields checked before anything touches them (ported from ap2-evidence-pack 1.1.0,
+    # 2026-10-03: a missing/null/wrong-typed field was an uncaught TypeError/AttributeError — 29 of 222 structural
+    # variants — instead of a fail-closed receipt).
+    if not isinstance(ev, dict):
+        return refusal("top level must be an object")
+    if not isinstance(ev.get("artifacts"), list) or any(not isinstance(a, dict) for a in ev["artifacts"]):
+        return refusal("artifacts must be a list of objects")
+    if "rfc3161_timestamp" in ev and not isinstance(ev["rfc3161_timestamp"], dict):
+        return refusal("rfc3161_timestamp must be an object")
+    if "rfc3161_timestamp" in ev and not isinstance(ev["rfc3161_timestamp"].get("anchored"), bool):
+        return refusal("rfc3161_timestamp.anchored must be a boolean")
+    if "producer_signatures" in ev and not isinstance(ev["producer_signatures"], dict):
+        return refusal("producer_signatures must be an object")
     e2 = {k: v for k, v in ev.items()
           if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
     recomputed_digest = hashlib.sha256(_canon(e2)).hexdigest()
@@ -511,6 +536,8 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
             parsed = parse_sd_jwt(a["sd_jwt_compact"])
             sig_ok = verify_es256(parsed["signing_input"], parsed["signature"],
                                   a["key"]["jwk"])
+            if not isinstance(a["key"].get("provenance_class"), str):     # a list/number crashed sorted() below
+                raise Ap2EvidenceError("key.provenance_class must be a string")
             resolved = resolve_disclosures(parsed["payload"], parsed["disclosures"])
             claims_ok = _canon(resolved) == _canon(a.get("resolved_claims"))
             kb = verify_kb_jwt(parsed, resolved)
@@ -521,13 +548,14 @@ def verify_evidence(path: str, trusted_producer_keys=None, require_pq: bool = Fa
                       and kb.get("verified") is not False)
             for_bindings.append({"name": a["name"], "compact": a["sd_jwt_compact"],
                                  "resolved_claims": resolved})
-        except (Ap2EvidenceError, KeyError, ValueError) as e:
-            art_results.append({"name": a.get("name"), "error": str(e)})
+        except (Ap2EvidenceError, KeyError, ValueError, TypeError, AttributeError) as e:
+            # a wrong-typed field inside one artifact (key, jwk, x/y, sd_jwt_compact) fails THAT artifact, never the verifier
+            art_results.append({"name": a.get("name"), "error": f"{type(e).__name__}: {e}"})
             all_ok = False
 
     bindings_ok = find_bindings(for_bindings) == ev.get("bindings", []) if all_ok else False
 
-    ts = ev.get("rfc3161_timestamp", {})
+    ts = ev.get("rfc3161_timestamp") or {}
     rfc = {"claimed": ts.get("anchored", False), "verified": None}
     if ts.get("anchored") and ts.get("tsr_b64"):
         rfc = {"claimed": True, **evidence_pack._verify_rfc3161(

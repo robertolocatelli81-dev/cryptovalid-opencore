@@ -43,6 +43,23 @@ class TestSigner(unittest.TestCase):
         self.key = os.path.join(self.d, "signer.key")
         _make_ledger(self.ledger)
 
+    def test_non_object_or_non_json_line_is_a_named_failure(self):
+        # audit V1 #4 (30/09/2026): a line [] / null / not JSON made signer.py verify raise a traceback
+        signer.keygen(self.key)
+        signer.sign_ledger(self.ledger, self.signed, self.key)
+        rows = open(self.signed).read().splitlines()
+        for extra, reason in (("[]", "not_a_json_object"), ("null", "not_a_json_object"), ("1", "not_a_json_object"),
+                              ("{x", "json_decode")):
+            for lines in (rows + [extra], [extra] + rows):
+                p = os.path.join(self.d, "bad.jsonl")
+                open(p, "w").write("\n".join(lines) + "\n")
+                r = signer.verify_file(p)
+                self.assertFalse(r["ok"], extra)
+                self.assertIn(reason, [f["reason"] for f in r["failures"]], extra)
+                cp = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "signer.py"), "verify", p],
+                                    capture_output=True, text=True, timeout=60)
+                self.assertEqual((cp.returncode, "Traceback" in cp.stderr), (1, False), extra)
+
     def test_keygen_0600(self):
         info = signer.keygen(self.key)
         self.assertEqual(len(info["public_key_hex"]), 64)

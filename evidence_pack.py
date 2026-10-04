@@ -147,7 +147,13 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
         http = urllib.request.Request(tsa_url, data=req, method="POST",
                                       headers={"Content-Type": "application/timestamp-query"})
         resp = urllib.request.urlopen(http, timeout=timeout).read()  # nosec B310 - schema validato http/https sopra
-        return {"anchored": True, "tsa": tsa_url, "tsr_b64": base64.b64encode(resp).decode()}
+        tsr_b64 = base64.b64encode(resp).decode()
+        # anchored only on a token whose imprint is THIS digest (2026-10-03: any HTTP body — an error page, a rejection, a token
+        # for another digest — was recorded as anchored: True)
+        chk = _verify_rfc3161(tsr_b64, digest_hex, timeout)
+        if not chk.get("imprint_ok"):     # a token exists only on a granted status: openssl refuses a non-granted reply carrying one
+            return {"anchored": False, "tsa": tsa_url, "note": "TSA reply carries no token for this digest"}
+        return {"anchored": True, "tsa": tsa_url, "tsr_b64": tsr_b64}
     except Exception as e:  # noqa: BLE001
         return {"anchored": False, "note": f"{type(e).__name__}: {str(e)[:80]}"}
     finally:
@@ -263,8 +269,14 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
         return {"files_ok": False, "file_ok": {}, "manifest_ok": False, "manifest_authenticated": False,
                 "ledgers_ok": False, "ledgers": [], "rfc3161": {}, "valid": False,
                 "error": "input_too_large: MANIFEST exceeds the verifier's size bound"}
-    with open(os.path.join(pack_dir, "MANIFEST.json"), encoding="utf-8") as f:
-        raw = f.read()
+    def _fail(error):   # the SAME key set as the normal receipt, every field at its fail value (never a traceback)
+        return {"files_ok": False, "file_ok": {}, "manifest_ok": False, "manifest_authenticated": False,
+                "ledgers_ok": False, "ledgers": [], "rfc3161": {}, "valid": False, "error": error}
+    try:
+        with open(os.path.join(pack_dir, "MANIFEST.json"), encoding="utf-8") as f:
+            raw = f.read()
+    except (OSError, UnicodeDecodeError) as e:   # missing, a directory, not UTF-8 (audit V1 #5, 30/09/2026)
+        return _fail(f"manifest_unreadable: {type(e).__name__}")
     depth = _json_depth(raw)
     if depth > _MAX_JSON_DEPTH:
         # Nesting beyond the normative bound (linear pre-scan, same rule as verifier.py, 2026-09-13):
@@ -272,11 +284,36 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
         return {"files_ok": False, "file_ok": {}, "manifest_ok": False, "manifest_authenticated": False,
                 "ledgers_ok": False, "ledgers": [], "rfc3161": {}, "valid": False,
                 "error": f"json_too_deep: MANIFEST nesting {depth} exceeds the acceptance-profile bound {_MAX_JSON_DEPTH}"}
-    man = json.loads(raw)
+    try:
+        man = json.loads(raw)
+    except (ValueError, RecursionError) as e:
+        return _fail(f"manifest_not_json: {type(e).__name__}")
+    # shape of the parts this function reads (audit V1 #5): anything else is a named FAIL, never a traceback; a file
+    # name must stay inside the pack (no absolute path, no '..' component), like a vector name in the runners
+    def _inside(name):
+        # separators of THIS platform only (on POSIX "\\" is an ordinary character, not a separator: NEMESIS P2, 01/10/2026)
+        if not (isinstance(name, str) and name != "" and not os.path.isabs(name) and "\0" not in name):
+            return False
+        parts = name
+        for sep in {os.sep, os.altsep or os.sep, "/"}:
+            parts = parts.replace(sep, "/")
+        return ".." not in parts.split("/")
+    if not isinstance(man, dict):
+        return _fail("manifest_not_an_object")
+    digs, leds = man.get("file_digests_sha256", {}), man.get("ledgers", [])
+    if not isinstance(digs, dict) or not all(_inside(k) and isinstance(v, str) for k, v in digs.items()):
+        return _fail("manifest_bad_file_digests: an object of file name (inside the pack) -> sha256 hex")
+    if not isinstance(leds, list) or not all(isinstance(lm, dict) and _inside(lm.get("file")) for lm in leds):
+        return _fail("manifest_bad_ledgers: a list of objects with a file name inside the pack")
+    root = os.path.realpath(pack_dir)
+
+    def _real_inside(path):   # where the file REALLY is: a symlink out of the pack is not read (NEMESIS P3, 01/10/2026)
+        rp = os.path.realpath(path)
+        return rp == root or rp.startswith(root + os.sep)
     file_ok = {}
     for name, dig in man.get("file_digests_sha256", {}).items():
         p = os.path.join(pack_dir, name)
-        file_ok[name] = os.path.exists(p) and _sha256_file(p) == dig
+        file_ok[name] = _real_inside(p) and os.path.isfile(p) and _sha256_file(p) == dig
     m2 = {k: v for k, v in man.items()
           if k not in ("manifest_digest_sha256", "rfc3161_timestamp",
                        "manifest_signature", "manifest_signer")}
@@ -296,6 +333,11 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
     ledger_results, ledgers_ok = [], True
     for lm in man.get("ledgers", []):
         p = os.path.join(pack_dir, lm["file"])
+        if not (_real_inside(p) and os.path.isfile(p)):
+            ledger_results.append({"file": lm["file"], "hash_pass": False, "sig_pass": False, "untruncated": False,
+                                   "pq_protected": False, "pq_reason": "not_a_file_inside_the_pack"})
+            ledgers_ok = False
+            continue
         hp = os.path.exists(p) and verifier.verify_ledger(p).get("verdict") == "PASS"
         sp = True
         pq, pq_reason = False, ""

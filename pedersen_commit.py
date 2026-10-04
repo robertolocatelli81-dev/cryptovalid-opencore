@@ -7,9 +7,9 @@ BISOGNO (post-2030 salvato): auditabilita' privacy-preserving per CBDC/RWA — p
 (ratio, riserva) senza rivelare i singoli record. CLDMA oggi pubblica i TOTALI in chiaro e apre i record
 sfidati; questo modulo aggiunge un layer CONFIDENZIALE reale.
 
-PERCHE' Pedersen e non "zkp_enterprise" (verificato 2026-08-22): `core/zkp_enterprise.py` NON e' una ZK vera —
-`verify_proof` ricomputa hash dai campi del proof e confronta, non usa mai il segreto, zero soundness (e' un
-wrapper di lifecycle/integrita' travestito). Pedersen e' invece un primitivo STANDARD, additivamente
+PERCHE' Pedersen e non una "prova" a hash (verificato 2026-08-22): una verifica che ricomputa hash dai campi
+della prova e confronta, senza mai usare il segreto, NON e' una ZK vera — zero soundness (e' un controllo di
+integrita' travestito). Pedersen e' invece un primitivo STANDARD, additivamente
 omomorfico, con hiding e binding dimostrabili. NON e' crypto nuova: e' del 1991.
 
 HONEST-SCOPE (dichiarato, non ZK completa):

@@ -117,6 +117,15 @@ def verify_consistency(m, n, proof, old_root, new_root):
     return sn == 0 and fr == old_root and sr == new_root
 
 
+def consistency_verdict(m, n, proof, old_root, new_root) -> str:
+    """Three-valued RFC 9162 §2.1.4 check: "could_not_compare" when no consistency proof exists between the two sizes
+    (m = 0: nothing to prove; m > n: the "old" tree is larger — a rollback, which a monitor reports apart from a fork),
+    else "consistent" / "inconsistent". verify_consistency (bool) is unchanged: both non-consistent states are False."""
+    if not (isinstance(m, int) and isinstance(n, int)) or isinstance(m, bool) or isinstance(n, bool) or m <= 0 or m > n:
+        return "could_not_compare"
+    return "consistent" if verify_consistency(m, n, proof, old_root, new_root) else "inconsistent"
+
+
 def canonical(entry):
     d = {k: v for k, v in entry.items() if k not in ("self_hash", "signature", "signer")}
     return json.dumps(d, sort_keys=True, separators=(",", ":")).encode()

@@ -90,6 +90,28 @@ class TestReceipts(unittest.TestCase):
         self.assertFalse(R.verify_sth(forged, self.pk)["ok"])
         self.assertFalse(M.tree_head(self.leaves)["signed"])            # the unsigned one says so
 
+    def test_malformed_receipt_or_entry_is_a_verdict_never_a_crash(self):
+        # audit V1 #7 (30/09/2026): a receipt / entry / STH that is not a JSON object raised a traceback
+        import subprocess
+        r = R.inclusion_receipt(SAMPLE, 1, self.key)
+        for bad in ([], 1, None, "x", dict(r, sth=[1])):
+            self.assertFalse(R.verify_receipt(bad, self.pk, leaf_canonical=self.leaves[1])["ok"], bad)
+        tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cryptovalid_receipt.py")
+        good = os.path.join(self.tmp, "r.json"); json.dump(r, open(good, "w"))
+        entry = os.path.join(self.tmp, "e.json"); json.dump(self.entries[1], open(entry, "w"))
+        cp = subprocess.run([sys.executable, "-B", tool, "verify", good, self.pk, "--entry-json", entry],
+                            capture_output=True, text=True, timeout=60)
+        self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)                        # control: the good pair passes
+        for raw_r, raw_e in ((b"{x", None), (b"[]", None), (b"\xff", None), (None, b"[]"), (None, b"{x")):
+            rp, ep = good, entry
+            if raw_r is not None:
+                rp = os.path.join(self.tmp, "bad_r.json"); open(rp, "wb").write(raw_r)
+            if raw_e is not None:
+                ep = os.path.join(self.tmp, "bad_e.json"); open(ep, "wb").write(raw_e)
+            cp = subprocess.run([sys.executable, "-B", tool, "verify", rp, self.pk, "--entry-json", ep],
+                                capture_output=True, text=True, timeout=60)
+            self.assertEqual((cp.returncode, "Traceback" in cp.stderr), (1, False), (raw_r, raw_e))
+
     def test_inclusion_every_index_and_tampers(self):
         for i in range(len(self.leaves)):
             r = R.inclusion_receipt(SAMPLE, i, self.key)

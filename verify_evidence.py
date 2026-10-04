@@ -94,9 +94,16 @@ def verify_pack(pack_dir: str) -> dict:
         layers.append(_layer("file digests == manifest", "PASS" if r.get("files_ok") else "FAIL"))
         layers.append(_layer("manifest auto-consistente", "PASS" if r.get("manifest_ok") else "FAIL"))
         auth = r.get("manifest_authenticated")
+        try:
+            with open(os.path.join(pack_dir, "MANIFEST.json"), encoding="utf-8") as fh:
+                sig_present = bool(json.load(fh).get("manifest_signature"))
+        except (OSError, ValueError, AttributeError):
+            sig_present = False
+        # a manifest signature that is PRESENT but does not verify is tampering, never "unsigned" (audit V1 #1, 30/09/2026)
         layers.append(_layer("manifest autenticato (Ed25519)",
-                             "PASS" if auth else ("SKIP" if not r.get("manifest_ok") else "SKIP"),
-                             "firmato" if auth else "non firmato o cryptography assente"))
+                             "PASS" if auth else ("FAIL" if sig_present else "SKIP"),
+                             "firmato" if auth else ("firma presente ma NON valida" if sig_present
+                                                     else "non firmato o cryptography assente")))
         layers.append(_layer("ledger: hash+firma+anti-troncamento",
                              "PASS" if r.get("ledgers_ok") else "FAIL"))
         rfc = r.get("rfc3161") or {}
@@ -107,6 +114,9 @@ def verify_pack(pack_dir: str) -> dict:
                                  "openssl assente" if v is None else ""))
         else:
             layers.append(_layer("RFC 3161 timestamp", "SKIP", "nessun timestamp nel pack"))
+        # the reference verifier's own verdict is a mandatory layer: this front-end never passes what it rejects
+        layers.append(_layer("verdetto del verificatore di riferimento (evidence_pack.verify_pack)",
+                             "PASS" if r.get("valid") is True else "FAIL"))
     except Exception as e:  # noqa: BLE001
         layers.append(_layer("evidence pack", "FAIL", f"{type(e).__name__}: {e}"))
     return _rollup("pack", layers)
@@ -145,9 +155,16 @@ def verify_ap2(path: str) -> dict:
         rfc = r.get("rfc3161") or {}
         v = rfc.get("verified")
         layers.append(_layer("RFC 3161", "PASS" if v is True else ("SKIP" if v in (None,) and not rfc.get("claimed") else ("SKIP" if v is None else "FAIL"))))
+        prod = r.get("producer_signatures") or {}
+        if prod.get("present"):
+            # a producer signature that is PRESENT but does not verify is tampering (audit V1 #2, 30/09/2026)
+            layers.append(_layer("firma producer", "PASS" if prod.get("ok") else "FAIL",
+                                 "" if prod.get("ok") else "firma presente ma NON valida"))
         if r.get("self_asserted_only"):
             layers.append(_layer("provenienza chiavi", "SKIP",
                                  "solo jwk auto-asserito: firma prova coerenza, non identità"))
+        layers.append(_layer("verdetto del verificatore di riferimento (ap2_evidence.verify_evidence)",
+                             "PASS" if r.get("valid") is True else "FAIL"))
     except Exception as e:  # noqa: BLE001
         layers.append(_layer("ap2 evidence", "FAIL", f"{type(e).__name__}: {e}"))
     return _rollup("ap2", layers)

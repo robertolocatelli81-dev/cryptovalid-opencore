@@ -354,6 +354,16 @@ def _check_signature(doc: Dict, expected_pubkey_hex) -> Optional[str]:
         return "signature_invalid"
 
 
+def _load_json_object(path):
+    """(object, None) or (None, reason): a file that is not UTF-8 JSON, or not a JSON object, is a named failure."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except (OSError, ValueError, RecursionError) as e:   # UnicodeDecodeError and JSONDecodeError are ValueError
+        return None, type(e).__name__
+    return (obj, None) if isinstance(obj, dict) else (None, "not_a_json_object")
+
+
 def verify_archive(directory: str, prefix: str = "ledger",
                    expected_pubkey_hex=None,
                    lotl_check: bool = False, lotl_member_states=None) -> Dict:
@@ -378,8 +388,11 @@ def verify_archive(directory: str, prefix: str = "ledger",
         if verifier.verify_ledger(s)["verdict"] != "PASS":
             failures.append({"segment": name, "reason": "hash_chain_fail"})
             continue
-        with open(s + ".sth.json", encoding="utf-8") as f:
-            sth = json.load(f)
+        sth, why = _load_json_object(s + ".sth.json")
+        if sth is None:   # not JSON / not an object / unreadable: named, never a traceback (audit V1 #6, 30/09/2026)
+            failures.append({"segment": name, "reason": f"sth_unreadable: {why}"})
+            prev_sth = None
+            continue
         leaves = merkle.leaves_from_ledger(s)
         if merkle.mth(leaves).hex() != sth.get("root_sha256") \
                 or len(leaves) != sth.get("tree_size"):
@@ -415,9 +428,12 @@ def verify_archive(directory: str, prefix: str = "ledger",
     # HEAD manifest: guardia della CODA (conteggio + ultimo STH)
     head_path = os.path.join(directory, f"{prefix}.head.json")
     head_signed = False
+    head = None
     if os.path.exists(head_path):
-        with open(head_path, encoding="utf-8") as f:
-            head = json.load(f)
+        head, why = _load_json_object(head_path)
+        if head is None:
+            failures.append({"segment": "HEAD", "reason": f"head_unreadable: {why}"})
+    if head is not None:
         if head.get("segments_sealed") != len(sealed):
             failures.append({"segment": "HEAD", "reason": "head_count_mismatch",
                              "expected": head.get("segments_sealed"), "found": len(sealed)})
@@ -430,7 +446,7 @@ def verify_archive(directory: str, prefix: str = "ledger",
                 failures.append({"segment": "HEAD", "reason": f"head_{reason}"})
         elif expected_pubkey_hex:
             failures.append({"segment": "HEAD", "reason": "head_unsigned_but_pubkey_expected"})
-    elif sealed:
+    elif sealed and not os.path.exists(head_path):
         warnings.append("no_head_manifest: tail segment removal/extension NOT detectable")
     if sealed and not head_signed:
         warnings.append("head_unsigned: tail guard only as strong as file access "
