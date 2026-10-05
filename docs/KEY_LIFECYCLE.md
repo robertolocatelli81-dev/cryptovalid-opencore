@@ -4,11 +4,14 @@
 > mechanisms live in **this** repository: `verifier.py` (hash-chain/idx/linkage, strict acceptance profile),
 > `sigsuite.py` + `ap2_evidence.py` (hybrid ML-DSA-65 co-signature, `verify_producer_block`, pinned
 > `trusted_producer_keys`), `verifiers/` (JS/Rust/Swift + `differential_oracle.py`). Mechanisms cited by
-> module names that are **not** in this repo — `canonical.py`, `device.py`, `interop/confidential.py`,
-> `longterm_evidence.py`, `DeviceTrust`/`OrgTrust`, `ReplayGuard`, `hwkeys.ExternalSigner`,
-> `timestamp.verify` — are implemented in the sibling toolkit
-> [omega-evidence](https://github.com/robertolocatelli81-dev/omega-evidence) (Apache-2.0) and are listed here
-> for completeness of the threat model, not as capabilities of this package.
+> module names that are **not** in this repo: `canonical.py` and `timestamp.verify` are in the sibling toolkit
+> [omega-evidence](https://github.com/robertolocatelli81-dev/omega-evidence) (Apache-2.0); `device.py`,
+> `interop/confidential.py`, `longterm_evidence.py`, `DeviceTrust`/`OrgTrust`, `ReplayGuard` and
+> `hwkeys.ExternalSigner` are in the author's non-public toolkit and in none of the author's public repositories (an earlier
+> version of this note placed them in omega-evidence, which does not contain them). All of them are listed for
+> completeness of the threat model, not as capabilities of this package. Rows that name no module (Freshness,
+> Zero-touch trust, Policy enforcement, Revocation) describe the same non-public toolkit; this package exposes only
+> the `require_pq` verification flag.
 
 *Status: 2026-09-03. Every key type, from generation to destruction, as implemented.
 Honest-scope: where custody depends on an operator action (offline root, HSM), that is
@@ -67,7 +70,7 @@ stated as an operational requirement, not a cryptographic guarantee.*
 ## 8. Post-quantum transition (timeline-aware)
 
 - **Now**: sign long-retention evidence packs with the **hybrid** block (classical + ML-DSA-65); a pack is `pq_protected` only when a VALID, pinned ML-DSA signature is present. The classical half is a hedge against ML-DSA implementation/algorithm risk — it provides **no** quantum resistance.
-- **Durable pre-quantum existence**: a PQ signature protects the PACK; proving a record *existed before* a CRQC still needs a trusted time anchor (RFC 3161 with a PQ/qualified TSA, or RFC 4998 renewal via `longterm_evidence.py`).
+- **Durable pre-quantum existence**: a PQ signature protects the PACK; proving a record *existed before* a CRQC still needs a trusted time anchor (RFC 3161 with a PQ/qualified TSA, or RFC 4998 renewal: `longterm_evidence.py`, non-public; `omega_evidence.preservation` in omega-evidence renews in RFC 4998 semantics, not its ASN.1 format).
 - **By 2030 / 2035** (NIST IR 8547): migrate long-retention records to PQ **before** short-lived ones; crypto-agility (`sig_alg`) is the migration mechanism; register SLH-DSA/ML-DSA backends behind the mandatory KAT gate.
 
 ## 9. Honest limits

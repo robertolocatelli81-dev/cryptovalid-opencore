@@ -18,7 +18,7 @@ DIVISIONE ONESTA DEL LAVORO (honest-scope):
 - TAMPER-EVIDENCE / integrita' di QUALI impegni sono attestati: hash-Merkle = PQ-safe (come CLDMA).
 - BINDING valore<->impegno: DL, NON quantum-safe (un quantistico riapre un impegno). Percio' la garanzia
   forte di integrita' resta hash-based; Pedersen aggiunge PRIVACY. Per l'integrita' PQ a lungo termine si
-  compone con longterm_evidence (rinnovo hash-based). NON e' ZK completa.
+  compone con un rinnovo hash-based (RFC 4998). NON e' ZK completa.
 - ⚠ LIMITE DI SOUNDNESS DIMOSTRATO (2026-08-22): senza prova di RANGE lo schema NON e' sound contro un
   prover MALEVOLO. Attacco (verificato nel banco): impegnare num_i = q-k ("-k" mod q) SGONFIA il numeratore
   netto (es. reale 100000 + fake (q-100000) => somma = 0 mod q), e l'apertura del solo TOTALE non lo coglie

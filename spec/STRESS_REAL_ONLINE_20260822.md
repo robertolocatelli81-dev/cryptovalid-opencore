@@ -20,6 +20,11 @@ reali e ancore esterne live**, e che il sistema **sa fallire** (il controllo pos
 | OMEGA lato-sistema (`tests/stress_total_real_online.py`) | **PASS 8/8** — connettori reali fx/crypto/macro/equities, brain, fintech sotto carico, concorrenza 603 op/s, determinismo bit-identico, resilienza a fonte-giù |
 | Moduli sessione 2026-08-22 (longterm_evidence, vdf_timeanchor, longterm_hashbased, pedersen_commit, cldma_confidential, internal-method) | **PASS 6/6** |
 
+Nota (2026-10-05): `tests/stress_total_real_online.py` e, dei moduli della sessione, `longterm_evidence`,
+`vdf_timeanchor`, `longterm_hashbased` e `internal-method` non sono in questo repository; quelle righe riportano
+un'esecuzione fatta allora sul codice dell'autore e non si riproducono da qui (`pedersen_commit` e
+`cldma_confidential` sono qui).
+
 ### B. Ancore ESTERNE ONLINE — verificate dal vivo
 | Ancora | Esito reale |
 |---|---|
