@@ -545,6 +545,35 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## The core's boundary allowance in the Cedulon checker (2026-10-05, 0.17.2)
+
+- **`cryptovalid_cedulon.verify_ledger` applies the boundary rule** that decision-profile-03 takes unchanged from the
+  core (cedulon-08 §11.4 step 5, MUST-T10-17; core-03 §12.1 step 5): an allow with no effect row within `clock_skew_ms`
+  of the newest attested record, and an effect row that no record names within `clock_skew_ms` of the oldest, are listed
+  under `boundary_deferred` and do not fail the verdict; a VALID result with a deferral says so in `why` ("boundary-
+  deferred, so the guarantee is conditional"). A count shortfall under a ref that has a row stays a finding. The default
+  is 300000 ms, the five minutes the profile names. The profile does not say which edge applies when every effect row
+  carries its own one-millisecond extract; this checker reads a one-ledger audit, whose edges are the oldest and the
+  newest record: for the closing edge, the reading Verax's own verifier takes since `f59ece9`; Verax applies no
+  opening-edge allowance (a row no record names is a finding there), the core's rule has one, and this checker applies
+  it. A ledger shorter than the allowance therefore defers every unmatched allow and every unnamed row it holds.
+  `clock_skew_ms=0` applies no allowance. 0.17.1 applied none.
+- **On verax-ai/verax `test-vectors/v1` at `f59ece9`** (20 vectors; checkpoint under the witness key; inputs, index and
+  operator credentials given), measured 2026-10-05: 20 of 20 verdicts and 14 of 16 first failing stages, as with 0.17.1;
+  with `clock_skew_ms=0` every verdict, stage and reason equals 0.17.1's (the output gains the key `boundary_deferred`,
+  empty there). The forged allow of `fail-allow-while-halted` is now deferred (30 ms from the newest record; it is also
+  30 ms after the halt extract's `windowEndMs`, the edge the vectors README measures from) instead of failing
+  `effect-binding`. Every ledger in the set spans at most 203 ms, so at the default no unmatched allow or unnamed row in
+  it can reach `decision-without-effect` or `effect-without-decision`; the two edges are measured in `test_cedulon.py`.
+  `fail-allow-while-halted` and `fail-allow-while-halted-witnessed` expect `control` and stop at `index`, because this
+  checker reads an index row by its kind as well as its ref (the index names a deny the ledger no longer holds: the
+  record under that ref is now an allow); Verax's verifier compares refs only. Run without the index stage, both stop
+  at `control`.
+- `test_cedulon.py` tests both edges at the exact allowance and one millisecond past it, that 0 applies none, also on
+  the edge itself, and that a count shortfall is not deferred; nine mutations of the rule, listed in the test, each turn
+  it red. A comment in `cldma_confidential.py` no longer names a module outside this repository (`ff1bd73`, on `master`
+  since 2026-10-05; 0.17.2 is the first release that carries it).
+
 ## What the wheel ships (2026-10-04, 0.17.1)
 
 - **AP2 verification works from a pip install.** `ap2_evidence` imports `sigsuite` from `pqcrypto/`, which the 0.17.0

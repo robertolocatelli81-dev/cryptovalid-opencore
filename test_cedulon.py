@@ -94,8 +94,8 @@ class Ledger:
                           "claims": presented_cp(cp) if presented_cp else cp}) + "\n"
         return dec, effects, cps
 
-    def verify(self, **kw):
-        return V.verify_ledger(*self.render(**kw), _pem(self.rk), _pem(self.xk), _pem(self.ck))
+    def verify(self, clock_skew_ms=V.DEFAULT_CLOCK_SKEW_MS, **kw):
+        return V.verify_ledger(*self.render(**kw), _pem(self.rk), _pem(self.xk), _pem(self.ck), clock_skew_ms=clock_skew_ms)
 
 
 class TestCedulon(unittest.TestCase):
@@ -201,7 +201,8 @@ class TestCedulon(unittest.TestCase):
         }
         for name, f in cases.items():
             with self.subTest(name):
-                r = self.L.verify(bend_rows=f)
+                # the findings themselves, with no boundary allowance (this ledger spans 3 ms: inside any allowance)
+                r = self.L.verify(bend_rows=f, clock_skew_ms=0)
                 self.assertEqual(self.stage(r), "effect-binding")
                 if name.startswith(("effect-", "decision-")):
                     self.assertIn(name, r["why"])
@@ -209,6 +210,53 @@ class TestCedulon(unittest.TestCase):
                     self.assertIn("grammar", r["why"])
         self.assertEqual(self.stage(self.L.verify(sign_body=Ed25519PrivateKey.generate())), "effect-binding")
         self.assertEqual(self.stage(self.L.verify(bend_body=lambda b: {**b, "extra": 1})), "effect-binding")
+
+    def test_boundary_allowance(self):
+        # Mutations of the rule this test turns red (measured 2026-10-05, each one alone): <= read as < on either edge;
+        # the 0 guard dropped on either edge; the opening edge measured from the newest record; the closing deferral
+        # without its continue; a deferral for any count shortfall instead of for no row; the conditional note dropped;
+        # a row under a refusal deferred. Nine.
+        # closing edge: ref-0's allow (t0) has no row; the newest record is t0 + 3, so the distance is 3 ms
+        drop = lambda rows: rows[1:]                            # noqa: E731
+        r = self.L.verify(bend_rows=drop)                       # default allowance: deferred, VALID, guarantee conditional
+        self.assertEqual(r["result"], "VALID")
+        self.assertEqual(r["boundary_deferred"], [{"ref": "ref-0", "unmatched": "allow", "edge": "closing", "distance_ms": 3}])
+        self.assertIn("conditional", r["why"])
+        self.assertEqual(self.L.verify(bend_rows=drop, clock_skew_ms=3)["result"], "VALID")      # within: ≤ the allowance
+        r = self.L.verify(bend_rows=drop, clock_skew_ms=2)                                       # 3 ms > 2: the finding
+        self.assertEqual(self.stage(r), "effect-binding")
+        self.assertIn("decision-without-effect under ref ref-0", r["why"])
+        # opening edge: a row no record names, 5 ms after the oldest record (t0)
+        extra = lambda rows: rows + [{**rows[0], "ref": "nobody", "timestampMs": self.L.t0 + 5}]  # noqa: E731
+        r = self.L.verify(bend_rows=extra, clock_skew_ms=5)
+        self.assertEqual(r["result"], "VALID")
+        self.assertEqual(r["boundary_deferred"], [{"ref": "nobody", "unmatched": "row", "edge": "opening", "distance_ms": 5}])
+        r = self.L.verify(bend_rows=extra, clock_skew_ms=4)
+        self.assertIn("effect-without-decision under ref nobody", r["why"])
+        # a row under a REFUSAL is never deferred: it has a record (effect-against-refusal), whatever the allowance
+        r = self.L.verify(bend_rows=lambda rows: rows + [{**rows[0], "ref": "ref-1"}])
+        self.assertIn("effect-against-refusal", r["why"])
+        # a count shortfall under a ref that HAS a row stays a finding: record 2 re-signed under ref-0 (two allows, one
+        # row, bound to the second), the last allow 1 ms from the newest record; nothing is deferred
+        def dup(i, payload, presented):
+            if i == 2:
+                payload = {k: ("ref-0" if n == "ref" else payload[k]) for k, n in V.RECORD_LABELS.items()}
+                presented = {**presented, "ref": "ref-0"}
+            return payload, presented, {}
+        r = self.L.verify(bend_record=dup, bend_rows=lambda rows: [{**rows[0], "effectHash": H("eff2")}])
+        self.assertIn("decision-without-effect under ref ref-0", r["why"])
+        self.assertEqual(r["boundary_deferred"], [])
+        self.assertEqual(self.L.verify()["boundary_deferred"], [])                               # a whole ledger: none
+        # 0 applies no allowance, also for an item exactly on the edge (distance 0)
+        r = self.L.verify(bend_rows=lambda rows: rows + [{**rows[0], "ref": "nobody"}], clock_skew_ms=0)
+        self.assertIn("effect-without-decision under ref nobody", r["why"])
+        self.L.kinds = ["deny", "allow"]                                      # the newest record is an allow with no row
+        r = self.L.verify(bend_rows=lambda rows: [], clock_skew_ms=0)
+        self.assertIn("decision-without-effect under ref ref-1", r["why"])
+        self.assertEqual(self.L.verify(bend_rows=lambda rows: [])["boundary_deferred"][0]["distance_ms"], 0)
+        for bad in (-1, True, 1.5, "300000"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                self.L.verify(clock_skew_ms=bad)
 
     def test_presented_row_is_one_the_extract_signs(self):
         self.assertEqual(self.L.verify(presented_row=dict)["result"], "VALID")            # the signed row, shown again

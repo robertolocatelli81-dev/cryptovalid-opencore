@@ -23,7 +23,8 @@ Stages, in this order; the first that fails is the verdict:
                         CEDULON-08 MUST-T4-2 and §11.4 step 4, which profile-03 §6 runs unchanged, restated by the Verax
                         test-vector README step 4; for a row list beside an extract the nearest rule is CEDULON-08
                         MUST-T10-12, extract-settlement-mismatch, audit fails; CEDULON-08 §6.3 names presented members
-                        as a surface anyone can rewrite); then §6.1 binding
+                        as a surface anyone can rewrite); then §6.1 binding, with the core's boundary allowance
+                        (BOUNDARY below: an unmatched allow or row near the ledger's edges is boundary_deferred)
   checkpoint-signature  the §6.2 header profile with the checkpoint content type, signed by the PINNED checkpoint key
   checkpoint-coverage   receiptCount = records with timestampMs in [startMs, endMs); chainHeadHash = hash of the last
                         record of the window in chain order; prevCheckpointHash links checkpoints
@@ -54,6 +55,18 @@ CHECKPOINT_LABELS = {-70101: "epoch", -70102: "startMs", -70103: "endMs", -70104
                      -70106: "totals", -70107: "prevCheckpointHash"}
 DECISIONS = ("allow", "deny", "defer")
 MAX_SAFE = 2 ** 53 - 1
+# BOUNDARY (decision-profile-03 §6.1: "the core's boundary rule applies unchanged"; CEDULON-08 §11.4 step 5 and
+# MUST-T10-17, the document the profile cites — core-03 §12.1 step 5; default 300000 ms, the five minutes the profile
+# names). The profile does not say which edge applies when every effect row carries its own one-millisecond extract;
+# this checker reads a one-ledger audit: the closing edge is the newest attested record (the reading Verax's verifier
+# takes since f59ece9), the opening edge the oldest (Verax applies no opening-edge allowance; the core's rule has one).
+# An allow with no effect row within clock_skew_ms of the closing edge, and an effect row with no record at all within
+# clock_skew_ms of the opening edge, are reported under `boundary_deferred` (a warning: the verdict does not fail on
+# them, and a VALID result says the guarantee is conditional) instead of decision-without-effect /
+# effect-without-decision. A count shortfall under a ref that has a row stays a finding. A ledger shorter than the
+# allowance therefore defers every such item. Per-row extracts do not tile, so no following extract resolves or hardens
+# a deferral. clock_skew_ms=0 applies no allowance.
+DEFAULT_CLOCK_SKEW_MS = 300000
 NOT_VERIFIED = ["inputs-binding", "index", "approval-signature", "control"]
 # The four stages above run when their inputs are given (verify_ledger: inputs_text, index_text, operator_credentials).
 # Sources, stated: inputs-binding — decision-profile-03 §4.1 (inputsHash = SHA-256 of the context, canonical encoding of
@@ -235,16 +248,20 @@ def _webauthn_ok(sig: Dict[str, Any], cred: Dict[str, Any]) -> bool:
 
 def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str, record_key_pem, extract_key_pem,
                   checkpoint_key_pem, inputs_text: Optional[str] = None, index_text: Optional[str] = None,
-                  operator_credentials: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                  operator_credentials: Optional[Dict[str, Any]] = None,
+                  clock_skew_ms: int = DEFAULT_CLOCK_SKEW_MS) -> Dict[str, Any]:
     """The verdict over one Decider's ledger. Keys are the relying party's pins (SPKI PEM); operator_credentials is the
-    relying party's pin of the operator's passkeys ({"credentials": [{id, publicKey (COSE, base64url), sub}]})."""
+    relying party's pin of the operator's passkeys ({"credentials": [{id, publicKey (COSE, base64url), sub}]}).
+    clock_skew_ms is the boundary allowance (see BOUNDARY above); 0 applies none."""
+    if not (isinstance(clock_skew_ms, int) and not isinstance(clock_skew_ms, bool) and 0 <= clock_skew_ms <= MAX_SAFE):
+        raise ValueError("clock_skew_ms must be an integer in [0, 2^53 - 1]")
     nv = [s for s in NOT_VERIFIED if not ((s == "inputs-binding" and inputs_text is not None)
                                           or (s == "index" and index_text is not None)
                                           or (s == "approval-signature" and operator_credentials is not None and inputs_text is not None)
                                           or (s == "control" and inputs_text is not None))]
     if operator_credentials is not None:
         nv.append("approval-challenge-binding")
-    out = {"result": "INVALID", "stage": None, "why": None, "not_verified": nv, "records": 0}
+    out = {"result": "INVALID", "stage": None, "why": None, "not_verified": nv, "records": 0, "boundary_deferred": []}
     try:
         lines = _loads_lines(decisions_text, "decisions")
         records, hashes = [], []
@@ -293,6 +310,9 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
         allows = {c["ref"]: c for c in records if c["decision"] == "allow"}
         refused = {c["ref"] for c in records if c["decision"] != "allow" and c["ref"]}
         seen = {}
+        deferred = out["boundary_deferred"]
+        stamps = [c["timestampMs"] for c in records]
+        oldest, newest = (min(stamps), max(stamps)) if stamps else (0, 0)
         for row in rows:
             seen[row["ref"]] = seen.get(row["ref"], 0) + 1
             if row["ref"] in allows:
@@ -303,6 +323,9 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
                     raise CedulonError("effect-binding", f"effect-class-mismatch under ref {row['ref']}")
             elif row["ref"] in refused:
                 raise CedulonError("effect-binding", f"effect-against-refusal under ref {row['ref']}")
+            elif clock_skew_ms and abs(row["timestampMs"] - oldest) <= clock_skew_ms:  # opening edge: record may predate
+                deferred.append({"ref": row["ref"], "unmatched": "row", "edge": "opening",
+                                 "distance_ms": abs(row["timestampMs"] - oldest)})
             else:
                 raise CedulonError("effect-binding", f"effect-without-decision under ref {row['ref']}")
         per_ref = {}
@@ -310,6 +333,11 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
             if c["decision"] == "allow":
                 per_ref[c["ref"]] = per_ref.get(c["ref"], 0) + 1
         for ref, n in per_ref.items():
+            if seen.get(ref, 0) == 0:                     # no row at all: closing edge, its row may not be written yet
+                last = max(c["timestampMs"] for c in records if c["decision"] == "allow" and c["ref"] == ref)
+                if clock_skew_ms and newest - last <= clock_skew_ms:
+                    deferred.append({"ref": ref, "unmatched": "allow", "edge": "closing", "distance_ms": newest - last})
+                    continue
             if seen.get(ref, 0) < n:
                 raise CedulonError("effect-binding", f"decision-without-effect under ref {ref}")
             if seen.get(ref, 0) > n:
@@ -379,7 +407,8 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
                     halted = False
                 elif halted and c["decision"] == "allow":
                     raise CedulonError("control", f"record {i}: an allow inside a halt window")
-        out.update(result="VALID", why="every in-scope stage verifies")
+        out.update(result="VALID", why="every in-scope stage verifies" + (
+            f"; {len(deferred)} item(s) boundary-deferred, so the guarantee is conditional" if deferred else ""))
         return out
     except CedulonError as e:
         out.update(stage=e.stage, why=str(e)[:300])
