@@ -1130,7 +1130,11 @@ pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ 'cr
 
 AP2 dispute evidence needs the `ap2` extra (`'cryptovalid-opencore[ap2]'`), which installs ap2-evidence-pack >= 1.3.0,
 < 2 from the same index. Every CI run of this repository (each push, and a weekly schedule) installs the newest 1.x
-from the index and runs every suite, so a 1.x release that breaks this front-end turns this repository red.
+from the index and runs every suite, so a 1.x release that breaks this front-end turns this repository red. Since
+2026-10-05 ap2-evidence-pack's own CI (job `downstream-cryptovalid`, first run 37287815388) clones this repository's
+master on each of its changes and runs `test_verify_evidence.py`, `test_mcp.py`, `test_audit_v1_types.py`,
+`test_verifier_depth.py` and `test_packaging.py` against the wheel it just built, refuses a skipped AP2 test, and passes
+a pack it built through `verify_evidence.py ap2` and `auto` (a tampered one exits 1 through `ap2`).
 
 Release artifacts are attached to GitHub Releases; the index links carry `#sha256=` fragments verified by pip. All documented `python3 <file>.py` commands keep working unchanged from a clone, with one dated exception:
 `ap2_evidence.py` left this repository in 0.18.0 (2026-10-05) for ap2-evidence-pack, whose `ap2-evidence` command
