@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cryptovalid-opencore"
-version = "0.17.2"
+version = "0.18.0"
 description = "Verifiable compliance evidence: hash-chained ledgers + standalone offline verifier (flat-layout modules, unchanged declared commands)"
 license = {text = "AGPL-3.0-or-later"}
 requires-python = ">=3.9"
@@ -14,10 +14,17 @@ readme = "README.md"
 [project.optional-dependencies]
 # anchor_commitment: OpenTimestamps calendars (python-opentimestamps, LGPL-3.0)
 ots = ["opentimestamps>=0.4.5"]
-# signatures (Ed25519, ECDSA, ML-DSA-65, COSE, JWS, AP2): `cryptography` >= 50, the version this release is measured with
-# (ML-DSA-65 itself works from 48.0.0; 47.0.0 raises UnsupportedAlgorithm). Declared in 0.17.1, because it was not; the
-# core hash verifier stays stdlib-only and needs no extra.
-sign = ["cryptography>=50"]
+# signatures (Ed25519, ECDSA, ML-DSA-65, COSE, JWS): `cryptography` >= 48, the first version whose ML-DSA-65 works
+# (47.0.0 raises UnsupportedAlgorithm; 0.18.0 is measured with 48.0.0 and 50.0.x). Declared in 0.17.1, because it was not;
+# the core hash verifier stays stdlib-only and needs no extra.
+sign = ["cryptography>=48"]
+# AP2 dispute evidence (`cryptovalid-verify ap2`, MCP tool verify_ap2_evidence): the reference verifier is the
+# ap2-evidence-pack package (Apache-2.0, same author). 0.18.0 no longer ships its own copy of ap2_evidence.py and
+# pqcrypto/: the two wheels installed the same paths and overwrote each other, and this copy had fallen behind
+# (it built packs the reference refuses). Without this extra the ap2 subcommand is a refusal that names it.
+# <2: a major release of ap2-evidence-pack may change verify_evidence(); the weekly CI run (verify.yml, schedule) installs
+# the newest 1.x from the index and runs every suite, so a break in a 1.x release turns this repository red too.
+ap2 = ["ap2-evidence-pack>=1.3.0,<2"]
 
 [project.urls]
 Homepage = "https://github.com/robertolocatelli81-dev/cryptovalid-opencore"
@@ -26,7 +33,5 @@ Homepage = "https://github.com/robertolocatelli81-dev/cryptovalid-opencore"
 cryptovalid-verify = "verify_evidence:main"
 
 [tool.setuptools]
-# 0.17.1: pqcrypto/ (sigsuite, imported by ap2_evidence) was left out of the wheel, so AP2 verification from a
-# pip install always failed with ModuleNotFoundError: sigsuite. Shipped as in ap2-evidence-pack.
-packages = ["pqcrypto"]
-py-modules = ['ap2_evidence', 'cldma_confidential', 'committed_attestation', 'conformance', 'cryptovalid_heterogeneous', 'cryptovalid_ingest', 'cryptovalid_kms', 'cryptovalid_lotl', 'cryptovalid_mcp', 'cryptovalid_merkle', 'cryptovalid_pruning_probe', 'cryptovalid_qeas', 'cryptovalid_reanchor', 'cryptovalid_report', 'cryptovalid_solana', 'cryptovalid_tsa', 'cryptovalid_worm', 'dora_incident', 'evidence_pack', 'fundcert_canonical', 'fundcert_crosssource', 'microfinance', 'mutation_runner', 'pedersen_commit', 'refresh_regulatory', 'signer', 'tx_evidence', 'verifier', 'verify_evidence', 'cryptovalid_receipt', 'cryptovalid_monitor', 'eidas_ledger_check', 'cryptovalid_jws', 'cryptovalid_tip', 'cryptovalid_checkpoint', 'cryptovalid_witness', 'cryptovalid_scitt', 'cryptovalid_cose_receipts', 'cryptovalid_cedulon', 'cryptovalid_aps', 'cryptovalid_vaara_receipt', 'cryptovalid_acta']
+# 0.18.0: no `packages` — pqcrypto/ and ap2_evidence.py come from ap2-evidence-pack (the `ap2` extra), not from here.
+py-modules = ['cldma_confidential', 'committed_attestation', 'conformance', 'cryptovalid_heterogeneous', 'cryptovalid_ingest', 'cryptovalid_kms', 'cryptovalid_lotl', 'cryptovalid_mcp', 'cryptovalid_merkle', 'cryptovalid_pruning_probe', 'cryptovalid_qeas', 'cryptovalid_reanchor', 'cryptovalid_report', 'cryptovalid_solana', 'cryptovalid_tsa', 'cryptovalid_worm', 'dora_incident', 'evidence_pack', 'fundcert_canonical', 'fundcert_crosssource', 'microfinance', 'mutation_runner', 'pedersen_commit', 'refresh_regulatory', 'signer', 'tx_evidence', 'verifier', 'verify_evidence', 'cryptovalid_receipt', 'cryptovalid_monitor', 'eidas_ledger_check', 'cryptovalid_jws', 'cryptovalid_tip', 'cryptovalid_checkpoint', 'cryptovalid_witness', 'cryptovalid_scitt', 'cryptovalid_cose_receipts', 'cryptovalid_cedulon', 'cryptovalid_aps', 'cryptovalid_vaara_receipt', 'cryptovalid_acta']

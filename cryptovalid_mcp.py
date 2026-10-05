@@ -110,7 +110,10 @@ def t_verify_pack(args: Dict) -> Dict:
 
 
 def t_verify_ap2_evidence(args: Dict) -> Dict:
-    import ap2_evidence
+    try:
+        import ap2_evidence   # ap2-evidence-pack (0.18.0: no longer shipped here; the `ap2` extra installs it)
+    except ImportError:
+        return {"error": "ap2-evidence-pack not installed: pip install 'cryptovalid-opencore[ap2]'"}
     path = args["path"]
     r = ap2_evidence.verify_evidence(path)
     return {"result": r, "provenance": _prov(path, _sha256_file(path))}

@@ -17,7 +17,10 @@ sys.path.insert(0, _HERE)
 import cryptovalid_receipt as R  # noqa: E402
 import cryptovalid_scitt as S  # noqa: E402
 import cryptovalid_jws as J  # noqa: E402
-import ap2_evidence  # noqa: E402
+try:
+    import ap2_evidence  # noqa: E402  (ap2-evidence-pack, extra `ap2` since 0.18.0; the AP2 test skips without it)
+except ImportError:
+    ap2_evidence = None
 import signer  # noqa: E402
 
 
@@ -90,8 +93,9 @@ class TestStrictBase64url(unittest.TestCase):
         for v in variants:
             self.assertFalse(J.verify(f"{h}.{p}.{v}", pk)["ok"], repr(v[-6:]))
 
+    @unittest.skipUnless(ap2_evidence, "ap2-evidence-pack not installed (pip install 'cryptovalid-opencore[ap2]')")
     def test_ap2_signature_segment(self):
-        import test_ap2_evidence as fx
+        import test_verify_evidence as fx
         d = tempfile.mkdtemp()
         sk, jwk = fx._make_signer()
         sd = fx._make_sd_jwt(sk, {"iss": "wallet"}, {"amount": "9.99"}, header_extra={"jwk": jwk})

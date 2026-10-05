@@ -113,15 +113,22 @@ class DeepNesting(unittest.TestCase):
         self.assertEqual(json.loads(out.stdout)["verdict"], "FAIL")
 
     def test_ap2_verify_cli_fail_closed_on_deep_pack(self):
-        # same defect class in the AP2 evidence verifier CLI: traceback until 2026-09-13
+        # same defect class through the AP2 front-end of this repository (`cryptovalid-verify ap2`): the reference verifier
+        # is ap2-evidence-pack since 0.18.0 (its own depth test lives there); with or without it, exit 1 and no traceback
         d = self._tmp("cv_depth_ap2_"); p = os.path.join(d, "pack.json")
         with open(p, "w") as f:
             f.write('{"x":' + "[" * 5000 + "]" * 5000 + "}")
-        out = subprocess.run([sys.executable, os.path.join(HERE, "ap2_evidence.py"), "verify", p],
+        out = subprocess.run([sys.executable, os.path.join(HERE, "verify_evidence.py"), "ap2", p],
                              capture_output=True, text=True, timeout=60)
         self.assertEqual(out.returncode, 1)
         self.assertNotIn("Traceback", out.stderr)
-        r = json.loads(out.stdout); self.assertFalse(r["valid"]); self.assertIn("json_too_deep", r["error"])
+        r = json.loads(out.stdout); self.assertFalse(r["valid"])
+        try:
+            import ap2_evidence  # noqa: F401
+        except ImportError:
+            self.assertIn("ap2-evidence-pack not installed", json.dumps(r))
+        else:
+            self.assertIn("json_too_deep", json.dumps(r))
 
     def test_evidence_pack_verify_cli_fail_closed_on_deep_manifest(self):
         d = self._tmp("cv_depth_pack_")

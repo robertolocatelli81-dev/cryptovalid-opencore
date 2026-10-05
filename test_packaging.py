@@ -4,9 +4,9 @@
 """The wheel must contain EVERY product module: pyproject lists them by hand (lesson from omega-health-companion
 0.4.0 on 2026-09-13, whose wheel shipped without four modules). Red whenever a module is missing from the list.
 
-0.17.1: also every local module that a shipped module imports (`ap2_evidence` imports `sigsuite` from pqcrypto/, which
-the 0.17.0 wheel did not contain), the `sign` extra, and no file or URL handle left open in a shipped module; on 0.17.0
-each of these three tests fails."""
+0.17.1: also every local module that a shipped module imports (until 0.17.2 `ap2_evidence` imported `sigsuite` from pqcrypto/,
+which the 0.17.0 wheel did not contain), the `sign` extra, and no file or URL handle left open in a shipped module; on 0.17.0
+each of these three tests fails. 0.18.0: no path shared with ap2-evidence-pack (see TestNoPathSharedWithAp2EvidencePack)."""
 import os, re, unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -48,14 +48,40 @@ def shipped_files(pyproject_path: str) -> list:
 
 
 def local_modules() -> dict:
-    """Module name -> repository path, for the .py files at the root and in pqcrypto/ (where ap2_evidence looks)."""
-    out = {}
-    for sub in ("", "pqcrypto"):
-        d = os.path.join(HERE, sub)
-        for n in os.listdir(d):
-            if n.endswith(".py"):
-                out.setdefault(n[:-3], os.path.join(sub, n) if sub else n)
-    return out
+    """Module name -> repository path, for the .py files at the root (0.18.0: no package directory is shipped)."""
+    return {n[:-3]: n for n in os.listdir(HERE) if n.endswith(".py")}
+
+
+class TestNoPathSharedWithAp2EvidencePack(unittest.TestCase):
+    """0.18.0: the wheel must not install a path that ap2-evidence-pack installs (`ap2_evidence.py`, `pqcrypto/`): pip
+    overwrote them silently in the order of installation and uninstalling either removed them for the other (measured
+    2026-10-04). The reference verifier is a dependency (extra `ap2`). On the 0.17.2 pyproject this test fails."""
+    SHARED = {"ap2_evidence", "pqcrypto"}
+
+    def _st(self, path=None):
+        with open(path or os.path.join(HERE, "pyproject.toml"), "rb") as f:
+            return tomllib.load(f)
+
+    @unittest.skipIf(tomllib is None, "tomllib: Python >= 3.11")
+    def test_shared_paths_not_shipped_and_reference_declared(self):
+        p = self._st()
+        st = p["tool"]["setuptools"]
+        self.assertEqual(self.SHARED & set(st.get("py-modules", [])), set())
+        self.assertEqual(self.SHARED & set(st.get("packages", [])), set())
+        self.assertFalse(os.path.exists(os.path.join(HERE, "ap2_evidence.py")))
+        self.assertFalse(os.path.isdir(os.path.join(HERE, "pqcrypto")))
+        ap2 = p["project"]["optional-dependencies"]["ap2"]
+        self.assertTrue(any(re.match(r"ap2-evidence-pack\s*>=\s*1\.3", x) for x in ap2), ap2)
+
+    @unittest.skipIf(tomllib is None, "tomllib: Python >= 3.11")
+    def test_positive_control_the_0_17_2_layout_fails(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "pyproject.toml"), "w") as f:
+            f.write('[project]\nname="x"\n[project.optional-dependencies]\nsign=["cryptography>=50"]\n'
+                    '[tool.setuptools]\npackages=["pqcrypto"]\npy-modules=["ap2_evidence","verifier"]\n')
+        st = self._st(os.path.join(d, "pyproject.toml"))["tool"]["setuptools"]
+        self.assertNotEqual(self.SHARED & (set(st["py-modules"]) | set(st["packages"])), set())
 
 
 def imported_names(path: str) -> set:
@@ -113,7 +139,7 @@ class TestWheelContents(unittest.TestCase):
     def test_sign_extra_declares_cryptography(self):
         with open(os.path.join(HERE, "pyproject.toml"), "rb") as f:
             extras = tomllib.load(f)["project"]["optional-dependencies"]
-        self.assertIn("cryptography>=50", extras.get("sign", []))
+        self.assertIn("cryptography>=48", extras.get("sign", []))   # 0.18.0: the floor where ML-DSA-65 works
 
     def test_no_unclosed_handle_in_shipped_modules(self):
         files = [p for p in shipped_files(os.path.join(HERE, "pyproject.toml"))

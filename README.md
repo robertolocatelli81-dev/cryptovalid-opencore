@@ -264,23 +264,29 @@ subject, the file digests, and each ledger's entry count + head hash. `verify_pa
 
 The AP2 spec tells implementers *what* to keep for dispute resolution (the SD-JWTs with their
 disclosures) but not *how* — no key snapshotting, no tamper-evidence, no long-term validation.
-`ap2_evidence.py` turns a set of SD-JWT mandates into **one self-contained evidence file** that
+ap2-evidence-pack turns a set of SD-JWT mandates into **one self-contained evidence file** that
 verifies **offline years later**: it validates each ES256 signature at build time, snapshots the
 key material with an explicit **provenance class** (`x5c_header` / `jwk_header` / `supplied` /
 `jwks_fetched` — declared, never dressed up), recomputes cross-mandate hash **bindings** from the
 exact compact serializations, and seals everything under a SHA-256 digest with an optional
 RFC 3161 timestamp:
 
+The reference implementation is the ap2-evidence-pack package (Apache-2.0, same author); since 0.18.0 this repository
+depends on it instead of carrying a copy:
+
 ```bash
-python3 ap2_evidence.py build ev.json intent=intent.sdjwt cart=cart.sdjwt --tsa http://tsa.izenpe.com
-python3 ap2_evidence.py verify ev.json     # offline, fail-closed
+pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ 'cryptovalid-opencore[ap2]'
+ap2-evidence build ev.json intent=intent.sdjwt cart=cart.sdjwt --tsa http://tsa.izenpe.com
+cryptovalid-verify ap2 ev.json     # offline, fail-closed; the reference's own refusal reason is in the receipt
 ```
+
+Without the `ap2` extra, `cryptovalid-verify ap2` is a refusal receipt that names it (exit 1), never a pass.
 
 Honest scope: proves these exact artifacts verified with this key material at build time (and
 existed at the TSA's time, if stamped). It does **not** confer eIDAS art. 45j qualified-archive
 legal presumption and does not validate x5c chains to a trust anchor. ES256 only, loudly.
-Tests: `python3 test_ap2_evidence.py`. Also exposed read-only as the MCP tool
-`verify_ap2_evidence`.
+Tests of the format live in ap2-evidence-pack; here `test_verify_evidence.py` and `test_mcp.py` test the front-end and
+the MCP tool `verify_ap2_evidence` (read-only), and skip without the package.
 
 ### Auditor-facing report (PDF/HTML)
 
@@ -544,6 +550,35 @@ python3 test_ledger_evidence.py                                         # 18 tes
 Honest scope, once more: a receipt signed by the log key proves what the log key holder published; a
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
+
+## One copy of the AP2 verifier (2026-10-05, 0.18.0)
+
+- **One copy of the AP2 verifier, in ap2-evidence-pack.** Until 0.17.2 this wheel and ap2-evidence-pack installed the
+  same two paths, `ap2_evidence.py` and `pqcrypto/sigsuite.py`; pip overwrote them silently in the order of installation
+  and uninstalling either removed them for the other (measured 2026-10-04). The copy here had fallen behind the
+  reference: measured 2026-10-05, a pack built with `python3 ap2_evidence.py build` from a 0.17.2 clone is refused by
+  ap2-evidence-pack 1.2.2 and by its JS verifier (`honest_scope does not match the canonical scope of this
+  evidence_format (SPEC §1)`), and the copy lacked the strict JSON loader, the regular-file check, the x5c chain and the
+  RFC 3161 token walk. 0.18.0 ships neither file: `cryptovalid-verify ap2` and the MCP tool import `ap2_evidence` from
+  ap2-evidence-pack >= 1.3.0 (extra `ap2`); the two wheels installed together share no path (RECORD intersection 0,
+  measured). `ap2_evidence.py`, `pqcrypto/`, `test_ap2_evidence.py`, `test_ap2_shape.py`, `test_ap2_conformance.py`,
+  `spec/vectors/ap2/` and the copy of `SPEC_AP2_EVIDENCE.md` are gone from the clone: the normative text and the vectors
+  are ap2-evidence-pack's. The documented `python3 ap2_evidence.py build|verify` commands become `ap2-evidence
+  build|verify` (the package's console script).
+- **The reference's refusal reason reaches the receipt.** `verify_ap2` read `error` from the old copy's receipt; since 1.1.0 the
+  reference's receipts carry `refused`, so a refused pack was a FAIL with an empty detail (measured on a too-deep pack and on a
+  pack with a non-canonical honest_scope). The last layer now carries it; two tests cover it.
+- **`sign` extra: `cryptography >= 48`** (was >= 50): the floor where ML-DSA-65 works (47.0.0 raises
+  UnsupportedAlgorithm).
+- **`cryptovalid-verify auto` recognises an AP2 pack whose `evidence_format` is past the first 2048 bytes.** A pack is
+  one JSON object with sorted keys, so `artifacts` comes first: measured 2026-10-05, a valid pack built by `ap2-evidence
+  build` 1.3.0 from two mandates has `evidence_format` at byte 3506, and `auto` verified it as a ledger and said FAIL.
+  `auto` now reads the top-level `evidence_format` of a JSON object file; a test builds a pack where it sits past
+  byte 2048.
+- **The versions of linked projects are written once.** pyproject.toml holds the `ap2` range (ap2-evidence-pack
+  >= 1.3.0, < 2) and the `sign` floor; `test_dependency_versions.py` fails when the CI or the README says otherwise, and
+  the floor job installs both minimums exactly, so every run shows they exist on the index and work. A weekly scheduled
+  run installs the newest ap2-evidence-pack 1.x.
 
 ## The core's boundary allowance in the Cedulon checker (2026-10-05, 0.17.2)
 
@@ -1037,7 +1072,8 @@ What will change under an evidence ledger written today, and what this repositor
 - **Signatures.** NIST IR 8547 (an initial public draft, not a final standard) proposes deprecating the
   112-bit-strength quantum-vulnerable schemes after 2030 and disallowing all of them — Ed25519 and ECDSA included —
   after 2035. A ledger kept for the multi-year retention windows of DORA, the CRA (technical documentation for at
-  least 10 years, Art. 13(13)) or eIDAS crosses that line. The `pqcrypto/` suite lets the **AP2 evidence format**
+  least 10 years, Art. 13(13)) or eIDAS crosses that line. The signature suite of ap2-evidence-pack
+  (a dependency since 0.18.0) lets the **AP2 evidence format**
   carry a hybrid classical + **ML-DSA-65** (FIPS 204) signature through the `cryptography` library, checked against
   the NIST ACVP ML-DSA-65 signature-verification vectors; since **0.12.0** the core ledger entries, the signed chain
   tip carry the same hybrid Ed25519 + ML-DSA-65 layer and the evidence-pack manifest records it per ledger (threat
@@ -1085,11 +1121,17 @@ pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ cry
 ```
 
 The hash-chain verifier needs only the standard library. Signing and signature verification (Ed25519, ECDSA,
-ML-DSA-65, COSE, JWS, AP2) need `cryptography` (≥ 50 is what the `sign` extra asks for and what this release is
-measured with; ML-DSA-65 works from 48.0.0), installed with the `sign` extra:
+ML-DSA-65, COSE, JWS, AP2) need `cryptography` (≥ 48: the floor where ML-DSA-65 works; measured with 48.0.0 and
+50.0.x), installed with the `sign` extra:
 
 ```bash
 pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ 'cryptovalid-opencore[sign]'
 ```
 
-Release artifacts are attached to GitHub Releases; the index links carry `#sha256=` fragments verified by pip. All documented `python3 <file>.py` commands keep working unchanged from a clone.
+AP2 dispute evidence needs the `ap2` extra (`'cryptovalid-opencore[ap2]'`), which installs ap2-evidence-pack >= 1.3.0,
+< 2 from the same index. Every CI run of this repository (each push, and a weekly schedule) installs the newest 1.x
+from the index and runs every suite, so a 1.x release that breaks this front-end turns this repository red.
+
+Release artifacts are attached to GitHub Releases; the index links carry `#sha256=` fragments verified by pip. All documented `python3 <file>.py` commands keep working unchanged from a clone, with one dated exception:
+`ap2_evidence.py` left this repository in 0.18.0 (2026-10-05) for ap2-evidence-pack, whose `ap2-evidence` command
+replaces it.

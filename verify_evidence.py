@@ -145,7 +145,11 @@ def verify_ap2(path: str) -> dict:
     if not _need_opencore():
         return _rollup("ap2", [_layer("ap2 evidence", "SKIP", "opencore/ non trovato")])
     try:
-        import ap2_evidence
+        import ap2_evidence   # ap2-evidence-pack (0.18.0: no longer shipped here; the `ap2` extra installs it)
+    except ImportError:
+        return _rollup("ap2", [_layer("ap2 evidence", "FAIL",
+                                      "ap2-evidence-pack not installed: pip install 'cryptovalid-opencore[ap2]'")])
+    try:
         r = ap2_evidence.verify_evidence(path)
         layers.append(_layer("digest file", "PASS" if r.get("digest_ok") else "FAIL"))
         layers.append(_layer("firme ES256 + disclosure + binding",
@@ -163,8 +167,11 @@ def verify_ap2(path: str) -> dict:
         if r.get("self_asserted_only"):
             layers.append(_layer("provenienza chiavi", "SKIP",
                                  "solo jwk auto-asserito: firma prova coerenza, non identità"))
+        # the reference's own reason reaches the auditor: 1.2.x receipts carry `refused` (the copy shipped until 0.17.2
+        # wrote `error`); without it a refused pack was a FAIL with an empty detail (measured 2026-10-05)
         layers.append(_layer("verdetto del verificatore di riferimento (ap2_evidence.verify_evidence)",
-                             "PASS" if r.get("valid") is True else "FAIL"))
+                             "PASS" if r.get("valid") is True else "FAIL",
+                             "" if r.get("valid") is True else str(r.get("refused") or r.get("error") or "")))
     except Exception as e:  # noqa: BLE001
         layers.append(_layer("ap2 evidence", "FAIL", f"{type(e).__name__}: {e}"))
     return _rollup("ap2", layers)
@@ -216,7 +223,25 @@ def verify_auto(path: str) -> dict:
         return verify_ap2(path)
     if '"root_hash"' in head and ('"metric_id"' in head or "CLDMA" in head):
         return verify_cldma(path)
+    if head.lstrip().startswith("{") and _top_level_evidence_format(path).startswith("ap2-evidence"):
+        # 0.18.0: an AP2 pack is one JSON object whose keys are sorted, so `artifacts` comes first and `evidence_format`
+        # can sit past the 2048-byte sniff (measured 2026-10-05: 2 artifacts built by `ap2-evidence build` put it at
+        # byte 3506; `auto` then verified the file as a ledger and said FAIL on a valid pack).
+        return verify_ap2(path)
     return verify_ledger(path)
+
+
+def _top_level_evidence_format(path: str, limit: int = 64 * 1024 * 1024) -> str:
+    """The `evidence_format` of a single JSON object file, "" when the file is not one (or is larger than `limit`)."""
+    try:
+        if os.path.getsize(path) > limit:
+            return ""
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return ""
+    fmt = obj.get("evidence_format") if isinstance(obj, dict) else None
+    return fmt if isinstance(fmt, str) else ""
 
 
 def _rollup(kind: str, layers: list) -> dict:

@@ -131,8 +131,11 @@ class TestMcpPositive(unittest.TestCase):
 
     def test_verify_ap2_evidence_roundtrip_and_tamper(self):
         # fixture reale: evidence pack ap2 costruito ora, poi manomesso (il banco sa fallire)
-        import test_ap2_evidence as fx
-        import ap2_evidence as ap2
+        try:
+            import ap2_evidence as ap2   # ap2-evidence-pack, extra `ap2` (0.18.0)
+        except ImportError:
+            self.skipTest("ap2-evidence-pack not installed (pip install 'cryptovalid-opencore[ap2]')")
+        import test_verify_evidence as fx
         sk, jwk = fx._make_signer()
         sd = fx._make_sd_jwt(sk, {"iss": "wallet"}, {"amount": "9.99"},
                              header_extra={"jwk": jwk})
@@ -148,6 +151,23 @@ class TestMcpPositive(unittest.TestCase):
         json.dump(ev, open(out, "w"))
         body2, _ = self.c.call("verify_ap2_evidence", {"path": out})
         self.assertFalse(body2["result"]["valid"])
+
+    def test_verify_ap2_evidence_without_the_package_is_an_error_not_a_pass(self):
+        # 0.18.0: the reference verifier comes from ap2-evidence-pack; absent, the tool answers an error (isError), never a verdict
+        import cryptovalid_mcp as M, builtins
+        real_import = builtins.__import__
+
+        def no_ap2(name, *a, **k):
+            if name == "ap2_evidence":
+                raise ImportError("simulated: ap2-evidence-pack not installed")
+            return real_import(name, *a, **k)
+        builtins.__import__ = no_ap2
+        try:
+            out = M.t_verify_ap2_evidence({"path": os.path.join(self.d, "nothing.json")})
+        finally:
+            builtins.__import__ = real_import
+        self.assertIn("ap2-evidence-pack not installed", out["error"])
+        self.assertNotIn("result", out)
 
     def test_wrong_token_still_blocked_even_with_gate_open(self):
         body, is_err = self.c.call("append_event",

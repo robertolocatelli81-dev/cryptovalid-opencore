@@ -8,8 +8,8 @@ implemented in code cited by module; claims a 4-mind review could not verify are
 
 > **Scope note (2026-09-13).** This document describes the *whole* CryptoValid evidence stack. Only these
 > mechanisms live in **this** repository: `verifier.py` (hash-chain/idx/linkage, strict acceptance profile),
-> `sigsuite.py` + `ap2_evidence.py` (hybrid ML-DSA-65 co-signature, `verify_producer_block`, pinned
-> `trusted_producer_keys`), `verifiers/` (JS/Rust/Swift + `differential_oracle.py`). Mechanisms cited by
+> ap2-evidence-pack (`sigsuite`, `ap2_evidence`; a dependency of this repository since 0.18.0, extra `ap2`: hybrid
+> ML-DSA-65 co-signature, `verify_producer_block`, pinned `trusted_producer_keys`), `verifiers/` (JS/Rust/Swift + `differential_oracle.py`). Mechanisms cited by
 > module names that are **not** in this repo: `canonical.py` and `timestamp.verify` are in the sibling toolkit
 > [omega-evidence](https://github.com/robertolocatelli81-dev/omega-evidence) (Apache-2.0); `device.py`,
 > `interop/confidential.py`, `longterm_evidence.py`, `DeviceTrust`/`OrgTrust`, `ReplayGuard` and
@@ -55,7 +55,7 @@ implemented in code cited by module; claims a 4-mind review could not verify are
 | Policy enforcement | Signed, versioned policy: which role may send which record kind to whom, `require_encryption`, `require_pq`, allowed algs/keystores — enforced on send AND receipt, fail-closed; downgrade/rollback refused. | A2, A4 |
 | Revocation | Signed, **sequenced** CRL (rollback-refused); credential validity windows; revoked devices dropped from cache immediately. | A2, A4 |
 | Hardware key custody | `hwkeys.ExternalSigner` brokers signing to Secure Enclave / StrongBox / HUKS / TPM; the private key never enters the toolkit process. | A7 (partial: protects the key, not a signing request from a compromised app) |
-| Long-term / quantum | Hybrid **ML-DSA-65** (FIPS 204, validated `cryptography` backend) co-signature over evidence packs (`sigsuite.py`, `ap2_evidence.sign_evidence`); RFC 4998 renewal (`longterm_evidence.py`, non-public; in omega-evidence, `omega_evidence.preservation` renews in RFC 4998 semantics, not its ASN.1 format); crypto-agility via declared `sig_alg`. | A6 (for the PACK signature) |
+| Long-term / quantum | Hybrid **ML-DSA-65** (FIPS 204, validated `cryptography` backend) co-signature over evidence packs (ap2-evidence-pack: `sigsuite`, `ap2_evidence.sign_evidence`; a dependency since 0.18.0, extra `ap2`); RFC 4998 renewal (`longterm_evidence.py`, non-public; in omega-evidence, `omega_evidence.preservation` renews in RFC 4998 semantics, not its ASN.1 format); crypto-agility via declared `sig_alg`. | A6 (for the PACK signature) |
 | Producer-signature soundness | `verify_producer_block` is fail-closed: `ok` requires ≥1 real PASS, 0 FAIL, **0 SKIP** (an unknown alg / missing PQ backend surfaces `incomplete`, never a green). | A2, A3 |
 | Timestamp authenticity | `timestamp.verify` runs `openssl ts -verify -CAfile <anchor>` and returns `verified:True` ONLY on a real signature+chain check; **without a supplied TSA trust anchor it returns `verified:None`**, never a green. | A2 |
 

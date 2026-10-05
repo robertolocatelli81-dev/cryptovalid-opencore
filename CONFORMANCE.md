@@ -2,20 +2,13 @@
 
 The CryptoValid evidence format has one normative contract: `spec/vectors/*`.
 
-## ap2-evidence-pack vectors (spec/vectors/ap2/)
+## ap2-evidence-pack (dependency since 0.18.0)
 
-The AP2 dispute-evidence pack has its own normative text (`SPEC_AP2_EVIDENCE.md`) and vector set:
-one ACCEPT (`valid_signed`, the positive control) and five REJECTs (stripped-signature downgrade,
-valid-but-unpinned producer key, digest mismatch, time anchor required-but-missing, time anchor
-claimed-but-invalid). A verifier conforms iff it reproduces each vector's `normative` block under
-the declared policy — `python3 spec/vectors/ap2/run_ap2_conformance.py` (exit 0 = conformant).
-The ML-DSA-65 producer-signature primitive is additionally checked against the NIST ACVP sigVer
-subset in `pqcrypto/vectors/acvp_mldsa65_sigver.txt` (the same 9 cases elara-mesh runs — one NIST
-oracle for both stacks): `python3 test_ap2_conformance.py`.
-
-| Implementation | Runtime / deps | Status |
-|---|---|---|
-| `ap2_evidence.py` | Python 3 + `cryptography` | reference — conformant 6/6 (1 accept + 5 reject); ACVP ML-DSA-65 sigVer 9/9 |
+The AP2 dispute-evidence format, its normative text (`SPEC_AP2_EVIDENCE.md`), its vector set (`spec/vectors/ap2/`, 8
+vectors), the conformance runner and the differential oracle live in the ap2-evidence-pack repository
+(https://github.com/robertolocatelli81-dev/ap2-evidence-pack). This repository's `cryptovalid-verify ap2` calls that
+package's `verify_evidence` and adds nothing to the verdict; the vectors it used to carry (6, built by an older copy
+of the builder) were refused by the reference since its 1.1.0 (measured: 1.0.2 accepts them) and were removed in 0.18.0.
 
 ## Ledger vectors (spec/vectors/)
 Every independent verifier MUST reproduce the normative block (verdict, chain_integrity,

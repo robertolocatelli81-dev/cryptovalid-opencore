@@ -2,8 +2,8 @@
 
 > **Scope note (2026-09-13).** This document describes the *whole* CryptoValid evidence stack. Only these
 > mechanisms live in **this** repository: `verifier.py` (hash-chain/idx/linkage, strict acceptance profile),
-> `sigsuite.py` + `ap2_evidence.py` (hybrid ML-DSA-65 co-signature, `verify_producer_block`, pinned
-> `trusted_producer_keys`), `verifiers/` (JS/Rust/Swift + `differential_oracle.py`). Mechanisms cited by
+> ap2-evidence-pack (`sigsuite`, `ap2_evidence`; a dependency of this repository since 0.18.0, extra `ap2`: hybrid
+> ML-DSA-65 co-signature, `verify_producer_block`, pinned `trusted_producer_keys`), `verifiers/` (JS/Rust/Swift + `differential_oracle.py`). Mechanisms cited by
 > module names that are **not** in this repo: `canonical.py` and `timestamp.verify` are in the sibling toolkit
 > [omega-evidence](https://github.com/robertolocatelli81-dev/omega-evidence) (Apache-2.0); `device.py`,
 > `interop/confidential.py`, `longterm_evidence.py`, `DeviceTrust`/`OrgTrust`, `ReplayGuard` and
