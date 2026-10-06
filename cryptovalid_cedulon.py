@@ -71,7 +71,12 @@ NOT_VERIFIED = ["inputs-binding", "index", "approval-signature", "control"]
 # The four stages above run when their inputs are given (verify_ledger: inputs_text, index_text, operator_credentials).
 # Sources, stated: inputs-binding — decision-profile-03 §4.1 (inputsHash = SHA-256 of the context, canonical encoding of
 # CEDULON-08 §7 = RFC 8785). index, control, approval-signature — the stage table of the Verax test-vector README and the
-# Implementation Status of core-03 (no normative text). approval-signature verifies the WebAuthn assertion as W3C
+# Implementation Status of core-03 (no normative text). index checks refs and effect claims, as Verax's verifier does (indexStatement,
+# effectRefsInIndex and noteEffectCompleteness in packages/proxy/src/verify-ledger.ts; its stage table files their
+# problem lines under index): every ref a row names must be the ref of a decision in the ledger, and a row that says the
+# ref has an effect (kind "effect", or hasEffect true) needs an effect row bound under that ref. A row's decision kind is
+# not read, since index.jsonl is unsigned; nor is its piece. A row that names no string ref fails here; Verax's parser
+# skips it, as it skips a row whose piece is not a string. approval-signature verifies the WebAuthn assertion as W3C
 # WebAuthn Level 3 §7.2 defines it and binds it to the held record through deferRecordHash; how the CHALLENGE is derived
 # from the held record is not written anywhere, so "approval-challenge-binding" always stays in not_verified.
 STAGES = ["record-header", "record-signature", "record-claims", "chain", "effect-binding",
@@ -167,16 +172,49 @@ def _record_claims(payload, presented) -> Dict[str, Any]:
     return c
 
 
+LINE_STAGE = {"decisions": "record-header", "inputs": "inputs-binding", "effects": "effect-binding", "index": "index",
+              "checkpoints": "checkpoint-signature"}
+
+
+MAX_DEPTH = 500    # json.loads recurses: past ~990 levels on 3.9/3.11 (~9990 on 3.13) it raises RecursionError, so the
+                   # verdict on a deeper line would depend on the Python version; every version refuses it here instead
+
+
+def _deeper_than(line: str, limit: int) -> bool:
+    """True when arrays/objects nest more than `limit` deep outside strings."""
+    if line.count("[") + line.count("{") <= limit:
+        return False
+    depth, in_str, esc = 0, False, False
+    for ch in line:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "[{":
+            depth += 1
+            if depth > limit:
+                return True
+        elif ch in "]}":
+            depth -= 1
+    return False
+
+
 def _loads_lines(text: str, what: str) -> List[Dict[str, Any]]:
     out = []
-    for i, line in enumerate(text.splitlines()):
-        if line.strip():
+    for i, line in enumerate(text.split("\n")):            # JSON Lines ends a line at \n only: str.splitlines would also
+        if line.strip():                                  # cut at U+2028, U+0085 ..., which JSON allows raw in a string
+            if _deeper_than(line, MAX_DEPTH):
+                raise CedulonError(LINE_STAGE[what], f"{what} line {i + 1}: nested more than {MAX_DEPTH} deep")
             try:
                 v = json.loads(line, object_pairs_hook=_no_dup_keys,
                                parse_constant=lambda x: (_ for _ in ()).throw(ValueError(f"non-JSON constant {x}")))
-            except ValueError as e:
-                raise CedulonError("record-header" if what == "decisions" else "effect-binding" if what == "effects"
-                                   else "checkpoint-signature", f"{what} line {i + 1}: {e}")
+            except ValueError as e:                       # the stage that reads this file
+                raise CedulonError(LINE_STAGE[what], f"{what} line {i + 1}: {e}")
             out.append(v)
     return out
 
@@ -343,18 +381,17 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
             if seen.get(ref, 0) > n:
                 raise CedulonError("effect-binding", f"effect-without-decision under ref {ref}")
 
-        if index_text is not None:                        # index: every row names something the ledger holds
-            effect_refs = {r["ref"] for r in rows}
+        if index_text is not None:                        # index: every ref a row names is still a decision's ref
+            decision_refs = {c["ref"] for c in records}   # index.jsonl is unsigned: a row's decision kind is no verdict
+            effect_refs = {r["ref"] for r in rows}        # the effect rows that bound above
             for i, row in enumerate(_loads_lines(index_text, "index")):
-                kind, ref = (row.get("kind"), row.get("ref")) if isinstance(row, dict) else (None, None)
-                if kind == "effect":
-                    held = ref in effect_refs
-                elif kind in DECISIONS:
-                    held = any(c["ref"] == ref and c["decision"] == kind for c in records)
-                else:
-                    raise CedulonError("index", f"index row {i}: unknown kind {kind!r}")
-                if not held:
-                    raise CedulonError("index", f"index row {i}: names a {kind} under ref {ref} the ledger does not hold")
+                ref = row.get("ref") if isinstance(row, dict) else None
+                if not isinstance(ref, str):
+                    raise CedulonError("index", f"index row {i}: names no ref")
+                if ref not in decision_refs:
+                    raise CedulonError("index", f"index row {i}: names ref {ref}, which no decision in the ledger holds")
+                if (row.get("kind") == "effect" or row.get("hasEffect") is True) and ref not in effect_refs:
+                    raise CedulonError("index", f"index row {i}: says ref {ref} has an effect, and no effect row binds under it")
         if operator_credentials is not None and inputs_text is not None:     # approval-signature
             creds = {c.get("id"): c for c in (operator_credentials or {}).get("credentials", []) if isinstance(c, dict)}
             for i, c in enumerate(records):

@@ -551,6 +551,48 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## The Cedulon index stage checks refs and effect claims, as Verax's verifier does (2026-10-06, 0.18.1)
+
+- **The index stage reads refs, and effect completeness.** Every ref an `index.jsonl` row names must be the ref of a
+  decision the ledger holds, and a row that says its ref has an effect (`kind` `effect`, or `hasEffect` true) needs an
+  effect row bound under that ref; a row's decision kind is not read, since `index.jsonl` is unsigned. Until now this
+  checker held a row's decision kind to the ledger (a `deny` row had to name a deny record under that ref) and did not
+  read `hasEffect`. Source: `indexStatement`, `effectRefsInIndex` and `noteEffectCompleteness` in verax-ai/verax
+  `packages/proxy/src/verify-ledger.ts` and `parseIndexText` in `ledger-manifest.ts`, the same at `f59ece9` and at
+  `e008f55`, and the stage table in `test-vectors/tools/stages.ts`, which files both of their problem lines ("index
+  names …", "index says ref … has an effect …") under `index`.
+- **Run against Verax's verifier** (`verifyLedger` at `e008f55` and at `f59ece9`, Node 22.23.2, 2026-10-06), on
+  `valid-full` unchanged and with lines added to `index.jsonl` (one line in 18 cases, a line before a held row in 4),
+  23 cases: the verdicts agree on 13, the unchanged ledger among them (on a line that is JSON `null` Verax's verifier
+  fails without naming a stage). Where they differ, this checker fails and Verax's passes for a row that names no
+  string `ref`, for a row with no string `piece` whose ref or effect claim fails here (Verax's parser skips such a row;
+  this checker does not read `piece`, so a row with a held ref, no effect claim and no string `piece` passes both), for
+  a duplicate member (`JSON.parse` keeps the last) and for a last line that is not JSON (Verax tolerates it as a
+  half-written append when an earlier line parsed); Verax's fails and this checker passes for a line of spaces, or a
+  lone `\r`, before the last, which this checker skips. Measured the same day beyond those 23: a line of other
+  whitespace only (a tab, `\x0c`, U+00A0, U+2028) before the last splits the same way; an empty line is skipped by
+  both; an integer of more than 4300 digits (Python's limit on converting an integer string) and arrays or objects nested
+  more than 500 deep (below) fail here and pass there.
+- **A line that is not JSON fails the stage that reads its file.** Until now such a line in `inputs.jsonl` or
+  `index.jsonl`, a duplicate member or `NaN` included, was reported under `checkpoint-signature`; the verdict was
+  INVALID either way. It now fails `inputs-binding` or `index`. A blank line is skipped, as before.
+- **A line nested more than 500 deep fails the stage that reads its file**, on every Python. Until now `json.loads`
+  raised `RecursionError` near 1000 levels on 3.9 and 3.11 and near 10000 on 3.13, so an `index.jsonl` line 5000 levels
+  deep made the verdict INVALID (`malformed`) on 3.9 and 3.11 and VALID on 3.13 (measured 2026-10-06).
+- **A line ends at `\n` only.** Until now `str.splitlines` also cut a line at U+2028, U+0085 and the other Unicode line
+  boundaries, which JSON allows raw inside a string, so such a line failed as not JSON in any of the five files.
+- **On verax-ai/verax `test-vectors/v1` at `f59ece9`** (the same setup as 0.17.2's run: checkpoint under the witness
+  key; inputs, index and operator credentials given), measured 2026-10-06 with Python 3.9, 3.11 and 3.13 and
+  cryptography 50.0.2: 20 of 20 verdicts and 16 of 16 first failing stages (0.17.2: 14 of 16; the checker is the same in
+  0.18.0). `fail-allow-while-halted` and `fail-allow-while-halted-witnessed` now stop at `control`, as the vectors
+  expect; every other verdict, stage and reason is unchanged. With `clock_skew_ms=0`, 15 of 16: `fail-allow-while-halted`
+  stops at `effect-binding` (`decision-without-effect`), since no allowance defers its forged allow, as in 0.17.2. The
+  positive control (one bit of a record signature flipped in `valid-full`) fails at `record-signature`.
+- `test_cedulon.py` (19 tests) holds the index stage to seventeen bent ledgers that must fail it (five of them
+  by their reason) and eleven that must pass it, every file to a line that is not JSON, and a line nested past 500
+  levels to one verdict on every Python; 41 mutations of the index stage, the line loader and the depth check each turn
+  it red on Python 3.9, 3.11 and 3.13.
+
 ## One copy of the AP2 verifier (2026-10-05, 0.18.0)
 
 - **One copy of the AP2 verifier, in ap2-evidence-pack.** Until 0.17.2 this wheel and ap2-evidence-pack installed the
@@ -602,7 +644,8 @@ certified devices — `eidas_ledger_check.py` tells you exactly which of those y
   it can reach `decision-without-effect` or `effect-without-decision`; the two edges are measured in `test_cedulon.py`.
   `fail-allow-while-halted` and `fail-allow-while-halted-witnessed` expect `control` and stop at `index`, because this
   checker reads an index row by its kind as well as its ref (the index names a deny the ledger no longer holds: the
-  record under that ref is now an allow); Verax's verifier compares refs only. Run without the index stage, both stop
+  record under that ref is now an allow); Verax's verifier compares refs, and effect completeness (corrected 2026-10-06,
+  see above). Run without the index stage, both stop
   at `control`.
 - `test_cedulon.py` tests both edges at the exact allowance and one millisecond past it, that 0 applies none, also on
   the edge itself, and that a count shortfall is not deferred; nine mutations of the rule, listed in the test, each turn
@@ -616,8 +659,8 @@ certified devices — `eidas_ledger_check.py` tells you exactly which of those y
   `verify_ap2_evidence` failed on every file with `ModuleNotFoundError: sigsuite` (a refusal, never a pass). The wheel
   now ships `pqcrypto/`. From a clone nothing changes.
 - **`cryptography` is declared, as the `sign` extra.** The wheel declared no dependency, so a plain install had no
-  signature layer. `pip install 'cryptovalid-opencore[sign]'` installs `cryptography` >= 50, the version this release is
-  measured with (ML-DSA-65 itself works from 48.0.0: generate, sign and verify measured with 48.0.0, 49.0.0 and 50.0.1;
+  signature layer. `pip install 'cryptovalid-opencore[sign]'` installed `cryptography` >= 50, the version 0.17.1 was
+  measured with (0.18.0 lowered the floor to 48.0.0) (ML-DSA-65 itself works from 48.0.0: generate, sign and verify measured with 48.0.0, 49.0.0 and 50.0.1;
   47.0.0 ships the `mldsa` module but raises `UnsupportedAlgorithm`). The hash-chain verifier still needs only the
   standard library, so the extra stays optional.
 - **Eleven file and URL handles closed.** Eleven `open()`/`urlopen()` calls in shipped modules did not close what they
@@ -918,7 +961,7 @@ the reference witness is in the release dossier):
 | `cryptovalid_witness.py` | A **witness**: keeps the last checkpoint it cosigned per origin (trust on first use, stated; several trusted keys per origin for rotation; an origin that differs from the key name is configured explicitly, as for `sum.golang.org`), cosigns a new one only when the log signature verifies **and** the new tree extends the stored one (same size → same root; larger → a consistency proof that verifies; smaller → rollback). Every refusal that involves two log-signed checkpoints returns both (`evidenza`); the pairs that are **proof** — `split-view`, two log-signed roots at one size, anyone can check both signatures — are appended once each to `<state>.evidence.jsonl` (also when the refusal reaches an HTTP client as a bare status), whether the witness meets them at the size it holds, at a size it cosigned earlier (`<state>.cosigned.jsonl`, one line per cosigned checkpoint; the last 4 MiB are searched) or at a size it refused earlier without proof and is now passing; `rollback` and `unproven-extension` are **not** proof (a log genuinely signed the older checkpoint, a missing proof may be a client error): they are returned and counted (distinct ones), and remembered as size/root/time (last 100 per origin); the log-signed notes refused without proof beyond the stored size — whatever old size the request stated — are kept in a `pending` ring (at most 100 per origin and 256 KiB, notes above 16 KiB kept as root only, smallest sizes dropped first) so that a later cosign, a second root at that size or a later rollback to it can turn them into proof (a cosign consumes the pending roots at its own size and leaves the others in the ring). A second root at a size the witness never cosigned pairs with a root it still remembers (pending ring, or the refusals ring as root only → `split-view-unkept`); one it no longer remembers (never seen, or dropped from the rings) is a `rollback`/`unproven-extension` it cannot turn into proof — stated. The cosignature is **cosignature/v1** (timestamp inside the signed bytes). `serve` exposes the `add-checkpoint` endpoint of the **tlog-witness HTTP interface** (`POST <prefix>/add-checkpoint`; 200 with the signature lines, 400, 403, 404, 409 with the size as `text/x.tlog.size`, 422, in the spec's order; 500 when the witness cannot decide — no Ed25519 implementation (the reason in the body), state file unreadable or unwritable or invalid configuration (the reason on stderr); check-and-persist under a process lock and a file lock, state and evidence fsync'ed before the response); `submit` is the log side (old size 0, then 409 → the witness's size and our proof; from the answer it keeps only the lines of the witness keys it trusts, each replacing that key's older line). `verify_witnessed` is the relying party: log signature (one key or a rotation set), the expected origin, ≥ N distinct trusted witnesses on *this* text — every line of a trusted witness key is verified and its newest counts — and, with `max_age_s`, ≥ N of them younger than it (a witness whose newest cosignature is in the future beyond `clock_skew_s` does not count; without `max_age_s` no clock is consulted). | c2sp.org/tlog-cosignature (Ed25519 v1), c2sp.org/tlog-witness |
 | `cryptovalid_scitt.py` | **SCITT** (RFC 9943, Proposed Standard, June 2026): a **Signed Statement** (COSE_Sign1 with the CWT Claims header — iss, sub — content type and kid, payload attached or detached), its **registration** on a cryptovalid ledger (the entry binds the statement's SHA-256), a **Receipt** with the CWT Claims RFC 9943 requires and the RFC 9942 inclusion proof (vds 1, vdp −1; the canonical leaf travels unsigned beside it), and the **Transparent Statement** (receipts under label 394). The relying party verifies offline, fail-closed: Issuer signature, TS signature with ITS trusted key, that the leaf binds THIS statement, and the RFC 6962 path up to the signed root. Measured with **pycose**, an independent COSE implementation: it decodes both messages, verifies both signatures, reads labels 15/394/395, refuses a wrong key or a tampered payload (`test_cryptovalid_scitt.py`, 5 tests, pycose required in CI). Stated: EdDSA only; the `RFC9162_SHA256` profile, not CCF's; no public Transparency Service here. | RFC 9943, RFC 9942, RFC 9052 |
 | `cryptovalid_cose_receipts.py` | **COSE Receipts** read from the published texts: profile `rfc9942` (the receipt layer: Issuer signature, log signature over the root rebuilt from the inclusion proof) and profile `rfc9943` (adds the protected-header MUSTs of RFC 9943 §6: CWT Claims with `iss` and `sub`, `kid` when neither `x5t` nor `x5chain` is present). EdDSA, ES256 and ES384, the key type bound to the algorithm; vds 1 (RFC 9162) and vds 2 (CCF, draft-ietf-scitt-receipts-ccf-profile-05, value requested, not yet assigned by IANA). Every refusal names its stage (`test_cose_receipts.py`, 12 tests). | RFC 9942, RFC 9943, RFC 9052, ccf-profile-05 |
-| `cryptovalid_cedulon.py` | **Cedulon Decision Records**, a clean-room reader of a Verax-style ledger: record header, signature, claims (the presented claims must equal the signed ones), chain, effect binding (a row presented beside an Effect Extract must be one the extract signs), checkpoints; inputs, index, the WebAuthn approval assertion and halt control when their files are given. The keys are pinned by the caller, the checkpoint key included. Stated: the approval challenge is not rebuilt (its derivation is not written anywhere) and no boundary allowance is applied (`test_cedulon.py`, 16 tests). | decision-profile-03, CEDULON-08, WebAuthn L3 §7.2 |
+| `cryptovalid_cedulon.py` | **Cedulon Decision Records**, a clean-room reader of a Verax-style ledger: record header, signature, claims (the presented claims must equal the signed ones), chain, effect binding (a row presented beside an Effect Extract must be one the extract signs), checkpoints; inputs, index, the WebAuthn approval assertion and halt control when their files are given. The keys are pinned by the caller, the checkpoint key included. Stated: the approval challenge is not rebuilt (its derivation is not written anywhere); the core's boundary allowance is applied (default 300000 ms, `clock_skew_ms=0` applies none); the index stage reads refs and, as Verax's verifier does, effect completeness (`test_cedulon.py`, 19 tests). | decision-profile-03, CEDULON-08, WebAuthn L3 §7.2 |
 | `cryptovalid_aps.py` | **APS action_ref** in the three forms, each named after the revision that defines it (-01 native, -03 v2 with domain prefixes, -03 §4.2 external), and the **Accountability Record v0.1** (schema in code, Ed25519 over JCS, digest, action_ref recomputed). `normalizeTimestamp` read as: drop fractional seconds, UTC only (`Z` or `+00:00`; another offset is refused) — an interpretation, stated (`test_aps.py`, 9 tests). | draft-pidlisnyi-aps-01, -03, RFC 8785 |
 | `cryptovalid_vaara_receipt.py` | **Vaara Receipt** (draft-sirkkavaara-vaara-receipt-12): decision and execution receipts, signed payload = JCS of exactly the five signed members, ES256 / RS256 / HS256 / ML-DSA-65. The expected algorithm is a required argument: a receipt naming another one is refused before any signature check (without it, an HS256 receipt keyed with the issuer's public key could be forged). Back link, result commitment, evidence digest and timestamp-anchor digests checked when their inputs are given; anchor tokens themselves are not verified, stated (`test_vaara_receipt.py`, 9 tests). | vaara-receipt-12, RFC 8785, FIPS 204 |
 | `cryptovalid_monitor.py --match REGEX` | **Identity / subject search** while monitoring, the way rekor-monitor searches a log for identities (its README, 2026-09-19): each pattern is matched against the canonical bytes of every entry — the bytes the Merkle leaf commits to — and the run reports the matching leaves (index, self_hash, snippet) and the NEW ones since the last green state, so an inclusion receipt can prove any of them. | rekor-monitor (Sigstore) |

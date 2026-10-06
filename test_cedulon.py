@@ -346,7 +346,7 @@ class VeraxLedger:
         index = [{"kind": c["decision"], "ref": c["ref"]} for _, c in recs] + [{"kind": "effect", "ref": r["ref"]} for r in rows]
         if bend_index:
             index = bend_index(index)
-        idx = "".join(json.dumps(x) + "\n" for x in index)
+        idx = "".join((x if isinstance(x, str) else json.dumps(x, ensure_ascii=False)) + "\n" for x in index)   # a str: raw line
         inp_text = "".join(json.dumps({"ref": k, "inputs": v}) + "\n" for k, v in inputs.items())
         cose_key = R.cbor_encode({1: 1, 3: -8, -1: 6, -2: self.pk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw)})
         creds = {"credentials": [{"id": "cred-1", "publicKey": _b64u(cose_key), "sub": "operator-1"}]}
@@ -385,9 +385,92 @@ class TestVeraxStages(unittest.TestCase):
         self.assertEqual(self.stage(r), "inputs-binding")
 
     def test_index(self):
-        for bend in (lambda ix: ix + [{"kind": "allow", "ref": "nobody"}], lambda ix: ix + [{"kind": "effect", "ref": "ref-3"}],
-                     lambda ix: ix + [{"kind": "deny", "ref": "ref-1"}], lambda ix: ix + [{"kind": "other", "ref": "ref-1"}]):
+        # as Verax's verifier (indexStatement, effectRefsInIndex): a ref no decision holds fails, whatever the row's kind
+        # says, and a row that says its ref has an effect (kind "effect", or hasEffect true) needs an effect row bound
+        # under that ref (ref-0 is a defer, ref-3 a deny: neither has one)
+        for bend in (lambda ix: ix + [{"kind": "allow", "ref": "nobody"}], lambda ix: ix + [{"kind": "effect", "ref": "nobody"}],
+                     lambda ix: ix + [{"kind": "deny"}], lambda ix: ix + [{"kind": "deny", "ref": 1}], lambda ix: ix + [[1]],
+                     lambda ix: ix + [{"kind": "allow", "ref": ""}], lambda ix: [{**ix[0], "ref": "ref-0x"}] + ix[1:],
+                     lambda ix: ix + [{"kind": "effect", "ref": "ref-3"}], lambda ix: ix + [{"kind": "deny", "ref": "ref-3", "hasEffect": True}],
+                     lambda ix: ix + [{"kind": "effect", "ref": "ref-0"}]):
             self.assertEqual(self.stage(self.L.verify(bend_index=bend)), "index")
+        for row, why in (({"kind": "deny"}, "names no ref"), ({"kind": "deny", "ref": 1}, "names no ref"),
+                         ({"kind": "deny", "ref": ["ref-1"]}, "names no ref"), ({"kind": "deny", "ref": "nobody"}, "names ref nobody"),
+                         ({"kind": "effect", "ref": "ref-3"}, "says ref ref-3 has an effect")):
+            self.assertIn(why, self.L.verify(bend_index=lambda ix: ix + [row])["why"])
+        # index.jsonl is unsigned: a row's decision kind is not a verdict here, so a held ref passes this stage under any
+        # kind but "effect"; hasEffect counts only when it is true (1 is not)
+        for bend in (lambda ix: ix + [{"kind": "deny", "ref": "ref-1"}], lambda ix: ix + [{"kind": "deny", "ref": "ref-1", "hasEffect": True}],
+                     lambda ix: ix + [{"kind": "other", "ref": "ref-1"}], lambda ix: [{**x, "kind": "allow"} for x in ix],
+                     lambda ix: ix[:1], lambda ix: ix + [{"kind": "deny", "ref": "ref-3", "hasEffect": 1}],
+                     lambda ix: ix + [{"kind": "Effect", "ref": "ref-3"}]):
+            self.assertEqual(self.L.verify(bend_index=bend)["result"], "VALID")
+        # an allow whose row is deferred by the boundary allowance has no bound row: an index row saying it has one fails
+        self.assertEqual(self.L.verify(drop_rows=("ref-5",))["result"], "VALID")
+        self.assertEqual(self.stage(self.L.verify(drop_rows=("ref-5",), bend_index=lambda ix: ix + [{"kind": "effect", "ref": "ref-5"}])), "index")
+        # a line of whitespace only (spaces, a lone \r, a tab) is skipped, before a held row as well as last; the README
+        # states that Verax's verifier fails such a line before the last
+        for blank in ("   ", "\r", "\t"):
+            self.assertEqual(self.L.verify(bend_index=lambda ix: ix[:1] + [blank] + ix[1:])["result"], "VALID")
+            self.assertEqual(self.L.verify(bend_index=lambda ix: ix + [blank])["result"], "VALID")
+        # a line ends at \n only: U+2028 and U+0085 are allowed raw inside a JSON string (Verax's parser splits at \n)
+        for ch in ("\u2028", "\u0085"):
+            self.assertEqual(self.L.verify(bend_index=lambda ix: ix + [{"kind": "deny", "ref": "ref-1", "subject": "a" + ch + "b"}])["result"], "VALID")
+        # a ledger with no effect row at all still has its index read
+        deny_only = lambda p: [["deny", None, {"p": 0}], ["deny", None, {"p": 1}]]
+        self.assertEqual(self.L.verify(bend_plan=deny_only)["result"], "VALID")
+        self.assertEqual(self.stage(self.L.verify(bend_plan=deny_only, bend_index=lambda ix: ix + [{"kind": "deny", "ref": "nobody"}])), "index")
+
+    def test_a_line_that_is_not_json_fails_the_stage_that_reads_its_file(self):
+        # until this test the inputs and index files reported such a line under checkpoint-signature
+        L = self.L
+        for pos, name, stage in ((0, "decisions", "record-header"), (1, "effects", "effect-binding"), (2, "checkpoints", "checkpoint-signature"),
+                                 (3, "inputs", "inputs-binding"), (4, "index", "index")):
+            for bad in ("{oops\n", '{"ref": "ref-1", "ref": "x"}\n', '{"ref": NaN}\n'):
+                with self.subTest(stage=stage, bad=bad):
+                    parts = list(L.render())
+                    parts[pos] += bad
+                    dec, eff, cps, inp, idx, creds = parts
+                    r = V.verify_ledger(dec, eff, cps, _pem(L.rk), _pem(L.xk), _pem(L.ck),
+                                        inputs_text=inp, index_text=idx, operator_credentials=creds)
+                    self.assertEqual(self.stage(r), stage)
+                    self.assertIn(f"{name} line {parts[pos].count(chr(10))}:", r["why"])       # the line number, from 1
+        # a duplicate member whose last value is held, and NaN beside a held ref: refused as not JSON, not downstream
+        for bad, why in (('{"kind": "deny", "ref": "nobody", "ref": "ref-1"}\n', "duplicate key"),
+                         ('{"kind": "deny", "ref": "ref-1", "x": NaN}\n', "non-JSON constant NaN")):
+            parts = list(L.render()); parts[4] += bad
+            dec, eff, cps, inp, idx, creds = parts
+            r = V.verify_ledger(dec, eff, cps, _pem(L.rk), _pem(L.xk), _pem(L.ck), inputs_text=inp, index_text=idx, operator_credentials=creds)
+            self.assertEqual(self.stage(r), "index"); self.assertIn(why, r["why"])
+
+    def test_nesting_depth_is_the_same_verdict_on_every_python(self):
+        # json.loads raises RecursionError near 1000 levels on 3.9/3.11 and near 10000 on 3.13: past MAX_DEPTH every
+        # version fails the stage that reads the file; brackets inside a string do not count
+        L, n = self.L, 500                                # the limit the README states
+        deep = lambda k: '{"ref": "ref-1", "z": ' + "[" * (k - 1) + "]" * (k - 1) + "}\n"    # k levels in all
+        for k, want in ((n - 1, "VALID"), (n, "VALID"), (n + 1, "INVALID"), (5000, "INVALID"), (20000, "INVALID")):
+            with self.subTest(k=k):
+                parts = list(L.render()); parts[4] += deep(k)
+                dec, eff, cps, inp, idx, creds = parts
+                r = V.verify_ledger(dec, eff, cps, _pem(L.rk), _pem(L.xk), _pem(L.ck),
+                                    inputs_text=inp, index_text=idx, operator_credentials=creds)
+                self.assertEqual(r["result"], want)
+                if want == "INVALID":
+                    self.assertEqual(self.stage(r), "index")
+                    self.assertIn("nested more than", r["why"])
+        for k in (1, 2, 3):                               # an object deep enough also counts
+            self.assertTrue(V._deeper_than("{" * (n + k) + "}" * (n + k), n))
+        self.assertFalse(V._deeper_than('{"s": "' + "[" * 2000 + '"}', n))           # inside a string
+        self.assertFalse(V._deeper_than('{"a": [], "z": ' + "[" * (n - 1) + "]" * (n - 1) + "}", n))   # n deep, more brackets
+        self.assertFalse(V._deeper_than("[" + "{}," * (n + 5) + "{}]", n))         # a closed object is left
+        self.assertFalse(V._deeper_than("[" + "[]," * (n + 5) + "[]]", n))         # a closed array is left
+        self.assertFalse(V._deeper_than('{"s": "\\"' + "[" * 2000 + '"}', n))       # after an escaped quote, still inside
+        self.assertTrue(V._deeper_than('{"s": "\\\\", "z": ' + "[" * (n + 1) + "]" * (n + 1) + "}", n))  # \\ closes no string
+        parts = list(L.render()); parts[0] += deep(n + 1)                            # every file, not only the index
+        dec, eff, cps, inp, idx, creds = parts
+        r = V.verify_ledger(dec, eff, cps, _pem(L.rk), _pem(L.xk), _pem(L.ck), inputs_text=inp, index_text=idx,
+                            operator_credentials=creds)
+        self.assertEqual(self.stage(r), "record-header")
 
     def test_approval_signature(self):
         other = Ed25519PrivateKey.generate()
