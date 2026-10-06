@@ -5,7 +5,7 @@ W4 (misurato 2026-08-19): su RPC pubblici gratuiti un anchor onesto perde testim
 aveva PRUNATO un anchor di 73.8 giorni; strict min_witnesses>=2 fallisce già a ~2.5 mesi). L'evidenza non
 sparisce dalla chain, ma diventa INACCESSIBILE via RPC pubblici → l'auto-DoS dell'evidenza.
 
-Fix (chiusura ingegneristica, Fable+Gemini): ri-ancorare lo stesso digest PRIMA della finestra di pruning
+Fix (chiusura ingegneristica, revisione indipendente): ri-ancorare lo stesso digest PRIMA della finestra di pruning
 misurata, e ALLERTARE quando un anchor è già sotto soglia. Questo modulo DECIDE e ALLERTA; NON spende: il
 re-ancoraggio è una nuova tx on-chain = HUMAN-GATED (confine sulla spesa irreversibile). La finestra di
 default (75 giorni) è ancorata alla MISURA (pruning osservato ~74gg), non a un'ipotesi — ri-misurabile con

@@ -3,7 +3,7 @@
 """
 committed_attestation — Committed-Ledger Derived-Metric Attestation (CLDMA).
 
-Il gap (verificato 2026-08-20, Gemini Pro + ricerca): i primitivi esistono separati
+Il gap (verificato 2026-08-20, revisione indipendente + ricerca): i primitivi esistono separati
 (proof-of-reserves Merkle prova una SOMMA; ZK-PoR prova con privacy; selective disclosure),
 ma NESSUNO prova che un RATIO REGOLATORIO DERIVATO (PAR30, write-off ratio, risk coverage)
 sia correttamente ricalcolato da un LEDGER PRIVATO IMPEGNATO, senza rivelare i singoli prestiti,
@@ -219,7 +219,7 @@ def metric_numerical_hash(spec_version: str, metric_id: str, as_of: str,
 
 def attestation(c: Commitment) -> Dict:
     """Disclosure PUBBLICA: radice + totali + ratio derivato (nessun record).
-    den=0 (Gemini): se il denominatore totale e' zero il ratio e' INDEFINITO; per convenzione dichiarata
+    den=0 (revisione): se il denominatore totale e' zero il ratio e' INDEFINITO; per convenzione dichiarata
     lo riportiamo come '0' con `denominator_minor: 0` -> il verificatore DEVE trattarlo come indefinito,
     non come '0% di rischio'. (verify_attestation lo gestisce coerentemente.)"""
     ratio = (Decimal(c.num_total) / Decimal(c.den_total)) if c.den_total else Decimal(0)

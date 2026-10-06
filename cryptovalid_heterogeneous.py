@@ -1,7 +1,7 @@
 """
 CryptoValid · ancoraggio ETEROGENEO — fault-independence VERA, non repliche same-chain.
 
-Annichila la criticità W3 (Fable 5 + Gemini Pro, 2026-08-19): N RPC di UNA chain sono repliche di una
+Annichila la criticità W3 (adversarial review, 2026-08-19): N RPC di UNA chain sono repliche di una
 sola fonte (~1.x testimoni) e NON proteggono da monocultura client / bug di protocollo / attacco alla
 chain. La difesa reale è ancorare lo stesso digest su DOMINI DI GUASTO DISTINTI — sistemi di consenso/
 fiducia indipendenti, dove la compromissione di uno NON tocca l'altro:

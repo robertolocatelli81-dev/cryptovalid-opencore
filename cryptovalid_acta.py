@@ -194,7 +194,7 @@ def _instant_exact(t: Any) -> Optional[Tuple[int, int, str]]:
 
     Returned as an ordered key (whole UTC second, leap flag, fractional digits with trailing zeros removed): digit
     strings normalized that way compare, as strings, exactly as the fractions they write — in linear time, with no int()
-    (a first version used int() and raised ValueError past 4300 digits on Python >= 3.11: Gemini Pro review 26/09/2026).
+    (a first version used int() and raised ValueError past 4300 digits on Python >= 3.11: review 26/09/2026).
     A leap second 23:59:60.f is (:59, 1, f), after
     every :59.x — however many digits x has — and before the next second. A first version added a 12-digit offset
     instead, and a 13-digit :59 bound then sorted after :60 (independent review 26/09/2026: PASS after valid_until)."""

@@ -182,7 +182,7 @@ class TestFundcert(unittest.TestCase):
         self.assertGreater(F.reconcile(h, perm, by="id")["residual_count"], 1)
 
     def test_gap_D2_evidence_record_provenienza(self):
-        # DEFICIENZA Gemini: un digest è inutile se non è legato all'INPUT + al METODO. evidence_record lega
+        # DEFICIENZA della revisione: un digest è inutile se non è legato all'INPUT + al METODO. evidence_record lega
         # provenienza (sha256 byte grezzi + fonte + quando) → metodo (fingerprint) → risultato (digest).
         raw = b'{"holdings": "raw source bytes"}'
         r = F.evidence_record(raw, source="SEC EDGAR", fetched_at="2026-08-20T11:00:00Z",
@@ -197,7 +197,7 @@ class TestFundcert(unittest.TestCase):
         self.assertEqual(F.canonicalizer_fingerprint(), F.canonicalizer_fingerprint())
 
     def test_gap_D2_resolve_exception_chi_perche(self):
-        # DEFICIENZA Gemini: 'un digest non dice CHI ha autorizzato né PERCHÉ'. resolve_exception registra il
+        # DEFICIENZA della revisione: 'un digest non dice CHI ha autorizzato né PERCHÉ'. resolve_exception registra il
         # contesto operativo (chi/perché/decisione/quando) su una voce di triage, con digest per la forensics.
         item = {"key": "TICKER:WOLF", "rel_pct": 2907.0, "severity": "high",
                 "action": "confirm_corporate_action", "flag": {"kind": "split_candidate"}, "status": "open"}
@@ -210,7 +210,7 @@ class TestFundcert(unittest.TestCase):
         self.assertEqual(item["status"], "open")                        # non muta l'originale
 
     def test_conformance_vectors_pinned(self):
-        # RIPRODUCIBILITÀ ESTERNA (critica Gemini sopravvissuta): i digest sono PINNATI in vettori versionati.
+        # RIPRODUCIBILITÀ ESTERNA (critica della revisione sopravvissuta): i digest sono PINNATI in vettori versionati.
         # Un terzo ricomputa e ottiene lo STESSO digest; se le regole di canonicalizzazione cambiano, i digest
         # cambiano e questo test FALLISCE → obbliga a un bump esplicito di CANON_VERSION (metodo stabile, non "il codice").
         import json
@@ -327,7 +327,7 @@ class TestFundcert(unittest.TestCase):
         self.assertEqual({(p["a"], p["b"]) for p in br}, {(p["a"], p["b"]) for p in exact})
 
     def test_gap_B5_asset_class_exposure(self):
-        # B5 (deficienza Gemini 'derivati/asset class'): il tool VEDE e separa le classi (equity/debt/derivato)
+        # B5 (deficienza della revisione 'derivati/asset class'): il tool VEDE e separa le classi (equity/debt/derivato)
         # invece di confonderle. Metadata a parte, l'id le distingue già nel digest. Validato su VTIAX reale
         # (has_derivatives=True). Qui il vettore sintetico con un derivato.
         h = F.Holdings("F", "d", "nport", [

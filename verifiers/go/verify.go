@@ -106,7 +106,7 @@ func VerifyLedger(r io.Reader) Verdict {
 			v.Failures = append(v.Failures, fmt.Sprintf("entry %d: idx %q not sequential", i, idx.String()))
 		}
 		self, isStr := e.Vals["self_hash"].(string)
-		if !isStr || len(self) != 64 { // reported HERE, not as a link failure on the next entry (Gemini, round 1)
+		if !isStr || len(self) != 64 { // reported HERE, not as a link failure on the next entry (round 1)
 			hashOK = false
 			v.Failures = append(v.Failures, fmt.Sprintf("entry %d: self_hash missing or not a 64-hex string", i))
 		}
@@ -207,7 +207,7 @@ func VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64,
 	}
 	if trustedPQPubkeyB64 != "" {
 		// a trusted post-quantum key is a REQUIREMENT: it implies a required tip and needs the trusted log key
-		// (council 15/09, Fable: PQ key alone returned before CheckTipPQ → PASS, a fail-open)
+		// (council 15/09: PQ key alone returned before CheckTipPQ → PASS, a fail-open)
 		requireTip = true
 		if trustedPubkeyHex == "" {
 			v.Verdict = "FAIL"

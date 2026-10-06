@@ -75,7 +75,7 @@ def _ed():
 
 def _load_sk(keyfile):
     """keyfile: path of the hex seed, or an already loaded (sk, pk_hex) pair (writers load the key ONCE —
-    council 15/09, Gemini: re-reading and re-deriving it at every flush is I/O and CPU in the hot path)."""
+    council 15/09: re-reading and re-deriving it at every flush is I/O and CPU in the hot path)."""
     if isinstance(keyfile, tuple):
         return keyfile
     Ed25519PrivateKey, _, ser = _ed()
@@ -90,13 +90,13 @@ def load_key(keyfile: str):
 
 
 # [0-9] and not \d: in Python `\d` matches every Unicode decimal digit (Arabic-Indic, fullwidth…) and int() converts
-# them, while Go (RE2) and JS mean ASCII — measured divergence, review round 3 with Fable 5.1
+# them, while Go (RE2) and JS mean ASCII — measured divergence, review round 3
 _TS_FIELDS = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})")
 
 
 def parse_instant(ts: str) -> Tuple[int, int]:
     """The ONE timestamp profile of the three checkers, validated by HAND and identically in Python, Go and JS
-    (review with Fable 5.1, 15/09/2026: the format rule was shared but the VALUE went to three library parsers
+    (review of 15/09/2026: the format rule was shared but the VALUE went to three library parsers
     that disagreed on 2026-02-30, hour 24, year 0000, a comma fraction, a 10-digit fraction, offset +24:00, and
     Python < 3.11 on fraction length). Profile: `YYYY-MM-DDThh:mm:ss[.f{1,9}](Z|±hh:mm)`, year 0001-9999, real
     calendar day (leap years), hour 0-23, minute/second 0-59 (no leap second), offset hour 0-23, minute 0-59.
@@ -233,7 +233,7 @@ def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str], trusted_p
         return {"ok": False, "why": f"ts outside the profile: {e}", "pq_protected": False}
     # The key INSIDE the tip is informative only: verifying against it proves nothing (anyone can sign a tip
     # with a key of their own and put it there). Without the trusted log key there is NO verification —
-    # ok=False, never a "PASS but untrusted" an automation would read as 0 (council 15/09, Gemini).
+    # ok=False, never a "PASS but untrusted" an automation would read as 0 (council 15/09).
     if not trusted_pubkey_hex:
         return {"ok": False, "why": "tip_untrusted: no trusted log key given (pass --trusted-pubkey); the key inside "
                                     "the tip cannot be trusted", "trusted": False, "pq_protected": False}
@@ -299,9 +299,9 @@ def check_tip(entries_count: int, last_self_hash: str, tip: Dict, trusted_pubkey
                 "signature": sig["why"], "pq_protected": False}
     if not_before:
         try:
-            nb = parse_instant(not_before)   # same profile as the tip's ts, in the three checkers (Gemini: py/js took a date-only)
+            nb = parse_instant(not_before)   # same profile as the tip's ts, in the three checkers (review: py/js took a date-only)
         except ValueError as e:
-            # the VERIFIER's argument is wrong, not the tip: never blame the file (review with Fable, Gemini)
+            # the VERIFIER's argument is wrong, not the tip: never blame the file (independent review)
             return {"ok": False, "error": f"bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm) ({str(e)[:60]})",
                     "signature": sig["why"], "pq_protected": False}
         if parse_instant(tip["ts"]) < nb:

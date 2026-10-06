@@ -158,7 +158,7 @@ const b64Strict = (s, n) => {   // strict standard base64 of exactly n bytes (ca
   if (typeof s !== "string" || s.length !== Math.ceil(n / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return null;
   const raw = Buffer.from(s, "base64"); return raw.length === n && raw.toString("base64") === s ? raw : null;
 };
-// The ONE timestamp profile of the three checkers, validated by HAND (review with Fable 5.1, 15/09/2026: Date.parse
+// The ONE timestamp profile of the three checkers, validated by HAND (review of 15/09/2026: Date.parse
 // silently rolled 2026-02-30 over to March, accepted hour 24 and year 0000; Date.UTC maps years 1-99 to 1900+y).
 // Returns the instant as the integer pair [epoch seconds, nanoseconds] — compared as a pair in the three checkers
 // (fraction precision differs in the three standard libraries) — or null when outside the profile.
@@ -193,7 +193,7 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
       return { ok: false, pq_protected: false, error: "tip_invalid: malformed post-quantum fields (signature_pq_hex 6618 lowercase hex, log_pq_pubkey_b64 strict base64 of 1952 bytes)" };
   }
   // the key inside the tip proves nothing: without the trusted log key there is NO verification (never a
-  // "PASS but untrusted" an automation reads as exit 0 — council 15/09, Gemini)
+  // "PASS but untrusted" an automation reads as exit 0 — council 15/09)
   if (!trustedPubkeyHex) return { ok: false, pq_protected: false, trusted: false, error: "tip_untrusted: no trusted log key given (--trusted-pubkey); the key inside the tip cannot be trusted" };
   if (tip.log_pubkey_hex && tip.log_pubkey_hex !== trustedPubkeyHex) return { ok: false, pq_protected: false, error: "tip_invalid: tip log key differs from the trusted log key" };   // "" = absent, as in Python/Go
   let sigOk = false;
@@ -206,7 +206,7 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
   if (expectLedgerId && tip.ledger_id !== expectLedgerId) return { ok: false, pq_protected: false, trusted, error: "ledger_id_mismatch: the tip belongs to a different ledger than the one you expect" };
   if (firstSelfHash !== null && entriesCount > 0 && tip.ledger_id !== firstSelfHash) return { ok: false, pq_protected: false, trusted, error: "tip_of_another_ledger: the tip's ledger_id is not this file's first self_hash" };
   // ROLLBACK (declared): an older genuine tip restored after a truncation passes; notBefore refuses older tips
-  if (notBefore) {   // instants, not strings (council 15/09, Opus): 'Z' / '+00:00' / other offsets of the same moment agree
+  if (notBefore) {   // instants, not strings (council 15/09): 'Z' / '+00:00' / other offsets of the same moment agree
     const a = parseInstant(tip.ts), b = parseInstant(notBefore);
     if (b === null) return { ok: false, pq_protected: false, trusted, error: "bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm)" };   // the verifier's error, not the tip's
     if (instantBefore(a, b)) return { ok: false, pq_protected: false, trusted, error: `tip_rolled_back: the tip is dated ${tip.ts}, before the required ${notBefore}` };

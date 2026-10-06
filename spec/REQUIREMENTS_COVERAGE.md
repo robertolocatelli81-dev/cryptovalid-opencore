@@ -32,7 +32,7 @@ does not satisfy alone) · **⬜ out of scope** (structurally not anchor-shaped 
 
 ## Known limits to test BEFORE production (supreme-ai flagged, highest operational value)
 1. **Evidence decay under RPC pruning — one measured data point (2026-08-19; claim narrowed after
-   Gemini Pro + Fable 5 review).** The `cryptovalid_pruning_probe` was run once. Of 4 public RPCs probed,
+   independent review).** The `cryptovalid_pruning_probe` was run once. Of 4 public RPCs probed,
    only **2 were reachable** (onfinality 429, rpcpool 403 — a reachability confound to declare). On the
    reachable pool: fresh anchors (t=0) were held by 2 RPCs; a **73.8-day-old** honest anchor was held by
    only **1** — `publicnode` had **pruned** it (`result=null`) while `mainnet-beta` still had it.
@@ -45,7 +45,7 @@ does not satisfy alone) · **⬜ out of scope** (structurally not anchor-shaped 
    **heterogeneous anchors** (OpenTimestamps/Bitcoin + eIDAS QTSP), or **periodic re-anchoring**.
 
 ## Bench honesty — mutation testing (hand-written, NOT systematic; claim bounded)
-Iteration, walked back twice under Gemini Pro + Fable 5 + supreme-ai review:
+Iteration, walked back twice under independent review:
 - First pass: 6 mutants vs the *live ad-hoc bench* → only **2/6** killed (the bench had no error-tx /
   no RPC-disagreement case, a redundant hex guard, and a **signer code smell**: the verdict recomputed
   `signer == expected` separately from the displayed `signer_ok`).

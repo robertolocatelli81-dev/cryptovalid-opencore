@@ -16,7 +16,7 @@ HONEST SCOPE (read this — it is the whole point):
   (the fee-payer pubkey you trust); without it, the anchor is existence+timestamp only. The
   authorised/authentic judgement is CryptoValid's other layers (ESMA register, KMS signature).
 
-Adversarial design review by Gemini Pro (2026-08-18) drove these defences, each a FALSE-POSITIVE
+An independent adversarial design review (2026-08-18) drove these defences, each a FALSE-POSITIVE
 vector it named:
   - fake cluster / rogue RPC → pin the mainnet genesis hash; require N-of-M RPC agreement.
   - fragile log parsing → extract the memo from the PARSED spl-memo instruction, not logMessages.
@@ -132,7 +132,7 @@ def verify_solana_anchor(signature, expected_sha3_hex, rpcs=DEFAULT_RPCS, timeou
     Scope of tx support: legacy + v0 transactions (every tx type on Solana today); a future v1+
     would need the RPC's maxSupportedTransactionVersion bumped — a documented limit, not silent.
 
-    On the N-of-M question (Gemini's design review): free public RPCs PRUNE historical txs, so
+    On the N-of-M question (the design review): free public RPCs PRUNE historical txs, so
     "N independent confirmations" is unattainable for months-old anchors. The realistic, honest
     defence is: (1) genesis-pin every reachable RPC to the real mainnet — a fake cluster is
     rejected; (2) require that NO reachable RPC that has the tx CONTRADICTS another (a lying RPC

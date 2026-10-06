@@ -25,7 +25,7 @@ raccoglie tutti i campi con le **evidenze reali nel repo**. Fonte degli indicato
 - **SDG 16** (istituzioni trasparenti/anti-corruzione) — **PRIMARIO e pieno**: evidenza di compliance
   tamper-evident, verificabile da un terzo qualunque. È ciò che il tool È oggi.
 - **SDG 9** (infrastruttura resiliente/open) — infrastruttura di verifica open, zero-dipendenze.
-- **SDG 1 / 8 / 10 RITIRATI.** Il council (Opus + Gemini-Pro, verificato sul codice) ha trovato un
+- **SDG 1 / 8 / 10 RITIRATI.** Il council (revisione indipendente, verificato sul codice) ha trovato un
   overclaim + una **contraddizione interna verificata** nel modulo microcredito: il matching cross-MFI del
   sovra-indebitamento (`microfinance.py:148-168`) funziona **solo con salt CONDIVISO** → l'hash del
   beneficiario diventa uno **pseudonimo linkabile fra istituti = dato personale pseudonimizzato** (GDPR

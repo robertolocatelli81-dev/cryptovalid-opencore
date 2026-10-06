@@ -121,7 +121,7 @@ class TestSpecVectorAndParsing(unittest.TestCase):
         with self.assertRaises(C.NoteError):
             C.split_note(b"text\n\n\xe2\x80\x94 n " + base64.b64encode(bytes(8193)) + b"\n")
         self.assertEqual(len(C.split_note(b"text\n\n\xe2\x80\x94 n " + base64.b64encode(bytes(8192)) + b"\n")[1]), 1)
-        # non-ASCII where base64 is expected: a refusal, never an unhandled exception (round 1, Gemini)
+        # non-ASCII where base64 is expected: a refusal, never an unhandled exception (round 1)
         with self.assertRaises(C.NoteError):
             C.split_note("text\n\n— n ñññññ\n".encode())
         with self.assertRaises(C.NoteError):
@@ -180,7 +180,7 @@ class TestSpecVectorAndParsing(unittest.TestCase):
         for args in ((LOG, -1, root), (LOG, True, root), (LOG, 1, root[:31]), ("", 1, root), ("a\n", 1, root), ("a\x01", 1, root)):
             with self.assertRaises(C.NoteError):
                 C.checkpoint_text(*args)
-        # emission accepts real-world origins too (Gemini, round 12): the schema-less URL form is only a SHOULD
+        # emission accepts real-world origins too (round 12): the schema-less URL form is only a SHOULD
         self.assertEqual(C.parse_checkpoint(C.checkpoint_text("Armory Drive Prod 2", 1, root))["origin"], "Armory Drive Prod 2")
         # parsing accepts what production logs emit (omniwitness logs.yaml, 2026-09-19): origins with spaces
         for origin in ("go.sum database tree", "rekor.sigstore.dev - 3904496407287907110", "Armory Drive Prod 2"):
@@ -468,7 +468,7 @@ class TestWitness(unittest.TestCase):
             self.assertEqual(len(f.readlines()), 1)
         os.remove(self.st1 + ".evidence.jsonl"); os.remove(self.st1); os.remove(self.st1 + ".cosigned.jsonl")
         r = self._w1(self.n5); self.assertEqual(r["stato"], "COSIGNED")
-        # same size with a non-empty proof is malformed → 422, no evidence (round 1, Opus: a client error is not evidence)
+        # same size with a non-empty proof is malformed → 422, no evidence (round 1: a client error is not evidence)
         r = self._w1(self.n5, proof=["AAAA"])
         self.assertEqual((r["stato"], r["http_status"], r["evidenza"]), ("REFUSED", 422, None))
         # extension 5→8 without proof: refused, both checkpoints returned but NOT as proof, state still 5
@@ -541,7 +541,7 @@ class TestWitness(unittest.TestCase):
         self.assertEqual((r2["stato"], r2["evidenza"]["tipo"]), ("REFUSED", "split-view"))
 
     def test_split_view_found_on_every_path(self):
-        """Round 4 (Opus): the pair of log-signed roots at one size is proof wherever the witness meets it — a
+        """Round 4: the pair of log-signed roots at one size is proof wherever the witness meets it — a
         refused root later contradicted by a cosigned one, a cosigned root later contradicted by a refused one at a
         size the witness has moved past, and a replay of the refused root against the cosigned one."""
         st = os.path.join(self.tmp, "w4.json"); W_ = lambda note, proof=None, ts=T0: W.witness_cosign(st, note, self.LV, "witness.example/w1", self.w1, proof, ts)
@@ -557,7 +557,7 @@ class TestWitness(unittest.TestCase):
         with open(st) as f:
             self.assertEqual(json.load(f)["pending"].get(LOG, {}), {})     # the pending root at 8 was consumed
         # a future root presented with the WRONG old size (the discovery request "old 0"): 409 for the client, but the
-        # root enters `pending` and a second root at that size with "old 0" is proof (round 6, Opus: the 409 gate came first)
+        # root enters `pending` and a second root at that size with "old 0" is proof (round 6: the 409 gate came first)
         c70 = C.sign_note(C.checkpoint_text(LOG, 70, hashlib.sha256(b"c70").digest()), LOG, self.ls)
         d70 = C.sign_note(C.checkpoint_text(LOG, 70, hashlib.sha256(b"d70").digest()), LOG, self.ls)
         r = W.witness_cosign(st, c70, self.LV, "witness.example/w1", self.w1, None, T0 + 2, old_size=0)
@@ -606,7 +606,7 @@ class TestWitness(unittest.TestCase):
         with open(st + ".evidence.jsonl") as f:
             self.assertEqual([json.loads(l)["size_presentato"] for l in f][-1], 60)
         # replaying the log's public FUTURE (sizes 9..300 without proof): the pending ring stays at 100 notes, the
-        # state file stops growing (round 5, Opus: the first version kept every note)
+        # state file stops growing (round 5: the first version kept every note)
         with open(st + ".evidence.jsonl") as f:
             before = len(f.readlines())
         sizes = []
@@ -635,7 +635,7 @@ class TestWitness(unittest.TestCase):
         with open(st) as f:
             self.assertLessEqual(sum(len(n.encode()) for r in json.load(f)["pending"][LOG].values() for n in r.values() if n), 256 * 1024)
         # an oversized first root at a size, then a small conflicting one: not silently lost — a `split-view-unkept`
-        # record with the earlier ROOT (the note was not kept), prova False, stated (round 7, Sonnet)
+        # record with the earlier ROOT (the note was not kept), prova False, stated (round 7)
         small559 = C.sign_note(C.checkpoint_text(LOG, 559, hashlib.sha256(b"small").digest()), LOG, self.ls)
         r = W_(small559, None, T0 + 13)
         self.assertEqual((r["evidenza"]["tipo"], r["evidenza"]["prova"], r["evidenza"]["precedente"]), ("split-view-unkept", False, None))
@@ -748,7 +748,7 @@ class TestWitness(unittest.TestCase):
         with open(st + ".evidence.jsonl") as f:
             self.assertEqual(len(f.readlines()), 2)
         # the same with an OVERSIZED first root (kept as root only) and a small second: the TOFU that follows records
-        # exactly one pair, not one full and one half (round 13, Opus)
+        # exactly one pair, not one full and one half (round 13)
         st_o = os.path.join(self.tmp, "w7o.json")
         big9 = C.sign_note(C.checkpoint_text(LOG, 9, hashlib.sha256(b"big").digest(), ["y" * 8000] * 3), LOG, self.ls)
         W.witness_cosign(st_o, big9, self.LV, "witness.example/w1", self.w1, None, T0, old_size=3)
@@ -882,7 +882,7 @@ class TestWitness(unittest.TestCase):
         self.assertEqual((r["stato"], r["freshness_s"]), ("OK", -1))
         r = W.verify_witnessed(n2, self.LV, [self.W1V, self.W2V], 1, max_age_s=60, now=T0 + 4)
         self.assertEqual((r["stato"], r["freshness_s"]), ("OK", 4))
-        # min_witnesses < 1 or a negative clock skew is a caller error, not a crash with max_age (round 1, Gemini)
+        # min_witnesses < 1 or a negative clock skew is a caller error, not a crash with max_age (round 1)
         with self.assertRaises(C.NoteError):
             W.verify_witnessed(n2, self.LV, [], 0, max_age_s=60, now=T0)
         with self.assertRaises(C.NoteError):
@@ -1024,7 +1024,7 @@ class TestTlogWitnessHTTP(unittest.TestCase):
         self.assertEqual(st, 200); self.assertTrue(body.startswith("— witness.example/w1 ".encode()) and body.endswith(b"\n"))
         self.assertEqual(W.verify_witnessed(n5 + body, self.LV, [self.WV])["stato"], "OK")
         # a fork presented with the wrong old size (the discovery request "old 0"): 409 for the client, but the pair
-        # IS recorded — it is the only kind that is proof (round 3, Opus)
+        # IS recorded — it is the only kind that is proof (round 3)
         st, body = W.add_checkpoint(self.url, nf.replace(b"\n8\n", b"\n5\n", 1), 0, [])   # size 5, another root: log-signed? no → 403
         self.assertEqual(st, 403)
         nf5 = C.sign_note(C.checkpoint_text(LOG, 5, hashlib.sha256(b"fork5").digest()), LOG, self.ls)
@@ -1125,9 +1125,9 @@ class TestTlogWitnessHTTP(unittest.TestCase):
         # an untrusted witness key: the 200 is not accepted
         r = W.submit_checkpoint(self.url, n8, l8, [C.vkey("witness.example/w1", C.TYPE_COSIG_V1, C.pubkey_from_seed(o))], self.LV)
         self.assertEqual(r["stato"], "NON_VALIDA"); self.assertIn("without a cosignature line from a trusted witness key", r["motivo"])
-        # an empty proof line is 400, not 404 (round 2, Opus)
+        # an empty proof line is 400, not 404 (round 2)
         self.assertEqual(W.add_checkpoint(self.url, b"\n" + n8, 0, [])[0], 400)
-        # a corrupted state file: 500 with a reason on stderr, never a dropped connection (round 2, Opus + Sonnet)
+        # a corrupted state file: 500 with a reason on stderr, never a dropped connection (round 2)
         with open(self.svc.state_path, "w") as f:
             f.write("{")
         self.assertEqual(W.add_checkpoint(self.url, n8, 8, [])[0], 500)
@@ -1143,13 +1143,13 @@ class TestTlogWitnessHTTP(unittest.TestCase):
         c = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
         c.putrequest("POST", "/w/add-checkpoint"); c.putheader("Content-Length", "10"); c.putheader("Transfer-Encoding", "chunked"); c.endheaders()
         self.assertEqual(c.getresponse().status, 400); c.close()
-        # hostile Content-Length: a response, not a hung thread or a traceback (round 1, Opus)
+        # hostile Content-Length: a response, not a hung thread or a traceback (round 1)
         import http.client
         for cl in ("abc", "-1"):
             c = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
             c.putrequest("POST", "/w/add-checkpoint"); c.putheader("Content-Length", cl); c.endheaders()
             resp = c.getresponse(); self.assertEqual((resp.status, resp.getheader("Content-Length"), resp.getheader("Connection")), (400, "0", "close"), cl); c.close()
-        # an unreachable witness: status 0 with the reason, never a traceback (round 5, Sonnet)
+        # an unreachable witness: status 0 with the reason, never a traceback (round 5)
         st0, body0 = W.add_checkpoint("http://127.0.0.1:1", n8, 0, [], timeout=2)
         self.assertEqual(st0, 0); self.assertTrue(body0.startswith(b"no response"))
         self.assertEqual(W.submit_checkpoint("http://127.0.0.1:1", n8, l8, [self.WV], self.LV)["status"], 0)

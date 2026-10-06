@@ -90,7 +90,7 @@ class TestHybridEntries(unittest.TestCase):
         for e in lines:
             e.pop("signature_pq"); e.pop("signer_pq")
         _write(self.signed, lines)
-        # council 15/09 (Gemini, Opus): with the EXPECTED key given the layer is REQUIRED at library level: ok False
+        # council 15/09: with the EXPECTED key given the layer is REQUIRED at library level: ok False
         r = signer.verify_file(self.signed, self.pk, self.pq_pk)
         self.assertFalse(r["ok"]); self.assertIs(r["pq_protected"], False); self.assertEqual(r["pq_status"], "missing")
         self.assertEqual(r["pq_failures"][0]["reason"], "pq_missing")
@@ -107,7 +107,7 @@ class TestHybridEntries(unittest.TestCase):
         self.assertEqual(cp.returncode, 2)     # --require-pq without --pq-pubkey is refused (self-declared protection)
 
     def test_foreign_pq_key_added_to_ed25519_ledger_is_never_protected(self):
-        # council 15/09 (Sonnet, Opus): an attacker ADDS their own ML-DSA layer to an Ed25519-only ledger
+        # council 15/09: an attacker ADDS their own ML-DSA layer to an Ed25519-only ledger
         ed = os.path.join(self.tmp, "ed.jsonl"); signer.sign_ledger(self.led, ed, self.k)
         forged = os.path.join(self.tmp, "forged.jsonl"); signer.sign_ledger(ed, forged, self.k, pq_keyfile=signer.keygen_pq(os.path.join(self.tmp, "att.pq")) and os.path.join(self.tmp, "att.pq"))
         r = signer.verify_file(forged, self.pk)                       # no expected PQ key: unpinned → None
@@ -116,7 +116,7 @@ class TestHybridEntries(unittest.TestCase):
         self.assertFalse(r["ok"]); self.assertEqual(r["pq_failures"][0]["reason"], "pq_signer_mismatch")
 
     def test_ed25519_corrupted_with_valid_pq_is_not_protected(self):
-        # council 15/09 (Sonnet): hybrid = BOTH hold; a broken classical signature must not leave pq_protected True
+        # council 15/09: hybrid = BOTH hold; a broken classical signature must not leave pq_protected True
         lines = [json.loads(l) for l in open(self.signed)]
         raw = bytearray(base64.b64decode(lines[1]["signature"])); raw[3] ^= 1; lines[1]["signature"] = base64.b64encode(bytes(raw)).decode()
         _write(self.signed, lines)
@@ -190,7 +190,7 @@ class TestHybridEntries(unittest.TestCase):
             K._mldsa65_raw_from_spki(b"\x30\x0a" + b"\x00" * 2000)         # not an ML-DSA-65 SPKI
         with self.assertRaises(RuntimeError):
             K._mldsa65_raw_from_spki(spki + b"\x00")                         # round 4: exact length, unused-bits byte
-        # round 4 (Fable): a KMS alias re-pointed between GetPublicKey and Sign → the Sign KeyId differs → refused
+        # round 4: a KMS alias re-pointed between GetPublicKey and Sign → the Sign KeyId differs → refused
         class Repointed(Stub):
             def sign(self, KeyId, Message, MessageType, SigningAlgorithm):
                 return {"Signature": sk.sign(Message), "KeyId": "arn:aws:kms:eu-central-1:1:key/OTHER", "SigningAlgorithm": "ML_DSA_SHAKE_256"}
@@ -370,7 +370,7 @@ class TestHybridTip(unittest.TestCase):
         self.assertEqual(rc, 0, out); self.assertTrue(out["tip"]["pq_protected"])
         rc, out = go()
         self.assertEqual(rc, 0); self.assertIsNone(out["tip"]["pq_protected"]); self.assertIn("pq_unchecked", out["tip"]["pq_why"])
-        # council 15/09 (Fable): a trusted PQ key WITHOUT the trusted log key, or without any tip, must never PASS
+        # council 15/09: a trusted PQ key WITHOUT the trusted log key, or without any tip, must never PASS
         cp = subprocess.run([GO_BIN, "-tip", self.tp, "-trusted-pq-pubkey", self.pq_pk, self.led], capture_output=True, text=True)
         self.assertNotEqual(cp.returncode, 0); self.assertIn("pq_key_without_log_key", cp.stdout)
         os.rename(self.tp, self.tp + ".away")
@@ -427,7 +427,7 @@ class TestHybridPack(unittest.TestCase):
         v = P.verify_pack(out, pq_pubkey_b64=other, signer_pubkey_hex=self.pk); self.assertFalse(v["valid"]); self.assertEqual(v["ledgers"][0]["pq_reason"], "pq_layer_lost")
 
     def test_forged_unsigned_manifest_never_yields_true(self):
-        # round 2 (Fable, measured): attacker re-signs with own keys, rewrites pq_signers and digests, drops the signature
+        # round 2 (measured): attacker re-signs with own keys, rewrites pq_signers and digests, drops the signature
         import evidence_pack as P, hashlib
         out = os.path.join(self.tmp, "pack"); P.build_pack([self.signed], out, subject="t", pq_pubkey_b64=self.pq_pk, signer_pubkey_hex=self.pk, sign_key=self.mk)
         man = json.load(open(os.path.join(out, "MANIFEST.json"))); name = man["ledgers"][0]["file"]
@@ -447,7 +447,7 @@ class TestHybridPack(unittest.TestCase):
         self.assertFalse(P.verify_pack(out, manifest_signer_hex=self.mpk)["ledgers"][0]["pq_protected"] is True)
 
     def test_manifest_body_tampered_under_intact_signature_is_not_pinned(self):
-        # round 3 (Fable, measured): keep the vendor's digest+signature, rewrite signers/pq_signers, re-sign the ledger
+        # round 3 (measured): keep the vendor's digest+signature, rewrite signers/pq_signers, re-sign the ledger
         import evidence_pack as P
         out = os.path.join(self.tmp, "pack"); P.build_pack([self.signed], out, subject="t", pq_pubkey_b64=self.pq_pk, signer_pubkey_hex=self.pk, sign_key=self.mk)
         mp = os.path.join(out, "MANIFEST.json"); man = json.load(open(mp)); name = man["ledgers"][0]["file"]

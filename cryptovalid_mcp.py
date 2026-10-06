@@ -6,7 +6,7 @@ CryptoValid Open Core — MCP server (stdio): agents that can PROVE what they di
 SPDX-License-Identifier: AGPL-3.0-or-later
 Copyright (C) 2026 Roberto Locatelli
 
-Exposes CryptoValid to any MCP client (Claude Code, Claude Desktop, other agents)
+Exposes CryptoValid to any MCP client (IDE assistants, desktop agents, other agents)
 so an agent can VERIFY evidence anyone hands it — and, behind an explicit human
 gate, SEAL its own actions into a tamper-evident, signed, RFC 3161-anchorable
 archive that any third party re-verifies offline with nothing but this repo.

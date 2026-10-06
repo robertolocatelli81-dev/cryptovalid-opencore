@@ -50,7 +50,7 @@ func TipPayload(entries int, ledgerID, tipSHA256, ts string) []byte {
 }
 
 // the payload is built by Sprintf (no JSON escaping): only hex and a plain ISO-8601 timestamp are admitted,
-// anything else would not be the reference bytes (council 15/09, Sonnet)
+// anything else would not be the reference bytes (council 15/09)
 func isHex64(s string) bool { return isHexN(s, 64) }
 
 // isHexN: exactly n LOWERCASE hex digits (no whitespace, no uppercase — hex.DecodeString would take "AB")
@@ -66,7 +66,7 @@ func isHexN(s string, n int) bool {
 	return true
 }
 
-// tsProfile is the ONE timestamp profile of the three checkers, validated by HAND (review with Fable 5.1,
+// tsProfile is the ONE timestamp profile of the three checkers, validated by HAND (independent review,
 // 15/09/2026: time.Parse accepted a comma fraction, a 10-digit fraction, offset +24:00 and year 0000 that Python
 // refused). YYYY-MM-DDThh:mm:ss[.f{1,9}](Z|±hh:mm); year 0001-9999; real calendar day; hour 0-23; minute and
 // second 0-59 (no leap second); offset hour 0-23, minute 0-59.
@@ -226,7 +226,7 @@ func CheckTip(entries int, first, last string, t *Tip, trustedPubkeyHex, notBefo
 	}
 
 	// the key inside the tip proves nothing: without the trusted log key there is NO verification (never a
-	// "PASS but untrusted" that an automation reads as exit 0 — council 15/09, Gemini)
+	// "PASS but untrusted" that an automation reads as exit 0 — council 15/09)
 	if trustedPubkeyHex == "" {
 		return false, "tip_untrusted: no trusted log key given (-trusted-pubkey); the key inside the tip cannot be trusted", false
 	}
@@ -247,7 +247,7 @@ func CheckTip(entries int, first, last string, t *Tip, trustedPubkeyHex, notBefo
 		return false, "tip_of_another_ledger: the tip's ledger_id is not this file's first self_hash", trusted
 	}
 	if notBefore != "" {
-		// instants, not strings (council 15/09, Opus: "…Z" vs "…+00:00" compared as bytes was a false rollback);
+		// instants, not strings (council 15/09: "…Z" vs "…+00:00" compared as bytes was a false rollback);
 		// a malformed notBefore is the VERIFIER's error, never the tip's
 		nbT, e2 := parseInstant(notBefore)
 		if e2 != nil {

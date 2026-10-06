@@ -90,7 +90,7 @@ class TestTip(unittest.TestCase):
         self.assertEqual(r["verdict"], "PASS"); self.assertFalse(r["tip"]["checked"]); self.assertIn("tip_untrusted", r["tip"]["error"])
         r = V.verify_ledger(self.led, require_tip=True)                      # ...and required → FAIL, never fail-open
         self.assertEqual(r["verdict"], "FAIL"); self.assertIn("tip_untrusted", self._errors(r))
-        # THE attack (council R2, Gemini): attacker's own key inside a forged tip, verifier run without --trusted-pubkey
+        # THE attack (council R2): attacker's own key inside a forged tip, verifier run without --trusted-pubkey
         _write(self.led, self.base[:-1]); T.sign_tip(self.led, self.other)
         self.assertEqual(V.main([self.led, "--require-tip", "--quiet"]), 1)
         self.assertEqual(T.main(["check", self.led]), 2)                     # check without a trusted key: exit 2
@@ -126,15 +126,15 @@ class TestTip(unittest.TestCase):
         self.assertTrue(any("ROLLBACK" in x for x in r["scope"]["does_not_prove"]))
         r = self._v(tip_not_before="2026-09-15T09:00:00+00:00")
         self.assertEqual(r["verdict"], "FAIL"); self.assertIn("tip_rolled_back", self._errors(r))
-        # instants, not strings (council R2, Opus): 'Z' form and a different offset of the SAME instant
+        # instants, not strings (council R2): 'Z' form and a different offset of the SAME instant
         _write(self.led, self.base); T.sign_tip(self.led, self.k, ts="2026-09-15T10:00:00+00:00")
         for same in ("2026-09-15T10:00:00Z", "2026-09-15T10:00:00+00:00", "2026-09-15T12:00:00+02:00", "2026-09-15T09:59:59.5Z"):
             self.assertEqual(self._v(tip_not_before=same)["verdict"], "PASS", same)
         self.assertEqual(self._v(tip_not_before="2026-09-15T10:00:01Z")["verdict"], "FAIL")
-        # the verifier's argument follows the SAME profile as the tip (Gemini: py/js took a date-only, Go did not)
+        # the verifier's argument follows the SAME profile as the tip (review: py/js took a date-only, Go did not)
         for bad in ("not-a-date", "2026-09-15", "2026-09-15T10:00:00", "2026-09-15T10:00Z"):
             r = self._v(tip_not_before=bad); self.assertEqual(r["verdict"], "FAIL", bad); self.assertIn("bad_not_before", self._errors(r))
-        # VALUE-layer profile, by hand and identical in the three checkers (review with Fable 5.1): impossible
+        # VALUE-layer profile, by hand and identical in the three checkers (independent review): impossible
         # dates, hour 24, year 0000, comma / 10-digit fraction, offset +24:00 are tip_invalid; 4-digit fraction ok
         _write(self.led, self.base)
         for bad_ts in ("2026-02-30T10:25:00Z", "2026-04-31T10:25:00Z", "2026-09-15T24:00:00Z", "0000-01-01T00:00:00Z",
@@ -147,7 +147,7 @@ class TestTip(unittest.TestCase):
             self.assertEqual(self._v()["verdict"], "PASS", ok_ts)
         with self.assertRaises(ValueError):
             T.parse_instant("2023-02-29T00:00:00Z")   # not a leap year
-        # round 3 with Fable: ASCII digits only (Python's \d matched Arabic-Indic/fullwidth digits, Go/JS did not)
+        # round 3: ASCII digits only (Python's \d matched Arabic-Indic/fullwidth digits, Go/JS did not)
         for uni in ("٢٠٢٦-٠٩-١٥T10:00:00Z", "２０２６-０９-１５T１０:２５:００Z"):
             T.sign_tip(self.led, self.k, ts=uni)
             r = self._v(); self.assertEqual(r["verdict"], "FAIL", uni); self.assertIn("tip_invalid", self._errors(r))
@@ -173,7 +173,7 @@ class TestTip(unittest.TestCase):
                          b'{"entries":3,"kind":"cryptovalid_tip/1","ledger_id":"' + b"cd" * 32 + b'","tip_sha256":"' + b"ab" * 32 + b'","ts":"2026-09-15T07:00:00+00:00"}')
 
     def test_ledger_identity_same_key_two_ledgers(self):
-        # council 15/09 (Sonnet/Gemini/Opus): one log key, two ledgers. B's tip on A's file is named; the WHOLE
+        # council 15/09: one log key, two ledgers. B's tip on A's file is named; the WHOLE
         # pair (B's file + B's tip) put in A's place is caught only out of band, with --expect-ledger-id.
         other = os.path.join(self.tmp, "B.jsonl"); b = _ledger(20); b[0]["data"] = {"ledger": "B"}
         prev = "0" * 64

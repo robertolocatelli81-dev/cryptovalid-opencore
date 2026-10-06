@@ -1,6 +1,6 @@
 # FUNDCERT/OMEGA — roadmap onesta sulle mancanze (vs competitor mondiali, 2026-08-20)
 
-Nata dall'assessment competitivo con cross-check Gemini Pro (verdetto IN DISACCORDO sul differenziatore, accolto).
+Nata dall'assessment competitivo con cross-check indipendente (verdetto IN DISACCORDO sul differenziatore, accolto).
 **Onestà prima di tutto:** alcune mancanze le chiude il codice, altre NO (audit organizzativi, accordi di filing,
 track-record). Qui distinguo, e segno lo stato REALE (non "attivo" = "fatto").
 
@@ -44,11 +44,11 @@ Legenda stato: ☐ da fare · ◐ parziale/in corso · ✔ affrontato+misurato �
 
 ## D. Fiducia / moat
 - ⛔ **D1 · Certificazioni** SOC 2 / ISO 27001 / pen-test: audit organizzativi.
-- ◐ **D2 · Verificabilità come contesto, non solo fingerprint** — la critica Gemini: un digest non dice chi/perché
+- ◐ **D2 · Verificabilità come contesto, non solo fingerprint** — la critica della revisione: un digest non dice chi/perché
   E la ri-computabilità serve una spec STABILE, non solo il codice. Affrontato in parte: **vettori di conformità
   pinnati** (`spec/vectors/fundcert_conformance.json` + test) — input canonico → digest atteso, versionati per
   `CANON_VERSION`; se le regole cambiano il test fallisce → bump esplicito. Un terzo ora ricomputa e VERIFICA.
-  Inoltre — le 3 deficienze precise di Gemini affrontate col codice: (a) `evidence_record()` lega il digest
+  Inoltre — le 3 deficienze precise della revisione affrontate col codice: (a) `evidence_record()` lega il digest
   all'INPUT (sha256 byte grezzi + fonte + fetched_at) e al METODO (`canonicalizer_fingerprint`) → la
   ri-computabilità ha una provenienza, non è nuda; (b) `resolve_exception()` porta il CHI/PERCHÉ (resolver,
   reason, decision, timestamp + digest) sulle eccezioni di triage = il contesto operativo che un fingerprint

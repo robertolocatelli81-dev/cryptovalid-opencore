@@ -4,7 +4,7 @@
 
 Il banco DEVE saper fallire (controlli negativi) prima di accettare il vero. La rete non è
 richiesta: gli RPC sono iniettati come fake che restituiscono viste controllate, così i vettori
-di falso-positivo nominati da Gemini (cluster falso, RPC che mente, memo forgiato) sono
+di falso-positivo nominati dalla revisione (cluster falso, RPC che mente, memo forgiato) sono
 esercitati in modo deterministico e offline.
 """
 import os

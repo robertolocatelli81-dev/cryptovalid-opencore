@@ -444,7 +444,7 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
     idx_ok = True
     for i, e in enumerate(entries):
         idx = e.get("idx")
-        if isinstance(idx, bool) or idx != i:   # True == 1 in Python: a boolean idx is NOT sequential (r5, Fable)
+        if isinstance(idx, bool) or idx != i:   # True == 1 in Python: a boolean idx is NOT sequential (r5)
             idx_ok = False
             errors.append({"line": i, "error": f"idx_mismatch: expected {i}, got {e.get('idx')}"})
 
@@ -470,7 +470,7 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
     tip_file = tip if tip is not None else (path + ".tip.json" if os.path.exists(path + ".tip.json") else None)
     if trusted_pq_pubkey_b64:
         # a trusted post-quantum key is a REQUIREMENT: it implies a required tip, and it is meaningless without the
-        # trusted log key (council 15/09, Fable: PQ key alone → tip never checked → PASS, a fail-open)
+        # trusted log key (council 15/09: PQ key alone → tip never checked → PASS, a fail-open)
         require_tip = True
         if not trusted_pubkey_hex:
             chain_integrity = False
@@ -478,7 +478,7 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
                                                             "(the post-quantum layer sits on top of the Ed25519 tip, never instead of it)"})
     if tip_file is not None and not trusted_pubkey_hex:
         # a tip is there but no trusted log key: it is NOT checked (the key inside the tip proves nothing), and
-        # the verdict is the bare chain's — with require_tip that is a FAIL (council 15/09, Gemini: no fail-open)
+        # the verdict is the bare chain's — with require_tip that is a FAIL (council 15/09: no fail-open)
         tip_check = {"ok": False, "checked": False, "tip_path": tip_file, "pq_protected": None,   # not read: unknown
                      "error": "tip_untrusted: a signed tip is present but no trusted log key was given (--trusted-pubkey); "
                               "the tail limit applies in full"}

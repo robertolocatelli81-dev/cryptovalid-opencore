@@ -96,7 +96,7 @@ func TestTipMovesTheTailLimit(t *testing.T) {
 			t.Fatalf("not-before %q not named bad_not_before: %+v", bad, v)
 		}
 	}
-	// value-layer profile by hand, identical in the three checkers (review with Fable 5.1)
+	// value-layer profile by hand, identical in the three checkers (independent review)
 	for _, bad := range []string{"2026-02-30T10:25:00Z", "2026-09-15T24:00:00Z", "0000-01-01T00:00:00Z", "2026-09-15T10:25:00,5Z", "2026-09-15T10:25:00.1234567890Z", "2026-09-15T10:25:00+24:00", "2026-09-15T10:25:60Z", "2023-02-29T00:00:00Z"} {
 		if _, err := parseInstant(bad); err == nil {
 			t.Fatalf("ts %q accepted by the hand-written validator", bad)
@@ -107,7 +107,7 @@ func TestTipMovesTheTailLimit(t *testing.T) {
 			t.Fatalf("ts %q refused: %v", good, err)
 		}
 	}
-	// round 3 with Fable: ASCII digits only; ordering on the integer pair (seconds, nanos) agrees with Python/JS
+	// round 3: ASCII digits only; ordering on the integer pair (seconds, nanos) agrees with Python/JS
 	for _, uni := range []string{"٢٠٢٦-٠٩-١٥T10:00:00Z", "２０２６-０９-１５T１０:２５:００Z"} {
 		if _, err := parseInstant(uni); err == nil {
 			t.Fatalf("non-ASCII digits accepted: %q", uni)

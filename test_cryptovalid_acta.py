@@ -176,7 +176,7 @@ class TestSignVerify(unittest.TestCase):
                   {"payload": p1, "signature": {"alg": "EdDSA", "kid": KID, "sig": "00" * 64}, "extra": 1}):
             self.assertFalse(A.verify_receipt(h, {KID: PUB_HEX})["ok"])
         self.assertFalse(A.verify_chain([], {KID: PUB_HEX})["ok"]); self.assertFalse(A.verify_chain("x", {})["ok"])
-        # round 1 (Opus): a valid signature with hostile members OUTSIDE the signed bytes is a verdict, never an exception
+        # round 1: a valid signature with hostile members OUTSIDE the signed bytes is a verdict, never an exception
         nan_sig = json.loads(json.dumps(r2)); nan_sig["signature"]["junk"] = float("nan")
         v = A.verify_receipt(nan_sig, {KID: PUB_HEX}); self.assertFalse(v["ok"]); self.assertIn("6.6", v["why"])
         deep = json.loads(json.dumps(r2)); deep["payload"]["deep"] = json.loads("[" * 600 + "]" * 600)
@@ -199,7 +199,7 @@ class TestSignVerify(unittest.TestCase):
         # a segment of a longer chain: the first link is a warning, not a problem
         v = A.verify_chain([r2], {KID: PUB_HEX}); self.assertTrue(v["ok"]); self.assertTrue(any("segment" in w["why"] for w in v["warnings"]))
         # a payload carrying a signature member is refused on read (§6.6)
-        # round 2 (Opus): verify_chain reads the link from the SAME shape as the signature — a flat receipt with a decoy `payload`
+        # round 2: verify_chain reads the link from the SAME shape as the signature — a flat receipt with a decoy `payload`
         flat_g = {"type": "protectmcp:decision", "tool_name": "Read", "decision": "allow", "issued_at": "2026-09-20T09:00:00Z", "issuer_id": "conformance", "policy_digest": POLICY_DIGEST}
         flat_g["signature"] = sk.sign(A.jcs(flat_g)).hex()
         flat_h = {"type": "protectmcp:decision", "tool_name": "Bash", "decision": "deny", "issued_at": "2026-09-20T09:00:01Z", "issuer_id": "conformance",
@@ -211,7 +211,7 @@ class TestSignVerify(unittest.TestCase):
         flat_ok = {k: v for k, v in flat_h.items() if k not in ("signature", "payload")}; flat_ok["previousReceiptHash"] = A.receipt_hash(flat_g); flat_ok["policy_digest"] = POLICY_DIGEST
         flat_ok["signature"] = sk.sign(A.jcs(flat_ok)).hex()
         self.assertTrue(A.verify_chain([flat_g, flat_ok], {"conformance": PUB_HEX}, _policy_files())["ok"])
-        # round 2 (Sonnet): an ES256 high-S twin verifies mathematically but would change the §6.7 hash → refused
+        # round 2: an ES256 high-S twin verifies mathematically but would change the §6.7 hash → refused
         hi = json.loads(json.dumps(es)); hi["signature"]["sig"] = (rr.to_bytes(32, "big") + (A.P256_ORDER - ss).to_bytes(32, "big")).hex()
         self.assertTrue(A.verify_receipt(es, {"es": pem})["ok"]); v = A.verify_receipt(hi, {"es": pem}); self.assertFalse(v["ok"]); self.assertIn("low-S", v["why"])
         # instants, not just shapes; previous must be signed; issued_at_base UTC; Cedar literal safety
@@ -345,7 +345,7 @@ class KeyValidityWindow(unittest.TestCase):
     def test_a_leap_second_is_compared_and_not_skipped(self):
         # `_valid_instant` accepts :60 because RFC 3339 allows the form; before this, parsing it failed and the
         # window check was skipped, so a receipt could pass a window it should have been compared against.
-        # Found by Gemini Pro reviewing the change, 23/09/2026.
+        # Found by an independent review of the change, 23/09/2026.
         r, kid, pk = self._signed("2026-06-30T23:59:60Z")
         keys = {kid: {"key": pk, "valid_until": "2026-01-01T00:00:00Z"}}
         out = A.verify_receipt(r, keys)
@@ -358,8 +358,8 @@ class KeyValidityWindow(unittest.TestCase):
 
     def test_one_parser_only(self):
         # The two parsers disagreed before: `_valid_instant` accepted a leap second and the comparison parser did
-        # not, so a value accepted as valid could not be compared and the window check was skipped. Found by Fable
-        # 5.1 and by Gemini Pro independently, 23/09/2026.
+        # not, so a value accepted as valid could not be compared and the window check was skipped. Found by two
+        # independent reviews, 23/09/2026.
         for t in ("2026-06-30T23:59:60Z", "2026-03-15T12:00:00.12Z", "2026-03-15T12:00:00.1234567Z"):
             self.assertEqual(A._valid_instant(t), A._instant(t) is not None, t)
 
@@ -640,7 +640,7 @@ B64U = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 @unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
 class MalformedInputsFound20260925(unittest.TestCase):
-    """Malformed-input review of 25/09/2026 (NEMESIS + three Opus minds + Gemini Pro; each finding reproduced before
+    """Malformed-input review of 25/09/2026 (NEMESIS + independent AI reviewers; each finding reproduced before
     the fix). Every test here was red on 0.16.0 and names the finding it pins."""
 
     def setUp(self):
@@ -968,7 +968,7 @@ class OpenPointsA3_20260926(unittest.TestCase):
 
 
 class ReviewFindings20260926(unittest.TestCase):
-    """Independent Opus review of the A3 change (26/09/2026), each finding reproduced before the fix."""
+    """Independent review of the A3 change (26/09/2026), each finding reproduced before the fix."""
 
     def test_leap_second_orders_after_every_digit_of_59(self):
         # the 12-digit offset used for :60 let a 13-digit :59 bound sort after it: a receipt issued at 23:59:60.5 passed
@@ -979,7 +979,7 @@ class ReviewFindings20260926(unittest.TestCase):
         self.assertEqual(w[0] if w else None, "outside")
 
     def test_a_very_long_fraction_gives_a_verdict_not_an_exception(self):
-        # Gemini Pro 26/09: int() of >4300 digits raised ValueError out of verify_receipt (Python >= 3.11)
+        # review 26/09: int() of >4300 digits raised ValueError out of verify_receipt (Python >= 3.11)
         t = "2026-09-20T09:00:00." + "1" * 5000 + "Z"
         key = A._instant_exact(t)
         self.assertIsNotNone(key)

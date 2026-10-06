@@ -333,7 +333,7 @@ def reconcile(a: Holdings, b: Holdings, by: str = "id", id_target: Optional[str]
 
 def canonicalizer_fingerprint() -> str:
     """Fingerprint del METODO di canonicalizzazione — lega il digest alle REGOLE esatte, non solo al codice
-    pubblico (critica Gemini: la ri-computabilità serve un metodo stabile). Cambia se cambia una regola-core."""
+    pubblico (critica della revisione: la ri-computabilità serve un metodo stabile). Cambia se cambia una regola-core."""
     spec = (f"{CANON_VERSION}|qdp={QUANTITY_DP}|round=ROUND_HALF_EVEN|"
             f"sort=(scheme,id,qty,cash)|hash=sha3_256|content_only")
     return hashlib.sha3_256(spec.encode()).hexdigest()[:16]
@@ -343,7 +343,7 @@ def evidence_record(raw_input, source: str, fetched_at: str, holdings_digest: st
                     fund_id: str = "", as_of: str = "") -> Dict:
     """Lega il digest all'INPUT che l'ha prodotto (provenienza: sha256 dei byte grezzi + fonte + quando) e al
     METODO (fingerprint) → un record di evidenza autoconsistente che prova COSA input, COME, COSA risultato.
-    Risponde alla critica Gemini 'un digest non dice da dove viene': senza legare l'input, la ri-computabilità è
+    Risponde alla critica della revisione 'un digest non dice da dove viene': senza legare l'input, la ri-computabilità è
     inutile. Va poi hash-chained nel ledger OMEGA per il tamper-evidence (chi/quando lo sigilla). `fetched_at`
     è fornito dal chiamante (tempo reale della fonte) — NON inventato qui."""
     raw = raw_input if isinstance(raw_input, bytes) else str(raw_input).encode()
@@ -361,7 +361,7 @@ def evidence_record(raw_input, source: str, fetched_at: str, holdings_digest: st
 
 
 def resolve_exception(item: Dict, resolver: str, reason: str, decision: str, at: str = "") -> Dict:
-    """Il CHI/PERCHÉ che Gemini indicava mancante: registra la RISOLUZIONE di un'eccezione di triage (chi, perché,
+    """Il CHI/PERCHÉ che la revisione indicava mancante: registra la RISOLUZIONE di un'eccezione di triage (chi, perché,
     quale decisione, quando). È il contesto operativo che un fingerprint da solo non porta; da hash-chainare per
     la forensics. `at` (timestamp) fornito dal chiamante, non inventato."""
     out = dict(item)
@@ -492,7 +492,7 @@ _ASSET_CLASS_LABEL = {"EC": "equity", "DBT": "debt", "DE": "derivative", "RA": "
 
 def asset_class_exposure(h: Holdings) -> Dict:
     """B5 — esposizione per CLASSE d'asset (equity/debt/derivato/…), da `assetCat` dell'N-PORT. Risponde alla
-    deficienza Gemini 'copertura asset class/derivati': il tool ora VEDE i derivati e li separa, invece di
+    deficienza della revisione 'copertura asset class/derivati': il tool ora VEDE i derivati e li separa, invece di
     confonderli con le azioni. Metadata a parte (l'id li distingue già nel digest). Value in base (es. USD)."""
     exp: Dict = {}
     unknown = 0

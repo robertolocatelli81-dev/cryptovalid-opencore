@@ -177,7 +177,7 @@ python3 conformance.py     # exit 0 = conformant
   `--tip-not-before` is the verifier's error (`bad_not_before`), never blamed on the tip; the instant is compared
   as the integer pair (seconds, nanoseconds), so two tips signed in the same second are told apart by their
   fraction (measured by the `ordering-*` oracle vectors). These were
-  measured divergences until 0.11.1 (review with Fable 5.1, 15/09/2026).
+  measured divergences until 0.11.1 (review of 15/09/2026).
   Writers: `cryptovalid_ingest.Ingestor(tip_keyfile=…)` (every flush, O(1), same lock), Go `AppendSigned` /
   `cvappend -tipkey`, `cryptovalid_tip.py sign` (any file, O(n)). Verifiers: Python (reference), JS, Go;
   **declared divergence**: Rust and Swift ignore the tip (measured by the oracle case `tip-truncated`).

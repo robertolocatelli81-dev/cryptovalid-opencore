@@ -26,7 +26,7 @@ def build_go(tmp):
     r = subprocess.run(["go", "build", "-o", out, "./cmd/cvverify"], cwd=GO_SRC, capture_output=True, text=True)
     if r.returncode != 0:
         # a Go toolchain is present but the verifier does not build: that IS a regression of a reference,
-        # never a silent "measured without Go" (council round 4, Gemini)
+        # never a silent "measured without Go" (council round 4)
         raise SystemExit("go build failed — the Go reference verifier is broken: " + r.stderr.strip()[:400])
     return out
 
@@ -141,7 +141,7 @@ CORPUS["raw-tab-same-canon"] = valid_entry({"k": "a\tb"}).replace("\\t", "\t")
 CORPUS["crlf-endings"] = valid_entry({"a": 1}).replace("\n", "") + "\r"                       # one entry, CRLF: PASS everywhere
 CORPUS["idx-neg-zero"] = valid_entry({"a": 1}).replace('"idx": 0', '"idx": -0')                # -0 is the integer 0: PASS everywhere
 CORPUS["non-utf8-byte"] = valid_entry({"a": 1}).encode().replace(b'"ts"', b'"t\xffs"', 1)         # bytes: FAIL everywhere (Rust said FILE_ERROR)
-# review 21/09 (Opus): a raw byte INSIDE A VALUE, self_hash computed over U+FFFD — a lossy decoder reads exactly the hashed text and
+# review 21/09: a raw byte INSIDE A VALUE, self_hash computed over U+FFFD — a lossy decoder reads exactly the hashed text and
 # says PASS (JS did, alone); a strict one refuses the file
 def _fffd_line():
     e = {"idx": 0, "ts": "t", "data": {"k": "\ufffd"}, "prev_hash": "0" * 64}
@@ -218,13 +218,13 @@ def _tip_case():
     return {"text": "".join(json.dumps(e) + "\n" for e in chain[:2]), "tip": tip, "pubkey": pk, "full": full, **hybrid,
             "tip_garbage_ts": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "garbage"),
             "tip_upper_hex": signed(3, chain[0]["self_hash"].upper(), chain[2]["self_hash"], "2026-09-15T07:00:00+00:00"),
-            # review with Fable 5.1 (15/09): validly signed, oddly formatted — Python/JS PASSED, Go refused
+            # review of 15/09: validly signed, oddly formatted — Python/JS PASSED, Go refused
             "tip_date_only_ts": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15"),
             "tip_no_seconds_ts": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T09:00+02:00"),
             # and the mirror: an EMPTY log_pubkey_hex was tip_invalid in Python, ok in Go/JS → now "absent" everywhere
             "tip_empty_pubkey": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T07:00:00+00:00").replace(
                 '"log_pubkey_hex": "%s"' % pk, '"log_pubkey_hex": ""'),
-            # VALUE layer (review with Fable 5.1, 15/09, measured: JS rolled 02-30 over, accepted 24:00 and year 0000;
+            # VALUE layer (review of 15/09, measured: JS rolled 02-30 over, accepted 24:00 and year 0000;
             # Go accepted a comma fraction, 10 digits, +24:00). One hand-written validator now, enumerated here.
             "tip_feb30": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-02-30T10:25:00Z"),
             "tip_hour24": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T24:00:00Z"),
@@ -235,7 +235,7 @@ def _tip_case():
             "tip_leap60": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T10:25:60Z"),
             "tip_frac4_ok": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2026-09-15T10:25:00.1234Z"),
             "tip_leapday_ok": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "2024-02-29T23:59:59-11:30"),
-            # round 3 with Fable: Python's \d matched Unicode digits (Go/JS: ASCII) → measured, now refused everywhere
+            # round 3: Python's \d matched Unicode digits (Go/JS: ASCII) → measured, now refused everywhere
             "tip_arabic_digits": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "٢٠٢٦-٠٩-١٥T10:00:00Z"),
             "tip_fullwidth_digits": signed(3, chain[0]["self_hash"], chain[2]["self_hash"], "２０２６-０９-１５T１０:２５:００Z"),
             # ORDERING vectors (checked below with --tip-not-before, Python/JS/Go only): same accept set is not
@@ -246,7 +246,7 @@ def _tip_case():
                 ("2026-09-15T10:00:00.0000004Z", "2026-09-15T10:00:00.0000001Z", "PASS"),
                 ("0050-06-15T12:00:00Z", "0100-01-01T00:00:00Z", "FAIL"),
                 ("2026-09-15T12:00:00+02:00", "2026-09-15T10:00:00Z", "PASS"),
-                # round 4 with Fable: pre-1970 with fraction (negative epoch seconds, positive nanos), and the extremes
+                # round 4: pre-1970 with fraction (negative epoch seconds, positive nanos), and the extremes
                 ("1969-12-31T23:59:59.9Z", "1969-12-31T23:59:59.5Z", "PASS"),
                 ("1969-12-31T23:59:59.5Z", "1969-12-31T23:59:59.9Z", "FAIL"),
                 ("0001-01-01T00:00:00+23:59", "0001-01-01T00:00:00Z", "FAIL"),
@@ -481,7 +481,7 @@ def main():
             f.write(valid_entry({"a": 1}) + "\n")
         cli_cases = {"cli-unknown-flag": ["--no-such-flag"], "cli-trusted-pubkey-empty": ["--trusted-pubkey", ""],
                      "cli-trusted-pubkey-missing-value": ["--trusted-pubkey"], "cli-two-positionals": [valid],
-                     "cli-algo-empty": ["--algo", ""]}   # review 21/09 (Haiku): Python validated five value flags of seven
+                     "cli-algo-empty": ["--algo", ""]}   # review 21/09: Python validated five value flags of seven
         for name, extra in cli_cases.items():
             row = {}
             for k, cmd in available.items():

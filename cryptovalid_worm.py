@@ -1,9 +1,9 @@
 """
 CryptoValid · WORM escrow adapter — annichila W2 (tiene l'HASH, non il DATO).
 
-W2 (Fable 5 vs Gemini Pro, 2026-08-19): l'ancora conserva l'hash, non il record → i requisiti WORM del
-DATO (SEC 17a-4, MiFID: ritenzione 5-7 anni immutabile) non erano soddisfatti PER COSTRUZIONE. Fix (Fable,
-chiusura ingegneristica): un adapter OPZIONALE che mette il RECORD (cifrato) su storage write-once, con
+W2 (adversarial review, 2026-08-19): l'ancora conserva l'hash, non il record → i requisiti WORM del
+DATO (SEC 17a-4, MiFID: ritenzione 5-7 anni immutabile) non erano soddisfatti PER COSTRUZIONE. Fix (chiusura
+ingegneristica): un adapter OPZIONALE che mette il RECORD (cifrato) su storage write-once, con
 l'ancora esistente che ne attesta l'integrità. La cancellazione GDPR («diritto all'oblio») avviene via
 CRYPTO-SHREDDING della chiave — si distrugge la chiave, non l'oggetto WORM: il ciphertext resta immutabile
 (WORM rispettato) ma diventa indecifrabile (dato effettivamente cancellato). I due obblighi, apparentemente

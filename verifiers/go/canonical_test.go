@@ -181,7 +181,7 @@ func TestTornLastLine(t *testing.T) {
 }
 
 func TestTornLastLineCompleteNoNewline(t *testing.T) {
-	// council round 3 (Fable+Opus): a COMPLETE, parsable last line that lost only its '\n' (crash between the
+	// council round 3: a COMPLETE, parsable last line that lost only its '\n' (crash between the
 	// last '}' and the newline, or a file truncated by one byte) must be refused too — otherwise Append writes
 	// the next entry on the SAME line and the writer itself corrupts the chain ({...}{...}\n).
 	p := t.TempDir() + "/t.jsonl"
@@ -217,7 +217,7 @@ func TestEmptyLedgerIsFail(t *testing.T) {
 }
 
 func TestTrailingWhitespaceAfterNewlineIsNamedCorrectly(t *testing.T) {
-	// council round 4 (Fable): `{...}\n   ` (an editor's trailing spaces) used to be reported as "no trailing
+	// council round 4: `{...}\n   ` (an editor's trailing spaces) used to be reported as "no trailing
 	// newline" although the newline IS there — safe, but the diagnosis lied and its recovery hint was wrong.
 	p := t.TempDir() + "/t.jsonl"
 	ts := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)

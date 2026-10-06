@@ -1,7 +1,7 @@
 """
 CryptoValid · mutation runner SISTEMATICO (stdlib) — annichila W7.
 
-W7 (supreme-ai + Fable + Gemini): finora solo mutanti SCELTI A MANO → "il banco becca un verifier corrotto"
+W7 (adversarial review): finora solo mutanti SCELTI A MANO → "il banco becca un verifier corrotto"
 era estrapolato da pochi mutanti su guardie già coperte. mutmut/cosmic-ray NON sono installabili qui
 (PEP 668, env gestito). Questo runner colma il gap SENZA dipendenze: genera mutanti da REGOLE (operatori
 di confronto, booleani, letterali, appartenenza) su TUTTO un file — generazione sistematica, non cherry-pick

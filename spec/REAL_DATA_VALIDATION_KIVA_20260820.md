@@ -1,11 +1,11 @@
 # microfinance.py — validazione su DATI REALI (Kiva) + shortlist prima MFI (2026-08-20)
 
-Ordine di Roberto: *"trova la prima MFI che usa CryptoValid e procediamo se anche Fable 5 è d'accordo."*
-Gate: **Gemini Pro** (sviluppo logico via grant) + **Fable 5** (D'ACCORDO-CON-CORREZIONE, 3 correzioni incorporate).
+Ordine di Roberto: trovare la prima MFI che usa CryptoValid e procedere solo se anche la revisione indipendente è d'accordo.
+Gate: **revisione indipendente** (D'ACCORDO-CON-CORREZIONE, 3 correzioni incorporate).
 Metro **pre-registrato e hashato PRIMA** del dato: `opencore/spec/PREREG_KIVA_20260820.md`
 (SHA3-256 `db5671af0156683c646aabbb02814fcb80a0feb0ed6a1f88916691ea1d2a04fe`, `~/.omega/prereg/prereg_ledger.jsonl`).
 
-## Stato onesto (Correzione 1 di Fable — un dataset NON è un utente)
+## Stato onesto (Correzione 1 della revisione — un dataset NON è un utente)
 Questo esercizio porta `microfinance.py` da **"validato su SINTETICO"** a **"validato su DATO REALE pubblico"**
 per le proprietà **strutturali/di integrità**. **ADOZIONE: ZERO.** L'ordine "prima MFI che *usa* CryptoValid"
 resta **APERTO**; questa ne è la precondizione onesta (una MFI approcciabile con credibilità, non un logo finto).
@@ -35,7 +35,7 @@ Il primo run segnava P1 `FAIL(cieco)`: era un **bug del mio harness** (leggevo c
 inesistenti; le vere sono `identity_ok`/`loans_inconsistent`), non del tool. Corretto → PASS. Registrato per
 onestà: stavo per accusare il tool di cecità per un errore mio.
 
-## LIMITI DICHIARATI (Correzione 3 di Fable + limite dato)
+## LIMITI DICHIARATI (Correzione 3 della revisione + limite dato)
 1. **Kiva è P2P crowdfunding**, non il ledger operativo privato di una MFI: lo snapshot è dato **già pubblico**.
    Prova che la pipeline regge dati reali nella forma giusta, NON che risolva il bisogno interno d'integrità
    di una MFI (quello vive sui registri privati).

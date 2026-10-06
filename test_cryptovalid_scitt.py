@@ -119,7 +119,7 @@ class TestScitt(unittest.TestCase):
             entry = [json.loads(l) for l in f][1]
         self.assertEqual(entry["data"]["scitt"]["statement_sha256"], SC.statement_id(ss))
         # the identity is over the SIGNED parts: the same statement re-encoded by another encoder (pycose/cbor2 order,
-        # non-minimal lengths) or carrying receipts of another TS keeps its identity (round 13, Opus)
+        # non-minimal lengths) or carrying receipts of another TS keeps its identity (round 13)
         pb, ph, uh, pl, sig = SC.parse_cose_sign1(ss)
         other_encoding = b"\xd2" + b"\x84" + b"\x58" + bytes([len(pb)]) + pb + b"\xa0" + b"\x58" + bytes([len(pl)]) + pl + b"\x58\x40" + sig
         self.assertEqual(SC.statement_id(other_encoding), SC.statement_id(ss))

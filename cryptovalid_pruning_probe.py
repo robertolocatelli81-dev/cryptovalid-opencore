@@ -1,7 +1,7 @@
 """
 CryptoValid — pruning / evidence-decay probe (opencore).
 
-The honest risk (supreme-ai + Fable 5, 2026-08-19): free public Solana RPCs PRUNE historical
+The honest risk (adversarial review, 2026-08-19): free public Solana RPCs PRUNE historical
 transactions. A STRICT verify (min_witnesses>=2) that passes at t=0 can FAIL on an *honest* old
 anchor months later — a self-DoS of the evidence. This probe MEASURES current retention across a
 set of public RPCs for a given anchor, so decay is a measured number, not an assumption.

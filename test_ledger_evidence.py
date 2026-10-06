@@ -127,7 +127,7 @@ class TestReceipts(unittest.TestCase):
             self.assertFalse(R.verify_receipt(bad, self.pk, leaf_canonical=lf)["ok"])
         bad = json.loads(json.dumps(r)); bad["leaf_index"] = 0
         self.assertFalse(R.verify_receipt(bad, self.pk, leaf_canonical=lf)["ok"])
-        # tree_size forgiato con path riusato (council 14/09, Fable): deve cadere
+        # tree_size forgiato con path riusato (council 14/09): deve cadere
         r0 = R.inclusion_receipt(SAMPLE, 0, self.key)
         forged = json.loads(json.dumps(r0)); forged["tree_size"] = 5
         self.assertFalse(R.verify_receipt(forged, self.pk, leaf_canonical=self.leaves[0])["ok"])
@@ -256,7 +256,7 @@ class TestMonitor(unittest.TestCase):
 
     @unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
     def test_state_file_rewritten_is_detected(self):
-        # council 14/09 (Gemini+Fable): riscrivere il file di stato azzerava la baseline su un ledger riscritto
+        # council 14/09: riscrivere il file di stato azzerava la baseline su un ledger riscritto
         k = os.path.join(self.tmp, "k"); pk = signer.keygen(k)["public_key_hex"]
         self.assertTrue(MON.run(self.ledger, self.state, keyfile=k)["ok"])
         with open(self.state) as f:
@@ -273,7 +273,7 @@ class TestMonitor(unittest.TestCase):
         os.remove(self.state); MON.run(self.ledger, self.state)
         v3 = MON.run(self.ledger, self.state, keyfile=k)
         self.assertTrue(any("STATE UNSIGNED" in a for a in v3["alerts"]))
-        # modalità AUDITOR (solo chiave pubblica): verde a ogni run, MAI scrive uno stato non firmato (round 3, Fable+Opus)
+        # modalità AUDITOR (solo chiave pubblica): verde a ogni run, MAI scrive uno stato non firmato (round 3)
         os.remove(self.state)
         for _ in range(3):
             va = MON.run(self.ledger, self.state, trusted_pubkey_hex=pk)
@@ -358,7 +358,7 @@ class TestEidasLedger(unittest.TestCase):
 
     @unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
     def test_signature_swap_is_measured(self):
-        # council 14/09 (Fable): scambiare signer/signature di un record dava PASS al verifier — l'autovalutazione ora misura le firme
+        # council 14/09: scambiare signer/signature di un record dava PASS al verifier — l'autovalutazione ora misura le firme
         tmp = tempfile.mkdtemp(prefix="eid2_")
         try:
             k = os.path.join(tmp, "k"); signer.keygen(k)

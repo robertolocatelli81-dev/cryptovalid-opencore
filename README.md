@@ -311,7 +311,7 @@ Tests: `python3 test_report.py` (tamper→RED proven before the positive path).
 
 ## MCP server — agents that can prove what they did
 
-`cryptovalid_mcp.py` exposes CryptoValid to any MCP client (Claude Code, Claude Desktop, other
+`cryptovalid_mcp.py` exposes CryptoValid to any MCP client (IDE assistants, desktop agents, other
 agents) over stdio — **zero dependencies**: the MCP JSON-RPC transport is implemented with the
 Python stdlib, same ethos as the rest of this repo.
 
@@ -922,8 +922,7 @@ python3 cryptovalid_acta.py run-vectors <agent-governance-testvectors clone> rec
 ```
 
 `examples/acta/testvectors_driver/run.sh` is the driver to drop into that repository's `implementations/`. Review round 1
-(Claude Opus 5, Sonnet 5, Haiku 4.5 — Gemini 3.1 Pro's credits were exhausted that day; every finding re-measured and
-ablated in the tests): the §2.2 `issuer_id == kid` rule was enforced only on the envelope shape — a flat-shape receipt
+(independent AI review; every finding re-measured and ablated in the tests): the §2.2 `issuer_id == kid` rule was enforced only on the envelope shape — a flat-shape receipt
 signed by any registered key could name another issuer (fixed for both shapes); a valid signature with hostile members
 outside the signed bytes (`NaN` inside the signature object, 600-deep nesting) raised instead of returning a verdict (the
 whole receipt is canonicalized first; the signature object must carry exactly `alg`, `kid`, `sig`; a payload with a
