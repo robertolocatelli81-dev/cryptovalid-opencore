@@ -43,6 +43,8 @@ from typing import Dict, List, Optional
 
 GENESIS_PREV = "0" * 64
 SUPPORTED_ALGOS = ("sha256", "sha3_256")
+ENTRY_KEYS = frozenset({"idx", "ts", "data", "prev_hash", "self_hash", "signature", "signer", "tsa_token", "signature_pq", "signer_pq"})   # SPEC §2.1: the closed entry schema
+
 
 
 
@@ -402,6 +404,14 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
     if algo is None:
         algo = detect_algo(entries) or "sha256"
 
+    # SPEC §2.1 (2026-10-10): the entry is a CLOSED object — a top-level key outside the core + optional fields is a named
+    # FAIL, never a silent pass (measured: entries written with an extra key, hash recomputed over it, were PASS)
+    schema_failures: List[Dict] = []
+    for i, e in enumerate(entries):
+        unknown = sorted(k for k in e if k not in ENTRY_KEYS)
+        if unknown:
+            schema_failures.append({"idx": e.get("idx", i), "reason": "unknown_field:" + ",".join(unknown)[:120]})
+
     # Re-hash check
     hash_recomputed = 0
     hash_failures: List[Dict] = []
@@ -457,7 +467,7 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
             ts_ok = False
             ts_backwards.append({"idx": entries[i].get("idx", i), "prev_ts": a, "ts": b})
 
-    chain_integrity = len(hash_failures) == 0 and len(link_failures) == 0 and idx_ok and len(errors) == 0
+    chain_integrity = len(hash_failures) == 0 and len(link_failures) == 0 and idx_ok and len(errors) == 0 and len(schema_failures) == 0   # SPEC §2.1
     # A ledger with ZERO entries has no chain to verify: "PASS" on nothing was a false green (found
     # by the 2026-09-11 red-team pass: truncation to zero entries verified as PASS — in all four
     # verifiers of this family). The spec vocabulary is PASS/FAIL, so it is a FAIL with a named error.
@@ -525,6 +535,7 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
         "ts_monotonic": ts_ok,
         "ts_backwards": ts_backwards[:10],
         "parse_errors": errors[:10],
+        "schema_failures": schema_failures[:10],   # SPEC §2.1 (2026-10-10): top-level entry keys outside the closed schema
         "chain_integrity": chain_integrity,
         "tip": tip_check,   # None = no signed tip checked (the tail limit below applies in full)
         "verdict": "PASS" if chain_integrity else "FAIL",

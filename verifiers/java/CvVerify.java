@@ -26,6 +26,10 @@ public class CvVerify {
     static final String GENESIS = "0".repeat(64);
     static final String TIP_KIND = "cryptovalid_tip/1";
     static final Set<String> ATTEST = Set.of("self_hash", "signature", "signer", "signature_pq", "signer_pq");
+    // SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the CLOSED entry schema (core + optional fields of §2), as verifier.py ENTRY_KEYS.
+    // A top-level key outside it is the named failure `unknown_field:<keys>`, never a silent PASS (measured 2026-10-11 on this
+    // verifier: an extra top-level key with self_hash recomputed over it was PASS with no trace). Keys inside `data` stay free (§4).
+    static final Set<String> ENTRY_KEYS = Set.of("idx", "ts", "data", "prev_hash", "self_hash", "signature", "signer", "tsa_token", "signature_pq", "signer_pq");
     static final byte[] ED_SPKI = hex("302a300506032b6570032100");
     static final byte[] MLDSA65_SPKI = hex("308207b2300b0609608648016503040312038207a100");
     static final Pattern TS = Pattern.compile("^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})$");
@@ -312,6 +316,8 @@ public class CvVerify {
             try { val = parse(raw); } catch (Bad e) { failures.add("line " + line + ": " + e.getMessage()); hashOK = false; objects.add(null); i++; continue; }
             if (!(val instanceof Obj)) { failures.add("line " + line + ": entry is not an object"); hashOK = false; objects.add(null); i++; continue; }
             Obj e = (Obj) val; objects.add(e);
+            List<String> unk = unknownFields(e);   // SPEC §2.1: closed entry schema — named, never silent (a LIST: the empty key "" is unknown too)
+            if (!unk.isEmpty()) failures.add("entry " + i + ": unknown_field:" + joinCut(unk));
             Object shv = e.vals.get("self_hash"); String self = shv instanceof String ? (String) shv : null;
             if (algo.isEmpty()) {   // no early return (r5): fall back to sha256 like the Python reference and keep going
                 byte[] p0 = payload(e);
@@ -365,6 +371,14 @@ public class CvVerify {
         return v;
     }
     static boolean isBlank(byte[] raw) { for (byte b : raw) if (b != ' ' && b != '\t' && b != '\r') return false; return true; }
+    /** The entry's top-level keys outside ENTRY_KEYS, sorted by code point (Python sorted()). The oracle caught a first version that
+     *  returned the joined string and tested it for emptiness: the empty key "" passed silently in Java and JS alone. */
+    static List<String> unknownFields(Obj e) {
+        List<String> unk = new ArrayList<>(); for (String k : e.keys) if (!ENTRY_KEYS.contains(k)) unk.add(k);
+        unk.sort(BY_CODEPOINT); return unk;
+    }
+    /** joined by ",", cut to 120 code points as the reference's `[:120]` does */
+    static String joinCut(List<String> unk) { String s = String.join(",", unk); return s.codePointCount(0, s.length()) > 120 ? s.substring(0, s.offsetByCodePoints(0, 120)) : s; }
     static Map<String, Object> fail(Map<String, Object> v, String algo, int n, List<String> failures) { v.put("verdict", "FAIL"); v.put("algo", algo); v.put("entries_count", n); v.put("hash_recompute_passed", false); v.put("link_passed", true); v.put("failures", failures); v.put("scope", SCOPE); return v; }
 
     static Map<String, Object> signatures(List<Obj> entries, String epk, String epq, boolean reqPQ) {

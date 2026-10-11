@@ -254,6 +254,26 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
             "manifest_signed": bool(sign_key)}
 
 
+# Closed manifest schema (SPEC §2.1, 2026-10-10): exactly what build_pack writes. Measured on 0.18.1: a MANIFEST written with an
+# extra top-level key (digest recomputed over it), an extra key inside ledgers[0], or inside rfc3161_timestamp (outside the
+# digest) all verified valid: true with no trace in the receipt.
+MANIFEST_KEYS = frozenset({"pack_format", "subject", "created_utc", "ledgers", "file_digests_sha256", "signer_pubkeys", "honest_scope",
+                           "manifest_digest_sha256", "manifest_signer", "manifest_signature", "rfc3161_timestamp"})
+LEDGER_ENTRY_KEYS = frozenset({"file", "entries", "head_self_hash", "hash_verdict", "chain_integrity", "signatures_ok", "signers", "pq_protected", "pq_status", "pq_signers"})
+RFC3161_KEYS = frozenset({"anchored", "tsa", "tsr_b64", "note"})   # every key _rfc3161_stamp and build_pack write (0.9.0-0.19.0)
+
+
+def _manifest_unknown_fields(man: Dict) -> List[str]:
+    out = [f"MANIFEST.{k}" for k in man if k not in MANIFEST_KEYS]
+    for i, led in enumerate(man.get("ledgers") or []):
+        if isinstance(led, dict):
+            out += [f"ledgers[{i}].{k}" for k in led if k not in LEDGER_ENTRY_KEYS]
+    ts = man.get("rfc3161_timestamp")
+    if isinstance(ts, dict):
+        out += [f"rfc3161_timestamp.{k}" for k in ts if k not in RFC3161_KEYS]
+    return sorted(out)
+
+
 def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubkey_hex: Optional[str] = None,
                 manifest_signer_hex: Optional[str] = None) -> Dict:
     """Verifica INDIPENDENTE dell'intero pack (l'auditor non usa alcun vendor): digest dei file ==
@@ -301,6 +321,9 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
         return ".." not in parts.split("/")
     if not isinstance(man, dict):
         return _fail("manifest_not_an_object")
+    unknown = _manifest_unknown_fields(man)
+    if unknown:   # SPEC §2.1: the manifest is a closed object — named, never silent
+        return _fail("manifest_unknown_field: " + ", ".join(unknown)[:200])
     digs, leds = man.get("file_digests_sha256", {}), man.get("ledgers", [])
     if not isinstance(digs, dict) or not all(_inside(k) and isinstance(v, str) for k, v in digs.items()):
         return _fail("manifest_bad_file_digests: an object of file name (inside the pack) -> sha256 hex")

@@ -551,6 +551,30 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## A field nobody defined is never silent: closed entry and manifest schemas, the entry rule in all six verifiers (2026-10-11, 0.19.0)
+
+- **The finding.** Measured on 0.18.1 on 2026-10-10: a ledger entry written with a top-level key nobody defined (self_hash
+  recomputed over it), a MANIFEST or `ledgers[i]` with an extra key, and an extra key in the unsealed `rfc3161_timestamp`
+  block all verified PASS / valid with no trace in the receipt of the Python reference; on the entry case the JS, Go, Java,
+  Rust and Swift ledger verifiers answered PASS too.
+- **The rule, written first (SPEC §2.1), then applied everywhere.** The entry's top level is exactly the core and optional
+  fields of SPEC §2; the MANIFEST, each `ledgers[i]` and the `rfc3161_timestamp` block are closed objects. A key outside the
+  list FAILS and is named: `unknown_field:<keys>` in the reference's `schema_failures` (`manifest_unknown_field: …` for a
+  pack). The five other verifiers, which verify ledgers, apply the entry rule: the same text in the Go and Java `failures[]`
+  and the JS `schema_failures[].reason`, the entry in a `schema_failures_idx` list in Rust and Swift. `data`
+  stays free (SPEC §4). Two normative vectors (`unknown_top_level_key` FAIL, `unknown_key_in_data` PASS).
+- **Measured, not asserted.** The differential oracle: 0/89 disagreements over Python, JS, Go, Java and Rust (28 declared),
+  with cases that require the reason text and the idx list to equal the reference's; `verifiers/closed_schema_mutants.py`:
+  1 500 generated mutations GREEN over the six verifiers, Swift included, while on 0.18.1 the quick run (150) counted 32
+  silent passes in each of Python, JS, Go, Java and Rust. Details and counts in `CONFORMANCE.md`.
+- **Declared, not closed in this release.** When no algorithm is forced, a ledger whose first three entries carry no `idx`
+  goes to the reference's fallback for ledgers of other OMEGA modules; when its hashes recompute there (receipt
+  `mode: full_recompute_generic`), that path applies neither SPEC §2.1 nor §5 step 4: an unknown top-level key passes, not
+  named, while the five other verifiers refuse the ledger. With `--algo` the reference applies the profile and names the key.
+  The ledger receipt says which path it took (`mode`); the evidence-pack receipt does not: `evidence_pack.py verify` reports
+  such a ledger as `hash_pass: true`, `valid: true`. Closing it is planned for the next release. Also declared: the types of
+  `ts` and `data` are not checked by any of the six; 12 older Swift divergences are listed in `CONFORMANCE.md`.
+
 ## The Cedulon index stage checks refs and effect claims, as Verax's verifier does (2026-10-06, 0.18.1)
 
 - **The index stage reads refs, and effect completeness.** Every ref an `index.jsonl` row names must be the ref of a

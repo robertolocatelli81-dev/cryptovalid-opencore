@@ -130,6 +130,38 @@ fn surrogate_pairs_accepted_lone_surrogates_refused() {
     assert!(cvverify::json::Parser::parse("{\"k\":\"\\u12\"}").is_err());
 }
 
+fn entry_with_top_level(extra_key: &str, extra_json: &str) -> String {
+    // a chained one-entry ledger carrying one extra TOP-LEVEL key, self_hash recomputed OVER it (only the schema rule can see it)
+    use cvverify::json::{canonical, Parser};
+    let body = format!("{{\"data\":{{\"i\":0}},\"idx\":0,\"prev_hash\":\"{}\",\"ts\":\"t\",{}:{}}}", "0".repeat(64), extra_key, extra_json);
+    let v = Parser::parse(&body).unwrap();
+    let h = cvverify::sha256::hex(canonical(&v).as_bytes());
+    format!("{{\"data\":{{\"i\":0}},\"idx\":0,\"prev_hash\":\"{}\",\"self_hash\":\"{}\",\"ts\":\"t\",{}:{}}}\n", "0".repeat(64), h, extra_key, extra_json)
+}
+
+#[test]
+fn closed_entry_schema_spec_2_1() {
+    // SPEC §2.1 (2026-10-10): a top-level key nobody defined is a schema failure (idx named), never a silent PASS.
+    // Measured on this verifier before 2026-10-11: PASS with no trace.
+    for key in ["\"x_unknown_2026\"", "\"__proto__\"", "\"Idx\"", "\"\""] {
+        let r = verify_ledger(&entry_with_top_level(key, "\"x\""), None);
+        assert_eq!(r.verdict, "FAIL", "unknown top-level key {} must FAIL", key);
+        assert_eq!(r.schema_failures_idx, vec![0], "the failure names the entry: {}", key);
+        assert!(r.hash_failures_idx.is_empty(), "hash recomputed over the key: only the schema rule sees it");
+        assert!(r.to_json().contains("\"schema_failures_idx\":[0]"));
+    }
+    // an OPTIONAL key of §2 with a value is in the schema: PASS (the rule must not reject too much)
+    let r = verify_ledger(&entry_with_top_level("\"tsa_token\"", "\"AAAA\""), None);
+    assert_eq!(r.verdict, "PASS", "{:?}", r);
+    assert!(r.schema_failures_idx.is_empty());
+    // the same unknown key INSIDE data is free (SPEC §4): PASS
+    let r = verify_ledger(&entry_with("{\"x_unknown_2026\":\"payload\"}"), None);
+    assert_eq!(r.verdict, "PASS");
+    assert!(r.schema_failures_idx.is_empty());
+    // positive control of the bench: the intact entry PASSES
+    assert_eq!(verify_ledger(&entry_with("{\"i\":0}"), None).verdict, "PASS");
+}
+
 #[test]
 fn nesting_bound_512() {
     let nest = |n: usize| format!("{}{}", "[".repeat(n), "]".repeat(n));

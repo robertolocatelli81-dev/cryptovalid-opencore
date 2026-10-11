@@ -12,7 +12,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-SWIFT = os.path.join(HERE, "swift", ".build", "debug", "cvverify")
+SWIFT = os.environ.get("CVVERIFY_SWIFT") or os.path.join(HERE, "swift", ".build", "debug", "cvverify")   # CVVERIFY_SWIFT: a binary built with --scratch-path elsewhere
 RUST = os.path.join(HERE, "rust", "target", "release", "cvverify")
 GO_SRC = os.path.join(HERE, "go")
 
@@ -133,7 +133,9 @@ CORPUS["valid-surrogate-pair"] = valid_entry({"k": "\U0001F600"})   # a proper p
 def _proto_rehashed():
     e = {"idx": 0, "ts": "t", "data": {"i": 0}, "prev_hash": "0" * 64, "__proto__": {"evil": 1}}
     e["self_hash"] = hashlib.sha256(canon(e)).hexdigest(); return json.dumps(e)
-CORPUS["proto-key-rehashed"] = _proto_rehashed()                                       # a legal key: PASS everywhere
+# since SPEC §2.1 (2026-10-10) `__proto__` is a top-level key nobody defined: FAIL everywhere, named (it was "a legal key: PASS
+# everywhere" — measured 2026-10-11 on f9cd1957: Python FAIL, JS/Go/Java/Rust PASS, the oracle was red and nobody had rerun it)
+CORPUS["proto-key-rehashed"] = _proto_rehashed()
 _t = valid_entry({"i": 0}); CORPUS["proto-key-hash-untouched"] = _t[:1] + '"__proto__": {"evil": 1}, ' + _t[1:]   # FAIL everywhere
 CORPUS["plus-number-same-canon"] = valid_entry({"n": 10}).replace('"n": 10', '"n": +10')       # not JSON: FAIL everywhere
 CORPUS["leading-zero-same-canon"] = valid_entry({"n": 10}).replace('"n": 10', '"n": 010')
@@ -148,6 +150,116 @@ def _fffd_line():
     e["self_hash"] = hashlib.sha256(canon(e)).hexdigest()
     return json.dumps(e, ensure_ascii=False).encode("utf-8").replace("\ufffd".encode("utf-8"), b"\xff", 1)   # the raw byte where U+FFFD was hashed
 CORPUS["non-utf8-byte-hashed-as-fffd"] = _fffd_line()
+
+
+# SPEC §2.1 (2026-10-10) — the entry is a CLOSED object: a top-level key nobody defined, self_hash recomputed over it (only the
+# schema rule can see it), is a NAMED failure in every verifier (`unknown_field:<keys>`, keys in code-point order), never a silent
+# PASS. Keys inside `data` (SPEC §4) and the optional keys of §2 stay PASS: the rule must not reject too much either. Measured
+# 2026-10-11 before the alignment of the other languages: Python FAIL, JS/Go/Java/Rust PASS on every "unknown-key-*" case.
+UNKNOWN_KEY = "x_unknown_2026"
+def _rehashed(extra, n=1, at=0, algo="sha256"):
+    """An n-entry chain whose entry `at` carries the extra top-level keys, self_hash recomputed over them."""
+    out, prev = [], "0" * 64
+    for i in range(n):
+        e = {"idx": i, "ts": "t", "data": {"i": i}, "prev_hash": prev}
+        if i == at:
+            e.update(extra)
+        h = hashlib.sha256 if algo == "sha256" else hashlib.sha3_256
+        e["self_hash"] = h(canon(e)).hexdigest(); prev = e["self_hash"]; out.append(e)
+    return "\n".join(json.dumps(x, ensure_ascii=False) for x in out)
+CORPUS["unknown-key-rehashed"] = _rehashed({UNKNOWN_KEY: "written at creation"})
+CORPUS["unknown-key-case-variant"] = _rehashed({"Idx": 0})            # a case variant of a known key is an unknown key
+CORPUS["unknown-key-empty-name"] = _rehashed({"": 1})
+CORPUS["unknown-key-unicode"] = _rehashed({"clé": 1})
+CORPUS["unknown-keys-two"] = _rehashed({"zz_b": 1, "aa_a": 2})       # the reason lists both, code-point sorted: aa_a,zz_b
+CORPUS["unknown-key-entry-1-of-3"] = _rehashed({UNKNOWN_KEY: True}, n=3, at=1)
+CORPUS["unknown-key-sha3-rehashed"] = _rehashed({UNKNOWN_KEY: None}, algo="sha3_256")
+CORPUS["unknown-key-in-data"] = valid_entry({UNKNOWN_KEY: "payload"})   # SPEC §4: data is domain-specific → PASS everywhere
+CORPUS["optional-tsa-token-rehashed"] = _rehashed({"tsa_token": "AAAA"})   # an optional key of §2 with a value → PASS everywhere
+# 11/10/2026 — found by closed_schema_mutants.py (full run: 7 of 1 500 mutations, all of this shape): a chain whose first three
+# entries lack `idx` (verifier.py: `not any("idx" in e for e in entries[:3])`) takes the reference's native-schema path
+# (_generic_recompute_verify) and is PASS there, where SPEC §2.1 is not applied either (an unknown top-level key passes: case
+# missing-idx-first-three-unknown-key); SPEC §5 step 4 and the five other verifiers say FAIL. Declared so it is measured on every run, not hidden;
+# the decision on the reference's fallback (keep it for ledgers of other OMEGA modules, or refuse per SPEC) is pending.
+def _no_idx_entry():
+    e = {"ts": "t", "data": {"i": 0}, "prev_hash": "0" * 64}
+    e["self_hash"] = hashlib.sha256(canon(e)).hexdigest(); return json.dumps(e)
+CORPUS["missing-idx-every-entry"] = _no_idx_entry()
+DECLARED_DIVERGENCE["missing-idx-every-entry"] = (
+    {"python": "PASS", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "FAIL", "swift": "FAIL"},
+    "no idx in any entry: the Python reference takes its native-schema fallback (PASS), the others apply SPEC §5 step 4 (FAIL) — measured 2026-10-11, decision pending")
+def _no_idx_first_three_unknown():
+    out, prev = [], "0" * 64
+    for i in range(5):
+        e = {"ts": "t", "data": {"i": i}, "prev_hash": prev}
+        if i >= 3:
+            e["idx"] = i
+        if i == 4:
+            e[UNKNOWN_KEY] = 1
+        e["self_hash"] = hashlib.sha256(canon(e)).hexdigest(); prev = e["self_hash"]; out.append(e)
+    return "\n".join(json.dumps(x) for x in out)
+CORPUS["missing-idx-first-three-unknown-key"] = _no_idx_first_three_unknown()
+DECLARED_DIVERGENCE["missing-idx-first-three-unknown-key"] = (
+    {"python": "PASS", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "FAIL", "swift": "FAIL"},
+    "idx missing in the first three entries (two of five still carry it) and an unknown top-level key on entry 4: the Python "
+    "reference takes its native-schema fallback, which applies neither SPEC §5 step 4 nor §2.1 (PASS, the key not named); the "
+    "others FAIL — measured 2026-10-11 (review), decision pending")
+# the reason TEXT and the idx list must be the reference's, not only contain the key: keys longer than the 120-code-point cut
+# (one outside the BMP, so a UTF-16 sort or a UTF-16 cut would differ) and an entry whose idx is not its position
+CORPUS["unknown-keys-long-cut"] = _rehashed({"\U0001F511" + "y" * 70: 1, "\uFF49\uFF44\uFF58" + "z" * 70: 2, "aa": 3})
+def _unknown_wrong_idx():
+    out, prev = [], "0" * 64
+    for i, ix in enumerate((0, 7, 2)):
+        e = {"idx": ix, "ts": "t", "data": {"i": i}, "prev_hash": prev}
+        if i == 1:
+            e[UNKNOWN_KEY] = 1
+        e["self_hash"] = hashlib.sha256(canon(e)).hexdigest(); prev = e["self_hash"]; out.append(e)
+    return "\n".join(json.dumps(x, ensure_ascii=False) for x in out)
+CORPUS["unknown-key-wrong-idx"] = _unknown_wrong_idx()
+EXACT_REASON = {"unknown-keys-long-cut", "unknown-key-wrong-idx", "unknown-keys-two", "unknown-key-unicode"}
+# name -> the `<keys>` the reason must carry (Python/JS: schema_failures[].reason; Go/Java: a failures[] string; Rust/Swift: a
+# receipt without reason text, so their schema_failures_idx must be non-empty)
+NAMED_UNKNOWN = {"unknown-key-rehashed": UNKNOWN_KEY, "unknown-key-case-variant": "Idx", "unknown-key-empty-name": "",
+                 "unknown-key-unicode": "clé", "unknown-keys-two": "aa_a,zz_b", "unknown-key-entry-1-of-3": UNKNOWN_KEY,
+                 "unknown-key-sha3-rehashed": UNKNOWN_KEY, "proto-key-rehashed": "__proto__",
+                 "unknown-keys-long-cut": "aa,", "unknown-key-wrong-idx": UNKNOWN_KEY}
+
+
+def closed_details(kind, cmd, path, extra=(), flags_first=False):
+    """(reasons, idxs) of the closed-schema failures in one receipt: Python/JS schema_failures[] (reason and idx); Go/Java the
+    text after `entry N: ` of their unknown_field failures (their N is the position, not compared); Rust/Swift only idxs."""
+    args = cmd + (list(extra) + [path] if flags_first else [path] + list(extra))
+    try:
+        r = json.loads(subprocess.run(args, capture_output=True, text=True, timeout=30).stdout)
+    except Exception:
+        return None, None
+    if kind in ("python", "js"):
+        sf = r.get("schema_failures") or []
+        return [x.get("reason") for x in sf], [x.get("idx") for x in sf]
+    if kind in ("go", "java"):
+        return [f.split(": ", 1)[1] for f in (r.get("failures") or []) if isinstance(f, str) and ": unknown_field:" in f], None
+    return None, r.get("schema_failures_idx")
+
+
+def names_unknown(kind, cmd, path, key, extra=(), flags_first=False):
+    """True when the receipt NAMES the closed-schema failure (SPEC §2.1) — never only a bare FAIL."""
+    args = cmd + (list(extra) + [path] if flags_first else [path] + list(extra))
+    try:
+        r = json.loads(subprocess.run(args, capture_output=True, text=True, timeout=30).stdout)
+    except Exception:
+        return False
+    if kind in ("rust", "swift"):
+        return bool(r.get("schema_failures_idx"))
+    def strings(o):   # decoded string values, so a key with a quote or a newline is searched as itself, not as its JSON escape
+        if isinstance(o, str):
+            yield o
+        elif isinstance(o, dict):
+            for v in o.values():
+                yield from strings(v)
+        elif isinstance(o, list):
+            for v in o:
+                yield from strings(v)
+    return any(("unknown_field:" + key) in s for s in strings(r))
 
 
 # Signed chain tip (15/09/2026): a truncated ledger WITH a tip next to it. Python, JS and Go check the sidecar
@@ -399,6 +511,20 @@ def main():
                 if pq_py != pq_go or pq_java != pq_go or pq_js is True:
                     disagreements += 1
                     print(f"  [DIFF] {name:22} pq_protected python={pq_py!r} go={pq_go!r} java={pq_java!r} js={pq_js!r}")
+            if name in NAMED_UNKNOWN:
+                # the verdict is not enough: every verifier must NAME the key nobody defined (SPEC §2.1)
+                named = {k: names_unknown(k, cmd, p, NAMED_UNKNOWN[name], extra.get(k, ()), flags_first=(k in ("go", "java")))
+                         for k, cmd in available.items()}
+                if not all(named.values()):
+                    disagreements += 1
+                    print(f"  [DIFF] {name:22} not named (unknown_field:{NAMED_UNKNOWN[name]}): {named}")
+            if name in EXACT_REASON and "python" in available:
+                det = {k: closed_details(k, cmd, p, extra.get(k, ()), flags_first=(k in ("go", "java"))) for k, cmd in available.items()}
+                ref_reasons, ref_idx = det["python"]
+                bad = {k: d for k, d in det.items() if (d[0] is not None and d[0] != ref_reasons) or (d[1] is not None and d[1] != ref_idx)}
+                if bad or not ref_reasons:
+                    disagreements += 1
+                    print(f"  [DIFF] {name:22} closed-schema reason/idx differ from python's {(ref_reasons, ref_idx)}: {bad}")
             if not ok and name in DECLARED_DIVERGENCE:
                 expected, why = DECLARED_DIVERGENCE[name]
                 if all(_matches(expected.get(k), verdicts[k]) for k in verdicts):

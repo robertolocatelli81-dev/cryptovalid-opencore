@@ -15,12 +15,21 @@ public struct VerifyResult: Codable, Equatable {
     public var entries: Int
     public var hash_failures_idx: [Int]
     public var link_failures_idx: [Int]
+    /// entries whose top level carries a key outside ENTRY_KEYS (SPEC §2.1)
+    public var schema_failures_idx: [Int]
     public var signatures_all_verified: Bool?
 }
 
 public enum CryptoValidVerifier {
     static let GENESIS = String(repeating: "0", count: 64)
     static let ATTEST: Set<String> = ["self_hash", "signature", "signer", "signature_pq", "signer_pq"] // 0.12.0: ML-DSA-65 companion
+    // SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the CLOSED entry schema (core + optional fields of §2), as verifier.py ENTRY_KEYS.
+    // An entry with a top-level key outside it is a schema failure and the verdict is FAIL, never a silent PASS. `data` stays free (§4).
+    public static let ENTRY_KEYS: Set<String> = ["idx", "ts", "data", "prev_hash", "self_hash", "signature", "signer", "tsa_token", "signature_pq", "signer_pq"]
+    /// The entry's top-level keys outside ENTRY_KEYS, in code-point order (the order Python's sorted() gives).
+    public static func unknownFields(_ entry: [String: JSONValue]) -> [String] {
+        entry.keys.filter { !ENTRY_KEYS.contains($0) }.sorted { Array($0.unicodeScalars).lexicographicallyPrecedes(Array($1.unicodeScalars)) }
+    }
 
     static func canonicalPayload(_ entry: [String: JSONValue]) -> [UInt8] {
         var d = entry; for k in ATTEST { d.removeValue(forKey: k) }
@@ -48,7 +57,10 @@ public enum CryptoValidVerifier {
             if let v = try? JSONParser.parse(t), case .object(let o) = v { entries.append(o) } else { parseErrors += 1 }
         }
         let use = algo ?? detectAlgo(entries) ?? "sha256"
-        var hashFail: [Int] = [], linkFail: [Int] = []
+        var hashFail: [Int] = [], linkFail: [Int] = [], schemaFail: [Int] = []
+        for (i, e) in entries.enumerated() where !unknownFields(e).isEmpty {   // SPEC §2.1: closed entry schema, never silence
+            schemaFail.append(Int(intVal(e["idx"]) ?? Int64(i)))
+        }
         for (i, e) in entries.enumerated() {
             guard let sh = str(e["self_hash"]) else { hashFail.append(Int(intVal(e["idx"]) ?? Int64(i))); continue }
             if hashWith(use, canonicalPayload(e)) != sh { hashFail.append(Int(intVal(e["idx"]) ?? Int64(i))) }
@@ -60,7 +72,7 @@ public enum CryptoValidVerifier {
         var idxOk = true
         for (i, e) in entries.enumerated() where intVal(e["idx"]) != Int64(i) { idxOk = false }
         // zero entries = nothing verified = FAIL (2026-09-11: all four verifiers said PASS on an empty file)
-        let chain = hashFail.isEmpty && linkFail.isEmpty && idxOk && parseErrors == 0 && !entries.isEmpty
+        let chain = hashFail.isEmpty && linkFail.isEmpty && idxOk && parseErrors == 0 && schemaFail.isEmpty && !entries.isEmpty   // SPEC §2.1
 
         var sigAll: Bool? = nil
         if entries.contains(where: { $0["signature"] != nil }) {
@@ -76,7 +88,7 @@ public enum CryptoValidVerifier {
         }
         return VerifyResult(verdict: chain ? "PASS" : "FAIL", chain_integrity: chain, algorithm: use,
                             entries: entries.count, hash_failures_idx: hashFail, link_failures_idx: linkFail,
-                            signatures_all_verified: sigAll)
+                            schema_failures_idx: schemaFail, signatures_all_verified: sigAll)
     }
     static func hexToData(_ h: String) -> Data? {
         guard h.count % 2 == 0 else { return nil }

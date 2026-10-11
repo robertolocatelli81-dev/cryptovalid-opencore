@@ -17,6 +17,14 @@ import { fileURLToPath } from "node:url";
 const GENESIS_PREV = "0".repeat(64);
 const ALGOS = ["sha256", "sha3_256"];
 const ATTEST = new Set(["self_hash", "signature", "signer", "signature_pq", "signer_pq"]); // 0.12.0: ML-DSA-65 companion fields
+// SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the CLOSED entry schema (core + optional fields of §2), as verifier.py ENTRY_KEYS. A
+// top-level key outside it is the named failure `unknown_field:<keys>` in `schema_failures`, never a silent PASS (measured
+// 2026-10-11 on this verifier: an extra top-level key with self_hash recomputed over it was PASS with no trace). `data` stays free (§4).
+export const ENTRY_KEYS = new Set(["idx", "ts", "data", "prev_hash", "self_hash", "signature", "signer", "tsa_token", "signature_pq", "signer_pq"]);
+// the entry's top-level keys outside ENTRY_KEYS, sorted by code point (Python sorted()) — a LIST: the empty key "" is unknown too
+// (the differential oracle caught the first version, which tested the joined string for truth and let `""` through silently)
+export function unknownFields(entry) { return Object.keys(entry).filter((k) => !ENTRY_KEYS.has(k)).sort(cmp); }
+const unknownReason = (u) => "unknown_field:" + [...u.join(",")].slice(0, 120).join("");   // cut to 120 code points like the reference
 
 // --- canonical JSON: identical to Python json.dumps(sort_keys=True,
 //     separators=(",",":"), ensure_ascii=True).
@@ -234,6 +242,9 @@ export function verifyLedger(text, { algo = null, pubkey = null, tip = null, tru
     else errors.push({ line: i, error: "not_a_json_object" });
   });
   const use = algo || detectAlgo(entries) || "sha256";
+  // SPEC §2.1: closed entry schema — same shape and reason text as the reference's schema_failures
+  const schemaFailures = [];
+  entries.forEach((e, i) => { const u = unknownFields(e); if (u.length) schemaFailures.push({ idx: e.idx ?? i, reason: unknownReason(u) }); });
   const hashFailures = [], linkFailures = [];
   entries.forEach((e, i) => {
     if (!("self_hash" in e)) { hashFailures.push({ idx: e.idx ?? i, reason: "missing_self_hash" }); return; }
@@ -261,7 +272,7 @@ export function verifyLedger(text, { algo = null, pubkey = null, tip = null, tru
     tipCheck = { ...checkTip(entries.length, last, tip, trustedPubkey, tipNotBefore, first, expectLedgerId), checked: true };
     if (!tipCheck.ok) errors.push({ line: entries.length, error: tipCheck.error });
   } else if (requireTip) errors.push({ line: entries.length, error: "tip_missing: a signed chain tip is required and none was found" });
-  const chainIntegrity = hashFailures.length === 0 && linkFailures.length === 0 && idxOk && errors.length === 0;
+  const chainIntegrity = hashFailures.length === 0 && linkFailures.length === 0 && idxOk && errors.length === 0 && schemaFailures.length === 0;   // SPEC §2.1
 
   let signatures = null;
   if (entries.some((e) => e.signature) || pubkey) {
@@ -280,7 +291,7 @@ export function verifyLedger(text, { algo = null, pubkey = null, tip = null, tru
   return {
     verdict: verdictPass ? "PASS" : "FAIL", chain_integrity: chainIntegrity, algorithm: use,
     entries: entries.length, hash_failures_idx: hashFailures.map((f) => f.idx), link_failures_idx: linkFailures.map((f) => f.idx),
-    errors, signatures, tip: tipCheck, verifier: "cvverify.mjs (independent, Node stdlib)",
+    errors, schema_failures: schemaFailures, signatures, tip: tipCheck, verifier: "cvverify.mjs (independent, Node stdlib)",
     independent_receipt_sha256: createHash("sha256").update(receiptPayload).digest("hex"), // this impl's own fingerprint, NOT the reference receipt
   };
 }

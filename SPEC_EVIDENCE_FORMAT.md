@@ -39,6 +39,28 @@ Optional fields (verified when present):
 | `signature` | hex | Ed25519 signature over the canonical form (§3), by `signer` |
 | `signer` | hex | Ed25519 public key (32 bytes hex) of the recording party |
 | `tsa_token` | base64 | RFC 3161 timestamp token over `self_hash` |
+| `signature_pq` | base64 | ML-DSA-65 signature over the canonical form, by `signer_pq` (hybrid ledgers, `signer.py`) |
+| `signer_pq` | base64 | ML-DSA-65 public key of the recording party |
+
+### 2.1 Closed entry schema (NORMATIVE, v0.2.1 — 2026-10-10)
+
+The entry is a CLOSED object: its top-level keys are exactly the core fields plus the optional fields of the two
+tables above. A top-level key outside that list is a verification FAIL with the named error `unknown_field:<key>`,
+never a silent pass — measured on 2026-10-10: a ledger whose entries were written with an extra top-level key (hash
+recomputed over it) verified PASS in the reference with no trace in the receipt. The `data` payload stays
+domain-specific (§4): keys inside `data` are not constrained by this section. The same rule applies to the evidence
+pack manifest (`evidence_pack.py`): `MANIFEST.json`, each `ledgers[i]` entry and the `rfc3161_timestamp` block are
+closed objects (keys listed in `evidence_pack.MANIFEST_KEYS`, `LEDGER_ENTRY_KEYS`, `RFC3161_KEYS`); an unknown key
+is `manifest_unknown_field` and the pack is not valid. The ledger rule is applied by every verifier of `verifiers/`
+(JS, Go, Java, Rust, Swift — aligned 2026-10-11, see CONFORMANCE.md): the same closed list, the failure named
+`unknown_field:<keys>` (keys in code-point order; Rust and Swift, whose receipts carry no reason text, name the entry in
+`schema_failures_idx`). The pack manifest is verified by the reference only (`evidence_pack.py`): the other verifiers do
+not read packs. Two conformance vectors fix the rule: `unknown_top_level_key` (FAIL) and `unknown_key_in_data` (PASS). Declared exception
+(measured 2026-10-11): when no algorithm is forced, a ledger whose first three entries carry no `idx` goes to the reference's
+fallback for ledgers of other OMEGA modules (receipt `mode: full_recompute_generic` when its hashes recompute there), which
+applies neither this section nor §5 step 4 — such a receipt is not a verification of this profile; with `--algo` the
+reference applies the profile; the other verifiers FAIL it; `evidence_pack.py verify` counts such a ledger as
+`hash_pass: true` without saying which path was taken (CONFORMANCE.md).
 
 ## 3. Canonicalisation and hashing (NORMATIVE — interoperability depends on it)
 

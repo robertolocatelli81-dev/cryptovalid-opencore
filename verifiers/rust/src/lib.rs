@@ -15,6 +15,11 @@ use std::collections::BTreeMap;
 
 pub const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const ATTEST: [&str; 5] = ["self_hash", "signature", "signer", "signature_pq", "signer_pq"]; // 0.12.0: ML-DSA-65 companion
+/// SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the CLOSED entry schema (core + optional fields of §2), as verifier.py ENTRY_KEYS.
+/// An entry with a top-level key outside it is a schema failure (its idx in `schema_failures_idx`) and the verdict is FAIL,
+/// never a silent PASS (measured 2026-10-11 on this verifier: an extra top-level key with self_hash recomputed over it was
+/// PASS with no trace). Keys inside `data` stay free (§4).
+pub const ENTRY_KEYS: [&str; 10] = ["idx", "ts", "data", "prev_hash", "self_hash", "signature", "signer", "tsa_token", "signature_pq", "signer_pq"];
 
 #[derive(Debug, PartialEq)]
 pub struct VerifyResult {
@@ -24,7 +29,14 @@ pub struct VerifyResult {
     pub entries: usize,
     pub hash_failures_idx: Vec<i64>,
     pub link_failures_idx: Vec<i64>,
+    /// entries whose top level carries a key outside ENTRY_KEYS (SPEC §2.1)
+    pub schema_failures_idx: Vec<i64>,
     pub parse_errors: usize,
+}
+
+/// The entry's top-level keys outside ENTRY_KEYS, in code-point order (BTreeMap order = Python sorted()).
+pub fn unknown_fields(entry: &BTreeMap<String, Json>) -> Vec<&str> {
+    entry.keys().filter(|k| !ENTRY_KEYS.contains(&k.as_str())).map(|k| k.as_str()).collect()
 }
 
 fn canonical_payload(entry: &BTreeMap<String, Json>) -> Vec<u8> {
@@ -87,6 +99,13 @@ pub fn verify_ledger(text: &str, algo: Option<&str>) -> VerifyResult {
 
     let mut hash_failures = Vec::new();
     let mut link_failures = Vec::new();
+    let mut schema_failures = Vec::new();
+    for (i, e) in entries.iter().enumerate() {
+        // SPEC §2.1: closed entry schema — a key nobody defined is a failure, never silence
+        if !unknown_fields(e).is_empty() {
+            schema_failures.push(get_int(e, "idx").unwrap_or(i as i64));
+        }
+    }
     for (i, e) in entries.iter().enumerate() {
         let idx = get_int(e, "idx").unwrap_or(i as i64);
         match get_str(e, "self_hash") {
@@ -117,6 +136,7 @@ pub fn verify_ledger(text: &str, algo: Option<&str>) -> VerifyResult {
     }
     // zero entries = nothing verified = FAIL (2026-09-11: all four verifiers said PASS on an empty file)
     let chain = hash_failures.is_empty() && link_failures.is_empty() && idx_ok && parse_errors == 0
+        && schema_failures.is_empty() // SPEC §2.1
         && !entries.is_empty();
 
     VerifyResult {
@@ -126,6 +146,7 @@ pub fn verify_ledger(text: &str, algo: Option<&str>) -> VerifyResult {
         entries: entries.len(),
         hash_failures_idx: hash_failures,
         link_failures_idx: link_failures,
+        schema_failures_idx: schema_failures,
         parse_errors,
     }
 }
@@ -140,8 +161,8 @@ impl VerifyResult {
                 .join(",")
         };
         format!(
-            "{{\"algorithm\":\"{}\",\"chain_integrity\":{},\"entries\":{},\"hash_failures_idx\":[{}],\"link_failures_idx\":[{}],\"verdict\":\"{}\"}}",
-            self.algorithm, self.chain_integrity, self.entries, idxs(&self.hash_failures_idx), idxs(&self.link_failures_idx), self.verdict
+            "{{\"algorithm\":\"{}\",\"chain_integrity\":{},\"entries\":{},\"hash_failures_idx\":[{}],\"link_failures_idx\":[{}],\"schema_failures_idx\":[{}],\"verdict\":\"{}\"}}",
+            self.algorithm, self.chain_integrity, self.entries, idxs(&self.hash_failures_idx), idxs(&self.link_failures_idx), idxs(&self.schema_failures_idx), self.verdict
         )
     }
 }

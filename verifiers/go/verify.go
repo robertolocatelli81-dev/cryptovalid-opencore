@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 )
 
 const Genesis = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -50,6 +52,34 @@ const scope = "single-snapshot check of the cryptovalid profile (SPEC_EVIDENCE_F
 // MaxLineBytes bounds one JSONL line (a longer line is a failure, not a crash, and never silently truncated).
 const MaxLineBytes = 64 << 20
 
+// EntryKeys is the CLOSED entry schema of SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the core fields plus the optional
+// fields of §2, exactly as verifier.py ENTRY_KEYS. A top-level key outside it is the named failure
+// `unknown_field:<keys>`, never a silent PASS (measured 2026-10-11 on this verifier: an entry written with an extra
+// top-level key, self_hash recomputed over it, was PASS with no trace). Keys inside `data` stay free (§4).
+var EntryKeys = map[string]bool{"idx": true, "ts": true, "data": true, "prev_hash": true, "self_hash": true,
+	"signature": true, "signer": true, "tsa_token": true, "signature_pq": true, "signer_pq": true}
+
+// UnknownFields returns the entry's top-level keys outside EntryKeys, sorted by code point (UTF-8 byte order), the
+// order Python's sorted() gives — so the failure text is identical in every verifier.
+func UnknownFields(e *Object) []string {
+	var out []string
+	for _, k := range e.Keys {
+		if !EntryKeys[k] {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// truncRunes cuts s to at most n code points, as the reference's `[:120]` slice does on a Python str.
+func truncRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
 // VerifyLedger reads JSONL in STREAMING (one entry in memory at a time — council 14/09: a multi-GB ledger must
 // not be loaded whole) and recomputes the chain. Fail-closed: any unparsable line is a failure; a scanner
 // error (line too long, I/O) is a failure, not a silent stop.
@@ -83,6 +113,9 @@ func VerifyLedger(r io.Reader) Verdict {
 			continue
 		}
 		v.objects = append(v.objects, e)
+		if unk := UnknownFields(e); len(unk) != 0 { // SPEC §2.1: closed entry schema — named, never silent
+			v.Failures = append(v.Failures, fmt.Sprintf("entry %d: unknown_field:%s", i, truncRunes(strings.Join(unk, ","), 120)))
+		}
 		if v.Algo == "" { // profile auto-detection on the first PARSABLE entry (a garbage first line must not desynchronise it)
 			if p0, err := Payload(e); err == nil {
 				for _, a := range Algos {

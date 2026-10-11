@@ -1,0 +1,12 @@
+{
+ "input": "unknown_top_level_key.jsonl",
+ "normative": {
+  "algorithm": "sha256",
+  "chain_integrity": false,
+  "entries": 2,
+  "hash_failures_idx": [],
+  "link_failures_idx": [],
+  "verdict": "FAIL"
+ },
+ "reference_receipt_sha256": "8886581e49820ebd27e794cbacf19df19577b5027a108d102411f40b5db30002"
+}

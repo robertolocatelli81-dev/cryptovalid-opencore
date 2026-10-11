@@ -4,6 +4,11 @@
 // Run on macOS/Linux(with swift-crypto): `swift test`.
 import XCTest
 @testable import CryptoValidVerify
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto   // swift-crypto on Linux: SHA256 for the test's own hash of the entry
+#endif
 
 final class ConformanceTests: XCTestCase {
     struct Normative: Codable {
@@ -60,6 +65,29 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(SHA3_256.hex("abc"), "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532")
     }
 
+
+    func testClosedEntrySchemaSpec21() {
+        // SPEC §2.1 (2026-10-10): a top-level key nobody defined is a schema failure (idx named), never a silent PASS;
+        // the same key inside data (SPEC §4) and an optional key of §2 stay PASS. self_hash recomputed OVER the key.
+        func entry(_ extraKey: String?, _ dataJSON: String) -> String {
+            let extra = extraKey.map { ",\"\($0)\":\"x\"" } ?? ""
+            let body = "{\"data\":\(dataJSON),\"idx\":0,\"prev_hash\":\"\(String(repeating: "0", count: 64))\",\"ts\":\"t\"\(extra)}"
+            let v = try! JSONParser.parse(body)
+            let h = SHA256.hash(data: Data(Canonical.encode(v).utf8)).map { String(format: "%02x", $0) }.joined()
+            return "{\"data\":\(dataJSON),\"idx\":0,\"prev_hash\":\"\(String(repeating: "0", count: 64))\",\"self_hash\":\"\(h)\",\"ts\":\"t\"\(extra)}\n"
+        }
+        XCTAssertEqual(CryptoValidVerifier.verify(ledgerText: entry(nil, "{\"i\":0}")).verdict, "PASS")   // positive control
+        for key in ["x_unknown_2026", "__proto__", "Idx", ""] {
+            let r = CryptoValidVerifier.verify(ledgerText: entry(key, "{\"i\":0}"))
+            XCTAssertEqual(r.verdict, "FAIL", key)
+            XCTAssertEqual(r.schema_failures_idx, [0], key)
+            XCTAssertEqual(r.hash_failures_idx, [], key)
+        }
+        let opt = CryptoValidVerifier.verify(ledgerText: entry("tsa_token", "{\"i\":0}"))
+        XCTAssertEqual(opt.verdict, "PASS"); XCTAssertEqual(opt.schema_failures_idx, [])
+        let inData = CryptoValidVerifier.verify(ledgerText: entry(nil, "{\"x_unknown_2026\":\"payload\"}"))
+        XCTAssertEqual(inData.verdict, "PASS"); XCTAssertEqual(inData.schema_failures_idx, [])
+    }
 
     func testDuplicateKeysRejected() {
         let dup = "{\"idx\":0,\"ts\":\"t\",\"data\":{\"evil\":1},\"data\":{\"real\":1},\"prev_hash\":\"" + String(repeating: "0", count: 64) + "\",\"self_hash\":\"x\"}"
