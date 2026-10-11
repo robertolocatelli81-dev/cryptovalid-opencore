@@ -7,3 +7,4 @@ dist/
 *.egg-info/
 build/
 verifiers/rust/target/
+verifiers/swift/.build/

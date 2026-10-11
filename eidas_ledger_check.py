@@ -71,7 +71,9 @@ def assess(ledger_path: str, deployment: Optional[Dict] = None) -> Dict:
             firme_valide = {"verified": None, "note": f"non verificate: {type(ex).__name__}"}
     stamped = sum(1 for e in entries if e.get("tsa_token"))
     algo = snap.get("algorithm_used")
-    chain_ok = bool(snap.get("hash_recompute_passed") and snap.get("link_passed"))
+    # the verifier's VERDICT, not hash+link alone: idx (SPEC §5 step 4) and the closed schema (§2.1) are part of the chain
+    # rule (0.20.0 review: a ledger without idx, or with a key nobody defined, was FAIL in verifier.py and SODDISFATTO here)
+    chain_ok = snap.get("verdict") == "PASS"
     req = []
 
     def add(rid, titolo, stato, misura, cosa_manca=None):
@@ -141,7 +143,7 @@ def ledger_report(ledger_path: str) -> Dict:
     return {"kind": "cryptovalid_ledger_report/1", "generato_il": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "ledger": os.path.abspath(ledger_path), "record": len(entries),
             "primo_ts": min(ts) if ts else None, "ultimo_ts": max(ts) if ts else None,
-            "algoritmo": snap.get("algorithm_used"), "catena_ok": bool(snap.get("hash_recompute_passed") and snap.get("link_passed")),
+            "algoritmo": snap.get("algorithm_used"), "catena_ok": snap.get("verdict") == "PASS",
             "idx_sequenziale": snap.get("idx_monotonic"), "ts_monotoni": snap.get("ts_monotonic"),
             "record_firmati": sum(1 for e in entries if e.get("signature")), "record_con_marca_rfc3161": sum(1 for e in entries if e.get("tsa_token")),
             "tree_head": M.tree_head(leaves), "verdetto_verifier": snap.get("verdict"),

@@ -39,12 +39,10 @@ including Python. `test_closed_schema_mutants.py` runs the
 quick bench in CI and proves it can go red (a JS copy without the rule). The empty-name key `""` is the case the first
 JS and Java ports got wrong (a joined string tested for truth): the oracle caught it before the commit.
 
-Two things the bench measured and this change does NOT decide: (a) a chain whose first three entries lack `idx` is PASS in
-the reference when no `--algo` is given (verifier.py takes its native-schema fallback for ledgers of other OMEGA modules,
-receipt `mode: full_recompute_generic`; `evidence_pack.py verify` counts it as `hash_pass: true`), which applies neither SPEC
-§5 step 4 nor §2.1 — an unknown top-level key passes there, not named —
-and FAIL in the five others; the oracle declares both (`missing-idx-every-entry`, `missing-idx-first-three-unknown-key`),
-the decision on the fallback is open; (b) a
+Two things the bench measured in 0.19.0: (a) a chain whose first three entries lack `idx` was PASS in the reference when
+no `--algo` was given (a native-schema fallback that applied neither SPEC §5 step 4 nor §2.1) and FAIL in the five others —
+**closed in 0.20.0**: the fallback is removed, the two oracle cases (`missing-idx-every-entry`,
+`missing-idx-first-three-unknown-key`) are FAIL in all of them and no longer declared; (b) a
 missing or non-string `ts` / `data` is PASS in all six (SPEC §2 gives the types, §5 never checks them) — reported, not
 changed.
 

@@ -17,6 +17,48 @@ RUST = os.path.join(HERE, "rust", "target", "release", "cvverify")
 GO_SRC = os.path.join(HERE, "go")
 
 
+def stale_binary(binary, src_dir, exts):
+    """The newest source under `src_dir` with one of `exts` when it is newer than `binary`, else None. A prebuilt verifier
+    older than its sources measures OLD code (11/10/2026: the oracle ran a Rust binary of 21/09, before the closed schema,
+    and reported its divergences as the code's); callers refuse it, they never measure it silently."""
+    if not os.path.exists(binary):
+        return None
+    t = os.path.getmtime(binary)
+    for d, dirs, files in os.walk(src_dir):
+        dirs[:] = [x for x in dirs if x not in (".build", "target", ".git")]
+        for f in files:
+            if f.endswith(exts) and os.path.getmtime(os.path.join(d, f)) > t:
+                return os.path.join(d, f)
+    return None
+
+
+# what the binary is built from (tests, manifests and the build dir are not: editing a test never relinks the binary, and
+# `swift build` does not relink when a source is only touched — measured 11/10/2026, review of 0.20.0)
+RUST_SRC = os.path.join(HERE, "rust", "src")
+SWIFT_SRC = os.path.join(HERE, "swift", "Sources")
+
+
+def build_swift(swift_dir):
+    """`swift build --product cvverify` when a Swift toolchain is on PATH (the build system decides freshness, as cargo does
+    for Rust); True when it built, False without a toolchain. A failing build is an error, never a silent old binary."""
+    if not shutil.which("swift"):
+        return False
+    r = subprocess.run(["swift", "build", "--product", "cvverify"], cwd=swift_dir, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit("swift build failed — the Swift verifier is broken: " + (r.stderr or r.stdout).strip()[:400])
+    return True
+
+
+def check_fresh(name, binary, src_dir, exts, built):
+    """Refuse a prebuilt binary older than one of its sources. When the toolchain has just built it, the build system's
+    own freshness check is the authority (mtimes would refuse a current binary)."""
+    if built:
+        return
+    newer = stale_binary(binary, src_dir, exts)
+    if newer:
+        raise SystemExit(f"{name} binary {binary} is older than {newer}: rebuild it (a stale binary measures old code)")
+
+
 def build_go(tmp):
     """Build verifiers/go/cmd/cvverify into `tmp` when a Go toolchain is on PATH (added 15/09/2026: the Go
     reference answered "EMPTY" on an empty ledger, an undeclared divergence nobody measured). None if no Go."""
@@ -177,17 +219,12 @@ CORPUS["unknown-key-sha3-rehashed"] = _rehashed({UNKNOWN_KEY: None}, algo="sha3_
 CORPUS["unknown-key-in-data"] = valid_entry({UNKNOWN_KEY: "payload"})   # SPEC §4: data is domain-specific → PASS everywhere
 CORPUS["optional-tsa-token-rehashed"] = _rehashed({"tsa_token": "AAAA"})   # an optional key of §2 with a value → PASS everywhere
 # 11/10/2026 — found by closed_schema_mutants.py (full run: 7 of 1 500 mutations, all of this shape): a chain whose first three
-# entries lack `idx` (verifier.py: `not any("idx" in e for e in entries[:3])`) takes the reference's native-schema path
-# (_generic_recompute_verify) and is PASS there, where SPEC §2.1 is not applied either (an unknown top-level key passes: case
-# missing-idx-first-three-unknown-key); SPEC §5 step 4 and the five other verifiers say FAIL. Declared so it is measured on every run, not hidden;
-# the decision on the reference's fallback (keep it for ledgers of other OMEGA modules, or refuse per SPEC) is pending.
+# entries lacked `idx` took the reference's native-schema path in 0.19.0 (PASS, SPEC §2.1 and §5 step 4 not applied: an unknown
+# top-level key passed, case missing-idx-first-three-unknown-key). 0.20.0 removed that path: FAIL in all six, no longer declared.
 def _no_idx_entry():
     e = {"ts": "t", "data": {"i": 0}, "prev_hash": "0" * 64}
     e["self_hash"] = hashlib.sha256(canon(e)).hexdigest(); return json.dumps(e)
 CORPUS["missing-idx-every-entry"] = _no_idx_entry()
-DECLARED_DIVERGENCE["missing-idx-every-entry"] = (
-    {"python": "PASS", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "FAIL", "swift": "FAIL"},
-    "no idx in any entry: the Python reference takes its native-schema fallback (PASS), the others apply SPEC §5 step 4 (FAIL) — measured 2026-10-11, decision pending")
 def _no_idx_first_three_unknown():
     out, prev = [], "0" * 64
     for i in range(5):
@@ -199,11 +236,6 @@ def _no_idx_first_three_unknown():
         e["self_hash"] = hashlib.sha256(canon(e)).hexdigest(); prev = e["self_hash"]; out.append(e)
     return "\n".join(json.dumps(x) for x in out)
 CORPUS["missing-idx-first-three-unknown-key"] = _no_idx_first_three_unknown()
-DECLARED_DIVERGENCE["missing-idx-first-three-unknown-key"] = (
-    {"python": "PASS", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "FAIL", "swift": "FAIL"},
-    "idx missing in the first three entries (two of five still carry it) and an unknown top-level key on entry 4: the Python "
-    "reference takes its native-schema fallback, which applies neither SPEC §5 step 4 nor §2.1 (PASS, the key not named); the "
-    "others FAIL — measured 2026-10-11 (review), decision pending")
 # the reason TEXT and the idx list must be the reference's, not only contain the key: keys longer than the 120-code-point cut
 # (one outside the BMP, so a UTF-16 sort or a UTF-16 cut would differ) and an entry whose idx is not its position
 CORPUS["unknown-keys-long-cut"] = _rehashed({"\U0001F511" + "y" * 70: 1, "\uFF49\uFF44\uFF58" + "z" * 70: 2, "aa": 3})
@@ -466,6 +498,18 @@ def main():
         "rust": [RUST],
         "swift": [SWIFT],
     }
+    built = {"rust": False, "swift": False}
+    if shutil.which("cargo"):   # as the closed-schema bench: measure the Rust of THIS tree, not a binary left from an older one
+        r = subprocess.run(["cargo", "build", "--release", "--quiet"], cwd=os.path.join(HERE, "rust"), capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit("cargo build failed — the Rust reference verifier is broken: " + r.stderr.strip()[:400])
+        built["rust"] = True
+    if os.environ.get("CVVERIFY_SWIFT"):
+        built["swift"] = True   # a binary named by the caller (built elsewhere): theirs to vouch for, as in the bench
+    elif os.path.exists(SWIFT):   # Swift is measured only when its binary is there (opt-in); then this tree's code is rebuilt
+        built["swift"] = build_swift(os.path.join(HERE, "swift"))
+    check_fresh("rust", RUST, RUST_SRC, (".rs",), built["rust"])
+    check_fresh("swift", SWIFT, SWIFT_SRC, (".swift",), built["swift"])
     available = {k: v for k, v in verifiers.items() if k in ("python", "js")
                  or os.path.exists(v[0])}
     disagreements = 0

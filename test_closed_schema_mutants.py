@@ -70,5 +70,58 @@ class TestClosedSchemaMutants(unittest.TestCase):
         self.assertEqual(set(rows), set(B.ENTRY_KEYS), "SPEC §2 tables vs the bench's closed set")
 
 
+
+class TestStaleBinary(unittest.TestCase):
+    """11/10/2026: the oracle measured a Rust binary of 21/09 as if it were the tree's code. A binary older than one of its
+    sources is now named and refused by the oracle and the bench (stale_binary), never measured silently."""
+    def test_newer_source_is_named_older_is_not(self):
+        sys.path.insert(0, os.path.join(HERE, "verifiers"))
+        from differential_oracle import stale_binary   # noqa: E402
+        d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        b, src = os.path.join(d, "cvverify"), os.path.join(d, "src", "lib.rs")
+        os.makedirs(os.path.dirname(src))
+        for f in (b, src):
+            open(f, "w").close()
+        os.utime(b, (1000, 1000)); os.utime(src, (2000, 2000))
+        self.assertEqual(stale_binary(b, d, (".rs",)), src)          # positive control: the stale case is caught
+        os.utime(b, (3000, 3000))
+        self.assertIsNone(stale_binary(b, d, (".rs",)))
+        self.assertIsNone(stale_binary(os.path.join(d, "absent"), d, (".rs",)))
+        os.makedirs(os.path.join(d, "target")); t = os.path.join(d, "target", "x.rs"); open(t, "w").close(); os.utime(t, (9000, 9000))
+        self.assertIsNone(stale_binary(b, d, (".rs",)))              # build output is not a source
+        os.makedirs(os.path.join(d, ".build")); t = os.path.join(d, ".build", "x.rs"); open(t, "w").close(); os.utime(t, (9000, 9000))
+        self.assertIsNone(stale_binary(b, d, (".rs",)))              # nor the Swift build directory
+
+    def test_refusal_and_what_counts_as_a_source(self):
+        """0.20.0 review: a test file or a manifest newer than the binary refused a CURRENT binary (cargo/swift do not relink
+        for them; `swift build` does not relink a source that is only touched): only src/ and Sources/ count, and a binary
+        the toolchain has just built is not second-guessed by mtimes."""
+        sys.path.insert(0, os.path.join(HERE, "verifiers"))
+        import differential_oracle as O   # noqa: E402
+        self.assertEqual(os.path.relpath(O.RUST_SRC, O.HERE), os.path.join("rust", "src"))
+        self.assertEqual(os.path.relpath(O.SWIFT_SRC, O.HERE), os.path.join("swift", "Sources"))
+        d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        b, src = os.path.join(d, "cvverify"), os.path.join(d, "a.swift")
+        for f in (b, src):
+            open(f, "w").close()
+        os.utime(b, (1000, 1000)); os.utime(src, (2000, 2000))
+        with self.assertRaises(SystemExit) as cm:
+            O.check_fresh("swift", b, d, (".swift",), built=False)
+        self.assertIn(src, str(cm.exception))
+        O.check_fresh("swift", b, d, (".swift",), built=True)       # just built by the toolchain: no refusal
+
+    def test_bench_generates_idx_removed_from_the_only_entry(self):
+        """The mutation that found the 0.19.0 shortcut (7/1500): it must be generated again, not skipped."""
+        sys.path.insert(0, os.path.join(HERE, "verifiers"))
+        import closed_schema_mutants as B   # noqa: E402
+
+        class R:
+            def randrange(self, n): return 0
+            def choice(self, xs): return "idx" if xs == B.CORE else xs[0]
+        base = B.rechain([{"idx": 0, "ts": "t", "data": {}}], "sha256")
+        m = B.m_missing_core(R(), "sha256", base)
+        self.assertIsNotNone(m)
+        self.assertEqual(m[:2], ("missing_idx", "FAIL"))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

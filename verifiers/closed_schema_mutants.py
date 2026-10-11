@@ -40,6 +40,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from differential_oracle import build_swift, check_fresh   # one copy of the stale-binary rule (oracle and bench)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_TREE = os.path.dirname(HERE)
@@ -209,11 +210,8 @@ def m_wrong_type_idx(rng, algo, base):
 
 def m_missing_core(rng, algo, base):
     es = json.loads(json.dumps(base)); at = rng.randrange(len(es)); k = rng.choice(CORE)
-    if k == "idx" and len(es) == 1:
-        # EVERY entry without idx takes the reference's native-schema path (verifier.py: no idx in the first entries →
-        # _generic_recompute_verify → PASS) while the other verifiers FAIL (SPEC §5 step 4): found by this bench on
-        # 2026-10-11 (7/1500), now a DECLARED case of the oracle (missing-idx-every-entry), not a mutation here
-        return None
+    # idx removed from the only entry: the reference took a native-schema path there until 0.19.0 (PASS, found by this bench
+    # 2026-10-11, 7/1500); 0.20.0 removed it, so the mutation is generated again and is FAIL in all six (SPEC §5 step 4)
     del es[at][k]
     cls = "FAIL" if k in ("idx", "prev_hash") else "AGREE"   # §5 checks idx and the chain rule; it never checks that ts/data exist
     es = rechain(es, algo)
@@ -347,6 +345,8 @@ def discover(tree, tmp, only=None, js_override=None):
         v["java"] = ([jdk[2], "-cp", out, "CvVerify"], True)
     swift = os.environ.get("CVVERIFY_SWIFT") or os.path.join(tree, "verifiers", "swift", ".build", "debug", "cvverify")   # as the oracle
     if os.path.exists(swift):
+        built = bool(os.environ.get("CVVERIFY_SWIFT")) or build_swift(os.path.join(tree, "verifiers", "swift"))
+        check_fresh("swift", swift, os.path.join(tree, "verifiers", "swift", "Sources"), (".swift",), built)
         v["swift"] = ([swift], False)
     if only:
         v = {k: x for k, x in v.items() if k in only}

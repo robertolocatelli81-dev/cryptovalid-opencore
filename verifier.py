@@ -207,134 +207,6 @@ def detect_algo(entries: List[Dict]) -> Optional[str]:
     return None
 
 
-def _generic_recompute_verify(entries: List[Dict], started: str, path: str) -> Optional[Dict]:
-    """Tentativo di verifica COMPLETA (ricomputo hash) per ledger senza `idx` ma con una
-    regola di hashing GENERICA rilevabile: hash_key = ALGO( canonical(entry senza hash_key
-    [e senza signature]) ). Ritorna un receipt PASS solo se il ricomputo combacia su TUTTE
-    le voci E la catena è integra (nessun rischio di falso PASS: PASS solo se ogni hash torna).
-    Se la regola non combacia ovunque → None (si ripiega su linkage)."""
-    if not entries:
-        return None
-    keys = list(entries[-1].keys())
-    prev_keys = [k for k in keys if "prev" in k.lower() and "hash" in k.lower()]
-    hash_cands = [k for k in keys if "hash" in k.lower() and "prev" not in k.lower()]
-    if not prev_keys or not hash_cands:
-        return None
-    pk = prev_keys[0]
-    sig_keys = [k for k in keys if k in ("signature", "sig")]
-    total = len(entries)
-
-    def _matches(hk, algo, drop):
-        idxs = []
-        for i, e in enumerate(entries):
-            body = {k: v for k, v in e.items() if k not in drop}
-            payload = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()
-            if hash_with(algo, payload) == e.get(hk):
-                idxs.append(i)
-        return idxs
-
-    # trova la regola (hk, algo, drop) che ricompone il PIÙ POSSIBILE delle voci
-    best = None  # (n_ok, hk, algo, drop, ok_idxs)
-    for hk in hash_cands:
-        for algo in SUPPORTED_ALGOS:
-            for drop in ({hk}, {hk, *sig_keys}):
-                ok_idxs = _matches(hk, algo, drop)
-                if best is None or len(ok_idxs) > best[0]:
-                    best = (len(ok_idxs), hk, algo, drop, ok_idxs)
-
-    if best is None:  # pragma: no cover - difensivo: hash_cands è già garantito non-vuoto sopra
-        return None
-    n_ok, hk, algo, drop, ok_idxs = best
-    # regola NON rilevata (nessuna maggioranza) → schema module-specifico → ripiega su linkage
-    if n_ok < max(1, (total + 1) // 2):
-        return None
-
-    # regola RILEVATA: da qui la verifica completa è OBBLIGATORIA (niente fallback che nasconda tamper)
-    hash_failures = [i for i in range(total) if i not in set(ok_idxs)]
-    # linkage sotto la stessa regola
-    link_failures = []
-    prev = GENESIS_PREV
-    for i, e in enumerate(entries):
-        if i > 0 and e.get(pk) not in (prev, None):
-            link_failures.append(i)
-        prev = e.get(hk)
-    passed = (not hash_failures) and (not link_failures)
-    receipt = {
-        "verified_utc": started,
-        "verifier": "OMEGA core.verify_ledger v1.1 (stdlib-only, generic full-recompute)",
-        "path": path,
-        "mode": "full_recompute_generic",
-        "algorithm_used": algo,
-        "hash_key": hk,
-        "prev_key": pk,
-        "drop_fields": sorted(drop),
-        "entries_count": total,
-        "hash_recomputed_ok": n_ok,
-        "hash_failures_idx": hash_failures[:10],
-        "link_failures_idx": link_failures[:10],
-        "hash_recompute_passed": not hash_failures,
-        "chain_integrity": passed,
-        "verdict": "PASS" if passed else "FAIL",
-    }
-    rc = {k: v for k, v in receipt.items() if k != "verified_utc"}
-    payload = json.dumps(rc, sort_keys=True, separators=(",", ":"), default=str).encode()
-    receipt["receipt_sha256"] = hashlib.sha256(payload).hexdigest()
-    return receipt
-
-
-def _linkage_verify(entries: List[Dict], started: str, path: str) -> Optional[Dict]:
-    """Verifica di LINKAGE per ledger OMEGA con schema di hash module-specifico
-    (ledger di altri moduli OMEGA): questi non hanno `idx` e usano una regola di hashing
-    propria che verify_ledger non ricomputa indipendentemente. Qui verifichiamo che la
-    CATENA sia integra — ogni `prev_hash` == hash dell'entry precedente — il che rileva
-    riordino / cancellazione / inserimento. Verdetto onesto: LINKED (non PASS: la
-    ricomputazione completa dell'hash richiede il verificatore nativo del modulo)."""
-    if not entries:
-        return None
-    keys = list(entries[-1].keys())
-    prev_keys = [k for k in keys if "prev" in k.lower() and "hash" in k.lower()]
-    hash_cands = [k for k in keys if "hash" in k.lower() and "prev" not in k.lower()]
-    if not prev_keys or not hash_cands:
-        return None
-    pk = prev_keys[0]
-    # scegli la hash-key che rende la catena più coerente
-    best = None
-    for hk in hash_cands:
-        prev = None
-        fails: List[Dict] = []
-        for i, e in enumerate(entries):
-            if i > 0 and e.get(pk) != prev:
-                fails.append({"index": i, "expected_prev": prev, "actual_prev": e.get(pk)})
-            prev = e.get(hk)
-        if best is None or len(fails) < len(best[1]):
-            best = (hk, fails)
-    hk, link_failures = best
-    linked = len(link_failures) == 0
-    receipt = {
-        "verified_utc": started,
-        "verifier": "OMEGA core.verify_ledger v1.1 (stdlib-only, linkage mode)",
-        "path": path,
-        "mode": "linkage",
-        "scheme_note": (
-            "schema di hash module-specifico: verificata la CATENA "
-            "(prev==hash precedente), NON la ricomputazione completa dell'hash "
-            "(usa il verificatore nativo del modulo per quella)."
-        ),
-        "hash_key": hk,
-        "prev_key": pk,
-        "entries_count": len(entries),
-        "link_ok": len(entries) - len(link_failures),
-        "link_total": len(entries),
-        "link_failures": link_failures[:10],
-        "chain_linkage_integrity": linked,
-        "verdict": "LINKED" if linked else "FAIL",
-    }
-    rc = {k: v for k, v in receipt.items() if k != "verified_utc"}
-    payload = json.dumps(rc, sort_keys=True, separators=(",", ":"), default=str).encode()
-    receipt["receipt_sha256"] = hashlib.sha256(payload).hexdigest()
-    return receipt
-
-
 def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = None,
                   trusted_pubkey_hex: Optional[str] = None, require_tip: bool = False,
                   tip_not_before: Optional[str] = None, expect_ledger_id: Optional[str] = None,
@@ -389,18 +261,9 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
             # host process had less stack than the bound assumes (deep caller). Named, not disguised.
             errors.append({"line": i, "error": f"recursion_error: {str(e)[:120]}"})
 
-    # Schema NATIVO (non-PersistentLedger): niente `idx` → verifica di linkage onesta,
-    # senza fingere una ricomputazione completa dell'hash che non conosciamo.
-    if algo is None and entries and not any("idx" in e for e in entries[:3]):
-        # 1) prova la verifica COMPLETA generica (ricomputo hash su tutte le voci)
-        full = _generic_recompute_verify(entries, started, path)
-        if full is not None:
-            return full
-        # 2) altrimenti verifica di LINKAGE onesta (schema module-specifico)
-        linkage = _linkage_verify(entries, started, path)
-        if linkage is not None:
-            return linkage
-
+    # No `idx` → the profile, like every other entry (0.20.0, closed by construction): the reference no longer takes a
+    # native-schema fallback for ledgers whose first three entries lack idx (0.19.0 declared it: §2.1 and §5 step 4 were
+    # not applied there, an unknown key passed). Such a ledger is FAIL, idx_mismatch named, as in the five other verifiers.
     if algo is None:
         algo = detect_algo(entries) or "sha256"
 
@@ -456,7 +319,7 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
         idx = e.get("idx")
         if isinstance(idx, bool) or idx != i:   # True == 1 in Python: a boolean idx is NOT sequential (r5)
             idx_ok = False
-            errors.append({"line": i, "error": f"idx_mismatch: expected {i}, got {e.get('idx')}"})
+            errors.append({"line": i, "error": f"idx_mismatch: expected {i}, got " + (json.dumps(idx, ensure_ascii=False, separators=(",", ":")) if "idx" in e else "(missing)")})   # 0.20.0: absent ≠ null ≠ "1"
 
     # Timestamp monotonicity: REPORTED, not enforced. A backwards `ts` does not break the hash chain
     # (the chain proves order of *appending*, not wall-clock time), but an auditor must see it.

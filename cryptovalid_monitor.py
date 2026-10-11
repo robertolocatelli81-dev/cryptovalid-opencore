@@ -88,8 +88,11 @@ def run(ledger_path: str, state_path: str, keyfile: Optional[str] = None, max_si
                   else "firmato con la log key" if keyfile else "non autenticato (nessuna chiave: limite dichiarato)")
     import cryptovalid_receipt as R
     snap = V.verify_ledger(ledger_path)
-    if snap.get("verdict") not in ("PASS",) and not (snap.get("hash_recompute_passed") and snap.get("link_passed")):
-        alerts.append(f"snapshot: verifier verdict {snap.get('verdict')} (chain/hash failures)")
+    if snap.get("verdict") != "PASS":   # 0.20.0 review: hash+link alone let a ledger without idx / with an unknown key through
+        errs = ([str(x.get("error")) for x in snap.get("parse_errors") or [] if isinstance(x, dict)]
+                + [f"idx {json.dumps(x.get('idx'))}: {x.get('reason')}" for x in snap.get("schema_failures") or [] if isinstance(x, dict)]
+                + [f"idx {json.dumps(x.get('idx'))}: {x.get('reason')}" for x in snap.get("hash_failures") or [] if isinstance(x, dict)])[:3]
+        alerts.append(f"snapshot: verifier verdict {snap.get('verdict')} (chain/hash/idx/schema failures)" + (": " + "; ".join(errs) if errs else ""))
     if snap.get("ts_monotonic") is False:
         alerts.append("snapshot: timestamps not monotonic")
     leaves = M.leaves_from_ledger(ledger_path)

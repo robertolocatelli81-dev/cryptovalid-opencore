@@ -55,12 +55,9 @@ is `manifest_unknown_field` and the pack is not valid. The ledger rule is applie
 (JS, Go, Java, Rust, Swift — aligned 2026-10-11, see CONFORMANCE.md): the same closed list, the failure named
 `unknown_field:<keys>` (keys in code-point order; Rust and Swift, whose receipts carry no reason text, name the entry in
 `schema_failures_idx`). The pack manifest is verified by the reference only (`evidence_pack.py`): the other verifiers do
-not read packs. Two conformance vectors fix the rule: `unknown_top_level_key` (FAIL) and `unknown_key_in_data` (PASS). Declared exception
-(measured 2026-10-11): when no algorithm is forced, a ledger whose first three entries carry no `idx` goes to the reference's
-fallback for ledgers of other OMEGA modules (receipt `mode: full_recompute_generic` when its hashes recompute there), which
-applies neither this section nor §5 step 4 — such a receipt is not a verification of this profile; with `--algo` the
-reference applies the profile; the other verifiers FAIL it; `evidence_pack.py verify` counts such a ledger as
-`hash_pass: true` without saying which path was taken (CONFORMANCE.md).
+not read packs. Two conformance vectors fix the rule: `unknown_top_level_key` (FAIL) and `unknown_key_in_data` (PASS). Since 0.20.0 the reference applies this
+section and §5 step 4 on every path: the fallback 0.19.0 declared (a ledger whose first three entries carried no `idx`, no
+algorithm forced, read by a generic path that applied neither) is removed; such a ledger is FAIL with `idx_mismatch` named.
 
 ## 3. Canonicalisation and hashing (NORMATIVE — interoperability depends on it)
 

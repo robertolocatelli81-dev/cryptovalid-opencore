@@ -551,6 +551,36 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## A ledger without `idx` is refused on every path; the ledger front-end names why (2026-10-11, 0.20.0)
+
+- **The shortcut 0.19.0 declared is closed.** Until 0.19.0, with no `--algo`, a ledger whose first three entries carried no
+  `idx` was read by a fallback for ledgers of other OMEGA modules (`mode: full_recompute_generic` or `linkage`), which
+  applied neither SPEC §2.1 nor §5 step 4: an unknown top-level key passed there, not named. That path is removed from
+  `verifier.py`. Such a ledger is now FAIL with or without `--algo`, as in the five other verifiers; the reference names
+  each entry in `parse_errors` (`idx_mismatch: expected 0, got (missing)`; the receipt keeps the first ten), Go and Java
+  name it `idx "" not sequential`, Rust and Swift carry no reason text. `evidence_pack.py verify` reports it as
+  `hash_pass: false`. A ledger written by an earlier tool without `idx` no longer verifies here: it is not a ledger of
+  this format.
+- **The callers follow the verdict.** `eidas_ledger_check.py` (REQ-7.5-04, `catena_ok`) and `cryptovalid_monitor.py` read
+  only the hash and link results: a ledger without `idx`, or with a key nobody defined (FAIL since 0.19.0), was
+  `SODDISFATTO_PER_COSTRUZIONE` and green there. Both now use the verifier's verdict; the monitor's alert names the first
+  reasons.
+- **`idx_mismatch` says what was there.** The value is printed as JSON, and `(missing)` when the key is absent; Python and
+  JS print the same text (except an object `idx` with integer-like keys, which JS orders first). Before, Python printed an
+  absent key and `null` alike (`None`) and `"1"` like the number `1`; JS printed `undefined`, `null` and `1`.
+- **`cryptovalid-verify ledger` names the reasons.** It printed `verdict=FAIL` only; the layer now carries `reasons`
+  (hash, link, schema and parse failures, with idx — as JSON — or line) and the first three in `detail`.
+- **The benches refuse a stale binary.** The differential oracle had measured a Rust binary built on 21/09, older than its
+  sources, as if it were the tree's code. When the toolchain is on PATH the oracle rebuilds Rust (`cargo build`) and, if a
+  Swift binary is present, Swift (`swift build`); the closed-schema bench does the same. Without the toolchain, the oracle
+  refuses a Rust or Swift binary older than one of its sources (`src/`, `Sources/`), naming the file; the bench does so
+  for Swift (it measures Rust only when `cargo` builds it). Tests and manifests are not sources: a
+  touched test never relinks the binary, and `swift build` does not relink a source that is only touched.
+- **Measured.** The two oracle cases `missing-idx-*` are FAIL in Python, JS, Go, Java and Rust: 0/89 disagreements, the
+  two cases no longer declared. `closed_schema_mutants.py` (1 500 mutations, seed 20261011): GREEN over the six verifiers,
+  Swift included; the same run with the 0.19.0 `verifier.py` is RED with 7 silent PASS, all `missing_idx` (positive
+  control). The 12 older Swift divergences listed in `CONFORMANCE.md` are unchanged.
+
 ## A field nobody defined is never silent: closed entry and manifest schemas, the entry rule in all six verifiers (2026-10-11, 0.19.0)
 
 - **The finding.** Measured on 0.18.1 on 2026-10-10: a ledger entry written with a top-level key nobody defined (self_hash
@@ -572,7 +602,7 @@ certified devices — `eidas_ledger_check.py` tells you exactly which of those y
   `mode: full_recompute_generic`), that path applies neither SPEC §2.1 nor §5 step 4: an unknown top-level key passes, not
   named, while the five other verifiers refuse the ledger. With `--algo` the reference applies the profile and names the key.
   The ledger receipt says which path it took (`mode`); the evidence-pack receipt does not: `evidence_pack.py verify` reports
-  such a ledger as `hash_pass: true`, `valid: true`. Closing it is planned for the next release. Also declared: the types of
+  such a ledger as `hash_pass: true`, `valid: true`. Closed in 0.20.0 (section above). Also declared: the types of
   `ts` and `data` are not checked by any of the six; 12 older Swift divergences are listed in `CONFORMANCE.md`.
 
 ## The Cedulon index stage checks refs and effect claims, as Verax's verifier does (2026-10-06, 0.18.1)

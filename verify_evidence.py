@@ -62,6 +62,20 @@ def _layer(name, status, detail=""):
 
 # ─────────────────────────────────────────────────── verificatori per tipo
 
+def _ledger_reasons(r: dict) -> list:
+    """Every failure the reference receipt names, one string each: where (idx / line) and why."""
+    out = []
+    for k in ("hash_failures", "link_failures", "schema_failures"):
+        for x in r.get(k) or []:
+            why = x.get("reason") or ("prev_hash does not link to the previous self_hash" if k == "link_failures" else "unnamed")
+            out.append(f"{k[:-9]} idx {json.dumps(x.get('idx'), ensure_ascii=False)}: {why}" if isinstance(x, dict) else f"{k[:-9]}: {x}")
+    for x in r.get("parse_errors") or []:
+        out.append(f"line {x.get('line')}: {x.get('error')}" if isinstance(x, dict) else f"parse: {x}")
+    if r.get("verdict") == "FILE_NOT_FOUND":
+        out.append("file not found")
+    return out
+
+
 def verify_ledger(path: str) -> dict:
     """Sola hash-chain del ledger (riusa il verificatore di riferimento se presente,
     altrimenti il mini-verificatore stdlib in questa stessa cartella)."""
@@ -74,8 +88,12 @@ def verify_ledger(path: str) -> dict:
             import verify_ledger as vl  # il mini-verificatore stdlib vicino
             r = vl.verify_ledger(path)
         ok = r.get("verdict") in ("PASS", "LINKED")
-        layers.append(_layer("ledger hash-chain", "PASS" if ok else "FAIL",
-                             f"verdict={r.get('verdict')}"))
+        layer = _layer("ledger hash-chain", "PASS" if ok else "FAIL", f"verdict={r.get('verdict')}")
+        if not ok:
+            # 0.20.0: the reasons the receipt names, not the bare verdict (the receipt keeps the first 10 per field)
+            layer["reasons"] = _ledger_reasons(r)
+            layer["detail"] += "; " + ("; ".join(layer["reasons"][:3]) if layer["reasons"] else "no reason named by the receipt")
+        layers.append(layer)
     except Exception as e:  # noqa: BLE001
         layers.append(_layer("ledger hash-chain", "FAIL", f"{type(e).__name__}: {e}"))
     return _rollup("ledger", layers)

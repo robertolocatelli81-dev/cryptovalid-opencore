@@ -136,25 +136,30 @@ class TestClosedSchema(unittest.TestCase):
         self.assertEqual(r["verdict"], "FAIL")
         self.assertEqual(r["schema_failures"], [{"idx": i, "reason": "unknown_field:" + KEY} for i in range(3)])
 
-    def test_declared_shortcut_is_pinned_until_it_is_closed(self):
-        """DECLARED in 0.19.0 (README, SPEC §2.1): first three entries without idx, no --algo -> the generic path, which
-        applies neither §2.1 nor §5 step 4; with an algorithm forced the profile applies. The release that closes the
-        shortcut must change this test."""
+    def test_ledger_without_idx_is_refused_with_or_without_algo(self):
+        """0.20.0 closes the shortcut 0.19.0 declared: first three entries without idx (or none at all), no --algo, used to
+        take a generic native-schema path (PASS, §2.1 and §5 step 4 not applied, the unknown key not named). Now the
+        profile applies on every path: FAIL, idx_mismatch and the unknown key named; the pack is not valid."""
         es = copy.deepcopy(self.entries) + [dict(idx=3, ts="2026-10-10T10:03:00Z", data={"n": 3})]
         for e in es[:3]:
             e.pop("idx")
         es[3][KEY] = 1
         p = self._write("short.jsonl", _rechain(es, "sha256"))
-        r = V.verify_ledger(p)
-        self.assertEqual((r["verdict"], r.get("mode")), ("PASS", "full_recompute_generic"))
-        self.assertNotIn(KEY, json.dumps(r))
-        r2 = V.verify_ledger(p, algo="sha256")
-        self.assertEqual(r2["verdict"], "FAIL")
-        self.assertIn({"idx": 3, "reason": "unknown_field:" + KEY}, r2["schema_failures"])
+        for algo in (None, "sha256"):
+            r = V.verify_ledger(p, algo=algo)
+            self.assertEqual(r["verdict"], "FAIL", algo)
+            self.assertNotIn("mode", r)
+            self.assertIn({"idx": 3, "reason": "unknown_field:" + KEY}, r["schema_failures"])
+            self.assertEqual([x["line"] for x in r["parse_errors"] if x["error"].startswith("idx_mismatch")], [0, 1, 2])
+        none = [dict(e) for e in self.entries]
+        for e in none:
+            e.pop("idx")
+        r = V.verify_ledger(self._write("none.jsonl", _rechain(none, "sha256")))
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertEqual(len([x for x in r["parse_errors"] if x["error"].startswith("idx_mismatch")]), 3)
         out = os.path.join(self.d, "pack4"); EP.build_pack([p], out)
         rp = EP.verify_pack(out)
-        self.assertTrue(rp["valid"]); self.assertTrue(rp["ledgers"][0]["hash_pass"])   # the pack receipt does not say which path
-
+        self.assertFalse(rp["valid"]); self.assertFalse(rp["ledgers"][0]["hash_pass"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

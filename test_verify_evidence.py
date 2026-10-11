@@ -222,5 +222,80 @@ class TestArchiveLayer(unittest.TestCase):
         self.assertTrue(r["valid"], r)
 
 
+
+class TestLedgerReasons(unittest.TestCase):
+    """0.20.0: `cryptovalid-verify ledger` names WHY a ledger fails (it printed only verdict=FAIL); a PASS carries no reasons."""
+    def _chain(self, mutate=None):
+        import verifier as V
+        prev, es = "0" * 64, []
+        for i in range(3):
+            e = {"idx": i, "ts": f"2026-10-11T10:0{i}:00Z", "data": {"n": i}, "prev_hash": prev}
+            if mutate:
+                mutate(i, e)
+            e["self_hash"] = V.hash_with("sha256", V.canonical_payload(e)); prev = e["self_hash"]; es.append(e)
+        return es
+
+    def _run(self, es, post=None):
+        d = tempfile.mkdtemp(); self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        if post:
+            post(es)
+        p = os.path.join(d, "l.jsonl")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(e) + "\n" for e in es))
+        return VE.verify_ledger(p)["layers"][0]
+
+    def test_intact_has_no_reasons(self):
+        lay = self._run(self._chain())
+        self.assertEqual((lay["status"], lay["detail"]), ("PASS", "verdict=PASS")); self.assertNotIn("reasons", lay)
+
+    def test_each_failure_class_is_named(self):
+        cases = {
+            "hash idx 1: hash_mismatch": dict(post=lambda es: es[1]["data"].update(n=9)),
+            "link idx 2: prev_hash does not link": dict(post=lambda es: es[2].update(prev_hash="f" * 64)),
+            "schema idx 1: unknown_field:zz": dict(mutate=lambda i, e: e.update(zz=1) if i == 1 else None),
+            "line 0: idx_mismatch": dict(mutate=lambda i, e: e.pop("idx")),
+        }
+        for want, kw in cases.items():
+            lay = self._run(self._chain(kw.get("mutate")), kw.get("post"))
+            self.assertEqual(lay["status"], "FAIL", want)
+            self.assertTrue(any(r.startswith(want) for r in lay["reasons"]), (want, lay["reasons"]))
+            self.assertIn(want, lay["detail"]) if want.startswith(lay["reasons"][0][:8]) else None
+            self.assertNotIn("None", " ".join(lay["reasons"]), lay["reasons"])
+
+    def test_idx_value_is_printed_as_json_and_absent_is_missing(self):
+        """README 0.20.0: «idx_mismatch says what was there»: null, "1", an absent key are three different texts, and the
+        reasons never print Python's None (absent vs null, the class 0.20.0 closes)."""
+        want = {"absent": "(missing)", "null": "null", "str": '"1"', "bool": "true", "nonascii": '"\u00e9"',
+                "list": "[1,2]"}
+        vals = {"null": None, "str": "1", "bool": True, "nonascii": "\u00e9", "list": [1, 2]}
+        for name, text in want.items():
+            def mut(i, e, name=name):
+                if i == 1:
+                    e.pop("idx") if name == "absent" else e.update(idx=vals[name])
+            es = self._chain(mut)
+            es[1]["data"]["n"] = 9                                  # a hash failure on the same entry: its idx is printed too
+            lay = self._run(es)
+            self.assertIn(f"line 1: idx_mismatch: expected 1, got {text}", lay["reasons"], (name, lay["reasons"]))
+            self.assertNotIn("None", " ".join(lay["reasons"]), lay["reasons"])
+            self.assertEqual(lay["detail"], "verdict=FAIL; " + "; ".join(lay["reasons"][:3]))
+
+    @unittest.skipUnless(__import__("shutil").which("node"), "node not on PATH")
+    def test_js_prints_the_same_idx_text(self):
+        import subprocess, verifier as V
+        js = os.path.join(_HERE, "verifiers", "js", "cvverify.mjs")
+        for v in ("absent", None, "1", True, "\u00e9", [1, 2]):
+            es = self._chain(lambda i, e, v=v: (e.pop("idx") if v == "absent" else e.update(idx=v)) if i == 1 else None)
+            d = tempfile.mkdtemp(); self.addCleanup(lambda d=d: __import__("shutil").rmtree(d, ignore_errors=True))
+            p = os.path.join(d, "l.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("".join(json.dumps(e) + "\n" for e in es))
+            py = [x["error"] for x in V.verify_ledger(p)["parse_errors"]]
+            out = json.loads(subprocess.run(["node", js, p], capture_output=True, text=True).stdout)
+            self.assertEqual([x["error"] for x in out["errors"]], py, v)
+
+    def test_missing_file_is_named(self):
+        lay = VE.verify_ledger("/nonexistent/cv-0200.jsonl")["layers"][0]
+        self.assertEqual(lay["status"], "FAIL"); self.assertIn("file not found", lay["reasons"])
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

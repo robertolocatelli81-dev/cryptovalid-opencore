@@ -45,7 +45,7 @@ def _write(path, entries):
 def _append(entries, payload):
     """Append a VALID entry (sha256 chain, same canonical rules as the verifier)."""
     last = entries[-1]
-    e = {"idx": last["idx"] + 1, "ts": "2026-09-13T20:00:%02dZ" % (last["idx"] + 1), "prev_hash": last["self_hash"], "payload": payload}
+    e = {"idx": last["idx"] + 1, "ts": "2026-09-13T20:00:%02dZ" % (last["idx"] + 1), "prev_hash": last["self_hash"], "data": payload}   # «data»: since 0.19.0 an unknown key (it was «payload») is a FAIL the monitor must see
     body = json.dumps(e, sort_keys=True, separators=(",", ":")).encode()
     e["self_hash"] = hashlib.sha256(body).hexdigest()
     return entries + [e]
@@ -379,6 +379,37 @@ class TestEidasLedger(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
+class TestCallersFollowTheVerdict(unittest.TestCase):
+    """0.20.0 review: eidas_ledger_check and the monitor read hash+link only, so a ledger without idx (FAIL in verifier.py
+    since 0.20.0) or with a key nobody defined (FAIL since 0.19.0) was SODDISFATTO / green there."""
+    def _ledger(self, drop_idx=False, extra=None):
+        import verifier as V
+        prev, es = "0" * 64, []
+        for i in range(3):
+            e = {"idx": i, "ts": f"2026-10-11T10:0{i}:00Z", "data": {"n": i}, "prev_hash": prev}
+            if drop_idx:
+                e.pop("idx")
+            if extra and i == 2:
+                e.update(extra)
+            e["self_hash"] = V.hash_with("sha256", V.canonical_payload(e)); prev = e["self_hash"]; es.append(e)
+        d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        p = os.path.join(d, "l.jsonl"); _write(p, es)
+        return p, d
+
+    def test_no_idx_and_unknown_key_are_not_green(self):
+        for kw in (dict(drop_idx=True), dict(extra={"zz": 1})):
+            p, d = self._ledger(**kw)
+            req = {r["req"]: r for r in E.assess(p)["requisiti"]}
+            self.assertEqual(req["REQ-7.5-04"]["stato"], "NON_SODDISFATTO", kw)
+            self.assertFalse(E.ledger_report(p)["catena_ok"], kw)
+            v = MON.run(p, os.path.join(d, "state.json"))
+            self.assertFalse(v["ok"], kw)
+            self.assertTrue(any("verifier verdict FAIL" in a for a in v["alerts"]), v["alerts"])
+        p, d = self._ledger()   # control: the same ledger, conformant, stays green in both
+        self.assertEqual({r["req"]: r for r in E.assess(p)["requisiti"]}["REQ-7.5-04"]["stato"], "SODDISFATTO_PER_COSTRUZIONE")
+        self.assertTrue(MON.run(p, os.path.join(d, "state.json"))["ok"])
+
+
 class TestJWS(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="jws_")

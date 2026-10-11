@@ -257,7 +257,7 @@ export function verifyLedger(text, { algo = null, pubkey = null, tip = null, tru
     if (e.prev_hash !== expected) linkFailures.push({ idx: e.idx ?? i, expected_prev: expected, actual_prev: e.prev_hash });
   });
   let idxOk = true;
-  entries.forEach((e, i) => { if (e.idx !== i) { idxOk = false; errors.push({ line: i, error: `idx_mismatch: expected ${i}, got ${e.idx}` }); } });
+  entries.forEach((e, i) => { if (e.idx !== i) { idxOk = false; errors.push({ line: i, error: `idx_mismatch: expected ${i}, got ${Object.prototype.hasOwnProperty.call(e, "idx") ? JSON.stringify(e.idx) : "(missing)"}` }); } });
   // zero entries = nothing verified = FAIL (2026-09-11: all four verifiers said PASS on an empty file)
   if (entries.length === 0) errors.push({ line: 0, error: "empty_ledger: zero entries, nothing to verify" });
   // signed chain tip: `tip` is the parsed document (or null); the CLI loads <ledger>.tip.json when present
