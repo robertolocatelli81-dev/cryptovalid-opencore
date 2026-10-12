@@ -1,0 +1,14 @@
+{
+ "input": "tsa_token_in_hash.jsonl",
+ "normative": {
+  "algorithm": "sha256",
+  "chain_integrity": false,
+  "entries": 2,
+  "hash_failures_idx": [
+   1
+  ],
+  "link_failures_idx": [],
+  "verdict": "FAIL"
+ },
+ "reference_receipt_sha256": "82332f657d97dbcf1add305e3221e7ecc2126a583a61c04133e02a0582715fea"
+}

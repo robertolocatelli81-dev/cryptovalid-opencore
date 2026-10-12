@@ -491,7 +491,10 @@ certificate against the **EU List of Trusted Lists** (ETSI TS 119 612, service t
 two non-qualified TSAs (freetsa, and **Certum's public TSA** — correctly distinguished from the
 *qualified* services of the same company listed in the Polish TL) were rejected. Honest scope:
 `qualified: true` means the TSA certificate is a QTST-`granted` service in the EU Trusted Lists
-at verification time; full ETSI TS 119 615 legal validation (chains, revocation, time constraints)
+at verification time, or when the fingerprint cache was built — at most 24 hours earlier (the status in force then;
+until 0.20.1 a service withdrawn today with `granted` in its history counted too, and the cache was read whatever its
+age — corrected in 0.20.2, see that section), not at the token's time (`qtst_fingerprints_at`, given the genTime,
+answers that; the CLI and the callers do not use it yet); full ETSI TS 119 615 legal validation (chains, revocation, time constraints)
 is beyond exact-fingerprint matching, and production use still wants a contracted QTSP with an SLA. The linear hash-chain stays the interoperable core; Merkle is **additive**. Domain separation:
 `0x00` leaves, `0x01` nodes. Third-party verification needs only
 `(entry, index, tree_size, audit_path, root)`. Tests: `python3 test_merkle.py`.
@@ -550,6 +553,98 @@ python3 test_ledger_evidence.py                                         # 18 tes
 Honest scope, once more: a receipt signed by the log key proves what the log key holder published; a
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
+
+## Swift reads a FIFO; `tsa_token` leaves the canonical form; the SPEC says who verifies signatures; the LOTL check reads the status in force (2026-10-12, 0.20.2)
+
+Defects present in 0.20.1 and before: three found by the review of 0.20.1, one in the ingest found while correcting them,
+the others in `cryptovalid_lotl` and `verify_archive --lotl` (found by a measurement of the EU Trusted Lists and by the
+review of this release). One more, in `eidas_ledger_check`, the `tsa_token` change itself would have opened; it is closed
+in the same release.
+
+- **SPEC v0.3.** The SPEC header moves from v0.2 (2026-08-13) to v0.3 (2026-10-12). §6 lists the changes since v0.2
+  that turn a PASS into a FAIL: the closed entry schema (0.19.0) and `idx` on every path (0.20.0), made without a version
+  bump, and `tsa_token` outside the canonical form (0.20.2).
+- **Swift did not read a FIFO.** `cvverify <(cat ledger.jsonl)` answered `FILE_ERROR`, exit 2, in the Swift verifier of
+  0.20.1 and 0.20.0, while Python, JS, Go, Java and Rust read the bytes and gave the verdict. Swift now reads the file to
+  its end through a file handle; a directory and a missing path stay `FILE_ERROR`, an empty file stays FAIL. The oracle
+  case `input-fifo` (all six verifiers must answer PASS) is a disagreement with the Swift binary of 0.20.1; a `swift test`
+  (FIFO, directory, missing path, empty file) fails when the 0.20.1 read is put back into the new function; the CLI line
+  that calls it is covered by the oracle case and, on macOS in CI, by a FIFO gate.
+- **`tsa_token` could not be what §2 said.** §2 defines it as an RFC 3161 token over `self_hash`, and §3 kept it inside the
+  bytes `self_hash` is computed from. Measured with a local test TSA (`openssl ts`): a real token over an entry's
+  `self_hash`, added after hashing, was FAIL in all six verifiers; with `self_hash` recomputed over the token, all six
+  said PASS and the token no longer bound the entry's `self_hash`. Since 0.20.2 `tsa_token` is outside the canonical form,
+  like the signatures, in the six verifiers and in `signer.py`: the first ledger is PASS in all six, the second FAIL. A
+  ledger written with the token hashed as content is FAIL from 0.20.2 on. None was found: on 2 880 `.jsonl` files in four
+  directory trees of the development machine, and on 126 more files carrying `self_hash` elsewhere on it (backups and
+  copies), the six verifiers give the same verdict and exit code before and after the change on every file (1 527 PASS
+  and 1 479 FAIL in each of the six; many of these files are not ledgers), no file was rewritten (sha256 before and
+  after), and no line of them carries `tsa_token`, at the top level or nested (355 474 JSON objects). Two normative vectors fix the rule
+  (`tsa_token_attached` PASS, `tsa_token_in_hash` FAIL at idx 1); four oracle cases check the verdict, not only the
+  agreement; tests in Python, JS, Go, Rust and Swift fail on the code of 0.20.1. No verifier here checks the token itself
+  (§5 step 6), and the SPEC now says so.
+- **"Verified when present" was not true of every verifier.** Measured on nine three-entry ledgers (unsigned; signed;
+  signed by another key; one signature changed, missing, malformed or without `signer`; hybrid; hybrid with one ML-DSA-65
+  signature changed), with no key, the right key and another key: `verifier.py` and the Rust verifier verify no signature
+  (a changed signature is PASS); `signer.py verify` refuses every broken, missing or malformed signature, with or without
+  `--pubkey`; JS, Go, Java and Swift verify Ed25519 and report it, and the verdict depends on it only when a key is given;
+  ML-DSA-65 is verified by `signer.py`, Go and Java, not by JS or Swift. SPEC §2 and §5 and `spec/CONFORMANCE.md` (which
+  said Swift verifies no signature; it has verified Ed25519 since its first version) now say this. §5 also named
+  `evidence_pack.py` as the implementation of step 6: it timestamps the pack's manifest digest, not entries. The
+  verifiers' behaviour on signatures is unchanged: the 189 results of the matrix (verdict and exit code) are the same
+  before and after.
+- **The same list in the ingest.** Resuming a segment, `cryptovalid_ingest` recomputed `self_hash` leaving out
+  `self_hash`, `signature` and `signer` only, so a segment whose entries carry `signature_pq`/`signer_pq` (or now
+  `tsa_token`) was refused as tampered while the six verifiers PASS it. It now leaves out the six fields of §3; a test
+  resumes both kinds of segment, refuses each one with its content changed, and fails on the code of 0.20.1.
+  `cryptovalid_merkle` still builds its leaves leaving out the first three only (on a hybrid or timestamped ledger a
+  change would change every root and receipt built with the current rule; on 2026-10-12 no ledger on the development
+  machine carries `signature_pq`, `signer_pq` or `tsa_token`): not changed here, an open decision. SPEC §6 (Merkle) said
+  the leaves are the canonical form of §3, and the module's docstring "the same rule as self_hash": both now say what the
+  leaves are.
+- **A withdrawn timestamp service counted as qualified.** `cryptovalid_lotl` took a `TSPService` as a qualified
+  timestamp service when the text `Svcstatus/granted` appeared anywhere in it, its `ServiceHistory` included. ETSI TS
+  119 612 puts the status in `ServiceInformation/ServiceStatus`, in force from its `StatusStartingTime`, and the earlier
+  ones in `ServiceHistoryInstance` entries; ETSI TS 119 615 (PRO-4.3.4-03) reads the status at a date the same way and
+  matches the certificate against the `ServiceInformation`'s digital identity. A service now counts when the entry in
+  force is `TSA/QTST` and `granted`, with the certificates of its `ServiceInformation`. On 26 of the 30 national lists
+  the LOTL points to (downloaded on 2026-10-12; PT and SI did not download then; CZ and DK below): 984 certificate
+  fingerprints in 0.20.1, 652 in 0.20.2 (332 fewer, none added; 17 lists change). 634 of the 652 have `granted` in
+  `ServiceInformation`; the other 18 are 18 services of one list whose `ServiceInformation` says `withdrawn` from a date in
+  2027-2029 and whose status in force today is `granted`. A new function, `qtst_fingerprints_at(list, instant)`, gives
+  the services qualified at a given instant (a token's genTime, which the caller supplies); `verify_archive`, the ingest
+  anchor and `cryptovalid_report --lotl` check the status in force at verification time, or when the cache was built.
+- **Two lists the LOTL names were not fetched.** The LOTL pointers were taken by a regex on locations ending in `.xml`:
+  the Czech list (`TSL_CZ.xtsl`) and the Danish one (`TSLDK_v6xml`) were skipped, and with them 420 and 6 fingerprints of
+  services granted today (measured on the lists of 2026-10-12). The pointers are now read from the LOTL as XML: every
+  `OtherTSLPointer` whose MimeType is `application/vnd.etsi.tsl+xml`, the LOTL's own pointer left out — 31 locations (the
+  30 national lists and the United Kingdom's last one, which has no granted QTST service).
+- **The list parser was not closed.** A document type declaration was refused by a byte search for `<!DOCTYPE`, which a
+  UTF-16 list passes: its entities were expanded (measured on Python 3.9, 3.11 and 3.13). TS 119 612 requires UTF-8 for
+  XML trusted lists; a list that is not UTF-8 or that carries a document type declaration is now refused by the XML
+  parser itself, in any encoding it declares. `StatusStartingTime` is read only in the form TS 119 612 §5.1.3 writes
+  (`YYYY-MM-DDThh:mm:ssZ`): `datetime.fromisoformat` also took a value without `Z`, an offset or a fraction, and on Python
+  3.11 and 3.13 three forms that 3.9 refused (`.5Z`, `20170301T000000Z`, a week date), so the same list could count a
+  service on one Python and not on another. Every `StatusStartingTime` in the lists read on 2026-10-12 (29 national lists,
+  PT missing, and the United Kingdom's) has the prescribed form: 9 888 of 9 888.
+- **The fingerprint cache had no age.** The ingest keeps it in `~/.cache/cryptovalid` and read it whatever its age, so a
+  set built on one day answered for every later day. The cache now records `built_at` and is rebuilt after 24 hours
+  (`cache_max_age_s`); a cache of 0.20.1 (no rule) is rebuilt. In `verify_archive --lotl`, a LOTL that cannot be
+  fetched or is not a trusted list is the warning `lotl_unavailable` and `eidas_qualified_segments: null`, not a
+  traceback (a network error raised out of it until 0.20.1).
+- **A presence counted as a timestamp.** `eidas_ledger_check` counted the entries carrying `tsa_token` (REQ-7.5-04-bis and
+  the ledger report). With `tsa_token` outside the canonical form, `"tsa_token": "AAAA"` added to every entry of a signed
+  ledger keeps every hash and signature valid, and turned REQ-7.5-04-bis from `NON_APPLICABILE` into `PARZIALE`. It now
+  counts the tokens that carry the entry's `self_hash` as message imprint and whose CMS signature verifies
+  (`cryptovalid_tsa`); the entries that only carry the field are reported apart (`record_con_campo_tsa_token`).
+- Tests for each point (synthetic lists and ledgers, a local `openssl ts` TSA) fail on the code of 0.20.1, except the
+  granted-today control, which passes there too.
+- **Measured on this code.** Differential oracle 0/110 over the six verifiers (26 declared divergences, on signed tips);
+  on the 0.20.1 code with the 0.20.1 Swift binary the same oracle counts 5/110. `conformance.py` 11/11; JS
+  `--conformance` 11/11 and its suite 117–118 checks (the count moves with a random signature); Rust and Swift binaries 11/11 on `spec/vectors/`; `cargo test` 9 tests
+  and `clippy -D warnings`; `swift test` 18/18; `go vet` and `go test`; the 48 Python test files on Python 3.9, 3.11
+  and 3.13 and with the declared floor (`cryptography` 48.0.0, `ap2-evidence-pack` 1.3.0), 48/48 each;
+  `closed_schema_mutants.py` 1 500 mutations, seed 20261011, GREEN over the six verifiers.
 
 ## The six verifiers follow one acceptance profile; Swift aligned, defects closed in Python, JS, Rust and Swift (2026-10-12, 0.20.1)
 

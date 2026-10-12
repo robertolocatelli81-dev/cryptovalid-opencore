@@ -24,13 +24,23 @@ public struct VerifyResult: Codable, Equatable {
 
 public enum CryptoValidVerifier {
     static let GENESIS = String(repeating: "0", count: 64)
-    static let ATTEST: Set<String> = ["self_hash", "signature", "signer", "signature_pq", "signer_pq"] // 0.12.0: ML-DSA-65 companion
+    static let ATTEST: Set<String> = ["self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token"] // 0.12.0: ML-DSA-65 companion; 0.20.2: tsa_token (SPEC §3)
     // SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the CLOSED entry schema (core + optional fields of §2), as verifier.py ENTRY_KEYS.
     // An entry with a top-level key outside it is a schema failure and the verdict is FAIL, never a silent PASS. `data` stays free (§4).
     public static let ENTRY_KEYS: Set<JSONKey> = ["idx", "ts", "data", "prev_hash", "self_hash", "signature", "signer", "tsa_token", "signature_pq", "signer_pq"]
     /// The entry's top-level keys outside ENTRY_KEYS, in code-point order (the order Python's sorted() gives).
     public static func unknownFields(_ entry: [JSONKey: JSONValue]) -> [String] {
         entry.keys.filter { !ENTRY_KEYS.contains($0) }.sorted().map { $0.string }   // JSONKey: scalar-exact, code-point order
+    }
+
+    /// The bytes of the file at `path`, read to its end through a file handle: a regular file, a FIFO or a process
+    /// substitution (`cvverify <(cat ledger)`) alike, as the Python, JS, Go, Java and Rust verifiers read them; nil when it
+    /// cannot be opened or read (missing, a directory, no permission). `FileManager.contents(atPath:)`, used until 0.20.1,
+    /// answered nil on a FIFO on Linux (FILE_ERROR, exit 2; NEMESIS 12/10/2026, the same in 0.20.0).
+    public static func readLedgerFile(atPath path: String) -> [UInt8]? {
+        guard let h = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? h.close() }
+        do { return [UInt8](try h.readToEnd() ?? Data()) } catch { return nil }   // nil from readToEnd = no bytes (empty file)
     }
 
     static func canonicalPayload(_ entry: [JSONKey: JSONValue]) -> [UInt8] {

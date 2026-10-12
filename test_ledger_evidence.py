@@ -442,5 +442,83 @@ class TestJWS(unittest.TestCase):
             J.sign_entry(self.e, self.k, x5c="single-string")
 
 
+@unittest.skipUnless(__import__("shutil").which("openssl"), "openssl absent: no local TSA")
+class TestEidasCountsBoundTokensOnly(unittest.TestCase):
+    """0.20.2: tsa_token is outside the canonical form, so it can be added to a signed ledger without breaking a hash or a
+    signature; REQ-7.5-04-bis counted PRESENCE ("AAAA" on every entry turned NON_APPLICABILE into PARZIALE). It now counts
+    tokens that carry the entry's self_hash and whose CMS signature verifies."""
+    def setUp(self):
+        import subprocess
+        self.d = d = tempfile.mkdtemp(); self.addCleanup(__import__("shutil").rmtree, d, True)
+        cnf = os.path.join(d, "t.cnf")
+        with open(cnf, "w") as f:
+            f.write("[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=t\n[ext]\nextendedKeyUsage=critical,timeStamping\n"
+                    "[tsa]\ndefault_tsa=t1\n[t1]\nserial=%s/serial\nsigner_cert=%s/tsa.crt\nsigner_key=%s/tsa.key\n"
+                    "signer_digest=sha256\ndefault_policy=1.2.3.4.1\ndigests=sha256\ness_cert_id_alg=sha256\n" % (d, d, d))
+        with open(os.path.join(d, "serial"), "w") as f:
+            f.write("01\n")
+        run = lambda *a: subprocess.run(a, check=True, capture_output=True)   # noqa: E731
+        run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout",
+            os.path.join(d, "tsa.key"), "-out", os.path.join(d, "tsa.crt"), "-days", "2", "-config", cnf, "-extensions", "ext")
+        self.run_ = run; self.cnf = cnf
+
+    def _token(self, hexd):
+        import base64
+        q, r = os.path.join(self.d, "q.tsq"), os.path.join(self.d, "r.der")
+        self.run_("openssl", "ts", "-query", "-digest", hexd, "-sha256", "-cert", "-out", q)
+        self.run_("openssl", "ts", "-reply", "-config", self.cnf, "-queryfile", q, "-out", r, "-token_out")
+        with open(r, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+
+    def _ledger(self, tokens):
+        import hashlib
+        import json
+        out, prev = [], "0" * 64
+        for i, tok in enumerate(tokens):
+            e = {"idx": i, "ts": "2026-10-12T00:00:0%dZ" % i, "data": {"i": i}, "prev_hash": prev}
+            e["self_hash"] = hashlib.sha256(json.dumps(e, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            prev = e["self_hash"]
+            if tok == "real":
+                e["tsa_token"] = self._token(e["self_hash"])
+            elif tok == "other":
+                e["tsa_token"] = self._token("ab" * 32)          # a genuine token, for another digest
+            elif tok is not None:
+                e["tsa_token"] = tok
+            out.append(e)
+        p = os.path.join(self.d, "l.jsonl")
+        with open(p, "w") as f:
+            f.write("\n".join(json.dumps(e) for e in out) + "\n")
+        return p
+
+    def _req(self, p):
+        r = [x for x in E.assess(p)["requisiti"] if x["req"] == "REQ-7.5-04-bis"][0]
+        return r["stato"], r["misura"]["record_con_token_rfc3161"], r["misura"]["record_con_campo_tsa_token"]
+
+    def test_only_tokens_that_bind_the_entry_count(self):
+        self.assertEqual(self._req(self._ledger(["real", None, "real"])), ("PARZIALE", 2, 2))      # positive control
+        self.assertEqual(self._req(self._ledger(["AAAA", "AAAA", "AAAA"])), ("NON_APPLICABILE", 0, 3))
+        self.assertEqual(self._req(self._ledger(["other", "!!", 7])), ("NON_APPLICABILE", 0, 3))
+        self.assertEqual(self._req(self._ledger([None, None])), ("NON_APPLICABILE", 0, 0))
+        import cryptovalid_tsa as T
+        orig = T.verify_cms_signature
+        T.verify_cms_signature = lambda der: False                       # a token whose CMS signature does not verify
+        try:
+            self.assertEqual(self._req(self._ledger(["real"])), ("NON_APPLICABILE", 0, 1))
+        finally:
+            T.verify_cms_signature = orig
+        self.assertEqual(E.ledger_report(self._ledger(["real", "AAAA"]))["record_con_marca_rfc3161"], 1)
+        T.verify_cms_signature = lambda der: True                        # an empty self_hash never "binds" (04 00 = empty OCTET STRING)
+        try:
+            self.assertEqual(E._tsa_tokens([{"self_hash": "", "tsa_token": "BAA="}]), (1, 0))
+            self.assertEqual(E._tsa_tokens([{"self_hash": "ab" * 32, "tsa_token": ""}]), (1, 0))   # present, empty
+        finally:
+            T.verify_cms_signature = orig
+        T.verify_cms_signature = lambda der: None                        # openssl absent: signature unchecked, not counted
+        try:
+            self.assertEqual(self._req(self._ledger(["real"])), ("NON_APPLICABILE", 0, 1))
+        finally:
+            T.verify_cms_signature = orig
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

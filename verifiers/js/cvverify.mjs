@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const GENESIS_PREV = "0".repeat(64);
 const ALGOS = ["sha256", "sha3_256"];
-const ATTEST = new Set(["self_hash", "signature", "signer", "signature_pq", "signer_pq"]); // 0.12.0: ML-DSA-65 companion fields
+const ATTEST = new Set(["self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token"]); // 0.12.0: ML-DSA-65 companion fields; 0.20.2: tsa_token (SPEC §3)
 // SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the CLOSED entry schema (core + optional fields of §2), as verifier.py ENTRY_KEYS. A
 // top-level key outside it is the named failure `unknown_field:<keys>` in `schema_failures`, never a silent PASS (measured
 // 2026-10-11 on this verifier: an extra top-level key with self_hash recomputed over it was PASS with no trace). `data` stays free (§4).

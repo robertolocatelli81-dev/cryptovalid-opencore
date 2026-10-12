@@ -25,7 +25,7 @@ public class CvVerify {
     static final long MAX_INPUT_BYTES = 256L * 1024 * 1024;   // verifier.py MAX_INPUT_BYTES
     static final String GENESIS = "0".repeat(64);
     static final String TIP_KIND = "cryptovalid_tip/1";
-    static final Set<String> ATTEST = Set.of("self_hash", "signature", "signer", "signature_pq", "signer_pq");
+    static final Set<String> ATTEST = Set.of("self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token");   // SPEC §3; tsa_token since 0.20.2
     // SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the CLOSED entry schema (core + optional fields of §2), as verifier.py ENTRY_KEYS.
     // A top-level key outside it is the named failure `unknown_field:<keys>`, never a silent PASS (measured 2026-10-11 on this
     // verifier: an extra top-level key with self_hash recomputed over it was PASS with no trace). Keys inside `data` stay free (§4).

@@ -13,7 +13,8 @@ Mutation classes and the SPEC rule behind each expected class:
   top_unknown / top_unknown_multi / top_unknown_all_entries / top_unknown_escaped  §2.1: FAIL, named
   top_unknown_no_rehash                                   §5 step 2: FAIL (hash mismatch; naming not required)
   data_unknown                                            §4: data is domain-specific → the base verdict (PASS)
-  optional_known (tsa_token with a string)                §2 optional fields → PASS (the rule must not reject too much)
+  optional_known (tsa_token with a string)                §2 optional fields → PASS (the rule must not reject too much;
+                                                          tsa_token is outside the canonical form since 0.20.2, §3)
   wrong_type_idx / missing_idx                            §5 step 4: FAIL (idx must equal the position)
   wrong_type_prev_hash / missing_prev_hash                §5 step 3: FAIL (chain rule)
   wrong_type_self_hash                                    §5 step 2: FAIL
@@ -48,7 +49,7 @@ DEFAULT_TREE = os.path.dirname(HERE)
 # SPEC §2 core + optional fields (the closed schema of §2.1), copied from the SPEC tables — not read from a verifier
 ENTRY_KEYS = ("idx", "ts", "data", "prev_hash", "self_hash", "signature", "signer", "tsa_token", "signature_pq", "signer_pq")
 CORE = ("idx", "ts", "data", "prev_hash")
-ATTEST = ("self_hash", "signature", "signer", "signature_pq", "signer_pq")   # outside the canonical form (§3)
+ATTEST = ("self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token")   # outside the canonical form (§3; tsa_token since 0.20.2)
 
 
 def canon(o):

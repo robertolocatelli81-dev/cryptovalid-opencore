@@ -48,6 +48,36 @@ FONTI = {
 }
 
 
+def _tsa_tokens(entries):
+    """(present, bound): entries carrying `tsa_token`, and those whose value is the base64 of an RFC 3161 token that
+    carries the entry's own `self_hash` as message imprint and whose CMS signature verifies (cryptovalid_tsa; without
+    openssl the signature is unchecked and the token is not counted). Since 0.20.2 `tsa_token` is outside the canonical
+    form (SPEC §3): anyone can add one to a signed ledger without breaking a hash or a signature, so presence is not a
+    timestamp (until then this check counted presence)."""
+    import base64
+    import binascii
+    present = bound = 0
+    try:
+        import cryptovalid_tsa as T
+    except Exception:  # noqa: BLE001
+        T = None
+    for e in entries:
+        t = e.get("tsa_token")
+        if t is None:
+            continue
+        present += 1
+        sh = e.get("self_hash")
+        if T is None or not isinstance(t, str) or not isinstance(sh, str):
+            continue
+        try:
+            der, digest = base64.b64decode(t, validate=True), bytes.fromhex(sh)
+        except (binascii.Error, ValueError):
+            continue
+        if len(digest) == 32 and T.token_contains_digest(der, digest) and T.verify_cms_signature(der) is True:
+            bound += 1
+    return present, bound
+
+
 def _entries(path: str) -> List[Dict]:
     with open(path, encoding="utf-8") as f:
         return [json.loads(l) for l in f if l.strip()]
@@ -69,7 +99,7 @@ def assess(ledger_path: str, deployment: Optional[Dict] = None) -> Dict:
             firme_valide = SG.verify_ledger_signatures(entries)
         except Exception as ex:  # noqa: BLE001 — senza cryptography: firme presenti ma NON verificate qui
             firme_valide = {"verified": None, "note": f"non verificate: {type(ex).__name__}"}
-    stamped = sum(1 for e in entries if e.get("tsa_token"))
+    present, stamped = _tsa_tokens(entries)
     algo = snap.get("algorithm_used")
     # the verifier's VERDICT, not hash+link alone: idx (SPEC §5 step 4) and the closed schema (§2.1) are part of the chain
     # rule (0.20.0 review: a ledger without idx, or with a key nobody defined, was FAIL in verifier.py and SODDISFATTO here)
@@ -108,7 +138,7 @@ def assess(ledger_path: str, deployment: Optional[Dict] = None) -> Dict:
     # REQ-7.5-04 alternative: qualified timestamps if time recording is used
     add("REQ-7.5-04-bis", "se l'ordine cronologico si affida al tempo registrato: marche temporali QUALIFICATE",
         "DICHIARATO_NON_VERIFICATO" if d["qtsp_timestamps"] and stamped else "PARZIALE" if stamped else "NON_APPLICABILE",
-        {"record_con_token_rfc3161": stamped, "qtsp_dichiarato": d["qtsp_timestamps"],
+        {"record_con_token_rfc3161": stamped, "record_con_campo_tsa_token": present, "qtsp_dichiarato": d["qtsp_timestamps"],
          "nota": "l'ordine qui è garantito dai link crittografici (REQ-7.5-04); il tempo è evidenza aggiuntiva"},
         None if (d["qtsp_timestamps"] or not stamped) else "i token RFC 3161 presenti provengono da una TSA non dichiarata qualificata")
     # REQ-7.5-06 device
@@ -145,7 +175,7 @@ def ledger_report(ledger_path: str) -> Dict:
             "primo_ts": min(ts) if ts else None, "ultimo_ts": max(ts) if ts else None,
             "algoritmo": snap.get("algorithm_used"), "catena_ok": snap.get("verdict") == "PASS",
             "idx_sequenziale": snap.get("idx_monotonic"), "ts_monotoni": snap.get("ts_monotonic"),
-            "record_firmati": sum(1 for e in entries if e.get("signature")), "record_con_marca_rfc3161": sum(1 for e in entries if e.get("tsa_token")),
+            "record_firmati": sum(1 for e in entries if e.get("signature")), "record_con_marca_rfc3161": _tsa_tokens(entries)[1],
             "tree_head": M.tree_head(leaves), "verdetto_verifier": snap.get("verdict"),
             "riproducibile": "stesso file → stesso report (tranne generato_il): un terzo lo ricalcola con verifier.py e cryptovalid_merkle"}
 

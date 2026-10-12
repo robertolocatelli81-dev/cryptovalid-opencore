@@ -50,7 +50,7 @@ const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const pubRaw = publicKey.export({ type: "spki", format: "der" }).subarray(-32);
 const signerHex = Buffer.from(pubRaw).toString("hex");
 function canonHash(entry) {
-  const d = {}; for (const k of Object.keys(entry).sort()) if (!["self_hash", "signature", "signer", "signature_pq", "signer_pq"].includes(k)) d[k] = entry[k];
+  const d = {}; for (const k of Object.keys(entry).sort()) if (!["self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token"].includes(k)) d[k] = entry[k];
   // reuse the module's canonical by re-verifying a whole ledger below instead of duplicating here
   return d;
 }
@@ -69,6 +69,16 @@ const badSig = { ...signed, signature: Buffer.from("x".repeat(64)).toString("bas
 const rBad = verifyLedger(JSON.stringify(badSig));
 ok("signature: forged signature not all_verified", rBad.signatures && !rBad.signatures.all_verified);
 ok("signature: pubkey pin mismatch flagged", !verifyLedger(JSON.stringify(signed), { pubkey: "00".repeat(32) }).signatures.all_verified);
+// 4a) SPEC §3 (12/10/2026, 0.20.2): tsa_token, an RFC 3161 token over self_hash, is outside the canonical form like the
+//     signatures. Until 0.20.1 it was inside: attached after hashing it was a hash failure, hashed as content it passed.
+{
+  const rAtt = verifyLedger(JSON.stringify({ ...signed, tsa_token: "AAAA" }), { pubkey: signerHex });
+  ok("tsa_token attached after hashing: PASS, signatures still verified", rAtt.verdict === "PASS" && rAtt.signatures.all_verified, JSON.stringify(rAtt));
+  const withTsa = { ...base, tsa_token: "AAAA" };
+  const hIn = createHash("sha256").update(Buffer.from("{" + Object.keys(withTsa).sort().map((k) => JSON.stringify(k) + ":" + JSON.stringify(withTsa[k])).join(",") + "}", "utf-8")).digest("hex");
+  const rIn = verifyLedger(JSON.stringify({ ...withTsa, self_hash: hIn }));
+  ok("tsa_token hashed as content: hash failure, FAIL", rIn.verdict === "FAIL", JSON.stringify(rIn));
+}
 
 // 4b) audit V1 #12 and A16 (30/09/2026): strict signature/signer decoding, as Python signer.py and Java; and with --pubkey a
 //     signature layer that does not verify fails the run (verdict FAIL, exit 1), as Java -pubkey

@@ -183,8 +183,10 @@ class Ingestor:
                     e = json.loads(line)
                 except json.JSONDecodeError:
                     break                                     # torn/corrupt tail
+                # the attestation fields of SPEC §3 (the verifiers' list): until 0.20.2 only the first three were
+                # left out here, so a segment carrying signature_pq/signer_pq or tsa_token was refused as tampered
                 body = {k: v for k, v in e.items()
-                        if k not in ("self_hash", "signature", "signer")}
+                        if k not in ("self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token")}
                 recomputed = hashlib.sha256(_canonical(body)).hexdigest()
                 if (e.get("idx") != self._idx or e.get("prev_hash") != self._prev
                         or e.get("self_hash") != recomputed):
@@ -473,12 +475,17 @@ def verify_archive(directory: str, prefix: str = "ledger",
     qualified_count: Optional[int] = None
     if lotl_check and timestamped:
         import cryptovalid_lotl as lotl
-        fprs, _cov = lotl.load_qualified_fingerprints(
-            lotl_member_states, cache_path=_default_lotl_cache(lotl_member_states))
-        qualified_count = sum(1 for _n, tok in timestamped if lotl.is_qualified(tok, fprs))
-        if qualified_count < len(timestamped):
-            warnings.append(f"tsa_not_qualified: {len(timestamped) - qualified_count} "
-                            "token(s) from a TSA not in the EU Trusted Lists (QTST)")
+        try:
+            fprs, _cov = lotl.load_qualified_fingerprints(
+                lotl_member_states, cache_path=_default_lotl_cache(lotl_member_states))
+        except Exception as e:  # noqa: BLE001 — network, or a LOTL that is not a trusted list (0.20.2: parsed as XML)
+            fprs = None
+            warnings.append(f"lotl_unavailable: {type(e).__name__}: {e}"[:300])
+        if fprs is not None:
+            qualified_count = sum(1 for _n, tok in timestamped if lotl.is_qualified(tok, fprs))
+            if qualified_count < len(timestamped):
+                warnings.append(f"tsa_not_qualified: {len(timestamped) - qualified_count} "
+                                "token(s) from a TSA not in the EU Trusted Lists (QTST)")
 
     return {"ok": bool(sealed) and not failures,
             "segments_verified": len(sealed),

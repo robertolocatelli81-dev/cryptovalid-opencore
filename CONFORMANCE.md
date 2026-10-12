@@ -27,7 +27,8 @@ rule for every runner, `unknown_top_level_key` (FAIL) and `unknown_key_in_data` 
 the alignment JS conformance was 8/9 and the Rust and Swift normative tests failed on the first. The differential oracle
 carries nine new cases — seven negative (a plain key, a case variant `Idx`, the empty name `""`, a non-ASCII name, two keys,
 a key on entry 1 of 3, the SHA3 profile) and the controls `unknown-key-in-data` / `optional-tsa-token-rehashed` that must
-stay PASS — and the existing `proto-key-rehashed` (`__proto__`) now expects FAIL; on the negative ones it checks that every
+stay PASS (since 0.20.2 `tsa_token` is outside the canonical form, SPEC §3: the second control is
+`optional-tsa-token-attached`, and the rehashed form is the case `tsa-token-inside-hash`, FAIL in all six) — and the existing `proto-key-rehashed` (`__proto__`) now expects FAIL; on the negative ones it checks that every
 receipt NAMES the key. Two more cases (`unknown-keys-long-cut`: keys past the 120-code-point cut, one outside the BMP;
 `unknown-key-wrong-idx`) require the reason TEXT and the idx list to equal the reference's, not only to contain the key:
 0/89 disagreements over Python, JS, Go, Java and Rust (28 declared). `verifiers/closed_schema_mutants.py` is a generative, differential bench over the
@@ -54,16 +55,17 @@ that MUST fail (bad_idx, broken_link, tampered_content).
 | Implementation | Runtime / deps | Status |
 |---|---|---|
 | `verifier.py` | Python 3, stdlib | reference — conformant |
-| `verifiers/js/cvverify.mjs` | Node ≥18, stdlib only | **conformant 9/9** (2026-10-11); 92–93-check suite (112 in 4 runs on 2026-10-12, after the checks for a BOM, `--algo`, float lexemes, `idx` past 2^53-1, a receipt over 64 KiB on a pipe; 115–116 in 9 runs after the review's checks: the receipt read through `| cat`, a signed tip with a BOM, `1.0` after an escaped quote, the float scan linear on 100 000 escaped quotes) incl. cross-oracle vs the Python reference (the count moves by one or two with the random signature's characters) |
-| `verifiers/rust/` | Rust, **std only** (SHA-256+Keccak in-crate) | **conformant 9/9**; `cargo test` 8 tests + `clippy -D warnings` (Rust 1.98.1, 2026-10-11; 9 tests since 2026-10-12, `--algo` closed); in the differential oracle = 0 mismatch |
-| `verifiers/swift/` | Swift + CryptoKit (Apple) / swift-crypto (Linux) | **compiled & tested on Linux (Swift 6.3.3, 2026-10-12): swift test 17/17, conformant 9/9** (the binary on `spec/vectors/`); aligned with the acceptance profile on 2026-10-12 — the 12 divergences measured on 2026-10-11 (surrogate pair refused, `+10` / `010` / a raw tab accepted, CRLF refused, `FILE_ERROR` on non-UTF-8, no usage errors in the CLI) are closed: the differential oracle with Swift is 0/106 (it was 12/89 on 2026-10-11; on the corpus of 2026-10-12 the code before the change counts 23/106); the parser now reads Unicode scalars, not grapheme clusters, compares keys scalar by scalar, and applies MAX_JSON_DEPTH = 512 (`deep-valid-600` is FAIL in all six, no longer declared). Tests by family (numbers, raw controls, `\u` escapes, surrogates, line endings, key equality, nesting, signature fields, non-UTF-8 bytes, CLI grammar) fail on the code before the change (10 of the 11 new tests; the whitespace one already passed there). In CI it has its own macOS job (`swift test` and the intact / tampered gate) and is not part of the differential oracle |
+| `verifiers/js/cvverify.mjs` | Node ≥18, stdlib only | **conformant 11/11** (0.20.2, 2026-10-12: the two `tsa_token` vectors; 9/9 on 2026-10-11; 117–118 checks in the suite on 2026-10-12); 92–93-check suite (112 in 4 runs on 2026-10-12, after the checks for a BOM, `--algo`, float lexemes, `idx` past 2^53-1, a receipt over 64 KiB on a pipe; 115–116 in 9 runs after the review's checks: the receipt read through `| cat`, a signed tip with a BOM, `1.0` after an escaped quote, the float scan linear on 100 000 escaped quotes) incl. cross-oracle vs the Python reference (the count moves by one or two with the random signature's characters) |
+| `verifiers/rust/` | Rust, **std only** (SHA-256+Keccak in-crate) | **conformant 11/11** (0.20.2; 9/9 before the two `tsa_token` vectors); `cargo test` 8 tests + `clippy -D warnings` (Rust 1.98.1, 2026-10-11; 9 tests since 2026-10-12, `--algo` closed); in the differential oracle = 0 mismatch |
+| `verifiers/swift/` | Swift + CryptoKit (Apple) / swift-crypto (Linux) | **compiled & tested on Linux (Swift 6.3.3, 2026-10-12): swift test 18/18, conformant 11/11** (the binary on `spec/vectors/`; 0.20.2: reads a FIFO, `tsa_token` outside the hash; 17/17 and 9/9 in 0.20.1); aligned with the acceptance profile on 2026-10-12 — the 12 divergences measured on 2026-10-11 (surrogate pair refused, `+10` / `010` / a raw tab accepted, CRLF refused, `FILE_ERROR` on non-UTF-8, no usage errors in the CLI) are closed: the differential oracle with Swift is 0/106 (it was 12/89 on 2026-10-11; on the corpus of 2026-10-12 the code before the change counts 23/106); the parser now reads Unicode scalars, not grapheme clusters, compares keys scalar by scalar, and applies MAX_JSON_DEPTH = 512 (`deep-valid-600` is FAIL in all six, no longer declared). Tests by family (numbers, raw controls, `\u` escapes, surrogates, line endings, key equality, nesting, signature fields, non-UTF-8 bytes, CLI grammar) fail on the code before the change (10 of the 11 new tests; the whitespace one already passed there). In CI it has its own macOS job (`swift test` and the intact / tampered gate) and is not part of the differential oracle |
 
 The JS verifier is cross-checked at test time by running the actual Python reference
 as an independent oracle: it must produce the same verdict/chain_integrity/algorithm
 on every vector, so a self-serving bug (agreeing only with itself) is caught.
 
-Honest scope: these verifiers prove integrity, linkage and signatures — not the truth
-of the recorded facts; Ed25519 is not post-quantum.
+Honest scope: these verifiers prove integrity and linkage — and signatures in the JS, Go, Java and Swift verifiers
+and in `signer.py verify`, not in `verifier.py` or the Rust verifier (who checks what, and when a signature enters the
+verdict: SPEC §5) — not the truth of the recorded facts; Ed25519 is not post-quantum.
 
 ## Canonical acceptance profile (enforced identically by all four + reference)
 

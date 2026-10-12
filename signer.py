@@ -36,8 +36,9 @@ from typing import Dict, List, Optional
 
 
 # attestation fields excluded from the content hash: classical (signature/signer) and, since 0.12.0, the
-# post-quantum companion (signature_pq/signer_pq, ML-DSA-65 FIPS 204 over the same self_hash bytes)
-ATTEST = ("self_hash", "signature", "signer", "signature_pq", "signer_pq")
+# post-quantum companion (signature_pq/signer_pq, ML-DSA-65 FIPS 204 over the same self_hash bytes); since 0.20.2 the
+# RFC 3161 tsa_token (a token over self_hash cannot be inside the bytes self_hash is computed from; SPEC §3)
+ATTEST = ("self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token")
 # ML-DSA-65 (FIPS 204) profile of the hybrid layer — pure ML-DSA (NOT HashML-DSA) with the EMPTY context string.
 # 0.12.0 used a domain context ("cryptovalid/entry/1"); 0.13.0 dropped it after checking the ecosystem for real
 # (16/09/2026): the JDK's built-in ML-DSA provider (24 → 27) has NO API to set a context (JEP 497 non-goal), so a

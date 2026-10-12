@@ -253,3 +253,23 @@ func mustObj(t *testing.T, s string) *Object {
 	}
 	return v.(*Object)
 }
+
+func TestTsaTokenIsAnAttestationOutsideTheHash(t *testing.T) {
+	// SPEC §3 (12/10/2026, 0.20.2): tsa_token, an RFC 3161 token over self_hash, is outside the canonical form like the
+	// signatures. Until 0.20.1 it was inside: a token attached after hashing was a hash failure, a hashed value passed.
+	body := `{"data":{"i":0},"idx":0,"prev_hash":"` + strings.Repeat("0", 64) + `","ts":"t"`
+	sum := sha256.Sum256([]byte(body + "}"))
+	h := hex.EncodeToString(sum[:])
+	attached := body + `,"self_hash":"` + h + `","tsa_token":"AAAA"}` + "\n"
+	if v := VerifyLedger(strings.NewReader(attached)); v.Verdict != "PASS" {
+		t.Fatalf("tsa_token attached after hashing must PASS: %+v", v)
+	}
+	sumIn := sha256.Sum256([]byte(body + `,"tsa_token":"AAAA"}`))
+	inside := body + `,"self_hash":"` + hex.EncodeToString(sumIn[:]) + `","tsa_token":"AAAA"}` + "\n"
+	if v := VerifyLedger(strings.NewReader(inside)); v.Verdict != "FAIL" || v.HashRecomputePassed || !strings.Contains(strings.Join(v.Failures, " "), "hash") {
+		t.Fatalf("tsa_token hashed as content must be a hash failure: %+v", v)
+	}
+	if v := VerifyLedger(strings.NewReader(body + `,"self_hash":"` + h + `"}` + "\n")); v.Verdict != "PASS" {
+		t.Fatalf("positive control: %+v", v)
+	}
+}

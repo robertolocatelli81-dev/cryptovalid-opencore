@@ -21,12 +21,13 @@ swift test        # runs the SAME normative vectors bundled as test resources
 - Ed25519 fields read as `signer.py` reads them: `signature` canonical standard base64 of 64 bytes, `signer` 64
   lowercase hex digits; anything else is `signatures_all_verified: false`.
 
-Status (measured 2026-10-12 on Linux, Swift 6.3.3 with swift-crypto): `swift test` 17/17; the binary reproduces the
-normative block of the 9 vectors of `spec/vectors/`; the differential oracle (`../differential_oracle.py`, Swift with
-Python, JS, Go, Java and Rust) 0/106 disagreements (26 declared divergences, all on signed tips). The acceptance profile is the reference's: RFC 8259 integers only
+Status (measured 2026-10-12 on Linux, Swift 6.3.3 with swift-crypto, 0.20.2): `swift test` 18/18; the binary reproduces the
+normative block of the 11 vectors of `spec/vectors/`; the differential oracle (`../differential_oracle.py`, Swift with
+Python, JS, Go, Java and Rust) 0/110 disagreements (26 declared divergences, all on signed tips). The acceptance profile is the reference's: RFC 8259 integers only
 within +/-(2^53-1), no raw control character in a string, `\u` = four ASCII hex digits, surrogate pairs combined and
 unpaired ones refused, no duplicate key (compared by Unicode scalars), nesting at most 512, LF the only line separator,
-a file that is not UTF-8 a FAIL. CLI: the ledger path first, then `--algo sha256|sha3_256` and `--pubkey <value>` (every entry must carry a valid signature
+a file that is not UTF-8 a FAIL. The file is read to its end through a file handle, so a FIFO (`cvverify <(cat
+ledger.jsonl)`) is read as by the other five (0.20.2; it was `FILE_ERROR`). CLI: the ledger path first, then `--algo sha256|sha3_256` and `--pubkey <value>` (every entry must carry a valid signature
 whose `signer` equals it, else FAIL — wrong key, unsigned or partly signed ledger — as in JS, Go and Java); an unknown flag, a missing or empty value, a value starting with `-`, an
 `--algo` outside the two profiles or a second positional is a usage error (exit 2, no verdict). Not built on macOS / iOS in this environment (CI has a macOS job).
 Honest scope as the JS verifier; no signed-tip or ML-DSA checks (declared in `../../CONFORMANCE.md`).

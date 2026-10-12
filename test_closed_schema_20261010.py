@@ -74,6 +74,25 @@ class TestClosedSchema(unittest.TestCase):
     def test_optional_fields_stay_in_schema(self):
         self.assertTrue({"signature", "signer", "tsa_token", "signature_pq", "signer_pq"} <= set(V.ENTRY_KEYS))
 
+    def test_tsa_token_is_an_attestation_outside_the_content_hash(self):
+        # SPEC §2/§3 (12/10/2026, 0.20.2): tsa_token is an RFC 3161 token over self_hash, so it cannot be inside the bytes
+        # self_hash is computed from. Until 0.20.1 it was: a token attached after hashing (the only way a token can bind its
+        # own self_hash) was a hash failure, and a value hashed as content passed. On the 0.20.1 verifier.py, and on the 0.20.1
+        # signer.py alone, this test fails (measured 12/10/2026).
+        import hashlib
+        attached = copy.deepcopy(self.entries); attached[1]["tsa_token"] = "MIIBzjCCAbQCAQEwDQYJ"
+        r = V.verify_ledger(self._write("tsa_attached.jsonl", attached))
+        self.assertEqual(r["verdict"], "PASS", r); self.assertEqual(r["hash_failures"], [])
+        one = copy.deepcopy(self.entries[:1]); one[0]["tsa_token"] = "AAAA"
+        one[0]["self_hash"] = hashlib.sha256(json.dumps({k: v for k, v in one[0].items() if k != "self_hash"}, sort_keys=True,
+                                                        separators=(",", ":")).encode()).hexdigest()   # the 0.20.1 rule
+        inside = V.verify_ledger(self._write("tsa_inside.jsonl", one))
+        self.assertEqual(inside["verdict"], "FAIL"); self.assertEqual([f["idx"] for f in inside["hash_failures"]], [0])
+        self.assertEqual(V.verify_ledger(self._write("tsa_ctl.jsonl", self.entries))["verdict"], "PASS")   # positive control
+        import signer as SG   # the signer's content check uses the same list (contenuto -> self_hash -> firma)
+        self.assertTrue(SG._content_self_hash_ok(attached[1])); self.assertFalse(SG._content_self_hash_ok(one[0]))
+        self.assertEqual(set(SG.ATTEST), {"self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token"})
+
     def test_manifest_unknown_keys_are_a_named_fail(self):
         base = self._write("base.jsonl", self.entries)
         out = os.path.join(self.d, "pack"); EP.build_pack([base], out)

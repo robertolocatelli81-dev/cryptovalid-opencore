@@ -181,6 +181,33 @@ class TestCrashRecovery(unittest.TestCase):
             ing.Ingestor(self.d, batch_size=5)
 
 
+    def test_resume_leaves_out_the_attestation_fields_of_spec_3(self):
+        # 12/10/2026 (0.20.2): the resume check left out self_hash/signature/signer only, so a segment whose entries carry
+        # signature_pq/signer_pq (hybrid, SPEC §3 since 0.12.0) or tsa_token (outside the hash since 0.20.2) was refused as
+        # tampered, while the six verifiers PASS it. Measured on the 0.20.1 code: both refused.
+        def segment_with(extra, tamper):
+            d = tempfile.mkdtemp()
+            self.addCleanup(shutil.rmtree, d, True)
+            w = ing.Ingestor(d, batch_size=5)
+            for i in range(3):
+                w.append({"i": i})
+            w.close(seal=False)
+            seg = os.path.join(d, "ledger-000000.jsonl")
+            rows = [json.loads(x) for x in open(seg)]
+            rows[1].update(extra)
+            if tamper:
+                rows[1]["data"] = {"i": 666}
+            open(seg, "w").write("".join(json.dumps(r) + "\n" for r in rows))
+            return d
+        for extra in ({"signature_pq": "x", "signer_pq": "y"}, {"tsa_token": "AAAA"}):
+            d = segment_with(extra, tamper=False)
+            w2 = ing.Ingestor(d, batch_size=5)       # resumes
+            w2.append({"i": 3}); w2.close()
+            self.assertTrue(ing.verify_archive(d)["ok"], extra)
+            with self.assertRaises(ValueError):      # positive control: the content tampered next to the field
+                ing.Ingestor(segment_with(extra, tamper=True), batch_size=5)
+
+
 @unittest.skipUnless(_HAVE_CRYPTO, "requires 'cryptography'")
 class TestSignedSth(unittest.TestCase):
     def setUp(self):
@@ -362,6 +389,32 @@ class TestAutoAnchorTSA(unittest.TestCase):
         r = ing.verify_archive(self.d)
         self.assertFalse(r["ok"])
         self.assertTrue(any(f["reason"].startswith("tsa_token_") for f in r["failures"]))
+
+    def test_lotl_unavailable_is_a_warning_not_a_traceback(self):
+        # 0.20.2: the LOTL is parsed as a trusted list, so a page that is not one raises ValueError (a network error raised
+        # already): verify_archive --lotl reports it and leaves eidas_qualified_segments unknown (None)
+        import cryptovalid_lotl as lotl
+        orig = lotl._get
+        w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
+        w._request_timestamp = self._fake_tsa_ok
+        for i in range(10):
+            w.append({"i": i})
+        w.seal(); w.close(seal=False)
+        cache = ing._default_lotl_cache(["ZZ"])
+        if os.path.exists(cache):
+            os.unlink(cache)
+        try:
+            for get in (lambda url, timeout=45: b"<html>maintenance</html>",
+                        lambda url, timeout=45: (_ for _ in ()).throw(OSError("unreachable"))):
+                lotl._get = get
+                r = ing.verify_archive(self.d, lotl_check=True, lotl_member_states=["ZZ"])
+                self.assertIsNone(r["eidas_qualified_segments"])
+                self.assertTrue(any(x.startswith("lotl_unavailable: ") for x in r["warnings"]), r["warnings"])
+                self.assertFalse(any(x.startswith("tsa_not_qualified") for x in r["warnings"]))
+        finally:
+            lotl._get = orig
+            if os.path.exists(cache):
+                os.unlink(cache)
 
     def test_lotl_cache_never_colocated_with_archive(self):
         # il buco ALTA della review: cache LOTL nella dir dell'archivio = avvelenabile

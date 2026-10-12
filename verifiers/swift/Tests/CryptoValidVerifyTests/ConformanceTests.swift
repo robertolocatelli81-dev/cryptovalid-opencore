@@ -83,10 +83,45 @@ final class ConformanceTests: XCTestCase {
             XCTAssertEqual(r.schema_failures_idx, [0], key)
             XCTAssertEqual(r.hash_failures_idx, [], key)
         }
-        let opt = CryptoValidVerifier.verify(ledgerText: entry("tsa_token", "{\"i\":0}"))
+        // tsa_token is an attestation outside the canonical form since 0.20.2 (SPEC §3): attached after hashing it PASSES;
+        // hashed as content (the 0.20.1 rule, which made a token over self_hash impossible) it is a hash failure
+        var attached = entry(nil, "{\"i\":0}"); attached.removeLast(2); attached += ",\"tsa_token\":\"x\"}\n"
+        let opt = CryptoValidVerifier.verify(ledgerText: attached)
         XCTAssertEqual(opt.verdict, "PASS"); XCTAssertEqual(opt.schema_failures_idx, [])
+        let inside = CryptoValidVerifier.verify(ledgerText: entry("tsa_token", "{\"i\":0}"))
+        XCTAssertEqual(inside.verdict, "FAIL"); XCTAssertEqual(inside.hash_failures_idx, [0]); XCTAssertEqual(inside.schema_failures_idx, [])
         let inData = CryptoValidVerifier.verify(ledgerText: entry(nil, "{\"x_unknown_2026\":\"payload\"}"))
         XCTAssertEqual(inData.verdict, "PASS"); XCTAssertEqual(inData.schema_failures_idx, [])
+    }
+
+    func testReadLedgerFileFifoDirectoryEmpty() throws {
+        // 12/10/2026: the CLI read the ledger with FileManager.contents(atPath:), nil on a FIFO on Linux, so
+        // `cvverify <(cat ledger)` was FILE_ERROR, exit 2, while the other five verifiers read it. A FIFO is read to its
+        // end; a directory and a missing path stay unreadable (nil = FILE_ERROR); an empty file is zero bytes, not nil.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cvv-fifo-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let body = "{\"data\":{\"i\":0},\"idx\":0,\"prev_hash\":\"\(String(repeating: "0", count: 64))\",\"ts\":\"t\"}"
+        let h = SHA256.hash(data: Data(Canonical.encode(try JSONParser.parse(body)).utf8)).map { String(format: "%02x", $0) }.joined()
+        let line = "{\"data\":{\"i\":0},\"idx\":0,\"prev_hash\":\"\(String(repeating: "0", count: 64))\",\"self_hash\":\"\(h)\",\"ts\":\"t\"}\n"
+        let regular = dir.appendingPathComponent("l.jsonl").path
+        XCTAssertTrue(FileManager.default.createFile(atPath: regular, contents: Data(line.utf8)))
+        XCTAssertEqual(CryptoValidVerifier.readLedgerFile(atPath: regular), Array(line.utf8))   // positive control
+        signal(SIGPIPE, SIG_IGN)   // a reader that closes early must fail an assertion here, not kill the test process
+        let fifo = dir.appendingPathComponent("p.fifo").path
+        XCTAssertEqual(mkfifo(fifo, 0o600), 0)
+        let writer = Thread {   // opening a FIFO for writing blocks until the reader opens it
+            if let w = FileHandle(forWritingAtPath: fifo) { w.write(Data(line.utf8)); try? w.close() }
+        }
+        writer.start()
+        let got = CryptoValidVerifier.readLedgerFile(atPath: fifo)
+        XCTAssertEqual(got, Array(line.utf8))
+        XCTAssertEqual(CryptoValidVerifier.verify(ledgerBytes: got ?? [], algo: nil, expectedPubkeyHex: nil).verdict, "PASS")
+        XCTAssertNil(CryptoValidVerifier.readLedgerFile(atPath: dir.path))                       // a directory
+        XCTAssertNil(CryptoValidVerifier.readLedgerFile(atPath: dir.appendingPathComponent("missing").path))
+        let empty = dir.appendingPathComponent("e.jsonl").path
+        XCTAssertTrue(FileManager.default.createFile(atPath: empty, contents: Data()))
+        XCTAssertEqual(CryptoValidVerifier.readLedgerFile(atPath: empty), [])
     }
 
     func testDuplicateKeysRejected() {

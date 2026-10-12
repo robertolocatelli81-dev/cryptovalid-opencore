@@ -208,11 +208,12 @@ func writeString(b *bytes.Buffer, s string) {
 	b.WriteByte('"')
 }
 
-// Payload is the canonical form of an entry without self_hash / signature / signer.
+// Payload is the canonical form of an entry without the attestation fields of SPEC §3: self_hash, signature, signer,
+// signature_pq, signer_pq and, since 0.20.2, tsa_token (an RFC 3161 token over self_hash cannot be inside its own input).
 func Payload(entry *Object) ([]byte, error) {
 	cp := &Object{Vals: map[string]any{}}
 	for _, k := range entry.Keys {
-		if k == "self_hash" || k == "signature" || k == "signer" || k == "signature_pq" || k == "signer_pq" {
+		if k == "self_hash" || k == "signature" || k == "signer" || k == "signature_pq" || k == "signer_pq" || k == "tsa_token" {
 			continue
 		}
 		cp.Keys = append(cp.Keys, k)

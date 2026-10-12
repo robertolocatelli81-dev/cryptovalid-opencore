@@ -26,12 +26,12 @@ while k < args.count {
     }
     k += 2
 }
-guard let data = FileManager.default.contents(atPath: path) else {
+guard let bytes = CryptoValidVerifier.readLedgerFile(atPath: path) else {   // a FIFO too (12/10/2026)
     print("{\"verdict\":\"FILE_ERROR\"}"); exit(2)
 }
 // bytes, not String(contentsOfFile:): a file that is not UTF-8 is read, then FAILs with a named error (as Rust, JS, Go,
 // Java); it used to be FILE_ERROR
-let r = CryptoValidVerifier.verify(ledgerBytes: [UInt8](data), algo: algo, expectedPubkeyHex: pubkey)
+let r = CryptoValidVerifier.verify(ledgerBytes: bytes, algo: algo, expectedPubkeyHex: pubkey)
 let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
 print(String(data: try! enc.encode(r), encoding: .utf8)!)
 exit(r.verdict == "PASS" ? 0 : 1)

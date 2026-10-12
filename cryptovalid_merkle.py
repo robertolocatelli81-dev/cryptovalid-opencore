@@ -4,7 +4,8 @@
 # Copyright (C) 2026 Roberto Locatelli
 """RFC 6962 Merkle extension for cryptovalid-opencore: O(log n) inclusion and
 consistency (append-only) proofs, third-party-verifiable, QTSP-ready Signed Tree Head.
-Leaves are the canonical form of each ledger entry (same rule as self_hash). Stdlib-only."""
+Leaves are each ledger entry without self_hash, signature and signer, serialised as the canonical form (sorted keys,
+compact separators); unlike the self_hash rule (SPEC §3) they keep signature_pq, signer_pq and tsa_token. Stdlib-only."""
 import hashlib
 import json
 

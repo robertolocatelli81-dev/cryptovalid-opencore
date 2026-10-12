@@ -195,3 +195,5 @@ jobs:
           if swift run -c release cvverify ../../examples/sample_ledger_tampered.jsonl; then
             echo "::error::swift verifier accepted a tampered ledger"; exit 1; fi
           swift run -c release cvverify ../../examples/sample_ledger.jsonl > /dev/null
+          # a FIFO is read (0.20.2); the binary itself, since `swift run` does not pass the process-substitution descriptor on
+          "$(swift build -c release --show-bin-path)/cvverify" <(cat ../../examples/sample_ledger.jsonl) > /dev/null

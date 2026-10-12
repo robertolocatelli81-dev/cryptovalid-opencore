@@ -14,7 +14,7 @@ use json::{canonical, Json, Parser};
 use std::collections::BTreeMap;
 
 pub const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-const ATTEST: [&str; 5] = ["self_hash", "signature", "signer", "signature_pq", "signer_pq"]; // 0.12.0: ML-DSA-65 companion
+const ATTEST: [&str; 6] = ["self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token"]; // 0.12.0: ML-DSA-65 companion; 0.20.2: tsa_token (SPEC §3)
 /// SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the CLOSED entry schema (core + optional fields of §2), as verifier.py ENTRY_KEYS.
 /// An entry with a top-level key outside it is a schema failure (its idx in `schema_failures_idx`) and the verdict is FAIL,
 /// never a silent PASS (measured 2026-10-11 on this verifier: an extra top-level key with self_hash recomputed over it was

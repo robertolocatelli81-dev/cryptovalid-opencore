@@ -76,9 +76,10 @@ python3 conformance.py     # exit 0 = conformant
 
 - **Signatures** (`signer.py`): Ed25519 over `self_hash`. A signing-conformant tool re-derives
   `self_hash` from content and verifies the signature (content → self_hash → signature). The attestation fields
-  excluded from the content hash are exactly `self_hash`, `signature`, `signer`, `signature_pq`, `signer_pq`
-  (the last two since 0.12.0; a verifier of an earlier version treats them as content and FAILs a hybrid ledger —
-  declared, not interop).
+  excluded from the content hash are exactly `self_hash`, `signature`, `signer`, `signature_pq`, `signer_pq`, `tsa_token`
+  (`signature_pq`/`signer_pq` since 0.12.0; a verifier of an earlier version treats them as content and FAILs a hybrid
+  ledger — declared, not interop; `tsa_token` since 0.20.2, SPEC §3: a verifier up to 0.20.1 FAILs an entry carrying a
+  token attached after hashing, and 0.20.2 FAILs one whose token was hashed as content).
 - **Hybrid post-quantum signatures** (0.12.0, optional; context changed in 0.13.0). Algorithm: **pure ML-DSA-65**
   (FIPS 204 pure ML-DSA, NOT HashML-DSA) with the **EMPTY context string**. 0.12.0 used the contexts
   `cryptovalid/entry/1` / `cryptovalid/tip/1`; 0.13.0 dropped them after checking the ecosystem (16/09/2026): the
@@ -123,9 +124,11 @@ python3 conformance.py     # exit 0 = conformant
   `Signature.getInstance("ML-DSA-65")`), all with the same tri-state and the same rules (a PQ key needs the Ed25519
   key and requires the layer; with a caller-given key a failing layer is a FAIL); the tip's ML-DSA-65 — Python, Go
   and Java; an older Go toolchain or a JDK < 24 answers `pq_unverifiable` (a FAIL when the key is
-  required; the compat path is not exercised by CI, declared); JS verifies per-entry Ed25519 only, Rust and Swift
-  none of the signatures (the JS tip checker reports null/false, never true; declared in the differential oracle,
-  which also compares the tri-state between Python and Go). Any FIPS 204 implementation with a plain
+  required; the compat path is not exercised by CI, declared); JS and Swift verify per-entry Ed25519 only, Rust and
+  `verifier.py` none of the signatures (the JS tip checker reports null/false, never true; declared in the differential
+  oracle, which also compares the tri-state between Python and Go). Corrected 2026-10-12: this line said "Rust and Swift
+  none"; Swift has verified per-entry Ed25519 since its first version (2026-09-04). Without a caller-given key the JS, Go,
+  Java and Swift verdict is the chain's and the signature result is reported only (SPEC §5). Any FIPS 204 implementation with a plain
   `verify(pk, msg, sig)` (JDK 24+, OpenSSL 3.5, .NET 10, Go 1.27) can verify the layer: the message is the bytes
   above and the context is empty (measured with `cryptography`, Go `crypto/mldsa` and the JDK 27 verifier; OpenSSL
   3.5 and .NET 10 are expected from their documented APIs, not measured). **The evidence pack is not quantum-resistant on its own**: its manifest records
@@ -187,7 +190,9 @@ python3 conformance.py     # exit 0 = conformant
   (`--tip-not-before`, string comparison on the tip's ISO-8601 `ts`); the monitor state, receipts or an external
   anchor are the systematic answer. Types are strict: `entries` is a non-negative JSON integer (a `"10"` or
   `10.0` would sign the same bytes but is refused by all three checkers).
-- **RFC 3161** timestamping: the token's message imprint MUST equal the stamped digest.
+- **RFC 3161** timestamping: the token's message imprint MUST equal the stamped digest. The per-entry `tsa_token` (SPEC §2,
+  §5 step 6) is not checked by any verifier in this repository (2026-10-12); the RFC 3161 checks here are on the evidence
+  pack's manifest digest (`evidence_pack.py`) and on any digest given to `cryptovalid_tsa.py`.
 - **Regulatory profiles** (`spec/regulatory_profiles.json`, self-updated by `refresh_regulatory.py`):
   a ledger entry MAY set `data.regulatory_ref = "<id>"` to declare which EU requirement it supports.
   The profile carries provenance and an `as_of` date; stale entries are flagged, never silently trusted.

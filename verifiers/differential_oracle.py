@@ -258,7 +258,21 @@ CORPUS["unknown-keys-two"] = _rehashed({"zz_b": 1, "aa_a": 2})       # the reaso
 CORPUS["unknown-key-entry-1-of-3"] = _rehashed({UNKNOWN_KEY: True}, n=3, at=1)
 CORPUS["unknown-key-sha3-rehashed"] = _rehashed({UNKNOWN_KEY: None}, algo="sha3_256")
 CORPUS["unknown-key-in-data"] = valid_entry({UNKNOWN_KEY: "payload"})   # SPEC §4: data is domain-specific → PASS everywhere
-CORPUS["optional-tsa-token-rehashed"] = _rehashed({"tsa_token": "AAAA"})   # an optional key of §2 with a value → PASS everywhere
+# tsa_token (12/10/2026, 0.20.2): an RFC 3161 token over self_hash is an ATTESTATION, outside the canonical form like the
+# signatures (SPEC §3). Until 0.20.1 it was inside, so the only tsa_token that could PASS was one that did not bind its own
+# self_hash (PASS in all six on "tsa-token-inside-hash"), and a token attached after hashing was a hash failure in all six.
+def _attached(extra, n=1, at=0, algo="sha256"):
+    """An n-entry chain hashed WITHOUT `extra`, then `extra` added to entry `at` (as signer.py adds signatures)."""
+    out = [json.loads(x) for x in _rehashed({}, n=n, algo=algo).split("\n")]
+    out[at].update(extra)
+    return "\n".join(json.dumps(x, ensure_ascii=False) for x in out)
+CORPUS["optional-tsa-token-attached"] = _attached({"tsa_token": "AAAA"})            # an optional key of §2, outside the hash → PASS
+CORPUS["tsa-token-attached-entry-1-of-3"] = _attached({"tsa_token": "MIIBzjCCAbQCAQEwDQYJ"}, n=3, at=1)
+CORPUS["tsa-token-attached-sha3"] = _attached({"tsa_token": "AAAA"}, algo="sha3_256")   # the profile is detected on entry 0
+CORPUS["tsa-token-inside-hash"] = _rehashed({"tsa_token": "AAAA"})   # hashed as content (the 0.20.1 rule) → hash failure: FAIL
+# agreement is not enough here: the verdict itself is the rule (all six could agree on the old rule)
+EXPECT_VERDICT = {"optional-tsa-token-attached": "PASS", "tsa-token-attached-entry-1-of-3": "PASS", "tsa-token-attached-sha3": "PASS",
+                  "tsa-token-inside-hash": "FAIL"}
 # 11/10/2026 — found by closed_schema_mutants.py (full run: 7 of 1 500 mutations, all of this shape): a chain whose first three
 # entries lacked `idx` took the reference's native-schema path in 0.19.0 (PASS, SPEC §2.1 and §5 step 4 not applied: an unknown
 # top-level key passed, case missing-idx-first-three-unknown-key). 0.20.0 removed that path: FAIL in all six, no longer declared.
@@ -584,7 +598,7 @@ def main():
                     extra["java"] += ["-trusted-pq-pubkey", TIP_CASE["pq_pubkey"]]
             verdicts = {k: verdict(cmd, p, extra.get(k, ()), flags_first=(k in ("go", "java"))) for k, cmd in available.items()}
             uniq = set(verdicts.values())
-            ok = len(uniq) == 1
+            ok = len(uniq) == 1 and (name not in EXPECT_VERDICT or uniq == {EXPECT_VERDICT[name]})
             # the PQ tri-state must agree between the two verifiers that CHECK it (Python, Go); JS reports
             # null-when-present / false-when-absent and must never say true (council 15/09: the oracle compared
             # verdicts only, so Go's bool-instead-of-null was invisible)
@@ -721,7 +735,39 @@ def main():
             if not ok:
                 disagreements += 1
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:22} expect usage(exit 2): {row}")
-    print(f"\ndisagreements: {disagreements}/{len(CORPUS) + (len(TIP_CASE['ordering']) if TIP_CASE else 0) + n_cli} (declared out-of-profile divergences: {declared})")
+        # INPUT FROM A FIFO (12/10/2026, NEMESIS of 0.20.1): `cvverify <(cat ledger)` — a named pipe, no size, not seekable.
+        # Python, JS, Go, Java and Rust read it; Swift answered FILE_ERROR, exit 2 (FileManager.contents(atPath:) on Linux,
+        # 0.20.0 and 0.20.1). Every verifier must give the verdict of the same bytes read from a regular file: PASS.
+        n_fifo = 0
+        if hasattr(os, "mkfifo"):
+            import threading
+            n_fifo = 1
+            row = {}
+            for k, cmd in available.items():
+                fifo = os.path.join(tmp, f"in-{k}.fifo")
+                os.mkfifo(fifo)
+
+                def feed(path=fifo):
+                    try:
+                        with open(path, "wb") as w:   # blocks until the verifier opens the pipe
+                            w.write((valid_entry({"a": 1}) + "\n").encode())
+                    except OSError:                   # the reader closed early: its verdict shows it
+                        pass
+                t = threading.Thread(target=feed, daemon=True)
+                t.start()
+                row[k] = verdict(cmd, fifo)
+                if t.is_alive():                      # the verifier never opened the pipe: release the writer
+                    try:
+                        os.close(os.open(fifo, os.O_RDONLY | os.O_NONBLOCK))
+                    except OSError:
+                        pass
+                    t.join(5)
+                os.remove(fifo)
+            ok = all(v == "PASS" for v in row.values())
+            if not ok:
+                disagreements += 1
+            print(f"  [{'OK ' if ok else 'DIFF'}] {'input-fifo':22} expect PASS: {row}")
+    print(f"\ndisagreements: {disagreements}/{len(CORPUS) + (len(TIP_CASE['ordering']) if TIP_CASE else 0) + n_cli + n_fifo} (declared out-of-profile divergences: {declared})")
     return 0 if disagreements == 0 else 1
 
 

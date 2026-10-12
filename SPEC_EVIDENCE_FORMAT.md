@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.2 (2026-08-13)
+# CryptoValid Evidence Format — candidate standard v0.3 (2026-10-12)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -33,12 +33,14 @@ required, order = chain order.
 | `prev_hash` | hex string | `self_hash` of entry `idx-1`; entry 0 uses 64 zeros |
 | `self_hash` | hex string | hash of the entry's canonical form (§3) |
 
-Optional fields (verified when present):
+Optional fields — attestations over `self_hash`, added after it is computed and outside the canonical form (§3). A
+present field is not verified by being present: which verifier checks which field is in §5 (steps 5–6; until 0.20.1 this
+line read "verified when present", which `verifier.py` and the Rust verifier do not do for any of them):
 | Field | Type | Meaning |
 |---|---|---|
 | `signature` | base64 | Ed25519 signature over the `self_hash` string (its UTF-8 bytes), by `signer` |
 | `signer` | hex | Ed25519 public key (32 bytes hex) of the recording party |
-| `tsa_token` | base64 | RFC 3161 timestamp token over `self_hash` |
+| `tsa_token` | base64 | RFC 3161 timestamp token over `self_hash` (message imprint = its 32 bytes); outside the canonical form since 0.20.2 (§3) |
 | `signature_pq` | base64 | ML-DSA-65 signature over the `self_hash` string (its UTF-8 bytes), by `signer_pq` (hybrid ledgers, `signer.py`) |
 | `signer_pq` | base64 | ML-DSA-65 public key of the recording party |
 
@@ -62,8 +64,12 @@ algorithm forced, read by a generic path that applied neither) is removed; such 
 ## 3. Canonicalisation and hashing (NORMATIVE — interoperability depends on it)
 
 Canonical form of an entry = JSON serialisation of the object **without** the attestation fields
-`self_hash`, `signature`, `signer`, `signature_pq`, `signer_pq` (§2; corrected 2026-10-12, the list named only the first
-three), with **exactly** these rules (so any language
+`self_hash`, `signature`, `signer`, `signature_pq`, `signer_pq`, `tsa_token` (§2; corrected 2026-10-12, the list named only
+the first three; `tsa_token` is in the list since 0.20.2 — a token over `self_hash` cannot be inside the bytes `self_hash` is
+computed from: until 0.20.1 the six verifiers hashed it as content, so a token that binds its own `self_hash` failed step 2
+and only a value that binds something else could pass. A ledger written with `tsa_token` hashed as content fails step 2
+from 0.20.2 on; on 2026-10-12 none was found — 2 880 `.jsonl` files in four directory trees of the author's machine, 315 057 JSON objects, no
+top-level `tsa_token` — and no writer in this repository produces the field), with **exactly** these rules (so any language
 produces identical bytes — a single differing byte breaks the hash):
 
 - keys sorted lexicographically (`sort_keys`), applied **recursively**;
@@ -121,20 +127,42 @@ forces a boolean where reality had none.
 4. Check `idx == position` for every entry → any mismatch → FAIL.
 5. If `signature`/`signer` present: verify Ed25519 over the `self_hash` string (its UTF-8 bytes).
 6. If `tsa_token` present: verify the RFC 3161 token binds `self_hash` and a
-   TSA time consistent with `ts`.
+   TSA time consistent with `ts`. (No verifier in this repository performs this step: see below.)
 7. A ledger with zero entries is FAIL (nothing was verified; `empty_ledger` error). Emit a JSON receipt including counts, failures (capped), verdict PASS/FAIL,
    and the receipt's own SHA-256 (receipt-of-receipt, deterministic: timestamp
    excluded).
 
-Reference implementation: `verifier.py` (steps 1–4 + receipt, stdlib-only); `signer.py` (step 5,
-Ed25519); `evidence_pack.py` (step 6, RFC 3161 — verified today against a real DigiCert TSA). Steps 5–6
-are OPTIONAL profiles; their absence never weakens steps 1–4.
+Reference implementation: `verifier.py` (steps 1–4 + receipt, stdlib-only); `signer.py verify` (step 5, Ed25519 and,
+when present, ML-DSA-65). Steps 5–6 are OPTIONAL profiles; their absence never weakens steps 1–4. Who performs them,
+measured on 2026-10-12 (0.20.2) on a three-entry ledger with one signature changed, missing, malformed or by another key:
+
+- `verifier.py` and the Rust verifier do not verify signatures and have no key option: a broken signature is PASS.
+- `signer.py verify` verifies every entry: an unsigned, broken, malformed or partial layer is `ok: false`, exit 1, with or
+  without `--pubkey`; with `--pubkey` a foreign signer is too.
+- The JS, Go, Java and Swift verifiers verify Ed25519 when an entry carries `signature` or a key is given (`--pubkey`,
+  Go/Java `-pubkey`). Without a key the result is reported (`signatures.all_verified` in JS, `signatures.ok` in Go and
+  Java, `signatures_all_verified` in Swift) and the verdict is the chain's: PASS on a broken, missing or malformed
+  signature and on a foreign signer. With a key, a layer that does not verify — an entry unsigned, a signature broken or
+  malformed, another signer — makes the verdict FAIL.
+- ML-DSA-65 (`signature_pq`): `signer.py`, Go and Java verify it (with a key, a broken one is FAIL); JS and Swift do not
+  (with `--pubkey`, a ledger whose `signature_pq` is broken is PASS there).
+- Step 6: no verifier in this repository performs it. `tsa_token` is accepted (§2.1) and excluded from the hash (§3), and
+  not checked. `evidence_pack.py` timestamps the pack's manifest digest with RFC 3161 (verified against a real DigiCert
+  TSA), not entries; `cryptovalid_tsa.py` requests and checks a token over any digest (e.g. a Merkle root).
+
+Until 0.20.1 this paragraph named `evidence_pack.py` as the implementation of step 6 and §2 said the optional fields
+were "verified when present".
 
 ## 6. Versioning
 
 The spec is versioned semver-style. Ledgers MAY carry
-`{"spec": "cryptovalid-evidence/0.2"}` inside `data` of entry 0. Breaking
-changes bump major; verifiers state the versions they support.
+`{"spec": "cryptovalid-evidence/0.3"}` inside `data` of entry 0. Breaking
+changes bump major (before 1.0, minor); verifiers state the versions they support.
+v0.3 (2026-10-12, cryptovalid-opencore 0.20.2) collects the changes since v0.2 (2026-08-13) that turn a PASS into a FAIL: the
+closed entry schema of §2.1 (cryptovalid-opencore 0.19.0: an undefined top-level key fails); `idx` required on every
+path (0.20.0); `tsa_token` outside the canonical form of §3 (0.20.2: a token hashed as content fails step 2). The first two
+were made in 0.19.0 and 0.20.0 without a version bump. No verifier
+in this repository reads the `spec` value yet.
 
 ## 7. Conformance (normative)
 
@@ -159,8 +187,11 @@ flagged, never silently trusted — the format never lets outdated regulatory st
 
 ## 6. Optional Merkle extension (RFC 6962) — efficient inclusion & consistency
 
-For large ledgers, `cryptovalid_merkle.py` builds an **RFC 6962** Merkle tree over the
-canonical form of each entry (§3), giving:
+For large ledgers, `cryptovalid_merkle.py` builds an **RFC 6962** Merkle tree whose leaves are each entry
+serialised by the rules of §3 without `self_hash`, `signature` and `signer` only — so a leaf keeps `signature_pq`,
+`signer_pq` and `tsa_token`, which the canonical form of §3 leaves out (corrected 2026-10-12: this line said "the
+canonical form of each entry (§3)"; whether the leaves follow §3 is open, since it changes the root of any ledger that
+carries those fields), giving:
 
 - **inclusion proofs** — verify one entry in `O(log n)` (audit path), no full-chain recompute;
 - **consistency proofs** — cryptographic proof that a newer ledger *append-only extends* an older one;
