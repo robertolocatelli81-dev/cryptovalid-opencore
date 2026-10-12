@@ -65,5 +65,33 @@ class TestLoneSurrogate(unittest.TestCase):
             self.assertEqual(json.dumps(obj, sort_keys=True, separators=(",", ":")), a["canonical"])
 
 
+class TestRawBytesThatAreNotUTF8(unittest.TestCase):
+    """NEMESIS 12/10/2026: the file is read with surrogateescape, so a byte that is not UTF-8 became a raw U+DCxx code point
+    and a self_hash computed over it made the line PASS (JS, Go, Java, Rust and Swift: FAIL). The hash below is computed
+    over exactly what surrogateescape reads, so only the rule can make the line FAIL."""
+
+    @staticmethod
+    def _write(raw: bytes, in_key: bool) -> str:
+        s = raw.decode("utf-8", "surrogateescape")
+        e = {"idx": 0, "ts": "t", "prev_hash": "0" * 64, "data": ({s: 1} if in_key else {"k": "a" + s + "b"})}
+        e["self_hash"] = hashlib.sha256(_canon(e)).hexdigest()
+        p = os.path.join(tempfile.mkdtemp(), "b.jsonl")
+        with open(p, "wb") as f:
+            f.write(json.dumps(e, ensure_ascii=False).encode("utf-8", "surrogateescape") + b"\n")
+        return p
+
+    def test_refused_in_values_and_keys(self):
+        for raw in (b"\xff", b"\xfe", b"\x80", b"\xc0\xaf", b"\xed\xa0\x80", b"\xf0\x9f\x98", b"\xf5\x80\x80\x80", b"\xe2\x82"):
+            for in_key in (False, True):
+                r = V.verify_ledger(self._write(raw, in_key))
+                self.assertEqual(r["verdict"], "FAIL", (raw, in_key))
+                self.assertIn("not_utf8", " ".join(e["error"] for e in r["parse_errors"]), (raw, in_key))
+
+    def test_valid_utf8_still_passes(self):   # control: the rule must not touch real UTF-8 (2, 3 and 4 bytes)
+        for raw in ("\u00e9".encode(), "\u20ac".encode(), "\U0001F600".encode(), "\ufffd".encode()):
+            for in_key in (False, True):
+                self.assertEqual(V.verify_ledger(self._write(raw, in_key))["verdict"], "PASS", (raw, in_key))
+
+
 if __name__ == "__main__":
     unittest.main()

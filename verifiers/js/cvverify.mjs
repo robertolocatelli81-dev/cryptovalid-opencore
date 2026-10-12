@@ -229,6 +229,21 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
            pq_note: pq_protected === null ? "ML-DSA-65 signature present but NOT verified by this verifier (no ML-DSA in Node): use verifier.py / cvverify (Go) with --trusted-pq-pubkey" : "Ed25519-only tip (not quantum-resistant)" };
 }
 
+// A float LEXEME outside strings (a digit followed by ".", "e" or "E"), found by ONE linear scan that honours string escapes.
+// It replaced a regex skip of strings (`"(?:[^"\\]|\\.)*"`) whose failed matches made an unterminated line of escaped
+// quotes quadratic: 200 000 `\"` took 72 s (NEMESIS B2 12/10/2026). Inside an unterminated string nothing is a float: the
+// line fails in JSON.parse.
+export function hasFloatLexeme(t) {
+  let inStr = false, esc = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (inStr) { if (esc) esc = false; else if (c === 92) esc = true; else if (c === 34) inStr = false; continue; }
+    if (c === 34) { inStr = true; continue; }
+    if (c >= 48 && c <= 57) { const d = t.charCodeAt(i + 1); if (d === 46 || d === 101 || d === 69) return true; }
+  }
+  return false;
+}
+
 export function verifyLedger(text, { algo = null, pubkey = null, tip = null, trustedPubkey = null, requireTip = false, tipNotBefore = null, expectLedgerId = null } = {}) {
   const entries = [], errors = [];
   text.split("\n").forEach((ln, i) => {
@@ -237,10 +252,17 @@ export function verifyLedger(text, { algo = null, pubkey = null, tip = null, tru
     try {
       const d = jsonNestingDepth(ln); if (d > MAX_JSON_DEPTH) throw new Error(`json_too_deep: nesting ${d} exceeds ${MAX_JSON_DEPTH}`);
       if (hasLoneSurrogate(ln)) throw new Error("lone_surrogate");
-      if (hasDuplicateKeys(ln)) throw new Error("duplicate_key"); v = JSON.parse(ln); } catch (e) { errors.push({ line: i, error: "json_decode:" + e.message }); return; }
+      if (hasDuplicateKeys(ln)) throw new Error("duplicate_key");
+      // a float LEXEME outside strings is out of profile even when its value is whole: JSON.parse reads 1.0 / 1e0 as the
+      // integer 1, so a self_hash computed over 1 was PASS here alone (NEMESIS 12/10/2026, found on real files: idx 0.0, 1e0)
+      if (hasFloatLexeme(ln)) throw new Error("float_forbidden");
+      v = JSON.parse(ln);
+      canon(v);   // |int| > 2^53-1 refused HERE, as a named line error (it used to throw later, uncaught: no receipt)
+    } catch (e) { errors.push({ line: i, error: "json_decode:" + e.message }); return; }
     if (v && typeof v === "object" && !Array.isArray(v)) entries.push(v);
     else errors.push({ line: i, error: "not_a_json_object" });
   });
+  if (algo !== null && !ALGOS.includes(algo)) throw new Error(`unsupported_algo:${algo}`);   // as hash_with in verifier.py
   const use = algo || detectAlgo(entries) || "sha256";
   // SPEC §2.1: closed entry schema — same shape and reason text as the reference's schema_failures
   const schemaFailures = [];
@@ -314,7 +336,7 @@ function main(argv) {
 if (argv[0] === "--conformance") {
   const r = conformance(argv[1]);
   console.log(JSON.stringify(r, null, 1));
-  process.exit(r.conformant ? 0 : 1);
+  process.exitCode = r.conformant ? 0 : 1;
 } else if (argv[0]) {
   // one grammar (21/09/2026, found on cra-evidence: an unknown flag, a value flag without a value or with "", a second positional
   // were silently taken as the ledger path and the constraint the operator asked for vanished): usage error, exit 2, no verdict
@@ -329,6 +351,7 @@ if (argv[0] === "--conformance") {
   }
   if (argv[0].startsWith("-")) usage();
   const algo = opts["--algo"] ?? null;
+  if (algo !== null && !ALGOS.includes(algo)) usage();   // only the two profiles (argparse choices in the reference): "foo" was hashed as SHA-256 and reported as "algorithm": "foo"
   const pubkey = opts["--pubkey"] ?? null;
   const trustedPubkey = opts["--trusted-pubkey"] ?? null;
   const requireTip = Boolean(opts["--require-tip"]);
@@ -338,14 +361,14 @@ if (argv[0] === "--conformance") {
   let bytes;
   try { bytes = readFileSync(argv[0]); }
   catch (e) { console.log(JSON.stringify({ verdict: "FILE_ERROR", error: e.code || e.message }, null, 1)); process.exit(2); }
-  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }   // strict: one invalid byte is a broken ledger (FAIL), never U+FFFD
+  try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }   // strict: one invalid byte is a broken ledger (FAIL), never U+FFFD; ignoreBOM: a leading BOM stays in the text and is refused like in the five others (it was stripped: PASS, NEMESIS 12/10/2026)
   catch (e) { console.log(JSON.stringify({ verdict: "FAIL", error: "ledger is not valid UTF-8" }, null, 1)); process.exit(1); }
   // tip: --tip <file>, else <ledger>.tip.json if present; an unreadable/malformed tip is a failure, never silence
   let tip = null;
   const tipPath = opts["--tip"] !== undefined ? opts["--tip"] : (existsSync(argv[0] + ".tip.json") ? argv[0] + ".tip.json" : null);
   if (tipPath !== null) {
     try {   // the tip is a SIGNED document: the same strict profile as the entries (r5: Java was strict, JS lax)
-      const raw = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(tipPath));
+      const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(tipPath));
       const d = jsonNestingDepth(raw); if (d > MAX_JSON_DEPTH) throw new Error("json_too_deep");
       if (hasLoneSurrogate(raw)) throw new Error("lone_surrogate");
       if (hasDuplicateKeys(raw)) throw new Error("duplicate_key");
@@ -355,8 +378,10 @@ if (argv[0] === "--conformance") {
     catch (e) { tip = { kind: "unreadable:" + (e.code || e.message) }; }
   }
   const r = verifyLedger(text, { algo, pubkey, tip, trustedPubkey, requireTip, tipNotBefore, expectLedgerId });
+  // exitCode, not process.exit(): exit() right after a write to a PIPE dropped every byte past 64 KiB (a receipt of a few
+  // hundred entries came out as truncated JSON, NEMESIS 12/10/2026); the process ends when stdout has drained
   console.log(JSON.stringify(r, null, 1));
-  process.exit(r.verdict === "PASS" ? 0 : 1);
+  process.exitCode = r.verdict === "PASS" ? 0 : 1;
 } else {
   console.error("usage: node cvverify.mjs <ledger.jsonl> [--algo A] [--pubkey hex] [--tip f] [--trusted-pubkey hex] [--require-tip] [--tip-not-before iso] [--expect-ledger-id hex] | --conformance <vectors_dir>");
   process.exit(2);

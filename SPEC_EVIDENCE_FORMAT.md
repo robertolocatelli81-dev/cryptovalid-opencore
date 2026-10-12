@@ -36,10 +36,10 @@ required, order = chain order.
 Optional fields (verified when present):
 | Field | Type | Meaning |
 |---|---|---|
-| `signature` | hex | Ed25519 signature over the canonical form (§3), by `signer` |
+| `signature` | base64 | Ed25519 signature over the `self_hash` string (its UTF-8 bytes), by `signer` |
 | `signer` | hex | Ed25519 public key (32 bytes hex) of the recording party |
 | `tsa_token` | base64 | RFC 3161 timestamp token over `self_hash` |
-| `signature_pq` | base64 | ML-DSA-65 signature over the canonical form, by `signer_pq` (hybrid ledgers, `signer.py`) |
+| `signature_pq` | base64 | ML-DSA-65 signature over the `self_hash` string (its UTF-8 bytes), by `signer_pq` (hybrid ledgers, `signer.py`) |
 | `signer_pq` | base64 | ML-DSA-65 public key of the recording party |
 
 ### 2.1 Closed entry schema (NORMATIVE, v0.2.1 — 2026-10-10)
@@ -61,8 +61,9 @@ algorithm forced, read by a generic path that applied neither) is removed; such 
 
 ## 3. Canonicalisation and hashing (NORMATIVE — interoperability depends on it)
 
-Canonical form of an entry = JSON serialisation of the object **without**
-`self_hash`, `signature`, `signer`, with **exactly** these rules (so any language
+Canonical form of an entry = JSON serialisation of the object **without** the attestation fields
+`self_hash`, `signature`, `signer`, `signature_pq`, `signer_pq` (§2; corrected 2026-10-12, the list named only the first
+three), with **exactly** these rules (so any language
 produces identical bytes — a single differing byte breaks the hash):
 
 - keys sorted lexicographically (`sort_keys`), applied **recursively**;
@@ -118,7 +119,7 @@ forces a boolean where reality had none.
    mismatch → FAIL.
 3. Check the chain rule for every entry → any mismatch → FAIL.
 4. Check `idx == position` for every entry → any mismatch → FAIL.
-5. If `signature`/`signer` present: verify Ed25519 over the canonical form.
+5. If `signature`/`signer` present: verify Ed25519 over the `self_hash` string (its UTF-8 bytes).
 6. If `tsa_token` present: verify the RFC 3161 token binds `self_hash` and a
    TSA time consistent with `ts`.
 7. A ledger with zero entries is FAIL (nothing was verified; `empty_ledger` error). Emit a JSON receipt including counts, failures (capped), verdict PASS/FAIL,

@@ -17,7 +17,9 @@ fn main() {
         match args[i].as_str() {
             "--algo" => {
                 match args.get(i + 1) {
-                    Some(v) if !v.is_empty() && !v.starts_with('-') => { algo = Some(v.as_str()); i += 2; }
+                    // only the two profiles (argparse choices in the reference): "foo" was hashed as SHA-256 and printed, unescaped,
+                    // as "algorithm" in the receipt (NEMESIS 12/10/2026)
+                    Some(v) if v == "sha256" || v == "sha3_256" => { algo = Some(v.as_str()); i += 2; }
                     _ => { eprintln!("usage: cvverify <ledger.jsonl> [--algo sha256|sha3_256]"); exit(2); }
                 }
             }

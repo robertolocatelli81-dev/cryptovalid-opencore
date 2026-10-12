@@ -37,6 +37,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -130,6 +131,13 @@ class JsonTooDeep(ValueError):
     pass
 
 
+# A raw surrogate code point in the decoded text can only come from bytes that are not UTF-8 (the file is read with
+# errors="surrogateescape", which maps each such byte to U+DC80..U+DCFF): valid UTF-8 never decodes to one. SPEC §1/§3:
+# a ledger is UTF-8 and MUST NOT contain non-UTF-8 bytes — refused, never hashed as the code point the decoder made up
+# (NEMESIS 12/10/2026: a 0xFF inside a value, self_hash computed over \udcff, was PASS here and FAIL in the five others).
+_RAW_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
 def has_lone_surrogate(text: str) -> bool:
     """True if a `\\uD800-\\uDFFF` escape in the JSON text is not part of a proper high+low pair.
     Linear scan honouring backslash escapes (a `\\\\uD800` is literal text, not an escape). A lone surrogate is
@@ -170,6 +178,8 @@ def _loads_strict(text):
     d = json_nesting_depth(text)
     if d > MAX_JSON_DEPTH:
         raise JsonTooDeep(f"json_too_deep: nesting {d} exceeds the acceptance-profile bound {MAX_JSON_DEPTH}")
+    if _RAW_SURROGATE.search(text):
+        raise ValueError("not_utf8: the line holds bytes that are not UTF-8 (SPEC §3)")
     if has_lone_surrogate(text):
         raise ValueError("lone_surrogate: unpaired UTF-16 surrogate escape is outside the acceptance profile")
     _ensure_recursion_headroom()

@@ -5,7 +5,7 @@
 // wrongly agree with ourselves is caught by disagreement with the reference.
 import { verifyLedger, conformance, jsonNestingDepth, hasLoneSurrogate, MAX_JSON_DEPTH, checkTip, tipPayload, parseInstant } from "./cvverify.mjs";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign as edSign } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -173,6 +173,70 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
     ok("cross: JS sees truncation against the Python tip", verifyLedger(text(4), { tip: pyTip, trustedPubkey: pk }).errors.some((e) => e.error.startsWith("tail_truncated")));
     ok("cli: <ledger>.tip.json picked up + --require-tip", (() => { try { execFileSync("node", [join(HERE, "cvverify.mjs"), led, "--trusted-pubkey", pk, "--require-tip"], { stdio: "pipe" }); return true; } catch { return false; } })());
   } catch (e) { console.log("  (cross-language tip check skipped: " + e.message.split("\n")[0] + ")"); }
+}
+
+// NEMESIS 12/10/2026: the CLI refuses a leading BOM (the five others do) and an --algo outside the two profiles
+{
+  const dir = mkdtempSync(join(tmpdir(), "cvbom-"));
+  const good = readFileSync(join(HERE, "..", "..", "spec", "vectors", "valid_sha256.jsonl"));
+  const run = (args) => { try { execFileSync("node", [join(HERE, "cvverify.mjs"), ...args], { stdio: "pipe" }); return 0; } catch (e) { return e.status; } };
+  const p0 = join(dir, "ok.jsonl"); writeFileSync(p0, good);
+  ok("cli: control ledger PASS (exit 0)", run([p0]) === 0);
+  for (const [name, bytes] of [["bom", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), good])], ["bom-blank", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf, 0x0a]), good])]]) {
+    const p = join(dir, name + ".jsonl"); writeFileSync(p, bytes);
+    ok(`cli: ${name} at the start of the file is FAIL (exit 1)`, run([p]) === 1);
+  }
+  for (const a of ["foo", "SHA256", "sha3-256", "sha512"]) ok(`cli: --algo ${a} is a usage error (exit 2)`, run([p0, "--algo", a]) === 2);
+  ok("cli: --algo sha3_256 still applies (FAIL on a SHA-256 ledger)", run([p0, "--algo", "sha3_256"]) === 1);
+  // a receipt larger than a pipe buffer (64 KiB) arrives whole when read through an OS pipe. spawnSync gives the child a
+  // socket pair whose buffer (~200 KiB) hid the bug for this receipt: `| cat` is the pipe a shell user has (NEMESIS B2
+  // 12/10/2026: with process.exit() restored, the spawnSync form still passed and `| cat` read 65 536 bytes)
+  {
+    const big = join(dir, "big.jsonl"); const Z = "0".repeat(64);
+    writeFileSync(big, Array.from({ length: 2000 }, (_, i) => `{"ts":${i},"v":${i}.5,"self_hash":"${Z}"}`).join("\n") + "\n");   // a float per line: one json_decode:float_forbidden error each
+    const r = spawnSync("sh", ["-c", 'node "$0" "$1" | cat', join(HERE, "cvverify.mjs"), big], { encoding: "utf-8", maxBuffer: 1 << 28 });
+    const st = spawnSync("node", [join(HERE, "cvverify.mjs"), big], { encoding: "utf-8", maxBuffer: 1 << 28 }).status;
+    let parsed = null; try { parsed = JSON.parse(r.stdout); } catch { /* truncated */ }
+    ok(`cli: a ${r.stdout.length}-byte receipt through \`| cat\` is whole JSON (exit 1)`, r.stdout.length > 65536 && parsed !== null && parsed.verdict === "FAIL" && st === 1);
+  }
+  // a signed tip with a leading BOM is unreadable, as in Python, Go and Java (it was stripped by the decoder: PASS here alone)
+  {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const pkHex = publicKey.export({ format: "der", type: "spki" }).subarray(12).toString("hex");
+    const lines = good.toString().split("\n").filter((x) => x.trim()).map((x) => JSON.parse(x));
+    const ts = "2026-10-12T00:00:00Z", lid = lines[0].self_hash, last = lines[lines.length - 1].self_hash;
+    const sig = edSign(null, tipPayload(lines.length, lid, last, ts), privateKey).toString("hex");
+    const tip = JSON.stringify({ kind: "cryptovalid_tip/1", entries: lines.length, ledger_id: lid, tip_sha256: last, ts, log_pubkey_hex: pkHex, signature_hex: sig });
+    for (const [name, pre, code] of [["tip-plain", "", 0], ["tip-bom", "\ufeff", 1]]) {
+      const p = join(dir, name + ".jsonl"); writeFileSync(p, good); writeFileSync(p + ".tip.json", pre + tip);
+      ok(`cli: ${name} with --trusted-pubkey --require-tip exits ${code}`, run([p, "--trusted-pubkey", pkHex, "--require-tip"]) === code);
+    }
+  }
+  // whole-number floats (1.0, 1e0) hashed as the integer JSON.parse reads, and an integer past 2^53-1: FAIL with a receipt
+  {
+    const Z = "0".repeat(64);
+    const line = (idxRaw, dataRaw, hashedData) => {
+      const h = createHash("sha256").update(`{"data":${hashedData},"idx":0,"prev_hash":"${Z}","ts":"t"}`).digest("hex");
+      return `{"idx":${idxRaw},"ts":"t","data":${dataRaw},"prev_hash":"${Z}","self_hash":"${h}"}\n`;
+    };
+    ok("float: control, integers PASS", verifyLedger(line("0", '{"a":1}', '{"a":1}')).verdict === "PASS");
+    for (const [idx, data] of [["0.0", '{"a":1}'], ["0e0", '{"a":1}'], ["0", '{"a":1.0}'], ["0", '{"a":1e0}'], ["0", '{"a":10E-1}'], ["0", '{"a":[2.00]}']]) {
+      const hashed = data.replace(/1\.0|1e0|10E-1/, "1").replace("2.00", "2");
+      ok(`float: idx ${idx} data ${data} is FAIL`, verifyLedger(line(idx, data, hashed)).verdict === "FAIL");
+    }
+    ok("float: a dot inside a string is data, not a float", verifyLedger(line("0", '{"a":"1.0e5"}', '{"a":"1.0e5"}')).verdict === "PASS");
+    // the string skip honours escapes: an escaped quote followed by 1.0 is still inside the string (a "[^"]*" skip FAILed it)
+    ok("float: 1.0 after an escaped quote inside a string is data", verifyLedger(line("0", '{"a":"x\\"1.0\\""}', '{"a":"x\\"1.0\\""}')).verdict === "PASS");
+    const r = spawnSync("node", [join(HERE, "cvverify.mjs"), (() => { const p = join(dir, "bigint.jsonl"); writeFileSync(p, line("9007199254740992", '{"a":1}', '{"a":1}')); return p; })()], { encoding: "utf-8" });
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* no receipt */ }
+    ok("bigint idx: FAIL with a receipt (exit 1), never an uncaught throw", r.status === 1 && j !== null && j.verdict === "FAIL");
+  }
+  // the float check is linear: an unterminated line of 100 000 escaped quotes (a regex skip of strings took 18 s on it)
+  {
+    const t0 = Date.now(); const r = verifyLedger('{"idx":0,"ts":"' + '\\"'.repeat(100000) + "\n"); const dt = Date.now() - t0;
+    ok(`float scan: 100 000 escaped quotes, unterminated, FAIL in ${dt} ms (< 2000)`, r.verdict === "FAIL" && dt < 2000);
+  }
+  ok("lib: unknown algo throws (as hash_with in verifier.py)", (() => { try { verifyLedger(good.toString(), { algo: "foo" }); return false; } catch (e) { return e.message.startsWith("unsupported_algo"); } })());
 }
 
 console.log(`\ncvverify test: ${pass} passed, ${fail} failed`);

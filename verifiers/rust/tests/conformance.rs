@@ -175,3 +175,19 @@ fn nesting_bound_512() {
         assert_eq!(r.parse_errors, 1, "json_too_deep must be a parse refusal ({} levels)", n);
     }
 }
+
+// NEMESIS 12/10/2026: --algo takes only the two profiles; anything else is a usage error (exit 2), never a verdict
+#[test]
+fn cli_algo_closed() {
+    let bin = env!("CARGO_BIN_EXE_cvverify");
+    let v = vdir().join("valid_sha256.jsonl");
+    let run = |args: &[&str]| std::process::Command::new(bin).arg(&v).args(args).output().unwrap();
+    assert_eq!(run(&[]).status.code(), Some(0), "control");
+    assert_eq!(run(&["--algo", "sha256"]).status.code(), Some(0));
+    assert_eq!(run(&["--algo", "sha3_256"]).status.code(), Some(1), "applied: FAIL on a SHA-256 ledger");
+    for a in ["foo", "SHA256", "sha3-256", "sha256\",\"verdict\":\"PASS"] {
+        let o = run(&["--algo", a]);
+        assert_eq!(o.status.code(), Some(2), "usage for --algo {}", a);
+        assert!(o.stdout.is_empty(), "no receipt for --algo {}", a);
+    }
+}

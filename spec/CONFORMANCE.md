@@ -231,16 +231,17 @@ tail that does not parse is never continued from. **Rust updated 15/09/2026** (t
 pairs combined into one scalar, unpaired surrogates refused (`lone_surrogate`), exactly four hex digits per
 `\u` escape. Until then the Rust parser refused even a **valid** pair (`\ud83d\ude00` → "bad scalar"): an
 undeclared divergence from Python/JS/Go that nobody had measured because Rust was not in the local oracle run.
-**Declared divergence (remaining): Swift** was not updated (no toolchain): a lone-surrogate line or a line
-deeper than 512 is FAIL on Python/JS/Go/Rust and still parsed by Swift; the oracle accepts only that pattern as
-declared, never as agreement.
-- What bounds the verifiers is now a RULE in four of five: **JS** (V8 `JSON.parse` + linear pre-scan), **Rust**
+**Swift updated 12/10/2026** (`verifiers/swift/Sources/CryptoValidVerify/JSONValue.swift`): the same rule — depth bound
+512, pairs combined, unpaired surrogates refused, exactly four ASCII hex digits per `\u` escape; `deep-valid-600` and
+`lone-surrogate` are FAIL in all six and no longer declared in the oracle (until then a line deeper than 512 was PASS
+in Swift alone, declared).
+- What bounds the verifiers is now a RULE in the reference and in **JS** (V8 `JSON.parse` + linear pre-scan), **Rust**
   (depth counter in the recursive-descent parser: 2000 levels = one parse refusal, no stack abort), **Go** (linear
-  pre-scan). **Swift** (`JSONValue.swift`) has no guard beyond its stack, and the Linux CI job does not build the
+  pre-scan) and, since 12/10/2026, **Swift** (depth counter in its recursive-descent parser). The Linux CI job does not build the
   Swift binary, so Swift is not exercised by the oracle in CI (its macOS job runs the Swift suite and the
   tampered-ledger gate). Oracle corpus (16 cases, 15/09/2026): `deep-nesting-2000` = FAIL everywhere;
   `deep-valid-512` (at the bound) = PASS everywhere; `deep-valid-600`, `lone-surrogate` = FAIL on the four
-  references (Swift declared); `valid-surrogate-pair` = PASS everywhere; `empty` = FAIL everywhere (the Go
+  references (Swift declared until 12/10/2026, FAIL since); `valid-surrogate-pair` = PASS everywhere; `empty` = FAIL everywhere (the Go
   reference answered a third verdict "EMPTY" until 15/09 — found the day Go joined the oracle). Local run with
   Python+JS+Go+Rust: 0/16 disagreements.
 - The PASS side is guarded too: the reference raises its own recursion headroom before decoding, so an

@@ -54,10 +54,9 @@ that MUST fail (bad_idx, broken_link, tampered_content).
 | Implementation | Runtime / deps | Status |
 |---|---|---|
 | `verifier.py` | Python 3, stdlib | reference — conformant |
-| `verifiers/js/cvverify.mjs` | Node ≥18, stdlib only | **conformant 9/9** (2026-10-11); 92–93-check suite incl. cross-oracle vs the Python reference (the count moves by one or two with the random signature's characters) |
-| `verifiers/rust/` | Rust, **std only** (SHA-256+Keccak in-crate) | **conformant 9/9**; `cargo test` 8 tests + `clippy -D warnings` (Rust 1.98.1, 2026-10-11); in the differential oracle = 0 mismatch |
-| `verifiers/swift/` | Swift + CryptoKit (Apple) / swift-crypto (Linux) | **compiled & tested on Linux (Swift 6.2, 2026-10-11): swift test 6/6, conformant 9/9**; the closed-schema cases agree with the five others; 12 OLDER divergences measured for the first time (surrogate pair refused, `+10` / `010` / a raw tab accepted, CRLF refused, `FILE_ERROR` on non-UTF-8, no usage errors in the CLI) — Swift was not updated for the 15/09–21/09 profile rules; in CI it has its own macOS job (`swift test` and the intact /
-tampered gate) and is not part of the differential oracle |
+| `verifiers/js/cvverify.mjs` | Node ≥18, stdlib only | **conformant 9/9** (2026-10-11); 92–93-check suite (112 in 4 runs on 2026-10-12, after the checks for a BOM, `--algo`, float lexemes, `idx` past 2^53-1, a receipt over 64 KiB on a pipe; 115–116 in 9 runs after the review's checks: the receipt read through `| cat`, a signed tip with a BOM, `1.0` after an escaped quote, the float scan linear on 100 000 escaped quotes) incl. cross-oracle vs the Python reference (the count moves by one or two with the random signature's characters) |
+| `verifiers/rust/` | Rust, **std only** (SHA-256+Keccak in-crate) | **conformant 9/9**; `cargo test` 8 tests + `clippy -D warnings` (Rust 1.98.1, 2026-10-11; 9 tests since 2026-10-12, `--algo` closed); in the differential oracle = 0 mismatch |
+| `verifiers/swift/` | Swift + CryptoKit (Apple) / swift-crypto (Linux) | **compiled & tested on Linux (Swift 6.3.3, 2026-10-12): swift test 17/17, conformant 9/9** (the binary on `spec/vectors/`); aligned with the acceptance profile on 2026-10-12 — the 12 divergences measured on 2026-10-11 (surrogate pair refused, `+10` / `010` / a raw tab accepted, CRLF refused, `FILE_ERROR` on non-UTF-8, no usage errors in the CLI) are closed: the differential oracle with Swift is 0/106 (it was 12/89 on 2026-10-11; on the corpus of 2026-10-12 the code before the change counts 23/106); the parser now reads Unicode scalars, not grapheme clusters, compares keys scalar by scalar, and applies MAX_JSON_DEPTH = 512 (`deep-valid-600` is FAIL in all six, no longer declared). Tests by family (numbers, raw controls, `\u` escapes, surrogates, line endings, key equality, nesting, signature fields, non-UTF-8 bytes, CLI grammar) fail on the code before the change (10 of the 11 new tests; the whitespace one already passed there). In CI it has its own macOS job (`swift test` and the intact / tampered gate) and is not part of the differential oracle |
 
 The JS verifier is cross-checked at test time by running the actual Python reference
 as an independent oracle: it must produce the same verdict/chain_integrity/algorithm
@@ -75,8 +74,22 @@ outside it is REJECTED uniformly (not silently transformed):
 - Numbers: integers only, in the portable range +/-(2^53-1). **No floats** (decimals travel as strings),
   **no NaN / Infinity**, no integer beyond the range.
 - Objects: **no duplicate keys** (top-level or nested; escaped duplicates like `"a"` vs `"\u0061"` too).
-- Strings: valid UTF-8. (Residual: lone UTF-16 surrogates are rejected by Rust/Swift; Python/JS acceptance
-  of them is a documented residual to close — tracked.)
+- Strings: valid UTF-8; an unpaired UTF-16 surrogate escape is refused by all six (named `lone_surrogate` by the four whose receipts carry reasons; oracle
+  cases `lone-surrogate-hashed-dropped` / `-fffd` / `-kept`, `low-surrogate-hashed-dropped` and `surrogate-split-by-escape`,
+  whose self_hash is computed over what a lax decoder reads, 2026-10-12). Closed on 2026-10-12 (each with an oracle case, FAIL in all six; on the code before, the case disagrees): a raw byte
+  that is not UTF-8, its self_hash computed over the code point Python's `surrogateescape` decoder gives it (`\udcff` for
+  `0xFF`), was PASS in the reference alone — `verifier.py` now refuses a line holding such a code point (`not_utf8`,
+  SPEC §3) (`non-utf8-byte-hashed-as-surrogateescape`, `…-in-key-…`); a UTF-8 BOM at the start of the file was PASS in JS
+  (and in the Swift code of 0.20.0) (`bom-start`, `bom-then-blank-line`); a whole-number float lexeme (`1.0`, `0e0`), hashed as the integer it reads
+  as, was PASS in JS alone (`float-whole-hashed-as-int`, `float-exp-idx-hashed-as-int`); an `idx` past 2^53-1 made JS
+  throw without a receipt (`idx-past-2^53`). Closed the same day without an oracle case (tests in `verifiers/js/test.mjs`): a JS
+  receipt larger than 64 KiB was cut when read through a pipe; a signed tip with a leading UTF-8 BOM was accepted by JS alone of the four verifiers that check tips (Python, Go and Java: unreadable).
+- CLI: `--algo` takes only `sha256` and `sha3_256` in the four CLIs that have it (Python, JS, Rust, Swift); anything else
+  is a usage error (`cli-algo-unknown`, `cli-algo-uppercase`; JS and Rust hashed SHA-256 and reported `"algorithm": "foo"`
+  until 2026-10-12, Rust printing the value unescaped in its receipt). Not a divergence of outcome: `--algo=sha256`, the flag before the path and a `--` right before or right after the
+  path are accepted by Python (argparse), which applies `--algo` (a `--` after a flag's value is a usage error there
+  too), and are usage errors in JS, Rust and Swift; each verifier either applies the constraint or refuses the command
+  (measured 2026-10-12, Python 3.9 / 3.11 / 3.13).
 
 The four verifiers agreeing on the 6 normative vectors is necessary but NOT sufficient; the differential
 oracle over the adversarial corpus is the real invariant. "Agree byte-for-byte" means *on this profile*.

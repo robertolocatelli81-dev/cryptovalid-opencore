@@ -551,6 +551,47 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## The six verifiers follow one acceptance profile; Swift aligned, defects closed in Python, JS, Rust and Swift (2026-10-12, 0.20.1)
+
+- **The finding.** On 2026-10-11 the differential oracle, run with Swift for the first time, counted 12 Swift-only
+  divergences: a valid surrogate pair refused; `+10`, `010` and a raw tab accepted; CRLF lines refused; `FILE_ERROR` on a
+  file that is not UTF-8 (×2); five CLI forms answered with a verdict instead of a usage error. Swift had not been updated
+  for the profile rules of 15–21/09.
+- **The rule, not the case.** The Swift parser reads Unicode scalars (a Swift `Character` is a grapheme cluster: `\r\n` was
+  one character, and String equality is canonical equivalence, so `é` and `e` + U+0301 were one key), applies the RFC 8259
+  integer grammar, refuses raw control characters, reads `\u` as four ASCII hex digits, combines surrogate pairs and refuses
+  unpaired ones, bounds nesting at 512, splits lines on LF only and FAILs a file that is not UTF-8. The CLI takes the ledger
+  path first, `--algo sha256|sha3_256` and `--pubkey`, and answers anything else with a usage error (exit 2). The Ed25519
+  fields are read strictly, as `signer.py` reads them.
+- **Measured.** Oracle with Swift 0/106 (12/89 on 2026-10-11; `deep-valid-600` and `lone-surrogate` no longer declared;
+  seventeen cases added on 2026-10-12 that only the rule can fail, on which the previous Swift code counts 23/106);
+  `closed_schema_mutants.py` 1 500 mutations, seed 20261011, GREEN over the six verifiers; `swift test` 17/17, of which
+  10 new tests fail on the previous Swift code (the eleventh, whitespace between tokens, passed there too).
+- **Found by the review and closed the same day.** A raw non-UTF-8 byte hashed over Python's `surrogateescape` code
+  point was PASS in `verifier.py` alone; a whole-number float (`1.0`, `0e0`) hashed as an integer was PASS in JS alone,
+  and a leading UTF-8 BOM in JS (and in the Swift code of 0.20.0); an `idx` past 2^53-1 made JS throw without a receipt,
+  and a JS receipt over 64 KiB was cut on a pipe; `--algo foo` was a PASS in JS and Rust; Swift's `--pubkey` did not
+  enter the verdict (a wrong key, an unsigned or a partly signed ledger was PASS, exit 0). Each is now refused, with an
+  oracle case or a test that fails on the code before. Rust also printed the `--algo` value into the receipt without
+  escaping it, so a crafted value could add a second `verdict` key; JS accepted a signed chain tip that starts with a
+  BOM, which Python, Go and Java refuse. Both closed.
+- **Found by a second, independent review.** The JS float check added the same day skipped strings with a backtracking
+  regex: 72 s on a 400 KB unclosed line of `\"` pairs (0.07 s before). It is now a linear scan, equal to the regex on
+  2.4 million short lines and on 6 257 real and fuzz files, with a test that fails on the regex.
+- **Chains.** Run before and after over the `.jsonl` files of the development machine (on 2026-10-12: the 2 820 under
+  the working trees and the 138 other ledgers found in the home directory) and over new ledgers written by today's
+  writers (`PersistentLedger`, the ingest, `signer.py sign`, `omega_evidence`, payloads with hard Unicode): the six
+  verifiers agree on every file, the new ledgers are PASS in all six, and no file was rewritten (sha256 before and
+  after). A PASS became FAIL in JS on three test files whose `idx` is a float (`0.0`, `1e0`), and in Swift on two test
+  files whose `idx` is written `01`, all outside the format (SPEC §2, §3, RFC 8259); every Swift change (27 FAIL to
+  PASS, 2 PASS to FAIL, 2 FILE_ERROR to FAIL) moved it to the reference's verdict, among them a real ledger of ours that
+  the previous Swift code refused because of an emoji.
+- **SPEC corrected.** §2 said `signature` is hex over the canonical form; `signer.py` signs the `self_hash` string (its
+  UTF-8 bytes) and writes the signature in base64, and `signer.py verify` and the JS, Go, Java and Swift verifiers check
+  it so (`verifier.py` and the Rust verifier do not check signatures). §2 (`signature`, `signature_pq`) and §5 step 5
+  now say so, and §3 names the five attestation fields the canonical form leaves out, as every verifier does (it named
+  three: `signature_pq` and `signer_pq` were missing). No behaviour changes with this text.
+
 ## A ledger without `idx` is refused on every path; the ledger front-end names why (2026-10-11, 0.20.0)
 
 - **The shortcut 0.19.0 declared is closed.** Until 0.19.0, with no `--algo`, a ledger whose first three entries carried no

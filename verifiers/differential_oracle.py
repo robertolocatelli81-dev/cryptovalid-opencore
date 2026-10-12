@@ -144,11 +144,9 @@ DECLARED_DIVERGENCE = {
     # name -> (expected verdict PER verifier, reason). A value may be a string (exact) or a set (any of).
     # Only this pattern is accepted as declared; anything else on the same case (an inverted regression,
     # a crash) is a real DIFF. Since 15/09/2026 the bound and the surrogate rule are enforced by Python, JS, Go
-    # AND Rust (one rule, four references); Swift was not updated (no toolchain) — declared in CONFORMANCE §.
-    "deep-valid-600": ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "FAIL", "swift": "PASS"},
-                       "outside the acceptance profile (nesting > MAX_JSON_DEPTH=512): references FAIL, Swift PASS"),
-    "lone-surrogate": ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "FAIL", "swift": {"PASS", "FAIL"}},
-                       "unpaired \\ud800 escape: refused by the four references (lone_surrogate); Swift not updated"),
+    # AND Rust; Swift since 12/10/2026 (deep-valid-600 and lone-surrogate were declared here with Swift PASS / either: no
+    # longer declared). A Swift regression past the bound is a DIFF on deep-valid-600; on surrogates the cases that can show
+    # one are the hashed ones (lone-surrogate-hashed-*, surrogate-split-by-escape): lone-surrogate fails on its hash alone.
 }
 # council 16/09 r5 — JSON escapes and line rules the 54 cases did not cover (Java took "\\u+041" via Integer.parseInt;
 # Python's universal newlines split on a lone CR; str.strip()/trim()/TrimSpace disagreed on U+00A0; Python took a
@@ -169,6 +167,25 @@ CORPUS["deep-valid-512"] = _valid_nested(510)   # exactly at the bound: must AGR
 # an unpaired UTF-16 surrogate escape: not a Unicode scalar, decoders disagree (Go stdlib → U+FFFD) → refused
 CORPUS["lone-surrogate"] = '{"idx":0,"ts":"t","data":{"k":"\\ud800"},"prev_hash":"' + "0" * 64 + '","self_hash":"z"}'
 CORPUS["valid-surrogate-pair"] = valid_entry({"k": "\U0001F600"})   # a proper pair (U+1F600) must PASS everywhere
+
+
+# review 12/10/2026 (Swift alignment): cases that only the RULE can refuse — the self_hash is computed over what a lax decoder
+# reads. `lone-surrogate` above carries self_hash "z": it fails on the hash in every verifier, so it cannot see a verifier that
+# drops, replaces or keeps an unpaired escape (the Swift code before 12/10 dropped it and said PASS on the -dropped case).
+def _lax_anchored(raw_value, read_value):
+    e = {"idx": 0, "ts": "t", "data": {"k": read_value}, "prev_hash": "0" * 64}
+    h = hashlib.sha256(canon(e)).hexdigest()
+    return '{"idx":0,"ts":"t","data":{"k":"' + raw_value + '"},"prev_hash":"' + "0" * 64 + '","self_hash":"' + h + '"}'
+CORPUS["lone-surrogate-hashed-dropped"] = _lax_anchored("a\\ud800b", "ab")
+CORPUS["lone-surrogate-hashed-fffd"] = _lax_anchored("a\\ud800b", "a\ufffdb")
+CORPUS["lone-surrogate-hashed-kept"] = _lax_anchored("a\\ud800b", "a\ud800b")
+CORPUS["low-surrogate-hashed-dropped"] = _lax_anchored("a\\udc00b", "ab")
+CORPUS["surrogate-split-by-escape"] = _lax_anchored("\\ud800\\\\dc00", "\U00010000")   # \ud800 then \\ then "dc00": not a pair
+# Int64.min, hashed as written: out of the portable range; abs() of it traps (the Swift code before 12/10 died, SIGILL)
+CORPUS["int64-min"] = '{"idx":0,"ts":"t","data":{"n":-9223372036854775808},"prev_hash":"' + "0" * 64 + '","self_hash":"' + \
+    hashlib.sha256(b'{"data":{"n":-9223372036854775808},"idx":0,"prev_hash":"' + b"0" * 64 + b'","ts":"t"}').hexdigest() + '"}'
+# the depth bound counts nesting, not containers: 600 siblings at depth 3 are in profile (PASS everywhere)
+CORPUS["siblings-600"] = valid_entry({"k": [[] for _ in range(600)]})
 # 21/09/2026 — classes found on cra-evidence 0.3.0 (same verifier code) and measured here: JS dropped an own "__proto__" key
 # from its canonical form (an entry with that key added and self_hash untouched was PASS in JS alone); Rust's JSON accepted
 # "+10", "010" and raw control characters (same canonical form → PASS in Rust alone); a non-UTF-8 file was FILE_ERROR in Rust
@@ -192,6 +209,30 @@ def _fffd_line():
     e["self_hash"] = hashlib.sha256(canon(e)).hexdigest()
     return json.dumps(e, ensure_ascii=False).encode("utf-8").replace("\ufffd".encode("utf-8"), b"\xff", 1)   # the raw byte where U+FFFD was hashed
 CORPUS["non-utf8-byte-hashed-as-fffd"] = _fffd_line()
+# a truncated 4-byte sequence decodes to ONE U+FFFD of the same length (3 bytes): a lossy decoder plus a length check passes it
+CORPUS["non-utf8-truncated-hashed-as-fffd"] = _fffd_line().replace(b"\xff", b"\xf0\x9f\x98", 1)
+# NEMESIS 12/10/2026: a byte that is not UTF-8, self_hash computed over the code point Python's surrogateescape gives it
+# (U+DCFF for 0xFF): the reference said PASS, the five others FAIL (SPEC §3: no non-UTF-8 bytes)
+def _surrogateescape_line(raw, in_key):
+    s = raw.decode("utf-8", "surrogateescape")
+    e = {"idx": 0, "ts": "t", "data": ({s: 1} if in_key else {"k": "a" + s + "b"}), "prev_hash": "0" * 64}
+    e["self_hash"] = hashlib.sha256(canon(e)).hexdigest()
+    return json.dumps(e, ensure_ascii=False).encode("utf-8", "surrogateescape")
+CORPUS["non-utf8-byte-hashed-as-surrogateescape"] = _surrogateescape_line(b"\xff", False)
+CORPUS["non-utf8-byte-in-key-hashed-as-surrogateescape"] = _surrogateescape_line(b"\xc0\xaf", True)
+# a UTF-8 BOM at the start of the file is not JSON whitespace: FAIL everywhere (JS stripped it and said PASS)
+CORPUS["bom-start"] = b"\xef\xbb\xbf" + valid_entry({"a": 1}).encode()
+CORPUS["bom-then-blank-line"] = b"\xef\xbb\xbf\n" + valid_entry({"a": 1}).encode()
+# NEMESIS 12/10/2026 (found on real files): a whole-number float LEXEME hashed as the integer a lax parser reads — JS read
+# 1.0 / 0e0 as 1 / 0 and said PASS alone (`float-whole` above hashes "1.0", so it fails on the hash in every verifier)
+def _int_hashed(idx_raw, data_raw, data_read):
+    e = {"idx": 0, "ts": "t", "data": data_read, "prev_hash": "0" * 64}
+    h = hashlib.sha256(canon(e)).hexdigest()
+    return '{"idx":' + idx_raw + ',"ts":"t","data":' + data_raw + ',"prev_hash":"' + "0" * 64 + '","self_hash":"' + h + '"}'
+CORPUS["float-whole-hashed-as-int"] = _int_hashed("0", '{"a":1.0}', {"a": 1})
+CORPUS["float-exp-idx-hashed-as-int"] = _int_hashed("0e0", '{"a":1}', {"a": 1})
+# an integer idx past 2^53-1: FAIL with a receipt everywhere (JS threw uncaught: no receipt, counted as a crash here)
+CORPUS["idx-past-2^53"] = '{"idx":9007199254740992,"ts":"t","data":{},"prev_hash":"' + "0" * 64 + '","self_hash":"' + "0" * 64 + '"}'
 
 
 # SPEC §2.1 (2026-10-10) — the entry is a CLOSED object: a top-level key nobody defined, self_hash recomputed over it (only the
@@ -651,10 +692,17 @@ def main():
             f.write(valid_entry({"a": 1}) + "\n")
         cli_cases = {"cli-unknown-flag": ["--no-such-flag"], "cli-trusted-pubkey-empty": ["--trusted-pubkey", ""],
                      "cli-trusted-pubkey-missing-value": ["--trusted-pubkey"], "cli-two-positionals": [valid],
-                     "cli-algo-empty": ["--algo", ""]}   # review 21/09: Python validated five value flags of seven
+                     "cli-algo-empty": ["--algo", ""],   # review 21/09: Python validated five value flags of seven
+                     # NEMESIS 12/10/2026: --algo outside the two profiles (JS and Rust hashed SHA-256 and reported "algorithm":
+                     # "foo"); only the four CLIs that have --algo take part (Go and Java auto-detect only)
+                     "cli-algo-unknown": ["--algo", "foo"], "cli-algo-uppercase": ["--algo", "SHA256"]}
+        only = {"cli-algo-unknown": {"python", "js", "rust", "swift"}, "cli-algo-uppercase": {"python", "js", "rust", "swift"}}
+        n_cli = len(cli_cases)
         for name, extra in cli_cases.items():
             row = {}
             for k, cmd in available.items():
+                if name in only and k not in only[name]:
+                    continue
                 ex = [(a.replace("--", "-", 1) if k in ("go", "java") and a.startswith("--") else a) for a in extra]
                 if k == "rust" and extra[0] == "--trusted-pubkey":
                     ex = ["--algo"] + extra[1:]   # the Rust CLI has only --algo: same grammar, its own value flag
@@ -673,7 +721,7 @@ def main():
             if not ok:
                 disagreements += 1
             print(f"  [{'OK ' if ok else 'DIFF'}] {name:22} expect usage(exit 2): {row}")
-    print(f"\ndisagreements: {disagreements}/{len(CORPUS) + (len(TIP_CASE['ordering']) if TIP_CASE else 0) + 5} (declared out-of-profile divergences: {declared})")
+    print(f"\ndisagreements: {disagreements}/{len(CORPUS) + (len(TIP_CASE['ordering']) if TIP_CASE else 0) + n_cli} (declared out-of-profile divergences: {declared})")
     return 0 if disagreements == 0 else 1
 
 
