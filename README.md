@@ -671,7 +671,10 @@ nothing on stderr; Go and Swift exited 0 or 1 on a full disk (Swift also with st
   (without a fresh cache), `cryptovalid_pruning_probe.py`, `cryptovalid_tsa.py` and `cryptovalid_solana.py` against a
   real network are converted but measured here only offline (LOTL with a fresh cache, Solana and the TSA with the
   connection refused). In process, after text the caller wrote to a `utf-8-sig` pipe, a receipt carries a second byte
-  order mark (the command line never does). Windows and macOS are not measured: the waiting on a full non-blocking
+  order mark (the command line never does). The CI's macOS job (13/10, run 38403932117) found one case that does not hold
+  there: the Swift verifier with stdout appended to a file already 1 000 bytes long under `ulimit -f 1` exited 0 with
+  nothing on stderr (with `ulimit -f 0` it exited 74, as on Linux); the cause is not established, and that case of
+  `swift test` runs on Linux only. Windows and macOS are not measured: the waiting on a full non-blocking
   stdout uses `select`/`poll` (POSIX).
 - Tests with real processes: `test_receipt_not_written.py` (12/10: /dev/full, a gone reader, stdout closed, for the
   Python commands and the Java verifier) and `test_receipt_design_20261013.py` (13/10, 17 tests: unbuffered under a file

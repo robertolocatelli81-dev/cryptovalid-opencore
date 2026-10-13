@@ -21,7 +21,7 @@ swift test        # runs the SAME normative vectors bundled as test resources
 - Ed25519 fields read as `signer.py` reads them: `signature` canonical standard base64 of 64 bytes, `signer` 64
   lowercase hex digits; anything else is `signatures_all_verified: false`.
 
-Status (measured 2026-10-12 on Linux, Swift 6.3.3 with swift-crypto, 0.20.2): `swift test` 18/18 (25/25 in 0.20.3 on Linux, measured 2026-10-13: the receipt-write test, three for usage with stderr lost, a file size limit and a late non-blocking reader, and three for the final newline, a wait that does not spin, and a write of 0 bytes or EINTR; the last two run on Linux only); the binary reproduces the
+Status (measured 2026-10-12 on Linux, Swift 6.3.3 with swift-crypto, 0.20.2): `swift test` 18/18 (25/25 in 0.20.3 on Linux, measured 2026-10-13: the receipt-write test, three for usage with stderr lost, a file size limit and a late non-blocking reader, and three for the final newline, a wait that does not spin, and a write of 0 bytes or EINTR; the last two run on Linux only, and so does the file-size case with room left: on the macOS CI runner, 13/10, run 38403932117, it exited 0 instead of 74, cause not established); the binary reproduces the
 normative block of the 11 vectors of `spec/vectors/`; the differential oracle (`../differential_oracle.py`, Swift with
 Python, JS, Go, Java and Rust) 0/110 disagreements (26 declared divergences, all on signed tips). The acceptance profile is the reference's: RFC 8259 integers only
 within +/-(2^53-1), no raw control character in a string, `\u` = four ASCII hex digits, surrogate pairs combined and
