@@ -172,7 +172,8 @@ application.
 python3 verifier.py <ledger.jsonl>     # verifies a hash-chained ledger
 ```
 
-Exit code 0 = chain intact; non-zero = the file tells you where it broke.
+Exit code 0 = chain intact; 1 = broken, and the receipt tells you where; 74 = the receipt could not be written whole
+(stdout or `--out` full, closed, or a reader gone), whatever the verdict (since 0.20.3).
 
 ## Signed evidence (the enterprise edge)
 
@@ -553,6 +554,169 @@ python3 test_ledger_evidence.py                                         # 18 tes
 Honest scope, once more: a receipt signed by the log key proves what the log key holder published; a
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
+
+## An outcome that is not written whole is exit 74; promised files and ledger lines are whole or absent (2026-10-13, 0.20.3)
+
+A defect present in 0.20.2 and before, in every command that prints a receipt. When stdout could not take the receipt
+(a full disk, a reader that has gone, stdout closed), the verifier exited with the verdict's code and the receipt was
+lost: measured on 0.20.2 (`>/dev/full`, `>&-`, `| head -c 0`, two runs each, a valid and a tampered ledger),
+`verifier.py`, `cryptovalid-verify` and `signer.py` exited 0 or 1 with stdout closed and 120 (the interpreter's own
+flush, "Exception ignored") on a full disk or a gone reader; the JS and Java verifiers exited 0 or 1 in every case, with
+nothing on stderr; Go and Swift exited 0 or 1 on a full disk (Swift also with stdout closed) and died of SIGPIPE (141) on a gone reader; Rust panicked
+(exit 101) on a full disk or a gone reader, and exited 0 or 1 with stdout closed (its runtime reopens descriptor 1 on
+`/dev/null`). A script that reads only the exit code took a lost PASS for a PASS.
+
+- Since 0.20.3 every command of this repository that verifies, records or signs evidence writes its outcome through one
+  writer and only then chooses the exit code (not converted: the development and CI tools under `verifiers/` and
+  `bench/` and the test files; `verifiers/closed_schema_mutants.py` on a full stdout still exits 120): when a byte of it was not taken it exits **74** (EX_IOERR in `sysexits.h`), whatever the verdict, and writes one
+  line `receipt not written: <reason>` on stderr (if stderr fails too, the exit is still 74). The Python writer lives in
+  `verifier.py` (which stays one stdlib-only file) and is imported by `cryptovalid-verify` / `verify_evidence.py`,
+  `signer.py` and the 30 other modules with a `__main__`: `cldma_confidential`, `conformance`, `cryptovalid_acta`,
+  `cryptovalid_checkpoint`, `cryptovalid_heterogeneous`, `cryptovalid_ingest`, `cryptovalid_jws`, `cryptovalid_kms`, `cryptovalid_lotl`,
+  `cryptovalid_mcp`, `cryptovalid_merkle`, `cryptovalid_monitor`, `cryptovalid_pruning_probe`, `cryptovalid_reanchor`,
+  `cryptovalid_receipt`, `cryptovalid_report`, `cryptovalid_scitt`, `cryptovalid_solana`, `cryptovalid_tip`,
+  `cryptovalid_tsa`, `cryptovalid_witness`, `cryptovalid_worm`, `dora_incident`, `eidas_ledger_check`, `evidence_pack`,
+  `fundcert_crosssource`, `mutation_runner`, `pedersen_commit`, `refresh_regulatory`, `tx_evidence`. The JS, Go
+  (`cvverify`, `cvappend`), Rust, Java and Swift verifiers follow the same rule. Exit codes 0, 1 and 2 (and 77 where a
+  command has it) keep their meaning when the outcome is written; the outcome itself is unchanged: on 83 commands run before and after with stdout on a regular file (the same inputs,
+  folder and start time), the exit code and stdout are byte for byte those of 0.20.2 in 81, and in the other 2 (a new
+  key, a measured duration) equal apart from that value.
+- What the writer does. Python writes the bytes its stdout text layer would write to the byte stream below it, in a
+  loop that checks every count, and flushes before the exit code is chosen; Rust, Swift and Java write descriptor 1 in
+  such a loop; Node writes a regular file synchronously to its last byte; Go checks the error of its write. A
+  non-blocking stdout that is full (a reader that reads late) is waited for as a blocking write waits (Python in
+  `select`, Rust and Swift in `poll`, Java in sleeps of 1 to 50 ms). SIGPIPE and SIGXFSZ are ignored, so a gone reader
+  and a file size limit are errors the program reads. Usage errors and refusals go to stderr through a write that never
+  raises. Measured on 0.20.2 on 13/10 (a bench of real processes, Python 3.11.2; every case below is exit 74 with one
+  line, or the whole receipt with the verdict's code, on this code): a non-blocking stdout read late cut a receipt
+  larger than the pipe buffer, at 65 536 bytes when the pipe had filled before the reader came (65 536 or 65 537 in Swift,
+  by timing; Java, read 1 s after its start, was still writing and lost the bytes past 1 151 646 of 1 438 366; Python 120, or 1 under `-u`; Java and Swift 1, the verdict's code; Rust
+  101); a regular file with 24 bytes left under `ulimit -f` took 24 bytes and the code was the verdict's (JS, Go,
+  Java) or 120 (Python), or the process was killed by SIGXFSZ (Rust, Swift); stdout opened read-only exited with the verdict's code in JS, Go, Rust,
+  Java and Swift, 120 in Python; a usage error with stderr full, closed or its reader gone exited 120 or 1 in Python (with
+  stderr closed the usage went to stdout), 101 in Rust (2 with stderr closed), and Swift was killed by SIGILL (`FileHandle.write`); with stderr's
+  reader gone Go and Swift died of SIGPIPE; `--help` on a full stdout exited 120 (1 under `-u`).
+  `cryptovalid_pruning_probe`, `mutation_runner` and `fundcert_crosssource` print their usage on stderr now (it went to
+  stdout).
+- **Files a command promises are whole or absent.** `verifier.py --out`, the signed ledger of `signer.py sign`, the chain tip, the monitor and witness state, the checkpoint and SCITT `--out` files,
+  `cryptovalid_receipt.py --cose`, the `cryptovalid_acta.py` receipts, the evidence pack's files, the HTML/PDF report, the
+  ingest STH and head, the LOTL cache, the regulatory profiles and the QEAS receipt are written to a new temporary file
+  in the same folder, of a name nobody can predict (created with `O_EXCL`), fsynced and closed, then renamed over the
+  path; on a failure the temporary file is removed, the file that was at the path stays as it was, and the command exits
+  74. Measured on 0.20.2: `signer.py keygen` over an existing key under `ulimit -f 0` left the key at 0 bytes (exit 120);
+  a symlink planted at the predictable `<tip>.tmp` or `<state>.tmp` was followed and its target overwritten (the tip, the
+  monitor). A new key (`keygen`, and `keygen --pq`) and a WORM object are created through a temporary file and a hard link, never over
+  an existing path, so they too are whole or absent. A path that exists and is not a regular file (`/dev/stdout`, a FIFO)
+  is written directly, every byte. Over an existing file the command keeps what 0.20.2's `open(path, "w")` kept: a
+  symlink at the path is followed (its target gets the file, the link stays), the existing file's mode is kept, and a
+  file this process may not write (a receipt `chmod 444`) is refused and left as it was (exit 74; it
+  was a traceback, exit 1). Changes of behaviour: `signer.py keygen` refuses a path where something already
+  exists (a key, writable or not; with `--pq` also `<keyfile>.pq`; a symlink): one line on stderr, exit 2 (the code of a
+  usage refusal), nothing written, the key left as it was; to replace a key, move or delete it first (0.20.2 replaced a
+  writable key with a new one, exit 0, and refused a read-only one with a traceback, exit 1); the file at the path is a new file, so a hard link to the old one keeps
+  the old content and the owner is the user who ran the command; a promised file in a folder this process cannot write is 74 even when
+  the file itself is writable (no temporary file can be made there); an evidence pack is a folder: each file is whole,
+  `MANIFEST.json` is written last, and a build that fails midway can leave copied ledgers without a new manifest (exit
+  74; the pack verifies only with a manifest that matches).
+- **A hash-chained ledger gets the whole line or nothing.** `cvappend` (Go), `cryptovalid_scitt.py register`, the
+  witness's `.evidence.jsonl` and `.cosigned.jsonl` logs and the ingest writer's batches append with unbuffered writes in
+  a loop and fsync; if a write or the fsync fails, the file is truncated back to the bytes it had, under the same lock,
+  and the command exits 74 with a line that says nothing was recorded and the ledger is left as it was. Measured on
+  0.20.2: `cvappend` under a file size limit exited 1 and left part of a line, which the next append refused as a torn
+  last line (the chain could not continue); `cryptovalid_scitt.py register` exited 2 (`File too large`) and left 24
+  bytes of a line. The ingest writer keeps
+  a batch that failed queued, and a later `flush()` writes it whole. With `-tipkey`, a tip that cannot be written is 74
+  and the line says the entry is in the ledger and the tip, if there is one, still names the previous entry. `cryptovalid_scitt.py register`
+  refuses a directory as `--out` before it records anything; when `--out` cannot be written after the line is recorded,
+  the exit is 74 and the line says the statement is registered (with its index) and only the transparent statement was
+  not written. `cryptovalid_witness.py cosign` does the same for its `--out` and its state.
+- **A check that cannot be run here is 74, never a verdict on the input.** When openssl cannot be started (fork refused
+  under `ulimit -u`, no descriptor left) or the file it reads cannot be written (no usable temporary directory), `evidence_pack.py
+  verify`, `cryptovalid-verify pack` and `archive`, `cryptovalid_ingest.py verify` and `eidas_ledger_check.py` exit 74
+  with `cannot run openssl here: <reason>` or `cannot write a temporary file for openssl: <reason>` (measured under
+  RLIMIT_NPROC 1 and under RLIMIT_FSIZE 0 with TMPDIR set); the same functions raise it to `cryptovalid_heterogeneous`
+  and to `cryptovalid_receipt.py inclusion --tsa` (by code, not measured there). Measured on 0.20.2 under RLIMIT_NPROC 1,
+  with a valid RFC 3161 token from a local TSA: `cryptovalid-verify pack` (a valid pack) and `cryptovalid-verify
+  archive` (a valid ingest archive) said `valid: false`, exit 1; `evidence_pack.py verify` reported the token
+  `verified: false`; `cryptovalid_ingest.py verify` and `eidas_ledger_check.py` exited 1 with a traceback. openssl absent stays what it was (the token is recorded, not
+  verified). openssl that does not answer within its timeout (15 s for the evidence pack's token, 30 s for the CMS
+  signature and for `openssl ts -verify`, which had no limit) is the same case, 74 with `cannot run openssl here: no
+  answer within <n> s`, as in ap2-evidence-pack 1.5.2: a slow or loaded machine causes it. Measured on 0.20.2 and on the
+  first 0.20.3 commits with an openssl that answers after 20 s: a valid pack `valid: false`, exit 1; after 35 s: a valid
+  ingest archive `valid: false`, exit 1 (with the temporary file's path in the receipt) and `cryptovalid_ingest.py
+  verify` a traceback, exit 1. `cryptovalid-verify ap2` treats ap2-evidence-pack's `Ap2WriteError` (1.5.2) the same way.
+- **A command run under a file size limit no longer breaks the next run.** CPython 3.9 and 3.11 write a module's
+  bytecode cache (`__pycache__/*.pyc`) with one raw write and install it even when that write was cut: measured on
+  13/10 with `verify_evidence.py ledger` on a valid ledger from a source tree without a cache, one run under `ulimit -f 1`
+  left a cut `verifier.cpython-311.pyc` (and `-39`), and every later run, without any limit, exited 1 with `EOFError:
+  marshal data too short` (Python 3.13.15 installs no cut file). Since 0.20.3 every module above, when it runs as a
+  command, sets `sys.dont_write_bytecode` before importing anything of this repository, so a command writes no bytecode
+  cache (it reads one that is there). Not covered: a cache written by another program that imports these modules as a
+  library, and the `cryptovalid-verify` entry point of an installed wheel (pip compiles the cache at install time).
+- **Corrected with it.** The RFC 3161 domain of `cryptovalid_heterogeneous.py` read `.get()` on the boolean returned by
+  `verify_with_openssl`: an `AttributeError` on every token, so that domain never verified (measured on 0.20.2 with a
+  token from a local TSA). It now counts when `openssl ts -verify` succeeds: a verdict correction of the library function
+  `verify_heterogeneous_anchor` — an anchor that needs that domain went from `ok: false` (the domain listed with
+  `errore: 'bool' object has no attribute 'get'`) to `ok: true` when openssl verifies the token against `/etc/ssl/certs`
+  (by the test, with openssl's answer simulated); a token openssl does not verify, or one whose TSA root is not in
+  `/etc/ssl/certs` (measured with the local TSA), stays a failed domain. Not changed: from the command line the
+  `token_der` of an attestation is a JSON string, not bytes, so the domain still does not verify there (library use only).
+- **Declared limits.** Started with stdout closed (`>&-`), Node, Go and Rust reopen descriptor 1 on `/dev/null`: the
+  write succeeds there and the program cannot tell (exit 0 or 1, as before); Python, Java and Swift see it and exit 74.
+  A reader that closes the pipe only after the receipt fitted in the pipe buffer has received the bytes as far as the
+  writer can know (with `| head -c 0` started together with a fast binary the writer can win the race; measured: Rust,
+  exit 0 in one of two runs on 12/10). `cryptovalid_tsa.py` with a TSA it cannot reach is a traceback and exit 1, as
+  before (now written by the stderr writer, so a full stderr keeps exit 1). `mutation_runner.py` rewrites the target
+  source file in place to mutate it and restores it after each mutant (a development tool). `cryptovalid_lotl.py`
+  (without a fresh cache), `cryptovalid_pruning_probe.py`, `cryptovalid_tsa.py` and `cryptovalid_solana.py` against a
+  real network are converted but measured here only offline (LOTL with a fresh cache, Solana and the TSA with the
+  connection refused). In process, after text the caller wrote to a `utf-8-sig` pipe, a receipt carries a second byte
+  order mark (the command line never does). Windows and macOS are not measured: the waiting on a full non-blocking
+  stdout uses `select`/`poll` (POSIX).
+- Tests with real processes: `test_receipt_not_written.py` (12/10: /dev/full, a gone reader, stdout closed, for the
+  Python commands and the Java verifier) and `test_receipt_design_20261013.py` (13/10, 17 tests: unbuffered under a file
+  size limit, a non-blocking stdout read only once the pipe is full in Python and Java, usage and `--help` with stderr
+  lost, the promised files, a symlink planted at the old temporary names, the two ledgers, the module commands, the
+  check that cannot run with a local TSA, the bytecode cache, the shape of the Java wait), `verifiers/js/test.mjs` (a file size limit), `go test`
+  (`cmd/cvappend`: a line truncated back, a tip not written, a planted `<tip>.tmp`), `cargo test`
+  (`tests/receipt_write.rs`: usage with stderr full, a file size limit, a non-blocking stdout) and `swift test` (the same
+  three). Each new test fails on 0.20.2: the 17 Python tests (Python 3.11), the 3 Go `cmd/cvappend` tests, the 3 Rust
+  and 3 Swift tests and the 5 JS file-size checks (each run against the code and the binaries of 0.20.2). The review of
+  0.20.3 added `test_outcome_review_20261013.py` (21 tests: a promised file over a read-only file, a symlink, a FIFO and an
+  existing `.pq`, the existing file's mode, the evidence pack's copies; openssl that times out or cannot be executed,
+  also in `evidence_pack.py build`; the SCITT `--out` before and after the line; fsync and a write(2) that takes 0 bytes
+  made to fail through an LD_PRELOAD shim, which needs a C compiler; the wait on a full stdout without spinning; a reader
+  that drips; the caller's own text first; one byte order mark per stream; an unexpected error with stderr lost;
+  ap2-evidence-pack's `Ap2WriteError`; the RFC 3161 domain of `cryptovalid_heterogeneous`; an ingest batch that failed,
+  written whole by the next flush), a witness test (`--out` refused before the state, a state that cannot be written is
+  74), and native tests: Go (an fsync that fails, through seccomp; the tip next to a relative ledger), Rust (4), Swift (3;
+  the tests that need `/dev/full` or Linux pipe sizes are skipped or fall back where those are absent, as on macOS), JS
+  (3) and the Java wait (`TestJavaWaitShape`, the 17th test of `test_receipt_design_20261013.py`).
+- **Measured on this code** (13/10/2026, Linux; Python 3.9.25, 3.11.2, 3.13.15; Node 22.23.2 and 24.19.0; Go 1.27.0;
+  Rust 1.98.1; JDK 27; Swift 6.3.3). A bench of real processes over every command above (60 cases for `verifier.py`,
+  `cryptovalid-verify`, `signer.py` and the JS, Go, Rust, Java and Swift verifiers; 48 for the module commands that run
+  without a network), each with stdout on a file, `/dev/null`, a slow reader, a late non-blocking reader, `| head -c
+  100`, `/dev/full`, a gone reader, `| head -c 0`, closed, read-only, a file size limit with and without room, a
+  non-blocking reader that never reads, stderr working, full, closed or with its reader gone, and Python buffered and
+  unbuffered: 1 886 + 2 208 cells on each Python, 0 cells where the outcome is lost or cut without exit 74, delivered
+  with another code than the verdict's, or 74 without its stderr line; the same bench finds 931 + 1 324 such cells on
+  0.20.2. The Python suites (50 files) on 3.9, 3.11, 3.13 and the declared floor (`cryptography` 48.0.0,
+  `ap2-evidence-pack` 1.3.0), 50/50 each; JS 150–151 checks (the count moves with a random signature; Node 22 three
+  times, Node 24) and `--conformance` 11/11; `cargo test` 17 tests and `clippy -D warnings`; `go vet`, `go test` and
+  `go test -race`; `swift test` 25/25 (Linux); `conformance.py` 11/11; differential oracle 0/110 over the six verifiers (26
+  declared divergences); `closed_schema_mutants.py` 1 500 mutations, seed 20261011, GREEN. 33 mutants of the
+  changed lines (Python 21, Go 3, Rust 3, Java 2, Swift 3, JS 1: the loop on the count, the wait on a full stdout, the
+  stderr writer, the temporary names, the truncation back, the 74 for a promised file, the check that cannot run and
+  the bytecode cache among them) are each killed by a failing assertion of these suites, which pass on the copy without
+  the mutant. The review of 0.20.3 wrote 44 more on the same lines (Python 21, Go 5, Rust 5, Swift 5, Java 4, JS 4): the
+  suites above killed 7; with the review's tests 41 are killed, and 3 live: one equivalent (JS: the write callback
+  ignoring its error while the 'error' listener stays, the same outcome in 88 of 88 cases), one that changes only how fast
+  Java drains after a long wait, and one that differs only under a umask removing the owner's bits (the Go tip's mode);
+  and 9 on the review's own lines, all killed. Windows and macOS: not measured here (the CI has a macOS job for Swift).
+- **Corrected after 0.20.2.** The 0.20.2 notes said SPEC §6 lists the changes since v0.2 that turn a PASS into a
+  FAIL and named three; a fourth is older: a ledger with zero entries is FAIL since 0.9.3 (2026-09-11; the JS
+  verifier said PASS on it before). §6 now lists it, says that no verifier states the SPEC version yet (it said
+  verifiers do), and the Merkle section, which also carried the number 6, is §9.
 
 ## Swift reads a FIFO; `tsa_token` leaves the canonical form; the SPEC says who verifies signatures; the LOTL check reads the status in force (2026-10-12, 0.20.2)
 

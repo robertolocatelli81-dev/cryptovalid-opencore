@@ -22,11 +22,35 @@ import (
 // Torn write (declared): a crash between Write and Sync can leave a partial last line without '\n'; the next
 // Append refuses to continue from it ("torn last line") and never guesses — recovery is a human decision:
 // verify the file, truncate the torn bytes, keep the incident in the ledger's report.
+// A write or fsync that FAILS (a full disk, a file size limit) is undone here (0.20.3): the file is truncated back to
+// the bytes it had, under the same lock, and the error is a *NotWrittenError — the whole line or nothing.
 // Cost: O(1) per append — the tail is read backwards from the end (last line only), idx = last idx + 1.
 // Note on Go's json.Marshal: a whole-number float64 marshals as an integer (accepted); a non-UTF-8 Go string
 // is replaced with U+FFFD by Marshal before this function sees it — validate strings at the source.
 func Append(path string, ts time.Time, data any, algo string) (selfHash string, err error) {
 	return appendLocked(path, ts, data, algo, nil)
+}
+
+// NotWrittenError: a ledger line or a signed tip that could not be written whole (write, fsync, rename): cvappend
+// exits 74 on it. For a line, the file has been truncated back (What says whether that worked); for a tip, the entry
+// IS in the ledger and the tip still names the previous one.
+type NotWrittenError struct {
+	What string
+	Err  error
+}
+
+func (e *NotWrittenError) Error() string { return e.What + ": " + e.Err.Error() }
+func (e *NotWrittenError) Unwrap() error { return e.Err }
+
+// undoAppend truncates the ledger back to `end` (the size this call found) after a failed write or fsync.
+func undoAppend(f *os.File, end int64, path string, err error) error {
+	left := "the ledger is left as it was"
+	if te := f.Truncate(end); te != nil {
+		left = "the ledger could not be truncated back and may end in part of the line"
+	} else {
+		_ = f.Sync()
+	}
+	return &NotWrittenError{What: "ledger " + path, Err: fmt.Errorf("%v; nothing was recorded, %s", err, left)}
 }
 
 // appendLocked is Append with an optional hook run under the same lock after the fsync, receiving the new
@@ -73,18 +97,19 @@ func appendLocked(path string, ts time.Time, data any, algo string, after func(f
 	if err != nil {
 		return "", err
 	}
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+	end, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
 		return "", err
 	}
-	if _, err := f.Write(append(line, '\n')); err != nil {
-		return "", err
+	if _, err := f.Write(append(line, '\n')); err != nil { // os.File.Write retries a short write; an error is a line not whole
+		return "", undoAppend(f, end, path, err)
 	}
 	if err := f.Sync(); err != nil {
-		return "", err
+		return "", undoAppend(f, end, path, err)
 	}
 	if after != nil {
 		if err := after(f, idx+1, selfHash); err != nil {
-			return "", fmt.Errorf("entry written, tip NOT signed: %w", err)
+			return "", &NotWrittenError{What: "tip " + TipPath(path), Err: fmt.Errorf("%v; entry %d (%s) is in the ledger, the tip (if there is one) still names the previous entry", err, idx, selfHash)}
 		}
 	}
 	return selfHash, nil

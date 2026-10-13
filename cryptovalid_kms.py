@@ -50,6 +50,9 @@ file: backend keeps the old caveat entirely.
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import base64
 import json
 import os
@@ -544,9 +547,16 @@ def backend_from_uri(uri: str, **extra):
                      "(expected file: | pkcs11: | awskms: | vault: | nethsm:)")
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say
+
+
+@receipt_cli
 def main(argv=None) -> int:  # pragma: no cover - thin CLI
     import argparse
-    p = argparse.ArgumentParser(prog="cryptovalid-kms",
+    p = Parser(prog="cryptovalid-kms",
                                 description="KMS/HSM signing backends for CryptoValid.")
     sub = p.add_subparsers(dest="cmd")
     for c in ("pubkey", "keygen-hsm", "selftest"):
@@ -557,16 +567,16 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
     be = backend_from_uri(a.backend)
     if a.cmd == "keygen-hsm":
         if not isinstance(be, Pkcs11Backend):
-            print("keygen-hsm only applies to pkcs11 backends", file=sys.stderr); return 2
-        print(json.dumps({"public_key_hex": be.keygen(), **be.describe()}, indent=1)); return 0
+            say("keygen-hsm only applies to pkcs11 backends\n"); return 2
+        emit(json.dumps({"public_key_hex": be.keygen(), **be.describe()}, indent=1)); return 0
     if a.cmd == "pubkey":
-        print(json.dumps({"public_key_hex": be.public_key_hex(), **be.describe()}, indent=1)); return 0
+        emit(json.dumps({"public_key_hex": be.public_key_hex(), **be.describe()}, indent=1)); return 0
     if a.cmd == "selftest":
         msg = b"cryptovalid-kms-selftest"
         sig = be.sign(msg)
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(be.public_key_hex())).verify(sig, msg)
-        print(json.dumps({"selftest": "ok", **be.describe()}, indent=1)); return 0
+        emit(json.dumps({"selftest": "ok", **be.describe()}, indent=1)); return 0
     return 2
 
 

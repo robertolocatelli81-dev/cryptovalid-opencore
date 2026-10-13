@@ -19,6 +19,9 @@ State is written ONLY after a green run (a red run never advances the baseline).
 signed by the log key when a keyfile is given, so a third party can audit the monitor's own history.
 """
 from __future__ import annotations
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import json
 import re
 import os
@@ -196,17 +199,21 @@ def run(ledger_path: str, state_path: str, keyfile: Optional[str] = None, max_si
                 verdict["baseline_non_avanzata"] = ("auditor: nessuno STH firmato per l'albero corrente (passare --sth-file "
                                                     "pubblicato dal writer); la baseline resta quella precedente")
         if scrivi:
-            tmp = state_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=1)
-            os.replace(tmp, state_path)
+            write_output(state_path, json.dumps(state, indent=1))   # 0.20.3: whole (temporary + fsync + rename), or exit 74
             verdict["state_written"] = state_path
     return verdict
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say, write_output
+
+
+@receipt_cli
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
-    p = argparse.ArgumentParser(prog="cryptovalid_monitor", description="append-only / non-equivocation monitor for a cryptovalid ledger")
+    p = Parser(prog="cryptovalid_monitor", description="append-only / non-equivocation monitor for a cryptovalid ledger")
     p.add_argument("ledger"); p.add_argument("state", help="state file (last green tree head)")
     p.add_argument("--keyfile", help="log key: sign the state's tree head"); p.add_argument("--max-silence-h", type=float)
     p.add_argument("--trusted-pubkey", help="verify the saved tree head against this log key (auditor without the private key)")
@@ -217,8 +224,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         v = run(a.ledger, a.state, a.keyfile, a.max_silence_h, a.trusted_pubkey, a.sth_file, a.match or None)
     except ValueError as e:
-        print(json.dumps({"ok": False, "error": str(e)})); return 2
-    print(json.dumps(v, indent=1))
+        emit(json.dumps({"ok": False, "error": str(e)})); return 2
+    emit(json.dumps(v, indent=1))
     return 0 if v["ok"] else 2
 
 

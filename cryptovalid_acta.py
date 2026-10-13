@@ -34,6 +34,9 @@ problem, never a pass; the chain check does not know whether a receipt without p
 unchained (§2.2 says the format does not distinguish).
 """
 from __future__ import annotations
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import argparse
 import base64
 import binascii
@@ -781,9 +784,7 @@ def run_vectors(repo_root: str, out_dir: str, seed_hex: str, issued_at_base: Opt
         payload = decision_payload(inp["tool_name"], decision, kid, issued_at=ts, policy_digest_value=pd,
                                    session_id=inp.get("session_id"), previous=prev, extra=extra)
         rec = sign_receipt(payload, seed_hex, kid)
-        with open(os.path.join(out_dir, f"receipt-{seq:04d}.json"), "w", encoding="utf-8") as f:
-            json.dump(rec, f, indent=2)
-            f.write("\n")
+        write_output(os.path.join(out_dir, f"receipt-{seq:04d}.json"), json.dumps(rec, indent=2) + "\n")   # whole, or 74 (0.20.3)
         summary["receipts"].append({"file": f"receipt-{seq:04d}.json", "tool_name": inp["tool_name"], "decision": decision, "reasons": reasons,
                                     "hash": receipt_hash(rec)})
         prev = rec
@@ -974,8 +975,15 @@ def _spki_material(data: bytes) -> Any:
     return data
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import OutputNotWritten, Parser, emit, receipt_cli, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import OutputNotWritten, Parser, emit, receipt_cli, say, write_output
+
+
+@receipt_cli
 def main(argv: Optional[List[str]] = None) -> int:
-    p = argparse.ArgumentParser(prog="cryptovalid-acta", description=DRAFT)
+    p = Parser(prog="cryptovalid-acta", description=DRAFT)
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("sign", help="sign a protectmcp:decision receipt")
     s.add_argument("--key", required=True, help="Ed25519 seed file (hex) — the cryptovalid signer keyfile")
@@ -1000,7 +1008,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     a = p.parse_args(argv)
     try:
         if a.cmd == "policy-digest":
-            print(policy_digest_from_dir(a.policy_dir, a.engine, a.ext)); return 0
+            emit(policy_digest_from_dir(a.policy_dir, a.engine, a.ext)); return 0
         if a.cmd == "sign":
             seed = read_regular(a.key, 4096).decode("utf-8").strip()      # a FIFO/device seed file no longer blocks
             pub = pubkey_from_seed(seed); kid = issuer_kid(pub)
@@ -1009,9 +1017,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 prev = load_json_strict(a.previous, "--previous")
             pd = policy_digest_from_dir(a.policy_dir, "cedar", a.policy_ext) if a.policy_dir else None
             rec = sign_receipt(decision_payload(a.tool, a.decision, kid, a.issued_at, pd, a.session, a.reason, prev), seed, kid)
-            with open(a.out, "w", encoding="utf-8") as f:
-                json.dump(rec, f, indent=2); f.write("\n")
-            print(json.dumps({"ok": True, "kid": kid, "hash": receipt_hash(rec)})); return 0
+            write_output(a.out, json.dumps(rec, indent=2) + "\n")   # 0.20.3: whole at --out (temporary + rename), or exit 74
+            emit(json.dumps({"ok": True, "kid": kid, "hash": receipt_hash(rec)})); return 0
         if a.cmd == "verify":
             keys: Dict[str, Any] = {}
             if a.jwks:
@@ -1022,9 +1029,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     ignored: List[str] = []
                     keys.update(keys_from_jwks(load_json_strict(a.jwks, "file"), ignored))
                     for note in ignored:
-                        print(f"note: --jwks {note}", file=sys.stderr)
+                        say(f"note: --jwks {note}\n")
                 except ValueError as ex:
-                    print(json.dumps({"ok": False, "error": f"--jwks: {ex}"})); return 2
+                    emit(json.dumps({"ok": False, "error": f"--jwks: {ex}"})); return 2
             for spec in a.key:
                 kid, mat = _cli_key(spec)
                 if kid in keys:
@@ -1045,14 +1052,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             complete = bool(getattr(a, "keys_are_complete", False))
             out = (verify_chain(recs, keys, files, keys_are_complete=complete) if len(recs) > 1 or a.policy_dir
                    else verify_receipt(recs[0], keys, keys_are_complete=complete))
-            print(json.dumps(out, indent=1))
+            emit(json.dumps(out, indent=1))
             return {"pass": 0, "fail": 1, "not_assessed": 77}[out["verdict"]]   # 77 only when NOTHING adverse was found
         if a.cmd == "run-vectors":
-            print(json.dumps(run_vectors(a.repo_root, a.out_dir, a.seed, a.issued_at_base), indent=1)); return 0
+            emit(json.dumps(run_vectors(a.repo_root, a.out_dir, a.seed, a.issued_at_base), indent=1)); return 0
+    except OutputNotWritten:
+        raise
     except (OSError, ValueError, TypeError, KeyError, RecursionError, json.JSONDecodeError) as ex:
-        print(json.dumps({"ok": False, "error": f"{type(ex).__name__}: {ex}"})); return 2
+        emit(json.dumps({"ok": False, "error": f"{type(ex).__name__}: {ex}"})); return 2
     except ImportError as ex:
-        print(json.dumps({"ok": False, "error": f"dependency missing: {ex}"})); return 77
+        emit(json.dumps({"ok": False, "error": f"dependency missing: {ex}"})); return 77
     return 2
 
 

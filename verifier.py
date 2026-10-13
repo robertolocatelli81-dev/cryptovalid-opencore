@@ -22,7 +22,8 @@ Verified schema:
   - prev_hash of entry i = self_hash of entry i-1 (the first has 64 zeros)
 
 Output: structured JSON receipt with an explicit `scope` (what PASS proves and does not prove).
-Exit code 0 = chain intact, 1 = failure (a file with zero entries is a failure: nothing was verified).
+Exit code 0 = chain intact, 1 = failure (a file with zero entries is a failure: nothing was verified), 74 = the receipt
+could not be written whole (stdout or the --out file: full, closed, a reader gone), whatever the verdict.
 
 Example:
     python3 opencore/verifier.py exports/omega_audit_ledger.jsonl
@@ -33,6 +34,9 @@ Reproducible by any third-party auditor: same file, same schema -> same receipt.
 
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import argparse
 import hashlib
 import json
@@ -45,6 +49,442 @@ from typing import Dict, List, Optional
 GENESIS_PREV = "0" * 64
 SUPPORTED_ALGOS = ("sha256", "sha3_256")
 ENTRY_KEYS = frozenset({"idx", "ts", "data", "prev_hash", "self_hash", "signature", "signer", "tsa_token", "signature_pq", "signer_pq"})   # SPEC §2.1: the closed entry schema
+
+EX_IOERR = 74   # sysexits.h: the receipt could not be written whole (0.20.3); never the verdict's 0/1 in that case
+
+# ── The one writer of every command in this repository (0.20.3) ─────────────────────────────────────────────────────
+# A command that has computed an outcome (verdict, receipt, record, key, pack) delivers it WHOLE — to stdout, to the
+# file it promises, to the ledger — or exits 74 (EX_IOERR) with one line `receipt not written: <reason>` on stderr.
+# The other modules with a `__main__` import these functions from here, so verifier.py stays one stdlib-only file.
+# Measured on Linux (13/10/2026); macOS and Windows are not measured.
+
+
+class ReceiptNotWritten(OSError):
+    """stdout refused the outcome (ENOSPC, EPIPE, EBADF, EFBIG, a closed or absent stdout): the exit code becomes 74"""
+
+
+class OutputNotWritten(OSError):
+    """a file the command promises (--out, a sidecar, a pack file, a state file) or a ledger line could not be written
+    whole: the exit code becomes 74, and nothing half-written is left at the promised path"""
+
+
+class CheckNotRun(OutputNotWritten):
+    """a check the input asks for that cannot be RUN here (openssl cannot be started: fork refused, no descriptor left;
+    no temporary file for the bytes openssl reads): exit 74, never a verdict on the input — it is neither the PASS nor
+    the FAIL of that check (measured 13/10/2026 on 0.20.2 under RLIMIT_NPROC 1: a valid pack was `valid: false`, exit 1)"""
+
+
+def _text_layer_bytes(out, buf, text: str) -> bytes:
+    """The bytes Python's own stdout text layer writes for `text`: its encoding and error handler, "\\n" as os.linesep
+    where the platform translates it (not Linux; not measured here), and a byte order mark only where that layer puts
+    one — utf-16 / utf-32 only on a stdout seekable at offset 0, utf-8-sig on a pipe too, none on a seekable stdout
+    past offset 0 (str.encode would put one on a pipe too)."""
+    import codecs
+    if os.linesep != "\n":
+        text = text.replace("\n", os.linesep)
+    encoding = out.encoding or "utf-8"
+    enc = codecs.getincrementalencoder(encoding)(out.errors or "strict")
+    try:
+        seekable = buf.seekable()
+        at_start = seekable and buf.tell() == 0
+    except (OSError, ValueError):
+        seekable = at_start = False
+    if (seekable and not at_start) or (not seekable and codecs.lookup(encoding).name in ("utf-16", "utf-32")) \
+            or getattr(out, "_cv_bytes_written", False):   # the text layer's encoder writes its mark once per stream
+        enc.setstate(0)   # no byte order mark
+    return enc.encode(text, final=True)
+
+
+def _wait_writable(buf) -> None:
+    """stdout is non-blocking and full: wait until it can take more, as a blocking write would (the reader is slow, not
+    gone; one that goes away makes the next write EPIPE). `select` sleeps in the kernel and Python retries it after a
+    signal (PEP 475). A byte stream with no descriptor (io.BytesIO under a TextIOWrapper) never blocks. POSIX only."""
+    import select
+    try:
+        select.select([], [buf.fileno()], [])
+    except (OSError, ValueError) as e:   # no descriptor, or one select cannot wait on
+        raise OSError(f"stdout is non-blocking and cannot be waited for: {e}")
+
+
+def write_all(text: str) -> None:
+    """Write the whole text to stdout and flush it; ReceiptNotWritten when it did not all get there (see _write_stdout)."""
+    _write_stdout(text, None)
+
+
+def write_all_bytes(raw: bytes) -> None:
+    """write_all for bytes that are the outcome as they are (a stored object): no text layer encoding"""
+    _write_stdout(None, raw)
+
+
+def _write_stdout(text, raw) -> None:
+    """Write the whole text to stdout and flush it; ReceiptNotWritten when it did not all get there. The bytes go to
+    `sys.stdout.buffer` in a loop that checks the count: with -u or PYTHONUNBUFFERED that is a raw FileIO whose write()
+    can take part of the data (a file size limit, a disk nearly full) and return the count without raising, or None (a
+    full non-blocking pipe) — the text layer above dropped the rest in silence. A full non-blocking stdout is waited for,
+    never given up on. An in-process text stream with no bytes below it (io.StringIO) gets the text."""
+    out = sys.stdout
+    if out is None:   # started with fd 1 closed: print() would drop the outcome and say nothing
+        raise ReceiptNotWritten("stdout is closed")
+    try:
+        buf = getattr(out, "buffer", None)
+        while True:   # whatever the text layer still holds goes first, waited for like the outcome
+            try:
+                out.flush()
+                break
+            except BlockingIOError:
+                if buf is None:
+                    raise
+                _wait_writable(buf)
+        if buf is None:
+            if text is None:
+                raise OSError("stdout has no byte layer for a binary outcome")
+            out.write(text)
+            out.flush()
+            return
+        data = memoryview(_text_layer_bytes(out, buf, text) if text is not None else raw)
+        try:
+            out._cv_bytes_written = True   # a second outcome on this stream gets no second byte order mark
+        except (AttributeError, TypeError):
+            pass
+        while data:
+            try:
+                n = buf.write(data)
+                waited = False
+            except BlockingIOError as e:   # buffered stdout on a full non-blocking pipe: part of it taken
+                n, waited = e.characters_written, True
+            if n is None:   # raw stdout on a full non-blocking pipe: nothing taken
+                n, waited = 0, True
+            if n < 0 or n > len(data) or (n == 0 and not waited):
+                raise OSError(f"short write: {len(data)} bytes not written")
+            data = data[n:]
+            if data and waited:
+                _wait_writable(buf)
+        while True:   # flushed HERE, before the exit code is chosen, not by the interpreter at exit
+            try:
+                buf.flush()
+                return
+            except BlockingIOError:
+                _wait_writable(buf)
+    except ReceiptNotWritten:
+        raise
+    except (OSError, ValueError) as e:   # ValueError: I/O on a closed file, or text the stream cannot encode
+        raise ReceiptNotWritten(f"{type(e).__name__}: {e}") from None
+
+
+def emit(*parts, sep: str = " ", end: str = "\n", flush: bool = True) -> None:
+    """print() for an outcome: the same text, written by write_all (ReceiptNotWritten when not written whole)"""
+    write_all(sep.join(str(p) for p in parts) + end)
+
+
+def say(text: str) -> bool:
+    """Write `text` to stderr without ever raising; True when it was written. If stderr is full, closed or its reader
+    gone, its descriptor is pointed at the null device (the interpreter's last flush cannot fail again and turn the
+    exit code into 120) and the caller's exit code stands."""
+    err = sys.stderr
+    if err is None:   # started with fd 2 closed
+        return False
+    try:
+        err.write(text)
+        err.flush()
+        return True
+    except (OSError, ValueError):
+        silence(err)
+        return False
+
+
+def silence(stream) -> None:
+    """Point the descriptor BEHIND `stream` at /dev/null so the interpreter's own flush at exit does not fail again on
+    what is still buffered ("Exception ignored", exit 120). The stream's own descriptor, never a fixed number: with fd
+    1 closed at start, a file this run opened may hold descriptor 1."""
+    try:
+        if stream is None:
+            return
+        fd = stream.fileno()
+    except (OSError, ValueError, AttributeError):
+        return
+    try:
+        null = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(null, fd)
+        finally:
+            os.close(null)
+    except OSError:
+        pass
+
+
+def receipt_lost(reason: str, stdout_failed: bool = True) -> int:
+    """One line `receipt not written: <reason>` on stderr (nothing raised if stderr fails too) and EX_IOERR."""
+    if stdout_failed:
+        silence(sys.stdout)
+    say(f"receipt not written: {reason}\n")
+    return EX_IOERR
+
+
+def receipt_not_written(why: str) -> int:
+    """the 0.20.3 name of receipt_lost(why): stdout's descriptor is already silenced by write_stdout"""
+    return receipt_lost(why, stdout_failed=False)
+
+
+def write_stdout(text: str) -> Optional[str]:
+    """Write `text` and a newline to stdout (write_all). None when every byte was taken, else the reason (and stdout's
+    descriptor then points at /dev/null)."""
+    try:
+        write_all(text + "\n")
+        return None
+    except ReceiptNotWritten as e:
+        silence(sys.stdout)
+        return str(e)
+
+
+def _unlink_quietly(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _write_fd(fd: int, data) -> None:
+    data = memoryview(data)
+    while data:
+        n = os.write(fd, data)
+        if n <= 0:
+            raise OSError(f"short write: {len(data)} bytes not written")
+        data = data[n:]
+
+
+def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = None) -> str:
+    """Write `data` (str as UTF-8, or bytes) to a NEW temporary file next to `path` and return its name; on failure
+    remove it and raise OutputNotWritten. The name is `<path>.<16 random hex>.tmp`, created with O_CREAT|O_EXCL (never
+    an existing file, a symlink or a FIFO planted at a predictable name); written in a loop that checks the count,
+    fsynced and closed inside the try (a deferred error at close is a failed write too); `mode` less the umask, or
+    `exact_mode` as it is (the mode of the file the temporary will replace)."""
+    import secrets
+    raw = data if isinstance(data, (bytes, bytearray)) else data.encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    tmp = f"{path}.{secrets.token_hex(8)}.tmp"
+    try:
+        fd = os.open(tmp, flags, mode)
+    except OSError as e:
+        raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+    try:
+        try:
+            if exact_mode is not None:
+                os.fchmod(fd, exact_mode)
+            _write_fd(fd, raw)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError as e:
+        _unlink_quietly(tmp)
+        raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+    return tmp
+
+
+def _replace_target(path: str):
+    """Where a promised file goes and the mode it keeps, as 0.20.2's open(path, "w") had it: a symlink at `path` is
+    followed (its target gets the file, the link stays); an existing file this process may not write (chmod 444 / 400)
+    is refused (OutputNotWritten), never replaced by a rename behind its owner's back — the kernel's own check, opened
+    for writing WITHOUT truncating; an existing file's mode is kept. Returns (real path, os.stat or None)."""
+    real = os.path.realpath(path)
+    try:
+        st = os.stat(real)
+    except OSError:
+        return real, None
+    import stat
+    if stat.S_ISREG(st.st_mode):
+        try:
+            os.close(os.open(real, os.O_WRONLY | getattr(os, "O_CLOEXEC", 0)))
+        except OSError as e:
+            raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+    return real, st
+
+
+def commit_tmp(tmp: str, path: str) -> None:
+    """rename `tmp` over `path`; on failure remove `tmp` and raise OutputNotWritten"""
+    try:
+        os.replace(tmp, path)
+    except OSError as e:
+        _unlink_quietly(tmp)
+        raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+
+
+def refuse_directory(path: str) -> None:
+    """a path that names a directory (or ends with a separator) can never receive the file: OutputNotWritten"""
+    p = str(path)
+    if p.endswith(("/", os.sep)) or os.path.isdir(p):
+        raise OutputNotWritten(f"{path}: is a directory")
+
+
+def write_output(path: str, data, mode: int = 0o666) -> None:
+    """The whole `data` at `path`, or nothing new there and OutputNotWritten. A regular file (or a new path) is written
+    through a temporary file renamed over it once complete, so a file already at `path` stays intact on failure. A path
+    that exists and is not a regular file (a FIFO, /dev/stdout, a device) is written directly, every byte, in a loop."""
+    import stat
+    refuse_directory(path)
+    path, st = _replace_target(path)
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        raw = data if isinstance(data, (bytes, bytearray)) else data.encode("utf-8")
+        try:
+            fd = os.open(path, os.O_WRONLY | getattr(os, "O_NOCTTY", 0))
+            try:
+                _write_fd(fd, raw)
+            finally:
+                os.close(fd)
+        except OSError as e:
+            raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+        return
+    # an existing file keeps its mode (a caller that asks for a mode, the key files, gets that mode)
+    keep = stat.S_IMODE(st.st_mode) if st is not None and mode == 0o666 else None
+    commit_tmp(write_tmp(path, data, mode, exact_mode=keep), path)
+
+
+def write_new(path: str, data, mode: int = 0o600) -> None:
+    """Create `path` with the whole `data`, never over an existing path: the bytes go to a temporary file (write_tmp),
+    which is then hard-linked at `path` (FileExistsError, as O_EXCL, when something is already there) and removed. A
+    key or a WORM object is either absent or whole at its path, never cut."""
+    tmp = write_tmp(path, data, mode)
+    try:
+        os.link(tmp, path)
+    except FileExistsError:
+        raise
+    except OSError as e:
+        raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+    finally:
+        _unlink_quietly(tmp)
+
+
+def copy_output(src: str, path: str) -> None:
+    """Copy the file `src` to `path` whole, or leave nothing new at `path` (OutputNotWritten): read in chunks into a
+    temporary file next to `path` (O_EXCL, random name), fsync, close, rename. An error READING `src` stays an OSError
+    (the caller's input), with the temporary file removed."""
+    import secrets
+    import stat
+    refuse_directory(path)
+    path, st = _replace_target(path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    tmp = f"{path}.{secrets.token_hex(8)}.tmp"
+
+    def lost(e):
+        return OutputNotWritten(f"{path}: {e.strerror or e}")
+    with open(src, "rb") as f:
+        try:
+            fd = os.open(tmp, flags, 0o666)
+        except OSError as e:
+            raise lost(e) from None
+        try:
+            try:
+                if st is not None:
+                    try:
+                        os.fchmod(fd, stat.S_IMODE(st.st_mode))   # the existing file's mode, as shutil.copyfile kept it
+                    except OSError as e:
+                        raise lost(e) from None
+                while True:
+                    chunk = f.read(1 << 20)
+                    if not chunk:
+                        break
+                    try:
+                        _write_fd(fd, chunk)
+                    except OSError as e:
+                        raise lost(e) from None
+                try:
+                    os.fsync(fd)
+                except OSError as e:
+                    raise lost(e) from None
+            finally:
+                try:
+                    os.close(fd)
+                except OSError as e:   # a deferred error at close is a failed write too
+                    raise lost(e) from None
+        except BaseException:
+            _unlink_quietly(tmp)
+            raise
+    commit_tmp(tmp, path)
+
+
+def write_file(path: str, text: str) -> Optional[str]:
+    """write_output(path, text): None on success, else the reason (0.20.3 interface)"""
+    try:
+        write_output(path, text)
+        return None
+    except OutputNotWritten as e:
+        return str(e)
+
+
+def append_line(path: str, line: bytes, *, mode: int = 0o666, opened=None, sync: bool = True) -> None:
+    """Append whole ledger lines (bytes ending in b"\\n") or nothing: unbuffered os.write in a loop, fsync (`sync`); on any
+    failure the file is truncated back to the bytes it had and OutputNotWritten names what is left. `opened` = an
+    already open binary file the caller holds a lock on (its descriptor is used); else `path` is opened O_APPEND."""
+    if not line.endswith(b"\n"):
+        raise ValueError("a ledger line ends with a newline")
+    own = opened is None
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), mode) if own else opened.fileno()
+    try:
+        if not own:
+            opened.flush()
+        end = os.lseek(fd, 0, os.SEEK_END)
+        try:
+            _write_fd(fd, line)
+            if sync:
+                os.fsync(fd)
+        except BaseException as e:
+            try:
+                os.ftruncate(fd, end)   # back to the bytes this call found: never half a line in a hash-chained file
+            except OSError:
+                left = "the ledger could not be truncated back and may end in part of the line"
+            else:
+                try:
+                    os.fsync(fd)
+                    left = "the ledger is left as it was"
+                except OSError:   # the truncation happened; only its flush to the disk failed
+                    left = "the ledger was truncated back to the bytes it had (that truncation could not be synced)"
+            if isinstance(e, OSError):
+                raise OutputNotWritten(f"ledger {path}: {e.strerror or e}; nothing was recorded, {left}") from None
+            raise
+    finally:
+        if own:
+            os.close(fd)
+
+
+class Parser(argparse.ArgumentParser):
+    """argparse with its output through the writers above: usage and error lines (exit 2) go to stderr with a write that
+    never raises (argparse's own exited 120 with stderr full, and with stderr closed it printed the usage to STDOUT);
+    `--help` prints through write_all, and a help that is not written whole is exit 74."""
+
+    def print_help(self, file=None):
+        if file is not None:
+            return super().print_help(file)
+        try:
+            write_all(self.format_help())
+        except ReceiptNotWritten as e:
+            raise SystemExit(receipt_lost(str(e)))
+
+    def _print_message(self, message, file=None):   # argparse's only writer: error() and exit() print through it
+        if not message:
+            return
+        if file is not None and file is not sys.stdout and file is not sys.stderr:   # a file the caller passed itself
+            file.write(message)
+        else:
+            say(message)
+
+
+def receipt_cli(main_fn):
+    """Decorator for a command's main(): ReceiptNotWritten → 74 (stdout silenced), OutputNotWritten → 74; any other
+    exception keeps exit 1 with its traceback written by say() (a full stderr no longer turns it into 120)."""
+    import functools
+
+    @functools.wraps(main_fn)
+    def wrapper(*a, **kw):
+        try:
+            return main_fn(*a, **kw)
+        except ReceiptNotWritten as e:
+            return receipt_lost(str(e))
+        except OutputNotWritten as e:
+            return receipt_lost(str(e), stdout_failed=False)
+        except Exception:
+            import traceback
+            say(traceback.format_exc())
+            return 1
+    return wrapper
 
 
 
@@ -449,8 +889,9 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
     return receipt
 
 
+@receipt_cli
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(allow_abbrev=False, 
+    parser = Parser(allow_abbrev=False, 
         prog="opencore/verifier.py",
         description="Verifica indipendente di un OMEGA ledger .jsonl (auditor-grade, stdlib-only).",
     )
@@ -487,15 +928,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                    "verified_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                    "parse_errors": [{"line": -1, "error": f"recursion_error: {str(e)[:120]}"}]}
 
+    # 0.20.3: a receipt that is not written whole (the --out file or stdout) is exit 74, whatever the verdict; both are
+    # attempted, and the code is decided after the flush
+    failed = []
     if args.out:
-        with open(args.out, "w") as f:
-            json.dump(receipt, f, indent=2, default=str)
-
-    if args.quiet:
-        print(receipt["verdict"])
-    else:
-        print(json.dumps(receipt, indent=2, default=str))
-
+        why = write_file(args.out, json.dumps(receipt, indent=2, default=str))
+        if why is not None:
+            failed.append(why)
+    why = write_stdout(receipt["verdict"] if args.quiet else json.dumps(receipt, indent=2, default=str))
+    if why is not None:
+        failed.append(why)
+    if failed:
+        return receipt_not_written("; ".join(failed))
     return 0 if receipt.get("verdict") == "PASS" else 1
 
 

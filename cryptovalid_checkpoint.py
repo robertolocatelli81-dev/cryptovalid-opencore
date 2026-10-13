@@ -26,6 +26,9 @@ Verified: Ed25519 log signatures (0x01), ECDSA log signatures (0x02, P-256/384/5
 0x04, 0x06. RFC 6962 THS keys (0x05) and unassigned types are UNKNOWN keys here and are ignored as the spec allows.
 """
 from __future__ import annotations
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import base64
 import hashlib
 import json
@@ -445,9 +448,16 @@ def verify_consistency_b64(old_size: int, old_root: bytes, new_size: int, new_ro
         return False
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import OutputNotWritten, Parser, emit, receipt_cli, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import OutputNotWritten, Parser, emit, receipt_cli, say, write_output
+
+
+@receipt_cli
 def main(argv=None) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="C2SP checkpoints / signed notes for a cryptovalid ledger")
+    ap = Parser(description="C2SP checkpoints / signed notes for a cryptovalid ledger")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("sign", help="write the signed checkpoint note of a ledger")
     s.add_argument("ledger"); s.add_argument("--origin", required=True); s.add_argument("--key", required=True, help="hex seed file (signer.py keygen)")
@@ -461,27 +471,28 @@ def main(argv=None) -> int:
         try:
             text, _ = ledger_checkpoint(a.ledger, a.origin)
             note = sign_note(text, a.name or a.origin, load_seed_hex(a.key))
-            with open(a.out, "wb") as f:
-                f.write(note)
+            write_output(a.out, note)   # 0.20.3: the note whole at --out (temporary + rename), or exit 74
+        except OutputNotWritten:
+            raise
         except (NoteError, OSError) as e:
-            print(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
-        print(note.decode("utf-8"), end=""); return 0
+            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+        emit(note.decode("utf-8"), end=""); return 0
     if a.cmd == "verify":
         try:
             with open(a.note, "rb") as f:
                 note = f.read()
             r = verify_note(note, a.vkey)
         except (NoteError, OSError) as e:   # a malformed vkey or an unreadable file is the caller's error: JSON, exit 2
-            print(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
-        print(json.dumps({k: (v if k != "text" else None) for k, v in r.items()}, ensure_ascii=False))
+            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+        emit(json.dumps({k: (v if k != "text" else None) for k, v in r.items()}, ensure_ascii=False))
         return 0 if r["stato"] == "OK" else 1
     try:
         seed = load_seed_hex(a.key)
         if a.mldsa44:
-            print(vkey(a.name, TYPE_MLDSA44, mldsa44_pubkey_from_seed(seed))); return 0
-        print(vkey(a.name, TYPE_COSIG_V1 if a.cosigner else TYPE_ED25519, pubkey_from_seed(seed))); return 0
+            emit(vkey(a.name, TYPE_MLDSA44, mldsa44_pubkey_from_seed(seed))); return 0
+        emit(vkey(a.name, TYPE_COSIG_V1 if a.cosigner else TYPE_ED25519, pubkey_from_seed(seed))); return 0
     except (NoteError, OSError) as e:
-        print(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+        emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
 
 
 if __name__ == "__main__":

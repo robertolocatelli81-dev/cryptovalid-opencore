@@ -28,6 +28,9 @@ Usage:
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import argparse
 import base64
 import hashlib
@@ -83,18 +86,17 @@ def _entries_and_head(path: str):
 def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15) -> Dict:
     """Verifica CRITTOGRAFICA del token RFC 3161: status Granted E message-imprint == digest atteso.
     Chiude il buco 'token spazzatura creduto ancorato'. Se openssl assente: verified=None (onesto:
-    'registrato ma NON verificato'), mai un falso True."""
+    'registrato ma NON verificato'), mai un falso True. openssl presente ma non avviabile qui, o nessun file
+    temporaneo: CheckNotRun (exit 74), mai `verified: false` (0.20.3: con fork negato un pack valido era `valid: false`)."""
     exe = shutil.which("openssl")
     if not exe:
         return {"verified": None, "note": "openssl absent — token recorded but NOT verified"}
-    import subprocess  # nosec B404 - openssl call con argomenti fissi, no shell
-    import tempfile
-    d = tempfile.mkdtemp()
+    import cryptovalid_tsa as _T
+    d = _T._openssl_tmpdir()
     try:
         tsr = os.path.join(d, "t.tsr")
-        with open(tsr, "wb") as f:
-            f.write(base64.b64decode(tsr_b64))
-        r = subprocess.run(  # nosec B603 - exe da shutil.which('openssl'), args FISSI, no shell
+        _T._tmp_write(tsr, base64.b64decode(tsr_b64))
+        r = _T._run_openssl(  # nosec B603 - exe da shutil.which('openssl'), args FISSI, no shell
             [exe, "ts", "-reply", "-in", tsr, "-text"], capture_output=True, text=True, timeout=timeout)
         text = r.stdout or ""
         granted = "Status: Granted" in text or "Granted." in text
@@ -117,6 +119,8 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15) -
         imprint = "".join(hexbytes)
         imprint_ok = imprint == expected_digest_hex.lower()
         return {"verified": bool(granted and imprint_ok), "granted": granted, "imprint_ok": imprint_ok}
+    except CheckNotRun:
+        raise
     except Exception as e:  # noqa: BLE001
         return {"verified": False, "note": f"{type(e).__name__}: {str(e)[:80]}"}
     finally:
@@ -124,20 +128,20 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15) -
 
 
 def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
-    """Timestamp RFC 3161 OPZIONALE via openssl (graceful se assente). Non invalida mai il pack."""
+    """Timestamp RFC 3161 OPZIONALE via openssl (graceful se assente). Non invalida mai il pack. openssl presente ma non
+    avviabile qui, o nessun file temporaneo: CheckNotRun (exit 74, nessun pack scritto; 0.20.3)."""
     from urllib.parse import urlparse
     if urlparse(tsa_url).scheme not in ("http", "https"):
         return {"anchored": False, "note": "TSA URL scheme not allowed (http/https only)"}   # no file:// etc.
     exe = shutil.which("openssl")
     if not exe:
         return {"anchored": False, "note": "openssl absent (RFC 3161 optional)"}
-    import subprocess
-    import tempfile
     import urllib.request
-    d = tempfile.mkdtemp()
+    import cryptovalid_tsa as _T
+    d = _T._openssl_tmpdir()
     try:
         tsq = os.path.join(d, "q.tsq")
-        r = subprocess.run(  # nosec B603 - exe da shutil.which('openssl'), argomenti list FISSI, no shell
+        r = _T._run_openssl(  # nosec B603 - exe da shutil.which('openssl'), argomenti list FISSI, no shell
             [exe, "ts", "-query", "-digest", digest_hex, "-sha256", "-cert", "-out", tsq],
             capture_output=True, timeout=timeout)
         if r.returncode != 0 or not os.path.exists(tsq):
@@ -155,6 +159,8 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
         if not chk.get("imprint_ok"):     # a token exists only on a granted status: openssl refuses a non-granted reply carrying one
             return {"anchored": False, "tsa": tsa_url, "note": "TSA reply carries no token for this digest"}
         return {"anchored": True, "tsa": tsa_url, "tsr_b64": tsr_b64}
+    except CheckNotRun:
+        raise
     except Exception as e:  # noqa: BLE001
         return {"anchored": False, "note": f"{type(e).__name__}: {str(e)[:80]}"}
     finally:
@@ -196,7 +202,7 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
     for lp in ledger_paths:
         name = os.path.basename(lp)
         dst = os.path.join(out_dir, name)
-        shutil.copyfile(lp, dst)
+        copy_output(lp, dst)   # 0.20.3: whole (temporary + rename) or nothing new; the digest is of the bytes at dst
         file_digests[name] = _sha256_file(dst)
         rec = verifier.verify_ledger(dst)
         n_entries, head = _entries_and_head(dst)
@@ -245,10 +251,8 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
             raise RuntimeError(f"manifest signing failed: {e}")
     manifest["rfc3161_timestamp"] = (_rfc3161_stamp(manifest["manifest_digest_sha256"], tsa_url)
                                      if tsa_url else {"anchored": False, "note": "no TSA provided"})
-    with open(os.path.join(out_dir, "MANIFEST.json"), "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=1, sort_keys=True)
-    with open(os.path.join(out_dir, "SUMMARY.md"), "w", encoding="utf-8") as f:
-        f.write(_summary_md(manifest))
+    write_output(os.path.join(out_dir, "MANIFEST.json"), json.dumps(manifest, ensure_ascii=False, indent=1, sort_keys=True))
+    write_output(os.path.join(out_dir, "SUMMARY.md"), _summary_md(manifest))
     return {"pack_dir": out_dir, "manifest_digest": manifest["manifest_digest_sha256"],
             "ledgers": len(ledgers_meta), "signers": len(signers),
             "manifest_signed": bool(sign_key)}
@@ -412,9 +416,16 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
             "valid": bool(files_ok and manifest_ok and ledgers_ok and not signature_broken)}
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import CheckNotRun, Parser, copy_output, emit, receipt_cli, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import CheckNotRun, Parser, copy_output, emit, receipt_cli, say, write_output
+
+
+@receipt_cli
 def main(argv: Optional[List[str]] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    p = argparse.ArgumentParser(prog="cryptovalid-evidence-pack")
+    p = Parser(prog="cryptovalid-evidence-pack")
     sub = p.add_subparsers(dest="cmd")
     b = sub.add_parser("build")
     b.add_argument("out_dir"); b.add_argument("ledgers", nargs="+")
@@ -423,12 +434,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     v = sub.add_parser("verify"); v.add_argument("dir")
     a = p.parse_args(argv)
     if a.cmd == "build":
-        print(json.dumps(build_pack(a.ledgers, a.out_dir, subject=a.subject, tsa_url=a.tsa,
+        emit(json.dumps(build_pack(a.ledgers, a.out_dir, subject=a.subject, tsa_url=a.tsa,
                                     sign_key=a.sign_key), indent=1))
         return 0
     if a.cmd == "verify":
         r = verify_pack(a.dir)
-        print(json.dumps(r, indent=1))
+        emit(json.dumps(r, indent=1))
         return 0 if r["valid"] else 1
     p.print_help(); return 2
 

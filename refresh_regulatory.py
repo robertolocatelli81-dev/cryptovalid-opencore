@@ -21,6 +21,9 @@ to practise law. Exit code 1 if anything needs review (so CI surfaces stale regu
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import argparse
 import json
 import os
@@ -67,20 +70,26 @@ def refresh(profiles_path: str = PROFILES, check_urls: bool = False) -> Dict:
             needs_review.append(r["id"])
     prof["last_checked_utc"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     prof["needs_review"] = sorted(needs_review)
-    with open(profiles_path, "w", encoding="utf-8") as f:
-        json.dump(prof, f, ensure_ascii=False, indent=1, sort_keys=True)
+    write_output(profiles_path, json.dumps(prof, ensure_ascii=False, indent=1, sort_keys=True))   # whole, or not at all (0.20.3)
     return {"last_checked_utc": prof["last_checked_utc"], "total": len(prof.get("regulations", [])),
             "needs_review": prof["needs_review"], "stale_window_days": STALE_DAYS}
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say, write_output
+
+
+@receipt_cli
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    p = argparse.ArgumentParser(prog="cryptovalid-refresh-regulatory")
+    p = Parser(prog="cryptovalid-refresh-regulatory")
     p.add_argument("--check-urls", action="store_true", help="also HEAD each source URL")
     p.add_argument("--profiles", default=PROFILES)
     a = p.parse_args(argv)
     r = refresh(a.profiles, check_urls=a.check_urls)
-    print(json.dumps(r, ensure_ascii=False, indent=1))
+    emit(json.dumps(r, ensure_ascii=False, indent=1))
     return 1 if r["needs_review"] else 0   # CI red if any regulatory mapping is stale/unreachable
 
 

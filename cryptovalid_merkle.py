@@ -6,6 +6,9 @@
 consistency (append-only) proofs, third-party-verifiable, QTSP-ready Signed Tree Head.
 Leaves are each ledger entry without self_hash, signature and signer, serialised as the canonical form (sorted keys,
 compact separators); unlike the self_hash rule (SPEC §3) they keep signature_pq, signer_pq and tsa_token. Stdlib-only."""
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import hashlib
 import json
 
@@ -155,9 +158,16 @@ def signed_tree_head(leaves):
     return tree_head(leaves)
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say
+
+
+@receipt_cli
 def main(argv=None):
     import argparse
-    p = argparse.ArgumentParser(prog="cryptovalid_merkle",
+    p = Parser(prog="cryptovalid_merkle",
                                 description="RFC 6962 Merkle proofs for a cryptovalid ledger.")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("sth").add_argument("ledger")
@@ -166,16 +176,16 @@ def main(argv=None):
     args = p.parse_args(argv)
     lv = leaves_from_ledger(args.ledger)
     if args.cmd == "sth":
-        print(json.dumps(tree_head(lv), indent=2)); return 0
+        emit(json.dumps(tree_head(lv), indent=2)); return 0
     root = mth(lv)
     if args.cmd == "prove":
         pr = inclusion_proof(args.index, lv)
-        print(json.dumps({"index": args.index, "tree_size": len(lv),
+        emit(json.dumps({"index": args.index, "tree_size": len(lv),
                           "root_sha256": root.hex(), "audit_path": [h.hex() for h in pr]}, indent=2))
         return 0
     pr = inclusion_proof(args.index, lv)
     ok = verify_inclusion(args.index, len(lv), lv[args.index], pr, root)
-    print("INCLUSION VALID" if ok else "INCLUSION INVALID")
+    emit("INCLUSION VALID" if ok else "INCLUSION INVALID")
     return 0 if ok else 1
 
 

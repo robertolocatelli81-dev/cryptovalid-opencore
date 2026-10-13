@@ -12,6 +12,9 @@ TSP in the eIDAS EU Trusted List to obtain a *qualified* timestamp with enhanced
 Stdlib-only for the protocol (hand-rolled DER TimeStampReq + response parsing). Optional full
 token signature verification via the `openssl ts` CLI when available. No new Python dependencies.
 """
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import os
 import urllib.request
 
@@ -83,42 +86,91 @@ def token_contains_digest(token_der: bytes, digest: bytes) -> bool:
     """Pragmatic check: the token's messageImprint carries our digest (the OCTET STRING is present)."""
     return _tlv(0x04, digest) in token_der
 
+def _not_run(what: str, e: BaseException):
+    try:
+        from verifier import CheckNotRun
+    except ImportError:   # imported as opencore.cryptovalid_tsa
+        from opencore.verifier import CheckNotRun
+    why = os.strerror(e.errno) if isinstance(getattr(e, "errno", None), int) else str(e)
+    return CheckNotRun(f"{what}: {type(e).__name__}: {why}")
+
+
+def _openssl_tmpdir() -> str:
+    """A private directory for the files openssl reads. One this process cannot create or write is CheckNotRun (the
+    check cannot be run here: exit 74 in a CLI), never a traceback or a check reported as failed (0.20.3, as
+    ap2-evidence-pack 1.5.2). The reason never lists the candidate paths: it would change with the environment."""
+    import tempfile
+    try:
+        base = tempfile.gettempdir()   # it probes every candidate by writing a file there
+    except OSError as e:
+        raise _not_run("cannot write a temporary file for openssl", OSError("no usable temporary directory")) from e
+    try:
+        return tempfile.mkdtemp(prefix="cv-openssl-", dir=base)
+    except OSError as e:
+        raise _not_run("cannot write a temporary file for openssl", e) from e
+
+
+def _tmp_write(path: str, data: bytes) -> None:
+    try:
+        with open(path, "wb") as f:
+            f.write(data)
+    except OSError as e:
+        raise _not_run("cannot write a temporary file for openssl", e) from e
+
+
+def _run_openssl(cmd, **kw):
+    """subprocess.run of openssl for a check. openssl that cannot be started HERE (fork refused under `ulimit -u` or low
+    memory, no descriptor left for its pipes, the binary gone since `which`) is CheckNotRun: until 0.20.2 it was a
+    traceback (ingest verify, eidas_ledger_check) or the check reported as failed (verify_evidence pack: a valid pack
+    `valid: false`, exit 1). openssl that does not answer within the timeout is the same case (the check did not finish
+    HERE; a slow or loaded machine causes it: measured 13/10/2026, an openssl answering after 20 s made a valid pack
+    `valid: false`, exit 1), as in ap2-evidence-pack 1.5.2."""
+    import subprocess
+    try:
+        return subprocess.run(cmd, **kw)
+    except subprocess.TimeoutExpired as e:
+        raise _not_run("cannot run openssl here", OSError(f"no answer within {e.timeout:g} s")) from e
+    except OSError as e:
+        raise _not_run("cannot run openssl here", e) from e
+
+
 def verify_cms_signature(token_der: bytes):
     """Firma CMS del token valida? (openssl cms -verify -noverify: verifica la FIRMA
     col certificato embedded, NON la catena di trust — la qualificazione della catena
     è il lavoro della LOTL, per impronta). Ritorna True/False, o None se openssl manca.
-    Serve a respingere blob forgiati che contengono il digest senza essere CMS firmati."""
+    Serve a respingere blob forgiati che contengono il digest senza essere CMS firmati.
+    openssl presente ma non avviabile, o nessun file temporaneo: CheckNotRun (0.20.3)."""
     import shutil
-    import subprocess
-    import tempfile
     if not shutil.which("openssl"):
         return None
-    with tempfile.NamedTemporaryFile(delete=False) as tf:
-        tf.write(token_der); tp = tf.name
+    d = _openssl_tmpdir()
     try:
-        p = subprocess.run(["openssl", "cms", "-verify", "-noverify", "-inform", "DER",
-                            "-in", tp, "-out", os.devnull],
-                           capture_output=True, timeout=30)
+        tp = os.path.join(d, "t.der")
+        _tmp_write(tp, token_der)
+        p = _run_openssl(["openssl", "cms", "-verify", "-noverify", "-inform", "DER",
+                          "-in", tp, "-out", os.devnull],
+                         capture_output=True, timeout=30)
         return p.returncode == 0
     finally:
-        os.unlink(tp)
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def verify_with_openssl(token_der: bytes, digest_data: bytes):
-    """Full RFC 3161 verification via `openssl ts` (signature + TSA cert), if openssl is installed."""
+    """Full RFC 3161 verification via `openssl ts` (signature + TSA cert), if openssl is installed (None if not).
+    openssl present but not startable, or no temporary file: CheckNotRun (0.20.3)."""
     import shutil
-    import subprocess
-    import tempfile
     if not shutil.which("openssl"):
         return None
-    with tempfile.NamedTemporaryFile(delete=False) as tf, tempfile.NamedTemporaryFile(delete=False) as df:
-        tf.write(token_der); df.write(digest_data); tp, dp = tf.name, df.name
+    d = _openssl_tmpdir()
     try:
-        p = subprocess.run(["openssl", "ts", "-verify", "-in", tp, "-data", dp, "-CApath", "/etc/ssl/certs"],
-                           capture_output=True, text=True)
+        tp, dp = os.path.join(d, "t.der"), os.path.join(d, "d.bin")
+        _tmp_write(tp, token_der)
+        _tmp_write(dp, digest_data)
+        p = _run_openssl(["openssl", "ts", "-verify", "-in", tp, "-data", dp, "-CApath", "/etc/ssl/certs"],
+                         capture_output=True, text=True, timeout=30)   # 0.20.3: it had no limit (a hang)
         return p.returncode == 0
     finally:
-        os.unlink(tp); os.unlink(dp)
+        shutil.rmtree(d, ignore_errors=True)
 
 # EU Trusted List (LOTL) root — the value of a *qualified* timestamp; verifying the TSA cert against
 # it is the remaining step to certify eIDAS-qualified status (documented, not yet automated here).
@@ -133,11 +185,19 @@ def timestamp_sth(root_hex: str, tsa_url: str, timeout: int = 30):
             "tsa_token": base64.b64encode(token).decode() if token else None,
             "tsa_url": tsa_url}
 
+
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say
+
+
+@receipt_cli
 def main(argv=None):
     import argparse
     import base64
     import json
-    p = argparse.ArgumentParser(prog="cryptovalid_tsa",
+    p = Parser(prog="cryptovalid_tsa",
                                 description="RFC 3161 (qualified) timestamp over a digest / Merkle STH.")
     p.add_argument("digest_hex", help="SHA-256 digest hex (e.g. a Merkle STH root_sha256)")
     p.add_argument("--tsa", default="https://freetsa.org/tsr",
@@ -145,7 +205,7 @@ def main(argv=None):
     a = p.parse_args(argv)
     granted, token, _ = request_timestamp(bytes.fromhex(a.digest_hex), a.tsa)
     ok = granted and token is not None and token_contains_digest(token, bytes.fromhex(a.digest_hex))
-    print(json.dumps({"granted": granted, "digest_bound": ok,
+    emit(json.dumps({"granted": granted, "digest_bound": ok,
                       "token_b64_len": len(base64.b64encode(token)) if token else 0,
                       "tsa": a.tsa}, indent=2))
     return 0 if ok else 1

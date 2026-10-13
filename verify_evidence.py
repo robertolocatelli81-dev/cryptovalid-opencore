@@ -23,10 +23,14 @@ Uso:
   python3 verify_evidence.py ap2      <evidence.json># mandati agentici SD-JWT (AP2)
   python3 verify_evidence.py cldma    <attest.json>  # attestazione CLDMA (ratio impegnato)
 
-Esce 0 se l'evidenza è valida per ciò che era verificabile, 1 altrimenti.
+Esce 0 se l'evidenza è valida per ciò che era verificabile, 1 altrimenti; 74 se la ricevuta non è stata scritta per
+intero su stdout (pieno, chiuso, lettore assente), qualunque sia il verdetto (0.20.3).
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import argparse
 import json
 import os
@@ -53,6 +57,19 @@ def _need_opencore():
 
 
 _OPENCORE = next((c for c in _CANDIDATES if os.path.exists(os.path.join(c, "verifier.py"))), _HERE)
+
+
+def _not_run(e: BaseException) -> bool:
+    """an exception that says a check could not be RUN here (openssl not startable, no temporary file): 0.20.3 lets it
+    through (exit 74) instead of turning it into a FAIL layer on the input. ap2-evidence-pack >= 1.5.2 raises
+    Ap2WriteError for the same case inside verify_evidence()."""
+    try:
+        from verifier import CheckNotRun
+    except ImportError:
+        return False
+    if type(e).__name__ == "Ap2WriteError" and not isinstance(e, CheckNotRun):
+        raise CheckNotRun(str(e)) from e
+    return isinstance(e, CheckNotRun)
 
 
 def _layer(name, status, detail=""):
@@ -136,6 +153,8 @@ def verify_pack(pack_dir: str) -> dict:
         layers.append(_layer("verdetto del verificatore di riferimento (evidence_pack.verify_pack)",
                              "PASS" if r.get("valid") is True else "FAIL"))
     except Exception as e:  # noqa: BLE001
+        if _not_run(e):
+            raise
         layers.append(_layer("evidence pack", "FAIL", f"{type(e).__name__}: {e}"))
     return _rollup("pack", layers)
 
@@ -153,6 +172,8 @@ def verify_archive(directory: str, prefix: str = "ledger") -> dict:
         for w in (r.get("warnings") or [])[:5]:
             layers.append(_layer("avviso", "SKIP", w))
     except Exception as e:  # noqa: BLE001
+        if _not_run(e):
+            raise
         layers.append(_layer("archive", "FAIL", f"{type(e).__name__}: {e}"))
     return _rollup("archive", layers)
 
@@ -191,6 +212,8 @@ def verify_ap2(path: str) -> dict:
                              "PASS" if r.get("valid") is True else "FAIL",
                              "" if r.get("valid") is True else str(r.get("refused") or r.get("error") or "")))
     except Exception as e:  # noqa: BLE001
+        if _not_run(e):
+            raise
         layers.append(_layer("ap2 evidence", "FAIL", f"{type(e).__name__}: {e}"))
     return _rollup("ap2", layers)
 
@@ -272,7 +295,14 @@ def _rollup(kind: str, layers: list) -> dict:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="verify_evidence",
+    _need_opencore()
+    from verifier import receipt_cli
+    return receipt_cli(_main)(argv)
+
+
+def _main(argv=None) -> int:
+    from verifier import Parser, receipt_not_written, write_stdout   # 0.20.3: the same write rule as verifier.py
+    p = Parser(prog="verify_evidence",
                                 description="Un verificatore per TUTTA l'evidenza CryptoValid, offline")
     p.add_argument("cmd", choices=["auto", "pack", "archive", "ledger", "ap2", "cldma"])
     p.add_argument("path")
@@ -280,7 +310,9 @@ def main(argv=None) -> int:
     fn = {"auto": verify_auto, "pack": verify_pack, "archive": verify_archive,
           "ledger": verify_ledger, "ap2": verify_ap2, "cldma": verify_cldma}[a.cmd]
     r = fn(a.path)
-    print(json.dumps(r, ensure_ascii=False, indent=1))
+    why = write_stdout(json.dumps(r, ensure_ascii=False, indent=1))
+    if why is not None:   # the receipt was not written whole: 74 (EX_IOERR), whatever `valid` says
+        return receipt_not_written(why)
     return 0 if r["valid"] else 1
 
 

@@ -10,7 +10,9 @@
 // tri-state and rules as signer.py / cvverify (Go). Run:  java CvVerify.java <ledger.jsonl> [flags]  (JDK 24+)
 //   flags: -tip F -trusted-pubkey HEX -trusted-pq-pubkey B64 -require-tip -tip-not-before ISO -expect-ledger-id HEX
 //          -pubkey HEX -pq-pubkey B64 -require-pq
-// Exit 0 = PASS, 1 = FAIL, 2 = usage. Output: one JSON receipt (fields named as the Go verifier's).
+// Exit 0 = PASS, 1 = FAIL, 2 = usage, 74 = the receipt was not written whole (stdout full, closed or a reader gone:
+// a write to fd 1 that fails; 0.20.3), whatever the verdict. Output: one JSON receipt (fields named as the Go
+// verifier's).
 import java.io.*;
 import java.nio.charset.*;
 import java.nio.file.*;
@@ -268,8 +270,7 @@ public class CvVerify {
     public static void main(String[] args) {
         try { run(args); }
         catch (Throwable t) {   // never a stack trace: a JSON FAIL receipt (r5: Path NUL bytes, OOM)
-            System.out.println("{\"verdict\":\"FAIL\",\"failures\":[\"internal: " + t.getClass().getSimpleName() + "\"],\"scope\":\"" + SCOPE.replace("\"", "'") + "\"}");
-            System.exit(1);
+            emit("{\"verdict\":\"FAIL\",\"failures\":[\"internal: " + t.getClass().getSimpleName() + "\"],\"scope\":\"" + SCOPE.replace("\"", "'") + "\"}", 1);
         }
     }
     static void run(String[] args) throws Exception {
@@ -287,8 +288,32 @@ public class CvVerify {
         }
         if (ledger == null) { usage(); return; }
         Map<String, Object> out = verify(ledger, tip, tpk, tpq, epk, epq, reqPQ, reqTip, nb, lid);
-        System.out.println(j(out));
-        System.exit("PASS".equals(out.get("verdict")) ? 0 : 1);
+        emit(j(out), "PASS".equals(out.get("verdict")) ? 0 : 1);
+    }
+    static final int EX_IOERR = 74;   // sysexits.h: the receipt could not be written whole (0.20.3)
+    // The receipt goes to fd 1 through the FileChannel of a FileOutputStream, in a loop that sees the count: a failed write
+    // is an IOException with its reason (System.out, a PrintStream, swallows it: 0.20.2 exited with the verdict's code on
+    // a full disk or a closed stdout). On a stdout that is non-blocking and full (a reader that reads late) the channel
+    // returns 0 instead of failing: the JDK's public API cannot poll fd 1, so a 0 is waited out in sleeps of 1 to 50 ms
+    // (no spin) and retried, as a blocking write would wait; a reader that goes away makes the next write EPIPE: 74.
+    // The receipt is ASCII (j() escapes everything outside 0x20..0x7e): these are the bytes println wrote, line separator
+    // included (0.20.3, the writer of omega-evidence 0.11.3).
+    static void emit(String receipt, int code) {
+        try {
+            java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap((receipt + System.lineSeparator()).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            java.nio.channels.FileChannel fd1 = new java.io.FileOutputStream(java.io.FileDescriptor.out).getChannel();   // unbuffered: no flush to forget
+            long nap = 1;
+            while (b.hasRemaining()) {
+                if (fd1.write(b) > 0) { nap = 1; continue; }
+                Thread.sleep(nap);
+                nap = Math.min(nap * 2, 50);
+            }
+        } catch (java.io.IOException | InterruptedException e) {
+            System.err.println("receipt not written: " + java.util.Objects.toString(e.getMessage(), e.getClass().getSimpleName()));
+            System.err.flush();
+            System.exit(EX_IOERR);
+        }
+        System.exit(code);
     }
     // a value flag given with "" or with a flag as its value would silently mean "not given": usage (21/09/2026, one grammar in the five)
     static String val(String[] args, int k) { if (k >= args.length || args[k].isEmpty() || args[k].startsWith("-")) usage(); return args[k]; }

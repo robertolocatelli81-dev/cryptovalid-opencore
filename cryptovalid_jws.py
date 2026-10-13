@@ -15,6 +15,9 @@ Honest scope: this is the JWS/JOSE container with the JAdES-relevant header, NOT
 and the CA validation are the user's and the QTSP's; the toolkit only puts them in the right place.
 """
 from __future__ import annotations
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import base64
 import re
 import json
@@ -93,9 +96,16 @@ def verify(jws: str, trusted_pubkey_hex: Optional[str] = None) -> Dict:
         return {"ok": False, "signature_valid": False, "why": f"{type(e).__name__}"}
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say
+
+
+@receipt_cli
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
-    p = argparse.ArgumentParser(prog="cryptovalid_jws", description="JWS (EdDSA, optional x5c) for a ledger record")
+    p = Parser(prog="cryptovalid_jws", description="JWS (EdDSA, optional x5c) for a ledger record")
     sub = p.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("sign"); a.add_argument("ledger"); a.add_argument("index", type=int); a.add_argument("keyfile"); a.add_argument("--x5c", nargs="*")
     v = sub.add_parser("verify"); v.add_argument("jws_file"); v.add_argument("trusted_pubkey_hex")
@@ -103,10 +113,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.cmd == "sign":
         with open(args.ledger, encoding="utf-8") as f:
             entries = [json.loads(l) for l in f if l.strip()]
-        print(sign_entry(entries[args.index], args.keyfile, args.x5c)); return 0
+        emit(sign_entry(entries[args.index], args.keyfile, args.x5c)); return 0
     with open(args.jws_file, encoding="utf-8") as f:
         r = verify(f.read().strip(), args.trusted_pubkey_hex)
-    print(json.dumps(r, indent=1, ensure_ascii=False)); return 0 if r["ok"] else 1
+    emit(json.dumps(r, indent=1, ensure_ascii=False)); return 0 if r["ok"] else 1
 
 
 if __name__ == "__main__":

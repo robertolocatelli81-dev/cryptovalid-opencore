@@ -1,4 +1,5 @@
-// cvverify — Go verifier for cryptovalid ledgers. Exit 0 = PASS, 1 = FAIL (an empty ledger is FAIL too), 2 = usage.
+// cvverify — Go verifier for cryptovalid ledgers. Exit 0 = PASS, 1 = FAIL (an empty ledger is FAIL too), 2 = usage,
+// 74 = the receipt was not written whole (stdout full or a reader gone; 0.20.3), whatever the verdict.
 // With a signed chain tip (-tip, or <ledger>.tip.json next to the file) truncation / suffix rewrite / unsealed
 // appends are named failures; -trusted-pubkey <hex> is the log key the relying party trusts; -require-tip makes
 // a missing tip a failure.
@@ -10,11 +11,15 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	cv "github.com/robertolocatelli81-dev/cryptovalid-opencore/verifiers/go"
 )
 
 func main() {
+	// a reader that is gone must be an EPIPE error the program sees, not a SIGPIPE death (exit 141, no message: 0.20.2)
+	signal.Ignore(syscall.SIGPIPE)
 	tip := flag.String("tip", "", "signed chain tip to check (default: <ledger>.tip.json if present)")
 	pk := flag.String("trusted-pubkey", "", "log key (hex) the tip must be signed with")
 	req := flag.Bool("require-tip", false, "FAIL when no signed tip is available")
@@ -44,7 +49,12 @@ func main() {
 	}
 	v := cv.VerifyLedgerFull(flag.Arg(0), *tip, *pk, *pq, *epk, *epq, *rpq, *req, *nb, *lid)
 	out, _ := json.MarshalIndent(v, "", " ")
-	fmt.Println(string(out))
+	// 0.20.3: fmt.Println's error was dropped, so a full disk exited with the verdict's code and no receipt. os.Stdout is
+	// unbuffered: Write returning nil means every byte was taken.
+	if _, err := os.Stdout.Write(append(out, '\n')); err != nil {
+		fmt.Fprintf(os.Stderr, "receipt not written: %v\n", err)
+		os.Exit(74) // sysexits EX_IOERR
+	}
 	if v.Verdict == "PASS" {
 		os.Exit(0)
 	}

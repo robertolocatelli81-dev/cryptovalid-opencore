@@ -10,7 +10,7 @@
 // and — when present — Ed25519 signatures over self_hash. stdlib crypto only.
 // Honest scope: proves integrity/linkage/signature, NOT the truth of recorded facts.
 import { createHash, verify as edVerify, createPublicKey } from "node:crypto";
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, fstatSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -332,11 +332,51 @@ export function conformance(dir) {
   return { conformant, vectors: results.length, results };
 }
 
+// 0.20.3: the receipt is written with process.stdout.write and the exit code is set only in its callback, after the bytes
+// were taken: on an error (ENOSPC on a full disk, EPIPE when the reader is gone) the code is 74 (sysexits EX_IOERR) and
+// stderr gets one line, whatever the verdict. console.log drops that error, and the exit code was the verdict's (0/1/2).
+// Never process.exit() here: exit() right after a write to a PIPE dropped every byte past 64 KiB (NEMESIS 12/10/2026); the
+// process ends when stdout has drained. With stdout closed (`>&-`) Node reopens fd 1 on /dev/null: that write succeeds.
+const EX_IOERR = 74;
+function emitReceipt(obj, code) {
+  let failed = false;
+  const fail = (e) => {
+    if (failed) return;
+    failed = true;
+    process.exitCode = EX_IOERR;
+    // stderr full or closed too: its error arrives as an 'error' event (an uncaught exception, exit 1, without a listener)
+    process.stderr.on("error", () => { process.exitCode = EX_IOERR; });
+    try { process.stderr.write(`receipt not written: ${(e && (e.code || e.message)) || e}\n`); } catch { /* the code says it */ }
+  };
+  const text = JSON.stringify(obj, null, 1) + "\n";
+  // a REGULAR file: Node's stream does ONE writeSync there and drops the rest after a short write (`ulimit -f`: the
+  // verdict's code with the receipt cut, measured 13/10/2026 on 0.20.3's first commit); written here, every byte, in a
+  // loop, and EFBIG / ENOSPC is 74 (the writer of cra-evidence 0.5.1)
+  let regular = false;
+  try { regular = fstatSync(1).isFile(); } catch { regular = false; }
+  if (regular) {
+    const buf = Buffer.from(text, "utf8");
+    try {
+      for (let off = 0; off < buf.length;) {
+        const n = writeSync(1, buf, off, buf.length - off);
+        if (n <= 0) throw new Error("short write");
+        off += n;
+      }
+      process.exitCode = code;
+    } catch (e) { fail(e); }
+    return;
+  }
+  process.exitCode = EX_IOERR;   // until the callback says every byte was taken
+  process.stdout.on("error", fail);
+  try {
+    process.stdout.write(text, (err) => { if (err) fail(err); else if (!failed) process.exitCode = code; });
+  } catch (e) { fail(e); }
+}
+
 function main(argv) {
 if (argv[0] === "--conformance") {
   const r = conformance(argv[1]);
-  console.log(JSON.stringify(r, null, 1));
-  process.exitCode = r.conformant ? 0 : 1;
+  emitReceipt(r, r.conformant ? 0 : 1);
 } else if (argv[0]) {
   // one grammar (21/09/2026, found on cra-evidence: an unknown flag, a value flag without a value or with "", a second positional
   // were silently taken as the ledger path and the constraint the operator asked for vanished): usage error, exit 2, no verdict
@@ -360,9 +400,9 @@ if (argv[0] === "--conformance") {
   let text;
   let bytes;
   try { bytes = readFileSync(argv[0]); }
-  catch (e) { console.log(JSON.stringify({ verdict: "FILE_ERROR", error: e.code || e.message }, null, 1)); process.exit(2); }
+  catch (e) { emitReceipt({ verdict: "FILE_ERROR", error: e.code || e.message }, 2); return; }
   try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }   // strict: one invalid byte is a broken ledger (FAIL), never U+FFFD; ignoreBOM: a leading BOM stays in the text and is refused like in the five others (it was stripped: PASS, NEMESIS 12/10/2026)
-  catch (e) { console.log(JSON.stringify({ verdict: "FAIL", error: "ledger is not valid UTF-8" }, null, 1)); process.exit(1); }
+  catch (e) { emitReceipt({ verdict: "FAIL", error: "ledger is not valid UTF-8" }, 1); return; }
   // tip: --tip <file>, else <ledger>.tip.json if present; an unreadable/malformed tip is a failure, never silence
   let tip = null;
   const tipPath = opts["--tip"] !== undefined ? opts["--tip"] : (existsSync(argv[0] + ".tip.json") ? argv[0] + ".tip.json" : null);
@@ -378,10 +418,7 @@ if (argv[0] === "--conformance") {
     catch (e) { tip = { kind: "unreadable:" + (e.code || e.message) }; }
   }
   const r = verifyLedger(text, { algo, pubkey, tip, trustedPubkey, requireTip, tipNotBefore, expectLedgerId });
-  // exitCode, not process.exit(): exit() right after a write to a PIPE dropped every byte past 64 KiB (a receipt of a few
-  // hundred entries came out as truncated JSON, NEMESIS 12/10/2026); the process ends when stdout has drained
-  console.log(JSON.stringify(r, null, 1));
-  process.exitCode = r.verdict === "PASS" ? 0 : 1;
+  emitReceipt(r, r.verdict === "PASS" ? 0 : 1);   // exit code after the write is drained (see emitReceipt)
 } else {
   console.error("usage: node cvverify.mjs <ledger.jsonl> [--algo A] [--pubkey hex] [--tip f] [--trusted-pubkey hex] [--require-tip] [--tip-not-before iso] [--expect-ledger-id hex] | --conformance <vectors_dir>");
   process.exit(2);

@@ -17,6 +17,9 @@ result to the vector's `normative` block. Exit code 0 = conformant.
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import glob
 import json
 import os
@@ -62,7 +65,17 @@ def run(verify_fn: Callable[[str], Dict] = verifier.verify_ledger) -> Dict:
     return {"conformant": conformant, "vectors": len(results), "results": results}
 
 
-if __name__ == "__main__":
+def main() -> int:
     r = run()
-    print(json.dumps(r, indent=1, ensure_ascii=False))
-    raise SystemExit(0 if r["conformant"] else 1)
+    emit(json.dumps(r, indent=1, ensure_ascii=False))
+    return 0 if r["conformant"] else 1
+
+
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import emit, receipt_cli
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import emit, receipt_cli
+main = receipt_cli(main)
+
+if __name__ == "__main__":
+    raise SystemExit(main())

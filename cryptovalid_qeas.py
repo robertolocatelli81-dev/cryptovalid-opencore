@@ -78,8 +78,7 @@ class LocalQeasStub:
                "subject": subject, "deposited_at": now, "provider": self.name,
                "qualified": False, "note": "LOCAL STUB — no legal value, test only"}
         self._db[rid] = rec
-        with open(self._path, "w", encoding="utf-8") as f:
-            json.dump(self._db, f)
+        _write_output(self._path, json.dumps(self._db))   # whole, or not at all (0.20.3)
         return rec
 
     def verify(self, receipt: Dict) -> Dict:
@@ -132,8 +131,7 @@ def archive_pack(pack_dir: str, backend, subject: str = "", now: Optional[float]
     receipt = backend.deposit(digest, subject or os.path.basename(pack_dir.rstrip("/")), ts)
     out = {"receipt": receipt, "pack_digest": digest, "backend": backend.name,
            "honest_scope": HONEST_SCOPE}
-    with open(os.path.join(pack_dir, "QEAS_RECEIPT.json"), "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=1)
+    _write_output(os.path.join(pack_dir, "QEAS_RECEIPT.json"), json.dumps(out, ensure_ascii=False, indent=1))   # whole (0.20.3)
     return out
 
 
@@ -151,3 +149,12 @@ def verify_pack_archive(pack_dir: str, backend) -> Dict:
     return {"present": True, "local_digest_match": local_match, "remote": remote,
             "legal_value": bool(remote.get("qualified")) and local_match,
             "honest_scope": HONEST_SCOPE}
+
+
+def _write_output(path, data):
+    """verifier.write_output (0.20.3): the whole file at `path` (temporary + rename), or OutputNotWritten"""
+    try:
+        from verifier import write_output
+    except ImportError:   # imported as opencore.cryptovalid_qeas
+        from opencore.verifier import write_output
+    write_output(path, data)

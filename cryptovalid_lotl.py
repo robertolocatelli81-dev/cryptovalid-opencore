@@ -14,6 +14,9 @@ match says the issuing service is a qualified timestamp service NOW; whether it 
 Protocol/XML parsing is stdlib (urllib, xml.etree with the ETSI namespace for the LOTL and every list, UTF-8 only, DTDs refused); the TSA cert is pulled from the CMS
 token via `cryptography` (already a dependency). Results cache locally; network failures on a
 single Trusted List are skipped, not fatal (honest partial coverage is logged by the caller)."""
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import hashlib
 import json
 import os
@@ -226,9 +229,8 @@ def load_qualified_fingerprints(member_states=None, cache_path=None, timeout=45,
         except Exception as e:  # una TL irraggiungibile non e' fatale
             log(f"TL skip: {url} ({type(e).__name__})")
     if cache_path:
-        with open(cache_path, "w") as f:
-            json.dump({"rule": RULE, "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                       "fingerprints": sorted(fprs), "coverage": coverage}, f)
+        write_output(cache_path, json.dumps({"rule": RULE, "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                             "fingerprints": sorted(fprs), "coverage": coverage}))   # whole, or not at all (0.20.3)
     return fprs, coverage
 
 def token_cert_fingerprints(token_der: bytes):
@@ -241,19 +243,27 @@ def is_qualified(token_der: bytes, qualified_fingerprints: set):
     """True iff the token's TSA certificate is a qualified-timestamp service in the EU LOTL."""
     return bool(token_cert_fingerprints(token_der) & qualified_fingerprints)
 
+
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say, write_output
+
+
+@receipt_cli
 def main(argv=None):
     import argparse
     import base64
-    p = argparse.ArgumentParser(prog="cryptovalid_lotl",
+    p = Parser(prog="cryptovalid_lotl",
                                 description="Certify an RFC 3161 token as eIDAS-qualified via the EU LOTL.")
     p.add_argument("token_b64", help="RFC 3161 TimeStampToken, base64 (from cryptovalid_tsa)")
     p.add_argument("--cache", default=None, help="cache file for qualified fingerprints")
     p.add_argument("--ms", nargs="*", default=None, help="restrict to member-state codes (e.g. IT DE)")
     a = p.parse_args(argv)
-    fprs, cov = load_qualified_fingerprints(a.ms, a.cache, log=lambda m: print("  " + m))
+    fprs, cov = load_qualified_fingerprints(a.ms, a.cache, log=lambda m: emit("  " + m))
     tok = base64.b64decode(a.token_b64)
     q = is_qualified(tok, fprs)
-    print(json.dumps({"qualified": q, "qualified_certs_in_lotl": len(fprs),
+    emit(json.dumps({"qualified": q, "qualified_certs_in_lotl": len(fprs),
                       "trusted_lists_covered": len(cov)}, indent=2))
     return 0 if q else 1
 

@@ -9,7 +9,14 @@ Stdlib-only Go implementation of the cryptovalid evidence-ledger profile
   O(1) per append (last line read backwards), exclusive `flock` from tail-read to fsync on Unix.
 * **`cryptovalid.VerifyLedger(r)`** / `cmd/cvverify` — single-snapshot verification in streaming (one entry
   in memory): every `self_hash` recomputes, every `prev_hash` links, `idx` contiguous from 0.
-  Exit 0 PASS, 1 FAIL (an empty ledger is FAIL: nothing verified).
+  Exit 0 PASS, 1 FAIL (an empty ledger is FAIL: nothing verified), 2 usage, 74 the receipt could not be written whole
+  (stdout full or a reader gone; since 0.20.3), whatever the verdict. `cvappend` exits 74 when the entry is appended but
+  its `self_hash` cannot be printed, when its line cannot be written whole (the file is truncated back under the lock:
+  nothing recorded, the ledger byte for byte as it was; it exited 1 and left part of a line, which the next append
+  refused as a torn tail), and with `-tipkey` when the tip cannot be written (the entry is appended; the tip is now
+  written to a temporary of an unpredictable name, fsynced, then renamed; a symlink planted at the old `<tip>.tmp` was
+  followed and its target rewritten with the tip). With stdout closed (`>&-`) Go reopens it on `/dev/null`: the write succeeds there
+  and the program cannot tell.
 
 ```
 go test ./...                                   # vectors.json (Python reference bytes) + refusals + chain

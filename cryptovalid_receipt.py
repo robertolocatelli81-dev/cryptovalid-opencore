@@ -27,6 +27,9 @@ QTSP. IANA labels checked on the live COSE registries on 2026-09-13: receipts=39
 RFC9162_SHA256 with inclusion proofs at -1 and consistency proofs at -2, each an array of bstr.
 """
 from __future__ import annotations
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import base64
 import hashlib
 import json
@@ -348,6 +351,8 @@ def _stamp(digest_hex: str, tsa_url: str) -> Dict:
                 "note": "RFC 3161 token over the signed root (imprint checked; CMS signature checked with the embedded cert; "
                         "TSA trust chain not established here); qualified only if the TSA is a QTSP"}
     except Exception as e:  # noqa: BLE001
+        if type(e).__name__ == "CheckNotRun":   # openssl cannot be run here (0.20.3): exit 74, not "not anchored"
+            raise
         return {"anchored": False, "note": f"{type(e).__name__}: {str(e)[:80]}"}
 
 
@@ -426,9 +431,18 @@ def verify_cose(cose: bytes, trusted_pubkey_hex: str, leaf_hash_hex: Optional[st
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────────────────
+
+
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say, write_output
+
+
+@receipt_cli
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
-    p = argparse.ArgumentParser(prog="cryptovalid_receipt", description="RFC 9942-style receipts for a cryptovalid ledger")
+    p = Parser(prog="cryptovalid_receipt", description="RFC 9942-style receipts for a cryptovalid ledger")
     sub = p.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("sth"); a.add_argument("ledger"); a.add_argument("keyfile")
     b = sub.add_parser("inclusion"); b.add_argument("ledger"); b.add_argument("index", type=int); b.add_argument("keyfile")
@@ -438,18 +452,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     v.add_argument("--entry-json", help="inclusion: file with YOUR entry (JSON object)"); v.add_argument("--trusted-root-1", help="consistency: YOUR previous root (hex)")
     args = p.parse_args(argv)
     if args.cmd == "sth":
-        print(json.dumps(signed_tree_head(M.leaves_from_ledger(args.ledger), args.keyfile), indent=1)); return 0
+        emit(json.dumps(signed_tree_head(M.leaves_from_ledger(args.ledger), args.keyfile), indent=1)); return 0
     if args.cmd == "inclusion":
         r = inclusion_receipt(args.ledger, args.index, args.keyfile, args.tsa)
         if args.cose:
-            with open(args.cose, "wb") as f:
-                f.write(to_cose(r, args.keyfile))
-        print(json.dumps(r, indent=1)); return 0
+            write_output(args.cose, to_cose(r, args.keyfile))   # 0.20.3: whole, or exit 74
+        emit(json.dumps(r, indent=1)); return 0
     if args.cmd == "consistency":
         with open(args.old_sth_json, encoding="utf-8") as f:
             old = json.load(f)
         r = consistency_receipt(old.get("sth", old), args.ledger, args.keyfile)
-        print(json.dumps(r, indent=1)); return 0 if r.get("ok", True) else 1
+        emit(json.dumps(r, indent=1)); return 0 if r.get("ok", True) else 1
     def _load(path, what):   # unreadable / not JSON / not an object: a verdict, never a traceback (audit V1 #7)
         try:
             with open(path, encoding="utf-8") as f:
@@ -459,15 +472,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         return (obj, None) if isinstance(obj, dict) else (None, f"{what} is not a JSON object")
     rcpt, why = _load(args.receipt_json, "receipt")
     if why:
-        print(json.dumps({"ok": False, "why": why}, indent=1)); return 1
+        emit(json.dumps({"ok": False, "why": why}, indent=1)); return 1
     leaf = None
     if args.entry_json:
         entry, why = _load(args.entry_json, "entry")
         if why:
-            print(json.dumps({"ok": False, "why": why}, indent=1)); return 1
+            emit(json.dumps({"ok": False, "why": why}, indent=1)); return 1
         leaf = M.canonical(entry)
     res = verify_receipt(rcpt, args.trusted_pubkey_hex, leaf_canonical=leaf, trusted_root_1_hex=args.trusted_root_1)
-    print(json.dumps(res, indent=1)); return 0 if res["ok"] else 1
+    emit(json.dumps(res, indent=1)); return 0 if res["ok"] else 1
 
 
 if __name__ == "__main__":

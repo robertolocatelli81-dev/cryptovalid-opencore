@@ -35,6 +35,9 @@ sha3_256(manifest_digest_sha256) — an unrelated tx cannot be passed off as thi
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import argparse
 import base64
 import hashlib
@@ -367,15 +370,14 @@ def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = 
                       pack_dir=os.path.abspath(pack_dir), solana=sres)
     base = out or os.path.join(pack_dir, "report.pdf")
     html_path = os.path.splitext(base)[0] + ".html"
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(doc)
+    write_output(html_path, doc)   # 0.20.3: whole (temporary + rename), or exit 74
     result = {"valid": verification["valid"], "html": html_path, "pdf": None,
               "report_sha256": hashlib.sha256(doc.encode()).hexdigest(),
               "eidas": lres, "solana": sres}
     if not html_only:
         try:
             from weasyprint import HTML  # optional, never a hard dependency
-            HTML(string=doc, base_url=pack_dir).write_pdf(base)
+            write_output(base, HTML(string=doc, base_url=pack_dir).write_pdf())   # bytes, then whole at `base` (0.20.3)
             result["pdf"] = base
         except ImportError:
             result["note"] = ("WeasyPrint not installed — HTML report generated; "
@@ -385,8 +387,15 @@ def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = 
     return result
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say, write_output
+
+
+@receipt_cli
 def main(argv: Optional[List[str]] = None) -> int:
-    p = argparse.ArgumentParser(prog="cryptovalid-report",
+    p = Parser(prog="cryptovalid-report",
                                 description="Render an evidence pack as an auditor-facing report")
     p.add_argument("pack_dir")
     p.add_argument("--out", help="output PDF path (default: <pack>/report.pdf)")
@@ -404,13 +413,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if a.solana_digest:
         with open(os.path.join(a.pack_dir, "MANIFEST.json"), encoding="utf-8") as f:
             d = solana_anchor_digest(json.load(f))
-        print(json.dumps({"solana_memo": f"sha3:{d}", "digest_sha3_hex": d,
+        emit(json.dumps({"solana_memo": f"sha3:{d}", "digest_sha3_hex": d,
                           "binding": "sha3_256(manifest_digest_sha256)"}, indent=1))
         return 0
     r = generate_report(a.pack_dir, out=a.out, html_only=a.html_only, lotl=a.lotl,
                         lotl_ms=[s.strip() for s in a.lotl_ms.split(",")] if a.lotl_ms else None,
                         solana=a.solana, title=a.title)
-    print(json.dumps(r, indent=1))
+    emit(json.dumps(r, indent=1))
     return 0 if r["valid"] else 1
 
 

@@ -18,6 +18,9 @@ HONEST-SCOPE:
   - Non prova la VERIDICITÀ del contenuto (resta W1, confine). Prova integrità + retention + cancellabilità.
 Richiede `cryptography` (AES-256-GCM); degrada onesto se assente.
 """
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import hashlib
 import json
 import os
@@ -51,9 +54,7 @@ class LocalWormStore:
         p = self._path(key)
         if os.path.exists(p):
             raise WormError(f"WORM: '{key}' già scritto, overwrite RIFIUTATO (write-once)")
-        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)  # 0400: read-only dopo la scrittura
-        with os.fdopen(fd, "wb") as f:
-            f.write(blob)
+        write_new(p, blob, mode=0o400)   # 0400; 0.20.3: whole or absent (temporary + link, never over an existing object)
         return {"key": key, "bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest()}
 
     def get(self, key: str) -> bytes:
@@ -122,10 +123,17 @@ def retrieve_record(record_id: str, key_id: str, worm: LocalWormStore, keyring: 
     return AESGCM(key).decrypt(nonce, ct, record_id.encode())     # AES-GCM: manomissione → InvalidTag
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say, write_all_bytes, write_new
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say, write_all_bytes, write_new
+
+
+@receipt_cli
 def main(argv=None):
     import argparse
     import sys
-    p = argparse.ArgumentParser(prog="cryptovalid-worm",
+    p = Parser(prog="cryptovalid-worm",
                                 description="WORM escrow store — retention immutabile del dato (SEC 17a-4).")
     sub = p.add_subparsers(dest="cmd")
     pp = sub.add_parser("put")
@@ -135,10 +143,10 @@ def main(argv=None):
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     if a.cmd == "put":
         with open(a.file, "rb") as f:
-            print(json.dumps(LocalWormStore(a.store).put(a.key, f.read())))
+            emit(json.dumps(LocalWormStore(a.store).put(a.key, f.read())))
         return 0
     if a.cmd == "get":
-        sys.stdout.buffer.write(LocalWormStore(a.store).get(a.key))
+        write_all_bytes(LocalWormStore(a.store).get(a.key))   # 0.20.3: every byte, or exit 74
         return 0
     p.print_help(); return 2
 

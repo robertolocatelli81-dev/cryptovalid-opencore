@@ -24,6 +24,9 @@ Honest scope: signing needs `cryptography`; the witness refuses to cosign when t
 (NON_VERIFICATA is not a green light); the witness state is a local JSON file, its integrity is the operator's.
 """
 from __future__ import annotations
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import base64
 import contextlib
 import hashlib
@@ -94,11 +97,7 @@ def _state_lock(path: str):
 
 
 def _save_state(path: str, st: Dict) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(st, f, ensure_ascii=False, indent=1)
-        f.flush(); os.fsync(f.fileno())
-    os.replace(tmp, path)
+    write_output(path, json.dumps(st, ensure_ascii=False, indent=1))   # 0.20.3: random O_EXCL temporary (was <path>.tmp), fsync, rename
     try:                                   # durable rename: the spec wants the checkpoint persisted BEFORE the response
         dfd = os.open(os.path.dirname(os.path.abspath(path)) or ".", os.O_RDONLY)
         try:
@@ -215,8 +214,8 @@ def _cosign_locked(state_path, cp, proof, witness_name, witness_seed, timestamp,
     registrato = int(time.time()) if timestamp is None else timestamp
 
     def _record(ev):
-        with open(state_path + ".evidence.jsonl", "a", encoding="utf-8") as f:   # under the same lock as the state
-            f.write(json.dumps(ev, ensure_ascii=False) + "\n"); f.flush(); os.fsync(f.fileno())
+        # under the same lock as the state; 0.20.3: the whole line or nothing (truncated back)
+        append_line(state_path + ".evidence.jsonl", (json.dumps(ev, ensure_ascii=False) + "\n").encode("utf-8"))
 
     def _ev(tipo, prova, precedente_note, size_prec):
         return {"tipo": tipo, "prova": prova, "origin": origin, "size_precedente": size_prec, "size_presentato": cp["size"],
@@ -394,9 +393,8 @@ def _cosign_locked(state_path, cp, proof, witness_name, witness_seed, timestamp,
     # evidence of anything and would otherwise be rewritten on every cosign and copied into every record
     stored = presentato + cosigned[len(base):].decode("utf-8")
     if prev is None or prev["root_b64"] != root_b64 or prev["size"] != cp["size"]:   # a NEW cosigned checkpoint: to the history
-        with open(state_path + ".cosigned.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps({"origin": origin, "size": cp["size"], "root_b64": root_b64, "note": stored, "cosigned_at": ts},
-                               ensure_ascii=False) + "\n"); f.flush(); os.fsync(f.fileno())
+        append_line(state_path + ".cosigned.jsonl", (json.dumps({"origin": origin, "size": cp["size"], "root_b64": root_b64, "note": stored,
+                                                                 "cosigned_at": ts}, ensure_ascii=False) + "\n").encode("utf-8"))
     st["origins"][origin] = {"size": cp["size"], "root_b64": root_b64, "note": stored, "cosigned_at": ts}
     _save_state(state_path, st)
     out.update(stato=STATO_OK, note=cosigned, cosignature=cosigned[len(base):], http_status=200)
@@ -662,9 +660,16 @@ def submit_checkpoint(url: str, note: bytes, leaves: List[bytes], witness_vkeys:
     return out
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import OutputNotWritten, Parser, append_line, emit, receipt_cli, refuse_directory, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import OutputNotWritten, Parser, append_line, emit, receipt_cli, refuse_directory, say, write_output
+
+
+@receipt_cli
 def main(argv=None) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="witness for C2SP checkpoints of cryptovalid ledgers")
+    ap = Parser(description="witness for C2SP checkpoints of cryptovalid ledgers")
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("cosign"); c.add_argument("note"); c.add_argument("--state", required=True); c.add_argument("--log-vkey", required=True)
     c.add_argument("--name", required=True); c.add_argument("--key", required=True); c.add_argument("--proof", help="JSON list of base64 hashes")
@@ -694,15 +699,15 @@ def main(argv=None) -> int:
             svc = WitnessService(a.state, a.name, C.load_seed_hex(a.key), a.log_vkey, origins,
                                  pq_seed=C.load_seed_hex(a.pq_key) if a.pq_key else None)
         except (C.NoteError, OSError) as e:
-            print(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
         httpd = serve(svc, a.host, a.port, a.prefix)
         try:
-            print(json.dumps({"listening": f"http://{httpd.server_address[0]}:{httpd.server_address[1]}{a.prefix}/add-checkpoint",
+            emit(json.dumps({"listening": f"http://{httpd.server_address[0]}:{httpd.server_address[1]}{a.prefix}/add-checkpoint",
                               "witness": C.vkey(a.name, C.TYPE_COSIG_V1, C.pubkey_from_seed(svc.seed)),
                               "witness_mldsa44": C.vkey(a.name, C.TYPE_MLDSA44, C.mldsa44_pubkey_from_seed(svc.pq_seed)) if svc.pq_seed else None,
                               "logs": sorted(svc.logs)}), flush=True)
         except C.NoteError as e:
-            print(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
@@ -715,12 +720,14 @@ def main(argv=None) -> int:
             note = C.sign_note(text, a.origin, seed)
             r = submit_checkpoint(a.url, note, leaves, a.witness_vkey, C.vkey(a.origin, C.TYPE_ED25519, C.pubkey_from_seed(seed)))
             if r["note"]:
-                with open(a.out, "wb") as f:
-                    f.write(r["note"])
+                write_output(a.out, r["note"])   # 0.20.3: whole at --out, or exit 74
+        except OutputNotWritten:
+            raise
         except (C.NoteError, OSError, ValueError) as e:
-            print(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
-        print(json.dumps({k: v for k, v in r.items() if k != "note"}, ensure_ascii=False)); return 0 if r["stato"] == "OK" else 1
+            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+        emit(json.dumps({k: v for k, v in r.items() if k != "note"}, ensure_ascii=False)); return 0 if r["stato"] == "OK" else 1
     if a.cmd == "cosign":
+        refuse_directory(a.out)   # 0.20.3: before the state records the cosignature, never after it
         try:
             with open(a.note, "rb") as f:
                 note = f.read()
@@ -729,20 +736,25 @@ def main(argv=None) -> int:
                 raise C.NoteError("--proof must be a JSON list of base64 strings")
             r = witness_cosign(a.state, note, a.log_vkey, a.name, C.load_seed_hex(a.key), proof,
                                pq_seed=C.load_seed_hex(a.pq_key) if a.pq_key else None)
+        except OutputNotWritten:
+            raise
         except (C.NoteError, OSError, ValueError) as e:
-            print(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
         if r["note"]:
-            with open(a.out, "wb") as f:
-                f.write(r["note"])
+            try:   # 0.20.3: whole at --out, or exit 74 — and the line says the state already records the cosignature
+                write_output(a.out, r["note"])
+            except OutputNotWritten as e:
+                raise OutputNotWritten(f"{e}; the cosignature is recorded in the witness state: only the cosigned note "
+                                       "was not written") from None
         r["cosignature"] = r["cosignature"].decode("utf-8") if r["cosignature"] else None
-        print(json.dumps({k: v for k, v in r.items() if k != "note"}, ensure_ascii=False)); return 0 if r["stato"] == STATO_OK else 1
+        emit(json.dumps({k: v for k, v in r.items() if k != "note"}, ensure_ascii=False)); return 0 if r["stato"] == STATO_OK else 1
     try:
         with open(a.note, "rb") as f:
             note = f.read()
         r = verify_witnessed(note, a.log_vkey, a.witness_vkey, a.min_witnesses, a.max_age, clock_skew_s=a.clock_skew, expected_origin=a.origin)
     except (C.NoteError, OSError) as e:
-        print(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
-    print(json.dumps(r, ensure_ascii=False)); return 0 if r["stato"] == "OK" else 1
+        emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+    emit(json.dumps(r, ensure_ascii=False)); return 0 if r["stato"] == "OK" else 1
 
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ line read "verified when present", which `verifier.py` and the Rust verifier do 
 | `signature_pq` | base64 | ML-DSA-65 signature over the `self_hash` string (its UTF-8 bytes), by `signer_pq` (hybrid ledgers, `signer.py`) |
 | `signer_pq` | base64 | ML-DSA-65 public key of the recording party |
 
-### 2.1 Closed entry schema (NORMATIVE, v0.2.1 — 2026-10-10)
+### 2.1 Closed entry schema (NORMATIVE since v0.3; written 2026-10-10 as v0.2.1)
 
 The entry is a CLOSED object: its top-level keys are exactly the core fields plus the optional fields of the two
 tables above. A top-level key outside that list is a verification FAIL with the named error `unknown_field:<key>`,
@@ -157,12 +157,14 @@ were "verified when present".
 
 The spec is versioned semver-style. Ledgers MAY carry
 `{"spec": "cryptovalid-evidence/0.3"}` inside `data` of entry 0. Breaking
-changes bump major (before 1.0, minor); verifiers state the versions they support.
-v0.3 (2026-10-12, cryptovalid-opencore 0.20.2) collects the changes since v0.2 (2026-08-13) that turn a PASS into a FAIL: the
-closed entry schema of §2.1 (cryptovalid-opencore 0.19.0: an undefined top-level key fails); `idx` required on every
-path (0.20.0); `tsa_token` outside the canonical form of §3 (0.20.2: a token hashed as content fails step 2). The first two
-were made in 0.19.0 and 0.20.0 without a version bump. No verifier
-in this repository reads the `spec` value yet.
+changes bump major (before 1.0, minor). Verifiers should state the versions they support; the six verifiers of this
+repository implement v0.3, do not state it in their receipts and do not read the `spec` value yet.
+v0.3 (2026-10-12, cryptovalid-opencore 0.20.2) collects the changes since v0.2 (2026-08-13) that turn a PASS into a FAIL:
+a ledger with zero entries is FAIL (§5 step 7, cryptovalid-opencore 0.9.3, 2026-09-11: until then the JS verifier said
+PASS on it, exit 0, and the reference EMPTY, exit 1); the closed entry schema of §2.1 (0.19.0: an undefined top-level key fails); `idx` required on every
+path (0.20.0); `tsa_token` outside the canonical form of §3 (0.20.2: a token hashed as content fails step 2). The first
+three were made without a version bump (§2.1 carried its own label, v0.2.1, while the header stayed v0.2); this list
+was corrected after the release of 0.20.2, which named three changes, without the empty ledger.
 
 ## 7. Conformance (normative)
 
@@ -185,7 +187,7 @@ against its PRIMARY source (exit 1 if anything needs review). **Honest scope:** 
 provenance-carrying and self-monitoring, NOT legal advice and NOT a compliance claim; a stale entry is
 flagged, never silently trusted — the format never lets outdated regulatory status pass unnoticed.
 
-## 6. Optional Merkle extension (RFC 6962) — efficient inclusion & consistency
+## 9. Optional Merkle extension (RFC 6962) — efficient inclusion & consistency
 
 For large ledgers, `cryptovalid_merkle.py` builds an **RFC 6962** Merkle tree whose leaves are each entry
 serialised by the rules of §3 without `self_hash`, `signature` and `signer` only — so a leaf keeps `signature_pq`,

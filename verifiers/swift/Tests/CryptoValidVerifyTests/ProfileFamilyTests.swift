@@ -366,6 +366,51 @@ final class CLIFamilyTests: XCTestCase {
         XCTAssertEqual(bom.code, 1); XCTAssertEqual(verdict(bom.out), "FAIL")
     }
 
+    /// 0.20.3: a receipt that is not written whole is exit 74 with one stderr line, whatever the verdict. On 0.20.2 the
+    /// CLI used print + exit: /dev/full and a closed stdout exited with the verdict's code (0/1) and nothing said, a
+    /// reader gone was a SIGPIPE death (141 in a shell). Real processes: stdout on /dev/full (ENOSPC), on a pipe whose
+    /// read end is closed before the start (EPIPE), and closed (`exec >&-`, EBADF: Swift does not reopen fd 1).
+    func testReceiptNotWrittenIsExit74() throws {
+        let valid = try write(validEntry("1"))
+        var tampered = validEntry("1"); tampered[tampered.count - 3] = UInt8(ascii: "0") == tampered[tampered.count - 3] ? UInt8(ascii: "1") : UInt8(ascii: "0")
+        let invalid = try write(tampered)
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("cvverify-missing-\(UUID().uuidString)").path
+        for (path, code) in [(valid, Int32(0)), (invalid, Int32(1)), (missing, Int32(2))] {
+            let ctl = try run([path])
+            XCTAssertEqual(ctl.code, code, "control \(path)"); XCTAssertNotNil(verdict(ctl.out), "control \(path)")
+            for mode in ["devfull", "epipe", "closed"] {
+                let p = Process(); let e = Pipe()
+                if mode == "closed" {
+                    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+                    p.arguments = ["-c", "exec \"$0\" \"$1\" >&-", try binary().path, path]
+                } else {
+                    p.executableURL = try binary(); p.arguments = [path]
+                }
+                if mode == "devfull" {
+                    // macOS has no /dev/full: that mode is Linux only (the CI's macOS job runs the other two)
+                    guard let full = FileHandle(forWritingAtPath: "/dev/full") else { continue }
+                    p.standardOutput = full
+                } else if mode == "epipe" {
+                    let o = Pipe(); try o.fileHandleForReading.close(); p.standardOutput = o
+                }
+                p.standardError = e
+                try p.run()
+                let err = String(decoding: e.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                p.waitUntilExit()
+                XCTAssertEqual(p.terminationReason, .exit, "\(mode) \(path): killed by a signal")
+                XCTAssertEqual(p.terminationStatus, 74, "\(mode) \(path): stderr \(err)")
+                XCTAssertTrue(err.hasPrefix("receipt not written: "), "\(mode) \(path): stderr \(err)")
+            }
+            // stderr full too: nowhere to say why, the exit is still 74 (FileHandle.write trapped here: SIGILL); Linux only
+            let q = Process(); q.executableURL = try binary(); q.arguments = [path]
+            guard let o2 = FileHandle(forWritingAtPath: "/dev/full"), let e2 = FileHandle(forWritingAtPath: "/dev/full") else { continue }
+            q.standardOutput = o2; q.standardError = e2
+            try q.run(); q.waitUntilExit()
+            XCTAssertEqual(q.terminationReason, .exit, "stdout+stderr full \(path): killed by a signal")
+            XCTAssertEqual(q.terminationStatus, 74, "stdout+stderr full \(path)")
+        }
+    }
+
     func testCLIGrammarFamily() throws {
         let v = try write(validEntry("1"))
         for good in [[v], [v, "--algo", "sha256"], [v, "--algo", "sha3_256", "--algo", "sha256"], [v, "--pubkey", "ab"],
@@ -389,4 +434,103 @@ final class CLIFamilyTests: XCTestCase {
             XCTAssertNil(verdict(r.out), "no verdict for \(form)")
         }
     }
+
+    /// bash -c `script` with $0 = the binary, $1… = args; (status, terminated by a signal?, stdout, stderr)
+    func shell(_ script: String, _ args: [String]) throws -> (code: Int32, signaled: Bool, out: String, err: String) {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        p.arguments = ["-c", script, try binary().path] + args
+        let o = Pipe(), e = Pipe(); p.standardOutput = o; p.standardError = e
+        try p.run()
+        let od = o.fileHandleForReading.readDataToEndOfFile(), ed = e.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return (p.terminationStatus, p.terminationReason == .uncaughtSignal, String(decoding: od, as: UTF8.self), String(decoding: ed, as: UTF8.self))
+    }
+
+    /// 0.20.3 (13/10): usage with stderr full or closed keeps exit 2 (FileHandle.write trapped: SIGILL, 132), nothing on stdout
+    func testUsageWithStderrLostIsExit2() throws {
+        // macOS has no /dev/full (a redirection to it fails in the shell, exit 1): that case is Linux only
+        for redirect in (FileManager.default.fileExists(atPath: "/dev/full") ? ["2>/dev/full", "2>&-"] : ["2>&-"]) {
+            for args in [[String](), ["x.jsonl", "--bogus"]] {
+                let r = try shell("exec \"$0\" \"$@\" \(redirect)", args)
+                XCTAssertFalse(r.signaled, "usage \(args) \(redirect): killed by a signal")
+                XCTAssertEqual(r.code, 2, "usage \(args) \(redirect)")
+                XCTAssertEqual(r.out, "", "usage \(args) \(redirect): stdout")
+            }
+        }
+    }
+
+    /// 0.20.3 (13/10): a regular file that stops growing (bash `ulimit -f 1` with 24 bytes left, `ulimit -f 0`) is exit 74
+    /// with one line (SIGXFSZ killed the process before: no exit code)
+    func testFileSizeLimitIsExit74() throws {
+        let v = try write(validEntry("1"))
+        for (blocks, prefill) in [(1, 1000), (0, 0)] {
+            let f = try write(Array(repeating: UInt8(ascii: "x"), count: prefill))
+            let r = try shell("ulimit -f \(blocks); exec \"$0\" \"$1\" >>\"$2\"", [v, f])
+            XCTAssertFalse(r.signaled, "ulimit -f \(blocks): killed by a signal")
+            XCTAssertEqual(r.code, 74, "ulimit -f \(blocks): stderr \(r.err)")
+            XCTAssertTrue(r.err.hasPrefix("receipt not written: "), "ulimit -f \(blocks): \(r.err)")
+        }
+    }
+
+    /// 0.20.3 (13/10): a NON-BLOCKING stdout read once the pipe is full gets a receipt larger than the pipe buffer whole, exit 1 (it was
+    /// 74 with 65 536 bytes in the pipe: fwrite reported EAGAIN as a lost receipt)
+    func testNonBlockingStdoutReadLateIsWhole() throws {
+        var lines = ""
+        for i in 0..<20000 {
+            lines += "{\"idx\":\(i),\"ts\":\"t\",\"data\":{\"e\":\(i)},\"prev_hash\":\"\(String(repeating: "1", count: 64))\",\"self_hash\":\"\(String(repeating: "7", count: 64))\"}\n"
+        }
+        let big = try write(Array(lines.utf8))
+        let py = "import fcntl,os,subprocess,sys,time\nr,w=os.pipe()\nfcntl.fcntl(w,fcntl.F_SETFL,fcntl.fcntl(w,fcntl.F_GETFL)|os.O_NONBLOCK)\np=subprocess.Popen(sys.argv[1:],stdout=w)\nos.close(w)\nimport array,termios\ntry:\n    cap=fcntl.fcntl(r,1032)\nexcept OSError:\n    cap=0\nlast=-1\nt0=time.time()\nwhile p.poll() is None and time.time()-t0<60:\n    n=array.array('i',[0]); fcntl.ioctl(r,termios.FIONREAD,n,True)\n    if n[0]>=cap or (cap==0 and n[0]>0 and n[0]==last): break\n    last=n[0]; time.sleep(0.25 if cap==0 else 0.02)\ntime.sleep(0.3)\nb=b''\nwhile True:\n    c=os.read(r,65536)\n    if not c: break\n    b+=c\nrc=p.wait()\nsys.stdout.write('%d %d %d' % (rc, len(b), b.count(b'\"verdict\"')))\n"
+        let r = try shell("exec python3 -c \"$1\" \"$0\" \"$2\"", [py, big])
+        let v = r.out.split(separator: " ").compactMap { Int($0) }
+        XCTAssertEqual(v.count, 3, "driver output \(r.out) \(r.err)")
+        if v.count == 3 {
+            XCTAssertEqual(v[0], 1, "exit code: \(r.out)")
+            XCTAssertTrue(v[1] > 65536 && v[2] == 1, "receipt not whole: \(r.out)")
+        }
+    }
+
+    /// review of 0.20.3, 13/10: the receipt ends with its newline (print wrote one; a mutant without it passed every test above)
+    func testReceiptEndsWithNewline() throws {
+        let r = try run([try write(validEntry("1"))])
+        XCTAssertEqual(r.code, 0); XCTAssertTrue(r.out.hasSuffix("}\n"), "receipt end: \(r.out.suffix(4).debugDescription)")
+    }
+
+    #if os(Linux)
+    /// review of 0.20.3, 13/10 (Linux: /proc, F_GETPIPE_SZ): waiting on a full non-blocking stdout sleeps in poll: under 0.3 s of CPU
+    /// in 2 s of waiting (poll with timeout 0 spun at 100 %), and the receipt is whole once read
+    func testWaitingOnAFullStdoutDoesNotSpin() throws {
+        var lines = ""
+        for i in 0..<20000 {
+            lines += "{\"idx\":\(i),\"ts\":\"t\",\"data\":{\"e\":\(i)},\"prev_hash\":\"\(String(repeating: "1", count: 64))\",\"self_hash\":\"\(String(repeating: "7", count: 64))\"}\n"
+        }
+        let big = try write(Array(lines.utf8))
+        let py = "import array,fcntl,os,subprocess,sys,termios,time\nr,w=os.pipe()\nfcntl.fcntl(w,fcntl.F_SETFL,fcntl.fcntl(w,fcntl.F_GETFL)|os.O_NONBLOCK)\np=subprocess.Popen(sys.argv[1:],stdout=w)\nos.close(w)\ncap=fcntl.fcntl(r,1032);t0=time.time()\nwhile p.poll() is None and time.time()-t0<60:\n    n=array.array('i',[0]); fcntl.ioctl(r,termios.FIONREAD,n,True)\n    if n[0]>=cap: break\n    time.sleep(0.02)\ntime.sleep(0.3)\ndef cpu():\n    f=open('/proc/%d/stat'%p.pid).read().rsplit(')',1)[1].split(); return (int(f[11])+int(f[12]))/os.sysconf('SC_CLK_TCK')\nc1=cpu(); time.sleep(2); c2=cpu()\nb=b''\nwhile True:\n    c=os.read(r,65536)\n    if not c: break\n    b+=c\nsys.stdout.write('%d %d %.3f' % (p.wait(), len(b), c2-c1))\n"
+        let r = try shell("exec python3 -c \"$1\" \"$0\" \"$2\"", [py, big])
+        let v = r.out.split(separator: " ").compactMap { Double($0) }
+        XCTAssertEqual(v.count, 3, "driver output \(r.out) \(r.err)")
+        if v.count == 3 {
+            XCTAssertEqual(Int(v[0]), 1, "exit code: \(r.out)")
+            XCTAssertTrue(v[1] > 65536, "receipt not whole: \(r.out)")
+            XCTAssertTrue(v[2] < 0.3, "CPU while waiting: \(r.out)")
+        }
+    }
+
+    /// review of 0.20.3, 13/10 (Linux, needs cc): write(2) taking 0 bytes is exit 74; an EINTR is retried and the receipt is whole
+    func testZeroWriteIs74AndEintrIsRetried() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cvverify-shim-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let src = "#define _GNU_SOURCE\n#include <dlfcn.h>\n#include <errno.h>\n#include <stdlib.h>\n#include <unistd.h>\nstatic int d0,di;\nssize_t write(int fd,const void*b,size_t n){static ssize_t(*r)(int,const void*,size_t);if(!r)r=dlsym(RTLD_NEXT,\"write\");\nif(fd==1&&n&&getenv(\"SHIM_W0\")&&!d0){d0=1;return 0;}\nif(fd==1&&n&&getenv(\"SHIM_WI\")&&!di){di=1;errno=EINTR;return -1;}\nreturn r(fd,b,n);}\n"
+        try src.write(toFile: dir + "/shim.c", atomically: true, encoding: .utf8)
+        let cc = try shell("cc -shared -fPIC -o \"$1/shim.so\" \"$1/shim.c\" -ldl", [dir])
+        if cc.code != 0 { throw XCTSkip("no C compiler") }
+        let v = try write(validEntry("1"))
+        let ctl = try run([v])
+        let z = try shell("LD_PRELOAD=\"$1/shim.so\" SHIM_W0=1 exec \"$0\" \"$2\"", [dir, v])
+        XCTAssertEqual(z.code, 74, "write 0: \(z.err)"); XCTAssertTrue(z.err.hasPrefix("receipt not written: short write"), z.err)
+        let i = try shell("LD_PRELOAD=\"$1/shim.so\" SHIM_WI=1 exec \"$0\" \"$2\"", [dir, v])
+        XCTAssertEqual(i.code, 0, "EINTR: \(i.err)"); XCTAssertEqual(i.out, ctl.out, "EINTR: receipt not whole")
+        try? FileManager.default.removeItem(atPath: dir)
+    }
+    #endif
 }

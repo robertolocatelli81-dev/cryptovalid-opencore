@@ -26,6 +26,9 @@ Usage:
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import argparse
 import base64, binascii, re
 import hashlib
@@ -98,13 +101,13 @@ def _ed():
 
 
 def keygen(path: str) -> Dict:
-    """Genera una chiave Ed25519 e la salva (seed hex, chmod 600). Ritorna la pubblica (hex)."""
+    """Genera una chiave Ed25519 e la salva (seed hex, chmod 600). Ritorna la pubblica (hex). 0.20.3: never over an
+    existing path (FileExistsError, as O_EXCL): a key is replaced only by moving or deleting it by hand."""
     Ed25519PrivateKey, _, ser = _ed()
     sk = Ed25519PrivateKey.generate()
     seed = sk.private_bytes(ser.Encoding.Raw, ser.PrivateFormat.Raw, ser.NoEncryption())
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(seed.hex())
+    from verifier import write_new   # 0.20.3: the seed is whole at `path` or not there, and never over an existing file
+    write_new(path, seed.hex(), mode=0o600)
     pk = sk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw)
     return {"keyfile": path, "public_key_hex": pk.hex()}
 
@@ -119,9 +122,8 @@ def keygen_pq(path: str) -> Dict:
     from cryptography.hazmat.primitives import serialization as ser
     sk = m.MLDSA65PrivateKey.generate()
     der = sk.private_bytes(ser.Encoding.DER, ser.PrivateFormat.PKCS8, ser.NoEncryption())
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(base64.b64encode(der).decode())
+    from verifier import write_new   # 0.20.3: never over an existing file (as O_EXCL), and never cut
+    write_new(path, base64.b64encode(der).decode(), mode=0o600)
     return {"keyfile": path, "alg": "ml-dsa-65", "public_key_b64": base64.b64encode(sk.public_key().public_bytes_raw()).decode()}
 
 
@@ -239,9 +241,8 @@ def sign_ledger(in_path: str, out_path: str, keyfile: Optional[str] = None,
             else:                   # re-signing WITHOUT a PQ key strips stale PQ fields: never mix keys silently
                 e.pop("signature_pq", None); e.pop("signer_pq", None)
             out.append(e)
-    with open(out_path, "w", encoding="utf-8") as f:
-        for e in out:
-            f.write(json.dumps(e) + "\n")
+    from verifier import write_output   # 0.20.3: the signed ledger is whole at out_path, or the file there is left intact
+    write_output(out_path, "".join(json.dumps(e) + "\n" for e in out))
     return {"signed": len(out), "signer": pk_hex, "out": out_path, "signer_pq": pq_pk_b64,
             "scheme": "hybrid ed25519+ml-dsa-65" if pq_signer is not None else "ed25519",
             **({"pq_backend": pq_signer.describe()} if pq_signer is not None and hasattr(pq_signer, "describe") else {})}
@@ -374,9 +375,22 @@ def verify_file(path: str, pubkey_hex: Optional[str] = None, pq_pubkey_b64: Opti
     return verify_ledger_signatures(entries, pubkey_hex, pq_pubkey_b64, require_pq=require_pq)
 
 
+def _emit(text: str, code: int) -> int:
+    """Print the JSON result; 74 (EX_IOERR) instead of `code` when it is not written whole (0.20.3, as verifier.py)."""
+    from verifier import receipt_not_written, write_stdout
+    why = write_stdout(text)
+    return code if why is None else receipt_not_written(why)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    from verifier import receipt_cli
+    return receipt_cli(_main)(argv)
+
+
+def _main(argv: Optional[List[str]] = None) -> int:
+    from verifier import Parser
     argv = sys.argv[1:] if argv is None else argv
-    p = argparse.ArgumentParser(prog="cryptovalid-signer")
+    p = Parser(prog="cryptovalid-signer")
     sub = p.add_subparsers(dest="cmd")
     kg = sub.add_parser("keygen"); kg.add_argument("keyfile")
     kg.add_argument("--pq", action="store_true", help="also generate the ML-DSA-65 (FIPS 204) key in <keyfile>.pq for HYBRID signatures")
@@ -392,30 +406,41 @@ def main(argv: Optional[List[str]] = None) -> int:
     vf.add_argument("--require-pq", action="store_true", help="exit 1 unless every entry carries a VALID ML-DSA-65 signature by --pq-pubkey (which it needs)")
     a = p.parse_args(argv)
     if a.cmd == "keygen":
-        out = keygen(a.keyfile)
+        # 0.20.3: a key is never replaced — refused before anything is written, exit 2 (the code of a usage refusal)
+        targets = [a.keyfile] + ([a.keyfile + ".pq"] if a.pq else [])
+        there = [t for t in targets if os.path.lexists(t)]
+        if there:
+            from verifier import say
+            say(f"keygen: {there[0]} already exists: a key is never replaced (move or delete it first); nothing written\n")
+            return 2
+        try:
+            out = keygen(a.keyfile)
+        except FileExistsError:   # created by someone else between the check and the link
+            from verifier import say
+            say(f"keygen: {a.keyfile} already exists: a key is never replaced (move or delete it first); nothing written\n")
+            return 2
         if a.pq:
             out["pq"] = keygen_pq(a.keyfile + ".pq")
-        print(json.dumps(out, indent=1)); return 0
+        return _emit(json.dumps(out, indent=1), 0)
     if a.cmd == "sign":
         be = None
         if getattr(a, "backend", None):
             if a.keyfile:
-                print("warning: sia keyfile che --backend indicati — uso --backend, "
-                      "il keyfile è ignorato", file=sys.stderr)
+                from verifier import say
+                say("warning: sia keyfile che --backend indicati — uso --backend, il keyfile è ignorato\n")
             from cryptovalid_kms import backend_from_uri
             be = backend_from_uri(a.backend)
         elif not a.keyfile:
             p.error("sign richiede un keyfile oppure --backend <uri>")
-        print(json.dumps(sign_ledger(a.ledger, a.out, a.keyfile, backend=be,
-                                     pq_backend=pq_backend_from_args(a.pq_key, a.pq_kms, a.pq_kms_region, a.pq_kms_profile)), indent=1)); return 0
+        return _emit(json.dumps(sign_ledger(a.ledger, a.out, a.keyfile, backend=be,
+                                            pq_backend=pq_backend_from_args(a.pq_key, a.pq_kms, a.pq_kms_region, a.pq_kms_profile)), indent=1), 0)
     if a.cmd == "verify":
         if a.require_pq and not a.pq_pubkey:
             p.error("verify: --require-pq needs --pq-pubkey (a post-quantum layer verified against the key INSIDE the ledger is self-declared)")
         if a.pq_pubkey and not a.pubkey:
             p.error("verify: --pq-pubkey needs --pubkey (hybrid = both keys pinned; the same rule as the tip's --trusted-pq-pubkey)")
         r = verify_file(a.ledger, a.pubkey, a.pq_pubkey, require_pq=a.require_pq)
-        print(json.dumps(r, indent=1))
-        return 0 if (r["ok"] and (r["pq_protected"] is True or not a.pq_pubkey)) else 1
+        return _emit(json.dumps(r, indent=1), 0 if (r["ok"] and (r["pq_protected"] is True or not a.pq_pubkey)) else 1)
     p.print_help(); return 2
 
 

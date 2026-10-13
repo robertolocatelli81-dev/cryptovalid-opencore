@@ -16,6 +16,9 @@ Positive/null control baked in: probing a non-existent signature MUST report 0 w
 (`decayed_or_absent`), proving the probe can detect absence — a probe that always finds the tx would
 be useless. Stdlib only.
 """
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import json
 import time
 import urllib.request
@@ -91,10 +94,21 @@ def probe_decay(anchors, rpcs=PROBE_RPCS, timeout=20):
     return {"checked_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "anchors": out}
 
 
-if __name__ == "__main__":
+def main(argv=None) -> int:
     import sys
-    sigs = sys.argv[1:]
+    sigs = sys.argv[1:] if argv is None else argv
     if not sigs:
-        print("usage: python3 -m opencore.cryptovalid_pruning_probe <signature> [<signature> ...]")
-        sys.exit(2)
-    print(json.dumps(probe_decay([{"signature": s, "label": s[:10]} for s in sigs]), indent=1))
+        say("usage: python3 -m opencore.cryptovalid_pruning_probe <signature> [<signature> ...]\n")   # usage on stderr (0.20.3)
+        return 2
+    emit(json.dumps(probe_decay([{"signature": s, "label": s[:10]} for s in sigs]), indent=1))
+    return 0
+
+
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import emit, receipt_cli, say
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import emit, receipt_cli, say
+main = receipt_cli(main)
+
+if __name__ == "__main__":
+    raise SystemExit(main())

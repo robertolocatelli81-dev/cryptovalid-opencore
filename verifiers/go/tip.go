@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -188,11 +189,32 @@ func writeTip(ledger string, key ed25519.PrivateKey, entries int, first, last st
 		LogPubkeyHex: hex.EncodeToString(key.Public().(ed25519.PublicKey))}
 	t.SignatureHex = hex.EncodeToString(ed25519.Sign(key, TipPayload(t.Entries, t.LedgerID, t.TipSHA256, t.TS)))
 	doc, _ := json.Marshal(t)
-	tmp := TipPath(ledger) + ".tmp"
-	if err := os.WriteFile(tmp, doc, 0o600); err != nil {
+	// 0.20.3: a temporary of a name nobody can predict (O_EXCL; it was <tip>.tmp, where a planted symlink or FIFO was
+	// followed or blocked the run), written, fsynced and closed, then renamed; on failure removed, the old tip intact
+	dir, base := filepath.Split(TipPath(ledger))
+	if dir == "" {
+		dir = "."
+	}
+	tf, err := os.CreateTemp(dir, base+".*.tmp")
+	if err != nil {
 		return nil, err
 	}
-	if err := os.Rename(tmp, TipPath(ledger)); err != nil {
+	tmp := tf.Name()
+	_, err = tf.Write(doc)
+	if err == nil {
+		err = tf.Chmod(0o600)
+	}
+	if err == nil {
+		err = tf.Sync()
+	}
+	if cerr := tf.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, TipPath(ledger))
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
 		return nil, err
 	}
 	return t, nil

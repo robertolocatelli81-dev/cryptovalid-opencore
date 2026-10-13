@@ -167,6 +167,10 @@ jobs:
           if java -cp "$RUNNER_TEMP/cvj" CvVerify examples/sample_ledger_tampered.jsonl > /dev/null; then
             echo "::error::java verifier accepted a tampered ledger"; exit 1; fi
           java -cp "$RUNNER_TEMP/cvj" CvVerify examples/sample_ledger.jsonl > /dev/null
+      - name: "Receipt not written = exit 74 (0.20.3): the Python CLIs and the Java verifier on /dev/full, a gone reader, a closed stdout"
+        run: CV_REQUIRE_CRYPTO=1 CV_REQUIRE_JAVA=1 python3 test_receipt_not_written.py
+      - name: "Outcome whole or exit 74 (13/10): -u, a late non-blocking reader (Python, Java), usage with stderr lost, promised files, ledger lines, openssl that cannot run"
+        run: CV_REQUIRE_CRYPTO=1 CV_REQUIRE_JAVA=1 CV_REQUIRE_OPENSSL=1 python3 test_receipt_design_20261013.py
       - name: Differential oracle — Python vs JS vs Go vs Rust vs Java must agree on every hostile input
         run: python3 verifiers/differential_oracle.py
       - name: "SCITT statements — pycose (independent COSE implementation) as the oracle, required here"

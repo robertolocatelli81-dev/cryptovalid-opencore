@@ -31,6 +31,9 @@ Honest scope, stated once and in every output: CryptoValid is a toolkit, not a Q
 self-assessment for a provider preparing a conformity assessment — never a claim of qualification.
 """
 from __future__ import annotations
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import json
 import os
 import sys
@@ -217,18 +220,25 @@ def practice_statement(ledger_path: str, provider: str = "<provider>", deploymen
     return "\n".join(lines) + "\n"
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say
+
+
+@receipt_cli
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
-    p = argparse.ArgumentParser(prog="eidas_ledger_check", description="self-assessment vs eIDAS 2.0 qualified electronic ledger rules (IR 2025/2531)")
+    p = Parser(prog="eidas_ledger_check", description="self-assessment vs eIDAS 2.0 qualified electronic ledger rules (IR 2025/2531)")
     p.add_argument("ledger"); p.add_argument("--report", action="store_true"); p.add_argument("--practice-statement", action="store_true")
     p.add_argument("--provider", default="<provider>"); p.add_argument("--deployment", help="JSON: qualified_certificates, qtsp_timestamps, signing_device, provider_is_qtsp")
     a = p.parse_args(argv)
     dep = json.loads(a.deployment) if a.deployment else None
     if a.report:
-        print(json.dumps(ledger_report(a.ledger), indent=1)); return 0
+        emit(json.dumps(ledger_report(a.ledger), indent=1)); return 0
     if a.practice_statement:
-        print(practice_statement(a.ledger, a.provider, dep)); return 0
-    print(json.dumps(assess(a.ledger, dep), indent=1, ensure_ascii=False)); return 0
+        emit(practice_statement(a.ledger, a.provider, dep)); return 0
+    emit(json.dumps(assess(a.ledger, dep), indent=1, ensure_ascii=False)); return 0
 
 
 if __name__ == "__main__":

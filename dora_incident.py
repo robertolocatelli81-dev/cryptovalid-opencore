@@ -24,6 +24,9 @@ Stdlib only.
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -163,10 +166,17 @@ def _load_phases(path: str) -> List[Phase]:
     return [Phase(phase=r["phase"], ts=r["ts"], detail=r.get("detail", {})) for r in rows]
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say
+
+
+@receipt_cli
 def main(argv=None) -> int:
     import argparse
     import sys
-    p = argparse.ArgumentParser(
+    p = Parser(
         prog="dora-incident",
         description="Tamper-evident evidence for the DORA ICT-incident lifecycle (NOT a compliance certificate).")
     sub = p.add_subparsers(dest="cmd")
@@ -179,14 +189,14 @@ def main(argv=None) -> int:
     a2.add_argument("phases_json")
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     if a.cmd == "attest":
-        print(json.dumps(attest(_load_phases(a.phases_json), a.incident_id, a.as_of),
+        emit(json.dumps(attest(_load_phases(a.phases_json), a.incident_id, a.as_of),
                          ensure_ascii=False, indent=1))
         return 0
     if a.cmd == "verify":
         with open(a.attestation_json, encoding="utf-8") as f:
             att = json.load(f)
         r = verify_attestation(att, _load_phases(a.phases_json))
-        print(json.dumps(r, ensure_ascii=False, indent=1))
+        emit(json.dumps(r, ensure_ascii=False, indent=1))
         return 0 if r["valid"] else 1
     p.print_help()
     return 2

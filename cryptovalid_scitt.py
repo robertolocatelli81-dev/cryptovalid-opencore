@@ -19,6 +19,9 @@ in the tests; there is no public SCITT Transparency Service here, and CCF's rece
 VDS — this is the RFC 9942 `RFC9162_SHA256` profile. Registration policies (RFC 9943 §4.1) are the deployment's.
 """
 from __future__ import annotations
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import hashlib
 import json
 import os
@@ -170,8 +173,7 @@ def register(cose: bytes, ledger_path: str, issuer_pubkey_hex: str, payload: Opt
                                 "content_type": v["content_type"], "payload_sha256": v["payload_sha256"]}},
              "prev_hash": prev}
         e["self_hash"] = hashlib.sha256(json.dumps(e, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        with open(ledger_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(e) + "\n"); f.flush(); os.fsync(f.fileno())
+        append_line(ledger_path, (json.dumps(e) + "\n").encode("utf-8"))   # 0.20.3: the whole line or nothing (truncated back)
     finally:
         if lock_fd is not None:
             fcntl.flock(lock_fd, fcntl.LOCK_UN); os.close(lock_fd)
@@ -309,9 +311,16 @@ def _read_bytes(path: str) -> bytes:
         return f.read()
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import OutputNotWritten, Parser, append_line, emit, receipt_cli, refuse_directory, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import OutputNotWritten, Parser, append_line, emit, receipt_cli, refuse_directory, say, write_output
+
+
+@receipt_cli
 def main(argv=None) -> int:
     import argparse
-    ap = argparse.ArgumentParser(description="SCITT (RFC 9943) signed / transparent statements over a cryptovalid ledger")
+    ap = Parser(description="SCITT (RFC 9943) signed / transparent statements over a cryptovalid ledger")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("sign"); s.add_argument("statement"); s.add_argument("--cty", required=True); s.add_argument("--iss", required=True)
     s.add_argument("--sub", required=True); s.add_argument("--key", required=True); s.add_argument("--out", required=True); s.add_argument("--detached", action="store_true")
@@ -326,26 +335,31 @@ def main(argv=None) -> int:
             with open(a.statement, "rb") as f:
                 pl = f.read()
             cose = signed_statement(pl, a.cty, a.iss, a.sub, a.key, detached=a.detached)
-            with open(a.out, "wb") as f:
-                f.write(cose)
-            print(json.dumps({"stato": "OK", "bytes": len(cose), "sha256": hashlib.sha256(cose).hexdigest()})); return 0
+            write_output(a.out, cose)   # 0.20.3: whole at --out, or exit 74
+            emit(json.dumps({"stato": "OK", "bytes": len(cose), "sha256": hashlib.sha256(cose).hexdigest()})); return 0
         if a.cmd == "register":
+            refuse_directory(a.out)   # 0.20.3: before the ledger line, never after it
             with open(a.signed, "rb") as f:
                 cose = f.read()
             pl = _read_bytes(a.statement) if a.statement else None
             reg = register(cose, a.ledger, a.issuer_pubkey, pl)
             rc = receipt(a.ledger, reg["index"], a.ts_key, a.ts_iss)
             ts = transparent_statement(cose, [rc])
-            with open(a.out, "wb") as f:
-                f.write(ts)
-            print(json.dumps({"stato": "OK", **reg, "transparent_bytes": len(ts)})); return 0
+            try:   # 0.20.3: whole at --out, or exit 74 — and the line says the statement IS in the ledger
+                write_output(a.out, ts)
+            except OutputNotWritten as e:
+                raise OutputNotWritten(f"{e}; the statement is registered in the ledger (index {reg['index']}): only the "
+                                       "transparent statement was not written") from None
+            emit(json.dumps({"stato": "OK", **reg, "transparent_bytes": len(ts)})); return 0
         with open(a.transparent, "rb") as f:
             ts = f.read()
         pl = _read_bytes(a.statement) if a.statement else None
         res = verify_transparent_statement(ts, a.issuer_pubkey, a.ts_pubkey, pl, a.ts_iss)
-        print(json.dumps(res, ensure_ascii=False)); return 0 if res["ok"] else 1
+        emit(json.dumps(res, ensure_ascii=False)); return 0 if res["ok"] else 1
+    except OutputNotWritten:
+        raise
     except (ScittError, OSError, ValueError) as e:
-        print(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+        emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
 
 
 if __name__ == "__main__":

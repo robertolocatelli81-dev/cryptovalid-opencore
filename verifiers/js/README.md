@@ -10,13 +10,16 @@ different runtime — proof that the format is vendor-neutral, not tool-locked.
 node cvverify.mjs ledger.jsonl                 # verify a hash-chained ledger
 node cvverify.mjs ledger.signed.jsonl --pubkey <hex>   # + pin the Ed25519 signer: a signature that does not verify -> verdict FAIL, exit 1
 node cvverify.mjs --conformance <vectors_dir>  # run the normative vector suite
-npm test                                        # 93 checks incl. cross-oracle vs Python
+npm test                                        # 151 checks incl. cross-oracle vs Python
 ```
 
 Verifies: canonical hash-chain (self_hash recompute, prev_hash linkage, sequential
 idx) for SHA-256 and SHA3-256, plus optional Ed25519 signatures over `self_hash` (signature: strict standard base64
 of 64 bytes; signer: 64 lowercase hex, as the Python reference and the Java verifier). Exit code: 0 on verdict PASS,
-1 on FAIL. Without `--pubkey` the verdict covers the chain only and a signature that does not verify is reported in
+1 on FAIL, 2 when the file cannot be read (`FILE_ERROR`) or on a usage error, 74 when the receipt could not be written
+whole (stdout full, under a file size limit, or a reader gone; since 0.20.3), whatever the verdict. A regular file is
+written in a loop to the last byte (Node's stream took what fitted under `ulimit -f` and the code was the verdict's). With stdout closed (`>&-`) Node reopens it on
+`/dev/null`: the write succeeds there and the program cannot tell. Without `--pubkey` the verdict covers the chain only and a signature that does not verify is reported in
 `signatures` (`all_verified: false`); with `--pubkey` it fails the run, as `java CvVerify.java -pubkey`.
 Library: `import { verifyLedger, conformance } from "./cvverify.mjs"` (no CLI side-effect).
 

@@ -14,6 +14,9 @@ Caveat dichiarato: le mutazioni che cadono dentro stringhe/commenti sono "mutant
 leggano i sopravvissuti col contesto. Da eseguire in CI; una passata mutmut in un venv resta il gradino sopra.
 Stdlib only.
 """
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import glob
 import os
 import shutil
@@ -139,11 +142,18 @@ def run_mutation(target_path: str, test_cmd: List[str], limit: int = 0) -> Dict:
     return result
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say
+
+
+@receipt_cli
 def main(argv=None):
     import sys
     a = argv if argv is not None else sys.argv[1:]
     if len(a) < 2:
-        print("usage: python3 -m opencore.mutation_runner <target.py> <test_cmd...> [--limit N]")
+        say("usage: python3 -m opencore.mutation_runner <target.py> <test_cmd...> [--limit N]\n")   # usage on stderr (0.20.3)
         return 2
     limit = 0
     if "--limit" in a:
@@ -153,11 +163,11 @@ def main(argv=None):
     target, test_cmd = a[0], a[1:]
     r = run_mutation(target, test_cmd, limit=limit)
     import json
-    print(json.dumps({k: v for k, v in r.items() if k != "survived"}, indent=1))
+    emit(json.dumps({k: v for k, v in r.items() if k != "survived"}, indent=1))
     if r["survived"]:
-        print(f"SOPRAVVISSUTI ({len(r['survived'])}):")
+        emit(f"SOPRAVVISSUTI ({len(r['survived'])}):")
         for s in r["survived"][:50]:
-            print("  -", s)
+            emit("  -", s)
     return 0
 
 

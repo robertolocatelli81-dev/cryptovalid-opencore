@@ -41,6 +41,9 @@ machine at hand, never quoted from this docstring.
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import glob
 import hashlib
 import json
@@ -80,22 +83,12 @@ def _fsync_dir(path: str):
 
 
 def _write_json_atomic(path: str, doc: Dict):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(doc, f, indent=1)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    write_output(path, json.dumps(doc, indent=1))   # 0.20.3: random O_EXCL temporary (was <path>.tmp), fsync, rename
     _fsync_dir(os.path.dirname(path) or ".")
 
 
 def _write_bytes_atomic(path: str, data: bytes):
-    tmp = path + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(data)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    write_output(path, data)   # 0.20.3: random O_EXCL temporary (was <path>.tmp), fsync, rename
     _fsync_dir(os.path.dirname(path) or ".")
 
 
@@ -227,10 +220,9 @@ class Ingestor:
     def flush(self):
         with self._lock:
             if self._buf:
-                self._fh.write(("\n".join(self._buf) + "\n").encode())
-                self._fh.flush()
-                if self._fsync:
-                    os.fsync(self._fh.fileno())
+                # 0.20.3: the whole batch or nothing: unbuffered writes on the segment's descriptor, truncated back to the
+                # bytes it had on a failure (the batch stays queued: a later flush() writes it whole, never after a torn part)
+                append_line(self._seg_path(self._seq), ("\n".join(self._buf) + "\n").encode(), opened=self._fh, sync=self._fsync)
                 self._buf.clear()
                 if self._tip_key is not None:
                     import cryptovalid_tip
@@ -497,9 +489,16 @@ def verify_archive(directory: str, prefix: str = "ledger",
             "warnings": warnings, "failures": failures}
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, append_line, emit, receipt_cli, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, append_line, emit, receipt_cli, say, write_output
+
+
+@receipt_cli
 def main(argv=None) -> int:  # pragma: no cover - thin CLI
     import argparse
-    p = argparse.ArgumentParser(prog="cryptovalid-ingest",
+    p = Parser(prog="cryptovalid-ingest",
                                 description="High-frequency ingestion + archive verify.")
     sub = p.add_subparsers(dest="cmd", required=True)
     v = sub.add_parser("verify"); v.add_argument("directory")
@@ -513,7 +512,7 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
     if a.cmd == "verify":
         r = verify_archive(a.directory, a.prefix, a.pubkey,
                            lotl_check=a.lotl, lotl_member_states=a.lotl_ms)
-        print(json.dumps(r, indent=1)); return 0 if r["ok"] else 1
+        emit(json.dumps(r, indent=1)); return 0 if r["ok"] else 1
     ing = Ingestor(a.directory, prefix="bench", batch_size=a.batch,
                    rotate_entries=a.n + 1)
     t0 = time.perf_counter()
@@ -521,7 +520,7 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
         ing.append({"event": "bench", "i": i})
     ing.close()
     dt = time.perf_counter() - t0
-    print(json.dumps({"events": a.n, "seconds": round(dt, 3),
+    emit(json.dumps({"events": a.n, "seconds": round(dt, 3),
                       "events_per_second_measured": int(a.n / dt),
                       "note": "measured on THIS machine/filesystem, batch fsync",
                       "verify_with": f"python3 cryptovalid_ingest.py verify {a.directory} --prefix bench"},

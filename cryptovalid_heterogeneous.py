@@ -17,6 +17,9 @@ HONEST-SCOPE: prova che il digest è attestato da ≥N sistemi di fiducia INDIPE
 tocca l'attestazione RFC3161, e viceversa). NON prova la veridicità del contenuto (resta W1, confine). I
 verificatori di dominio sono iniettabili (`verifiers=`) per test ermetici. Stdlib only.
 """
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import json
 from typing import Callable, Dict, List, Optional
 
@@ -37,8 +40,10 @@ def _verify_rfc3161(att: Dict, digest_hex: str) -> bool:
     digest = bytes.fromhex(digest_hex)
     if not token_contains_digest(token, digest):   # il token deve impegnare QUESTO digest
         return False
-    res = verify_with_openssl(token, att.get("digest_data", digest))
-    return bool(res.get("verified") or res.get("ok"))
+    # verify_with_openssl returns True / False / None (openssl absent): until 0.20.3 this read res.get(...) on that bool,
+    # an AttributeError on every token, so the rfc3161 domain never verified (measured 13/10/2026). openssl that cannot
+    # be run here raises CheckNotRun, which the loop below lets through (exit 74), never a domain reported as failed.
+    return verify_with_openssl(token, att.get("digest_data", digest)) is True
 
 
 # registro dei domini noti → verificatore nativo. Iniettabile nei test.
@@ -67,6 +72,8 @@ def verify_heterogeneous_anchor(expected_sha3_hex: str, attestations: List[Dict]
             continue
         try:
             ok = bool(vfn(att, expected_sha3_hex))
+        except CheckNotRun:           # the check cannot be RUN here (0.20.3): exit 74, never a domain that failed
+            raise
         except Exception as e:        # noqa: BLE001 — un dominio che erra non deve rompere gli altri
             per_domain.append({"domain": dom, "ok": False, "note": f"errore: {str(e).splitlines()[0][:80]}"})
             continue
@@ -89,10 +96,17 @@ def verify_heterogeneous_anchor(expected_sha3_hex: str, attestations: List[Dict]
     }
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import CheckNotRun, Parser, emit, receipt_cli, say
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import CheckNotRun, Parser, emit, receipt_cli, say
+
+
+@receipt_cli
 def main(argv=None):
     import argparse
     import sys
-    p = argparse.ArgumentParser(prog="cryptovalid-heterogeneous",
+    p = Parser(prog="cryptovalid-heterogeneous",
                                 description="Verifica un'ancora ETEROGENEA (>=N domini di fiducia indipendenti).")
     p.add_argument("digest_sha3_hex")
     p.add_argument("attestations_json", help="file JSON: lista di attestazioni [{\"domain\": ...}, ...]")
@@ -101,7 +115,7 @@ def main(argv=None):
     with open(a.attestations_json, encoding="utf-8") as f:
         atts = json.load(f)
     r = verify_heterogeneous_anchor(a.digest_sha3_hex, atts, min_domains=a.min_domains)
-    print(json.dumps(r, ensure_ascii=False, indent=1))
+    emit(json.dumps(r, ensure_ascii=False, indent=1))
     return 0 if r.get("ok") else 1
 
 

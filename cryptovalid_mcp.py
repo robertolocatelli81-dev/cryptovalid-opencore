@@ -37,6 +37,9 @@ signed — never the truth of the recorded facts.
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import hashlib
 import json
 import os
@@ -274,6 +277,13 @@ def handle(msg: Dict) -> Optional[Dict]:
     return _rpc_error(id_, -32601, f"method not found: {method}")
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say
+
+
+@receipt_cli
 def main() -> int:
     for line in sys.stdin:
         line = line.strip()
@@ -282,11 +292,11 @@ def main() -> int:
         try:
             msg = json.loads(line)
         except ValueError:
-            print(json.dumps(_rpc_error(None, -32700, "parse error")), flush=True)
+            emit(json.dumps(_rpc_error(None, -32700, "parse error")), flush=True)
             continue
         reply = handle(msg)
         if reply is not None:
-            print(json.dumps(reply, ensure_ascii=False), flush=True)
+            emit(json.dumps(reply, ensure_ascii=False), flush=True)
     return 0
 
 

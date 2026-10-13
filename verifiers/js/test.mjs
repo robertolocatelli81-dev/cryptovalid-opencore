@@ -4,7 +4,7 @@
 // verifier (verifier.py at the repo root) as an independent oracle — so a bug that makes us
 // wrongly agree with ourselves is caught by disagreement with the reference.
 import { verifyLedger, conformance, jsonNestingDepth, hasLoneSurrogate, MAX_JSON_DEPTH, checkTip, tipPayload, parseInstant } from "./cvverify.mjs";
-import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, openSync, closeSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign as edSign } from "node:crypto";
 import { join, dirname } from "node:path";
@@ -246,7 +246,58 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
     const t0 = Date.now(); const r = verifyLedger('{"idx":0,"ts":"' + '\\"'.repeat(100000) + "\n"); const dt = Date.now() - t0;
     ok(`float scan: 100 000 escaped quotes, unterminated, FAIL in ${dt} ms (< 2000)`, r.verdict === "FAIL" && dt < 2000);
   }
-  ok("lib: unknown algo throws (as hash_with in verifier.py)", (() => { try { verifyLedger(good.toString(), { algo: "foo" }); return false; } catch (e) { return e.message.startsWith("unsupported_algo"); } })());
+  // 0.20.3: a receipt that is not written whole is exit 74 with a stderr line, whatever the verdict (it was 0/1 and silent:
+  // console.log drops the error). /dev/full = ENOSPC; a pipe whose read end is closed before the start = EPIPE (python3
+  // makes it: Node has no os.pipe). `>&-` is not tested: Node reopens fd 1 on /dev/null, the program cannot see it.
+  {
+    const cli = join(HERE, "cvverify.mjs");
+    const bad = join(dir, "bad.jsonl"); writeFileSync(bad, readFileSync(join(VDIR, "broken_link.jsonl")));
+    const notUtf8 = join(dir, "notutf8.jsonl"); writeFileSync(notUtf8, Buffer.from([0xff, 0x0a]));
+    const cases = [["valid", [p0], 0], ["invalid", [bad], 1], ["not UTF-8", [notUtf8], 1], ["missing file", [join(dir, "nope.jsonl")], 2],
+                   ["--conformance", ["--conformance", VDIR], 0]];
+    const EPIPE_RUN = "import os,subprocess,sys\nr,w=os.pipe(); os.close(r)\nsys.exit(subprocess.run(sys.argv[1:], stdout=w).returncode)";
+    for (const [name, args, code] of cases) {
+      const f = spawnSync("node", [cli, ...args], { encoding: "utf-8", maxBuffer: 1 << 26 });
+      let parsed = null; try { parsed = JSON.parse(f.stdout); } catch { /* none */ }
+      ok(`receipt ${name}: written to a pipe, exit ${code}`, f.status === code && parsed !== null && !f.stderr.includes("receipt not written"), `status ${f.status}`);
+      const full = openSync("/dev/full", "w");
+      const d = spawnSync("node", [cli, ...args], { stdio: ["ignore", full, "pipe"], encoding: "utf-8" }); closeSync(full);
+      ok(`receipt ${name}: /dev/full is exit 74 + stderr line`, d.status === 74 && d.stderr.startsWith("receipt not written: "), `status ${d.status} stderr ${JSON.stringify(d.stderr)}`);
+      const e = spawnSync("python3", ["-c", EPIPE_RUN, "node", cli, ...args], { encoding: "utf-8" });
+      ok(`receipt ${name}: reader gone (EPIPE) is exit 74 + stderr line`, e.status === 74 && e.stderr.startsWith("receipt not written: "), `status ${e.status} stderr ${JSON.stringify(e.stderr)}`);
+      const full2 = openSync("/dev/full", "w");
+      const b = spawnSync("node", [cli, ...args], { stdio: ["ignore", full2, full2] }); closeSync(full2);
+      ok(`receipt ${name}: stdout and stderr on /dev/full is still exit 74`, b.status === 74, `status ${b.status}`);
+      // a regular file that stops growing (bash `ulimit -f 1` = 1 024 bytes, 24 left): Node's stream wrote what fitted and the code
+      // was the verdict's (0.20.3 before 13/10); now every byte or 74. The same file without the limit gets the whole receipt.
+      const cut = join(dir, "cut.out"); writeFileSync(cut, "x".repeat(1000));
+      const c = spawnSync("bash", ["-c", 'ulimit -f 1; exec node "$@" >>"$0"', cut, cli, ...args], { encoding: "utf-8" });
+      ok(`receipt ${name}: a file size limit is exit 74 + stderr line`, c.status === 74 && c.stderr.startsWith("receipt not written: "), `status ${c.status} stderr ${JSON.stringify(c.stderr)}`);
+      const whole = join(dir, "whole.out"); writeFileSync(whole, "");
+      const w = spawnSync("sh", ["-c", 'exec node "$@" >>"$0"', whole, cli, ...args], { encoding: "utf-8" });
+      ok(`receipt ${name}: a regular file gets the receipt whole, exit ${code}`, w.status === code && readFileSync(whole, "utf-8") === f.stdout, `status ${w.status}`);
+    }
+  }
+  // review of 0.20.3, 13/10: the receipt ends with "\n" (console.log wrote one), on a pipe and on a regular file; write(2) taking 0
+  // bytes on a regular file is 74, never a silent retry (an LD_PRELOAD shim built by cc; skipped without a C compiler)
+  {
+    const cli = join(HERE, "cvverify.mjs");
+    const f = spawnSync("node", [cli, p0], { encoding: "utf-8" });
+    ok("receipt ends with a newline (pipe)", f.status === 0 && f.stdout.endsWith("}\n"), JSON.stringify(f.stdout.slice(-4)));
+    const reg = join(dir, "nl.out"); writeFileSync(reg, "");
+    const g = spawnSync("sh", ["-c", 'exec node "$@" >"$0"', reg, cli, p0]);
+    ok("receipt ends with a newline (regular file)", g.status === 0 && readFileSync(reg, "utf-8").endsWith("}\n"), `status ${g.status}`);
+    const shimC = join(dir, "shim.c"), shimSo = join(dir, "shim.so");
+    writeFileSync(shimC, "#define _GNU_SOURCE\n#include <dlfcn.h>\n#include <stdlib.h>\n#include <unistd.h>\nstatic int d0;\nssize_t write(int fd,const void*b,size_t n){static ssize_t(*r)(int,const void*,size_t);if(!r)r=dlsym(RTLD_NEXT,\"write\");\nif(fd==1&&n&&getenv(\"SHIM_W0\")&&!d0){d0=1;return 0;}\nreturn r(fd,b,n);}\n");
+    const cc = process.platform === "linux" ? spawnSync("cc", ["-shared", "-fPIC", "-o", shimSo, shimC, "-ldl"]) : { status: 1 };
+    if (cc.status === 0) {
+      const z = spawnSync("sh", ["-c", 'exec node "$@" >"$0"', reg, cli, p0], { encoding: "utf-8", env: { ...process.env, LD_PRELOAD: shimSo, SHIM_W0: "1" } });
+      ok("write(2) taking 0 bytes on a regular file is exit 74 + stderr line", z.status === 74 && z.stderr.startsWith("receipt not written: "), `status ${z.status} ${JSON.stringify(z.stderr)}`);
+    } else {
+      console.log("  (skipped: no C compiler for the write-0 shim)");
+    }
+  }
+  ok("lib: unknown algo throws (as hash_with in verifier.py)",(() => { try { verifyLedger(good.toString(), { algo: "foo" }); return false; } catch (e) { return e.message.startsWith("unsupported_algo"); } })());
 }
 
 console.log(`\ncvverify test: ${pass} passed, ${fail} failed`);

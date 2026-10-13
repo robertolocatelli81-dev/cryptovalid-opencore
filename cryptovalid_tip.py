@@ -27,6 +27,9 @@ Byte-identical payload in every language (Python is the oracle of the bytes):
 ledgers lets the pair file+tip of B be substituted for A). The verifier checks it against the file
 (`tip_of_another_ledger`) and, out of band, against `--expect-ledger-id` (`ledger_id_mismatch`).
 """
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import argparse
 import calendar
 import hashlib
@@ -183,12 +186,7 @@ def write_tip(out: str, keyfile: str, entries: int, ledger_id: str, tip_sha256: 
             raise RuntimeError("hybrid tip signing needs cryptography >= 50 (ML-DSA) to self-verify the post-quantum signature")
         tip["signature_pq_hex"] = pq_sig.hex()
         tip["log_pq_pubkey_b64"] = pq_backend.public_key_b64
-    tmp = out + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(tip, f, separators=(",", ":"), sort_keys=True)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, out)
+    write_output(out, json.dumps(tip, separators=(",", ":"), sort_keys=True))   # 0.20.3: random O_EXCL temporary, fsync, rename
     return tip
 
 
@@ -335,8 +333,15 @@ def load_tip(path: str) -> Dict:
     return doc
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say, write_output
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say, write_output
+
+
+@receipt_cli
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="cryptovalid_tip.py", description="signed chain tip: sign after each append")
+    p = Parser(prog="cryptovalid_tip.py", description="signed chain tip: sign after each append")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("sign", help="write <ledger>.tip.json for the current file")
     s.add_argument("ledger"); s.add_argument("keyfile"); s.add_argument("--out")
@@ -351,23 +356,23 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     if a.cmd == "sign":
         from signer import pq_backend_from_args
-        print(json.dumps(sign_tip(a.ledger, a.keyfile, a.out, pq_backend=pq_backend_from_args(a.pq_key, a.pq_kms, a.pq_kms_region, a.pq_kms_profile)), indent=1))
+        emit(json.dumps(sign_tip(a.ledger, a.keyfile, a.out, pq_backend=pq_backend_from_args(a.pq_key, a.pq_kms, a.pq_kms_region, a.pq_kms_profile)), indent=1))
         return 0
     if not a.trusted_pubkey:
-        print(json.dumps({"ok": False, "error": "tip_untrusted: --trusted-pubkey is required (the key inside the tip "
+        emit(json.dumps({"ok": False, "error": "tip_untrusted: --trusted-pubkey is required (the key inside the tip "
                                                 "proves nothing); exit 2"}, indent=1))
         return 2
     try:
         t = chain_tip(a.ledger)
         tip = load_tip(a.tip or tip_path_for(a.ledger))
     except (OSError, ValueError) as e:      # a missing/malformed file is a JSON error, never a traceback
-        print(json.dumps({"ok": False, "error": f"tip_unreadable: {type(e).__name__}: {str(e)[:160]}"}, indent=1))
+        emit(json.dumps({"ok": False, "error": f"tip_unreadable: {type(e).__name__}: {str(e)[:160]}"}, indent=1))
         return 1
     r = check_tip(t["entries"], t["tip_sha256"], tip, a.trusted_pubkey, a.not_before,
                   first_self_hash=t["ledger_id"], expect_ledger_id=a.expect_ledger_id,
                   trusted_pq_pubkey_b64=a.trusted_pq_pubkey)
     r["note"] = "the CHAIN is not verified by this command (fields are read as written): use verifier.py --trusted-pubkey"
-    print(json.dumps(r, indent=1))
+    emit(json.dumps(r, indent=1))
     return 0 if (r["ok"] and r.get("trusted")) else 1
 
 

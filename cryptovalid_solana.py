@@ -28,6 +28,9 @@ Stdlib only. No keys, no writes, no signing. Fail-closed and honest on every unc
 
 Author: Roberto Locatelli + Noûs, 2026 — Licence: AGPL-3.0-or-later (opencore).
 """
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import json
 import re
 import urllib.request
@@ -226,10 +229,17 @@ def verify_solana_anchor(signature, expected_sha3_hex, rpcs=DEFAULT_RPCS, timeou
             "honest_scope": _SCOPE}
 
 
+try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+    from verifier import Parser, emit, receipt_cli, say
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import Parser, emit, receipt_cli, say
+
+
+@receipt_cli
 def main(argv=None):
     import argparse
     import sys
-    p = argparse.ArgumentParser(prog="cryptovalid_solana",
+    p = Parser(prog="cryptovalid_solana",
                                 description="Verify a Solana mainnet anchor of a CryptoValid digest.")
     p.add_argument("signature")
     p.add_argument("expected_sha3_hex")
@@ -241,9 +251,9 @@ def main(argv=None):
     out = verify_solana_anchor(a.signature, a.expected_sha3_hex,
                                rpcs=tuple(a.rpc) if a.rpc else DEFAULT_RPCS,
                                expected_signer=a.signer, min_witnesses=a.min_witnesses)
-    print(json.dumps(out, indent=1, ensure_ascii=False))
-    sys.exit(0 if out["ok"] else 1)
+    emit(json.dumps(out, indent=1, ensure_ascii=False))
+    return 0 if out["ok"] else 1   # 0.20.3: returned, so the receipt writer can turn a lost receipt into 74
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

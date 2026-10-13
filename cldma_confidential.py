@@ -50,6 +50,9 @@ Stdlib puro (riusa gli helper di committed_attestation + pedersen_commit).
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 from typing import Dict, List, Tuple
 
 try:
@@ -222,10 +225,19 @@ def detection_probability(fraction_bad: float, k: int) -> float:
     return _C.detection_probability(fraction_bad, k)
 
 
-if __name__ == "__main__":
+def _demo() -> int:
     led = [{"principal_outstanding": "1000.00", "days_overdue": "0", "status": "active"},
            {"principal_outstanding": "500.00", "days_overdue": "45", "status": "active"}]
     att, secret = build_confidential(led, "salt", _C.SPEC_PAR30, "2026-08-22")
-    print("verify_confidential:", verify_confidential(att)["ok"])
+    emit("verify_confidential:", verify_confidential(att)["ok"])
     op = open_totals(att, secret)
-    print("verify_total_opening:", verify_total_opening(att, op))
+    emit("verify_total_opening:", verify_total_opening(att, op))
+    return 0
+
+
+if __name__ == "__main__":   # a demo: its two lines go through the same writer (exit 74 when not written whole)
+    try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+        from verifier import emit, receipt_cli
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore.verifier import emit, receipt_cli
+    raise SystemExit(receipt_cli(_demo)())

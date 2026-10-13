@@ -28,6 +28,9 @@ Stdlib puro (big-int). Deterministico dove serve; r da os.urandom (segreto).
 """
 from __future__ import annotations
 
+import sys as _sys_0203
+if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
+    _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
 import hashlib
 import os
 from typing import List, Optional, Tuple
@@ -119,10 +122,19 @@ def h_provenance() -> dict:
             "h": hex(H), "note": "h = (H(seed))^2 mod p; log_g(h) ignoto per costruzione (NUMS)"}
 
 
-if __name__ == "__main__":
+def _demo() -> int:
     C, r = commit(1500)
-    print("open:", open_commit(C, 1500, r), " open-wrong:", open_commit(C, 1501, r))
+    emit("open:", open_commit(C, 1500, r), " open-wrong:", open_commit(C, 1501, r))
     vs = [100, 250, 175]
     Cs, rs = commit_contributions(vs)
     tv, tr = sum_opening(vs, rs)
-    print("confidential sum:", verify_confidential_sum(Cs, tv, tr))
+    emit("confidential sum:", verify_confidential_sum(Cs, tv, tr))
+    return 0
+
+
+if __name__ == "__main__":   # a demo: its two lines go through the same writer (exit 74 when not written whole)
+    try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
+        from verifier import emit, receipt_cli
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore.verifier import emit, receipt_cli
+    raise SystemExit(receipt_cli(_demo)())

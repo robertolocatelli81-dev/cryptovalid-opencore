@@ -938,6 +938,20 @@ class TestWitness(unittest.TestCase):
         with mock.patch.object(C, "_ed", return_value=(None, None, None)):
             self.assertEqual(W.verify_witnessed(n2, self.LV, [self.W1V], 1)["stato"], "NON_VERIFICATA")
 
+    def test_cli_outcome_not_written_is_74(self):
+        """0.20.3 review (13/10/2026): a state or log line that cannot be written is exit 74, never the ERRORE of exit 2;
+        a directory as --out is refused before the state records anything"""
+        n5 = os.path.join(self.tmp, "cp5.note"); _wb(n5, self.n5)
+        cmd = [sys.executable, os.path.join(HERE, "cryptovalid_witness.py"), "cosign", n5, "--state", self.st1, "--log-vkey",
+               self.LV, "--name", "witness.example/w1", "--key", self.w1k, "--out"]
+        r = subprocess.run(cmd + [self.tmp + os.sep], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 74, r.stderr)
+        self.assertFalse(os.path.exists(self.st1), "the state recorded a cosignature before --out was refused")
+        r = subprocess.run(["bash", "-c", 'ulimit -f 0; exec "$@"', "_"] + cmd + [os.path.join(self.tmp, "o.note")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 74, r.stdout + r.stderr)
+        self.assertEqual(r.stdout, "")
+
     def test_cli(self):
         n5 = os.path.join(self.tmp, "cp5.note"); _wb(n5, self.n5)
         out = os.path.join(self.tmp, "cp5.c.note")
