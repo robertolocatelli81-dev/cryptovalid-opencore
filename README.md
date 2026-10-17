@@ -572,7 +572,8 @@ signature layer or count it. What changes on purpose:
   `signature_pq`, `signer_pq` in any entry (until 0.20.3 only `signature`). A valid signature by an unknown key stays a
   PASS without a key: pinning the key is the caller's. `verifier.py` and the Rust verifier do not check signatures: their
   receipt now has `signatures_not_checked`, the number of entries carrying a signature field, only when it is not zero.
-  ML-DSA-65: Go and Java verify it (a broken one is now a FAIL without a key too); JS and Swift count it,
+  ML-DSA-65: Go and Java verify it (a broken one is now a FAIL without a key too) when built with Go 1.27 or run on a
+  JDK 24 or later; older ones declare the layer unverifiable (`pq_status`), as before. JS and Swift count it,
   `pq_not_checked`. The matrix of 12/10 (9 cases, no key / right key / wrong key, six verifiers and `signer.py`) was rerun
   on 0.20.3 before the change and gave the same table. 21 vectors in `spec/vectors/signatures/` (`make_vectors.py`
   regenerates the same bytes): the six verifiers and `signer.py verify` reproduce all 21; the code of 0.20.3 differs on

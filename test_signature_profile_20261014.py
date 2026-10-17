@@ -254,8 +254,9 @@ class TestCrossLanguage(unittest.TestCase):
         want = {"go": "FAIL", "java": "FAIL", "js": "PASS", "swift": "PASS"}   # Go/Java verify ML-DSA; JS/Swift count it
         for name in self.bins:
             rc, o = self.run_v(name, bad)
-            if name == "java" and "unverifiable" in json.dumps(o):
-                continue   # a JDK below 24 has no ML-DSA (declared in the verifier)
+            if name in ("java", "go") and "unverifiable" in json.dumps(o):   # a JDK below 24, a Go below 1.27: no ML-DSA
+                self.assertNotEqual(o["signatures"].get("pq_protected"), True, (name, o.get("signatures")))   # declared,
+                continue                                                                                       # never green
             self.assertEqual(o["verdict"], want[name], (name, o.get("signatures")))
             if name in ("js",):
                 self.assertEqual(o["signatures"]["pq_not_checked"], len(lines))
