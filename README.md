@@ -558,7 +558,10 @@ certified devices — `eidas_ledger_check.py` tells you exactly which of those y
 
 ## A signature layer that does not verify is a FAIL; Ed25519 keys and R of small or mixed order are refused; Merkle leaves follow §3; a cut bytecode cache is compiled again (2026-10-14, 0.21.0)
 
-SPEC v0.4. Every change below has a test that fails on 0.20.3 and mutants of its lines that the tests kill. Receipts in
+SPEC v0.4. Every change below has a test that fails on 0.20.3, and the mutants we ran on its lines are killed by the tests (on
+17/10 a review found five that lived — the neutral-point test reduced to x = 0 in JS and Go, the list of signature fields
+without the ML-DSA ones in JS (two mutants) and Go — and a test now kills them: a key of mixed order whose torsion part has
+order 2 or 4, a ledger whose signature layer is `signature_pq` alone or `signer_pq` alone). Receipts in
 file mode: the 83 cases of the bench of 0.20.3 (the six verifiers and the Python commands) are identical to 0.20.3 on
 Python 3.9, 3.11 and 3.13 (81 byte for byte, 2 by their own rule: generated keys); the bench sees a change made on
 purpose (3 cases differ when `verifier.py` prints with another indent). On 458 ledgers of the development machine (every
@@ -573,7 +576,8 @@ signature layer or count it. What changes on purpose:
   PASS without a key: pinning the key is the caller's. `verifier.py` and the Rust verifier do not check signatures: their
   receipt now has `signatures_not_checked`, the number of entries carrying a signature field, only when it is not zero.
   ML-DSA-65: Go and Java verify it (a broken one is now a FAIL without a key too) when built with Go 1.27 or run on a
-  JDK 24 or later; older ones declare the layer unverifiable (`pq_status`), as before. JS and Swift count it,
+  JDK 24 or later; older ones declare the layer unverifiable (`pq_status: unverifiable`) and the verdict stays the
+  Ed25519 layer's (PASS, exit 0, with a well-formed ML-DSA signature that does not verify), as before. JS and Swift count it,
   `pq_not_checked`. The matrix of 12/10 (9 cases, no key / right key / wrong key, six verifiers and `signer.py`) was rerun
   on 0.20.3 before the change and gave the same table. 21 vectors in `spec/vectors/signatures/` (`make_vectors.py`
   regenerates the same bytes): the six verifiers and `signer.py verify` reproduce all 21; the code of 0.20.3 differs on
@@ -592,8 +596,9 @@ signature layer or count it. What changes on purpose:
   the library's rule (`cryptovalid_acta.py` already refused keys of small order).
 - **Merkle leaves (SPEC §9).** A leaf is the canonical form of §3. Until 0.20.3 it kept `signature_pq`, `signer_pq` and
   `tsa_token`: signing a ledger with ML-DSA, or adding a timestamp token after a tree head, changed the root of entries
-  already covered while the chain stayed PASS (`examples/sample_ledger.jsonl`: 95db8b0b... unsigned and signed Ed25519,
-  264cbff9... hybrid, 67d223d0... with a token; now 95db8b0b... for all four). The root of a ledger without those fields is
+  already covered while the chain stayed PASS (`examples/sample_ledger.jsonl`: 95db8b0b... unsigned and signed Ed25519;
+  with an ML-DSA layer or a token, a root that depends on their bytes — 264cbff9... and 67d223d0... in the run of 14/10,
+  ML-DSA signing is hedged —; now 95db8b0b... for all four). The root of a ledger without those fields is
   unchanged; a tree head, checkpoint or receipt made by 0.20.3 for a ledger that carries them is reproduced by 0.20.3, not
   by 0.21.0 (vector `spec/vectors/merkle_leaves.json`, with both roots, computed by an independent RFC 6962 code).
 - **LOTL: a QTST history out of order or with two entries at one instant is an error** (ETSI TS 119 615 PRO-4.3.4-03A;
@@ -604,7 +609,7 @@ signature layer or count it. What changes on purpose:
   `cryptovalid_lotl` command adds `indeterminate` (only then). Until 0.20.3 the service was counted, the first entry of a
   tie taken (the same entry 03 b names). Measured: 39 services tie in their history on 26 national lists of 12/10 and on
   the 30 of 14/10 (one could not be fetched), none of them a QTST: the fingerprints are those of 0.20.3 at three instants
-  (652 on the lists of 12/10, 1 081 on those of 14/10). A tie between the ServiceInformation and one history entry is not
+  (12/10, 14/10 and 2019-01-01: 652, 652 and 404 on the lists of 12/10; 1 081, 1 081 and 445 on those of 14/10). A tie between the ServiceInformation and one history entry is not
   03A: the ServiceInformation applies, as before.
 - **A bytecode cache already cut is compiled from the source** (the rest of the 0.20.3 note on the cache, "it reads one
   that is there"). Measured on 0.20.3: `verifier`'s `.pyc` cut at any offset from byte 16 on made every command that imports it

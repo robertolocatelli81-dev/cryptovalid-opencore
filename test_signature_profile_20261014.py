@@ -196,6 +196,7 @@ class TestCrossLanguage(unittest.TestCase):
                 self.assertEqual(o["verdict"], v["signature_profile"]["verdict"], (name, v["input"]))
                 self.assertEqual(rc, 0 if o["verdict"] == "PASS" else 1, (name, v["input"]))
 
+    @unittest.skipUnless(_crypto(), "cryptography not installed")   # cryptovalid_tip needs it
     def test_tip_signed_by_a_small_order_key(self):
         # a log key of small order and a signature (R small, S = 0) that the library's equation accepts on this payload:
         # the ts is ground until R + k*A is the neutral point. Refused everywhere (named), as an entry signature is.
@@ -231,6 +232,43 @@ class TestCrossLanguage(unittest.TestCase):
             rc, o = self.run_v(name, led, flags[name])
             self.assertEqual((rc, o["verdict"]), (1, "FAIL"), name)
             self.assertIn("small_order_key", json.dumps(o), name)
+
+    def test_mixed_order_2_and_4_torsion_and_a_layer_of_ml_dsa_only(self):
+        # NEMESIS 17/10: the 21 vectors carry no key whose torsion part has order 2 or 4 and no ledger whose layer is
+        # signature_pq/signer_pq alone; a neutral-point test reduced to x = 0, or a layer list without the two ML-DSA
+        # fields, passed the suites of 0.21.0. A = a*B + T (T of order 2, then 4), R = r*B, k even: the cofactorless equation holds.
+        sys.path.insert(0, SDIR)
+        import make_vectors as MV
+        cases = {}
+        for name, T in (("mixed_t2", MV.T2), ("mixed_t4", E.scalar_mul(2, MV.T8))):
+            A = E.add(MV.aB, T)
+            self.assertEqual(E.key_problem(E.encode(A)), "mixed_order_key", name)
+            for nonce in range(1000):
+                e = MV.chain([{"case": name, "nonce": nonce}])[0]
+                k = int.from_bytes(hashlib.sha512(E.encode(MV.rB) + E.encode(A) + e["self_hash"].encode()).digest(), "little") % E.L
+                if E.is_neutral(E.scalar_mul(k, T)):
+                    break
+            e["signature"] = base64.b64encode(E.encode(MV.rB) + ((MV.r + k * MV.a) % E.L).to_bytes(32, "little")).decode()
+            e["signer"] = E.encode(A).hex()
+            cases[name] = ([e], "mixed_order_key")
+        for field in ("signature_pq", "signer_pq"):   # each of the two alone opens the layer
+            pq = MV.chain([{"event": "%s-%d" % (field, i)} for i in range(2)])
+            for e in pq:
+                e[field] = "AAAA"
+            cases[field + "_only"] = (pq, "missing signature/signer/self_hash")
+        for name, (entries, why) in cases.items():
+            path = os.path.join(self.tmp, name + ".jsonl")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("".join(json.dumps(e) + "\n" for e in entries))
+            if _crypto():
+                rc, o = _run([sys.executable, os.path.join(HERE, "signer.py"), "verify", path])
+                self.assertEqual((rc, o["ok"]), (1, False), name)
+                self.assertIn(why, json.dumps(o), name)
+            for vname in self.bins:
+                rc, o = self.run_v(vname, path)
+                self.assertEqual((rc, o["verdict"]), (1, "FAIL"), (vname, name))
+                if vname != "swift":   # Swift reports a boolean only
+                    self.assertIn(why, json.dumps(o), (vname, name))
 
     @unittest.skipUnless(_crypto(), "cryptography not installed")
     def test_broken_ml_dsa_without_a_key(self):
