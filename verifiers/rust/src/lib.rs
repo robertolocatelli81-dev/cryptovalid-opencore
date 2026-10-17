@@ -32,6 +32,9 @@ pub struct VerifyResult {
     /// entries whose top level carries a key outside ENTRY_KEYS (SPEC §2.1)
     pub schema_failures_idx: Vec<i64>,
     pub parse_errors: usize,
+    /// 0.21.0 (SPEC v0.4 §5 step 5): entries carrying a signature field (signature, signer, signature_pq, signer_pq),
+    /// which this verifier does not check; written in the receipt only when it is not zero
+    pub signatures_not_checked: usize,
 }
 
 /// The entry's top-level keys outside ENTRY_KEYS, in code-point order (BTreeMap order = Python sorted()).
@@ -139,6 +142,10 @@ pub fn verify_ledger(text: &str, algo: Option<&str>) -> VerifyResult {
         && schema_failures.is_empty() // SPEC §2.1
         && !entries.is_empty();
 
+    let signatures_not_checked = entries
+        .iter()
+        .filter(|e| ["signature", "signer", "signature_pq", "signer_pq"].iter().any(|k| e.contains_key(*k)))
+        .count();
     VerifyResult {
         verdict: if chain { "PASS" } else { "FAIL" }.into(),
         chain_integrity: chain,
@@ -148,6 +155,7 @@ pub fn verify_ledger(text: &str, algo: Option<&str>) -> VerifyResult {
         link_failures_idx: link_failures,
         schema_failures_idx: schema_failures,
         parse_errors,
+        signatures_not_checked,
     }
 }
 
@@ -160,9 +168,14 @@ impl VerifyResult {
                 .collect::<Vec<_>>()
                 .join(",")
         };
+        let not_checked = if self.signatures_not_checked > 0 {
+            format!(",\"signatures_not_checked\":{}", self.signatures_not_checked)
+        } else {
+            String::new()
+        };
         format!(
-            "{{\"algorithm\":\"{}\",\"chain_integrity\":{},\"entries\":{},\"hash_failures_idx\":[{}],\"link_failures_idx\":[{}],\"schema_failures_idx\":[{}],\"verdict\":\"{}\"}}",
-            self.algorithm, self.chain_integrity, self.entries, idxs(&self.hash_failures_idx), idxs(&self.link_failures_idx), idxs(&self.schema_failures_idx), self.verdict
+            "{{\"algorithm\":\"{}\",\"chain_integrity\":{},\"entries\":{},\"hash_failures_idx\":[{}],\"link_failures_idx\":[{}],\"schema_failures_idx\":[{}]{},\"verdict\":\"{}\"}}",
+            self.algorithm, self.chain_integrity, self.entries, idxs(&self.hash_failures_idx), idxs(&self.link_failures_idx), idxs(&self.schema_failures_idx), not_checked, self.verdict
         )
     }
 }

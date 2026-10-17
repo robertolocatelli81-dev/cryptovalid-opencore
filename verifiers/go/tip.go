@@ -257,9 +257,14 @@ func CheckTip(entries int, first, last string, t *Tip, trustedPubkeyHex, notBefo
 	}
 	pk, err1 := hex.DecodeString(trustedPubkeyHex)
 	sig, err2 := hex.DecodeString(t.SignatureHex)
-	if err1 != nil || err2 != nil || len(pk) != ed25519.PublicKeySize ||
-		!ed25519.Verify(ed25519.PublicKey(pk), TipPayload(t.Entries, t.LedgerID, t.TipSHA256, t.TS), sig) {
+	if err1 != nil || err2 != nil || len(pk) != ed25519.PublicKeySize {
 		return false, "tip_invalid: tip signature invalid", false
+	}
+	if ok, why := ed25519Strict(pk, TipPayload(t.Entries, t.LedgerID, t.TipSHA256, t.TS), sig, nil); !ok {
+		if why == "bad_signature" {
+			return false, "tip_invalid: tip signature invalid", false
+		}
+		return false, "tip_invalid: tip signature invalid (" + why + ")", false // 0.21.0: small/mixed order, named
 	}
 	trusted = trustedPubkeyHex != ""
 	if expectLedgerID != "" && t.LedgerID != expectLedgerID {

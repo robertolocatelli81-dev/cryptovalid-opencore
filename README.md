@@ -536,6 +536,7 @@ four pieces were missing and are now here, stdlib-only:
 | Module | What it adds | Standard |
 |---|---|---|
 | `cryptovalid_receipt.py` | **Portable receipts**: inclusion and consistency proofs for one entry / two tree heads, with a tree head **really signed** by the log key (the old `signed_tree_head` in `cryptovalid_merkle` carried no signature — renamed `tree_head`, alias kept). JSON profile and **COSE_Sign1** encoding per RFC 9942 (`vds`=1 RFC9162_SHA256, `vdp` with inclusion −1 / consistency −2 as arrays of bstr, alg EdDSA; consistency receipts carry a **detached** payload and the verifier recomputes root_2); minimal CBOR codec (duplicate keys and deep nesting refused). Verification is fail-closed: it needs **your** entry (inclusion) or **your** previous root (consistency) and a **trusted** log key — nothing named inside the receipt is trusted, and the proof's tree size must equal the signed head's. | RFC 9942, RFC 9162, RFC 9052, RFC 8949 |
+| `ed25519_order.py` | **Ed25519 keys and R of small or mixed order** (0.21.0): RFC 8032 5.1.3 decoding, `[8]P` and `[L]P` with the 5.1.4 formulas, standard library only; `key_problem`, `r_problem`, `strict_problem` (with a cache per key). Used by `signer.py verify` and `cryptovalid_tip.py` before the library's equation; the JS, Go, Java and Swift verifiers carry the same rule. Not constant time (public values only). | RFC 8032 §5.1; the 12 classes of novifinancial/ed25519-speccheck |
 | `cryptovalid_tip.py` | **Signed chain tip** (0.11.0): `{entries, tip_sha256, ts}` signed with the log key after every append (O(1), atomic sidecar `<ledger>.tip.json`; Go `AppendSigned` / `cvappend -tipkey` writes it under the same lock). Any snapshot verifier holding the tip and the trusted key sees tail truncation, suffix rewrite and unsealed appends — the three attacks a bare chain cannot see. Same signed bytes in Python, JS and Go (cross-signed in the tests). Limit: the holder of the log key; deleting the tip is visible only with `--require-tip` or a copy kept elsewhere (monitor state, receipts, anchor). | signed tree-head idea of RFC 6962, reduced to the chain tip |
 | `cryptovalid_monitor.py` | **Append-only / non-equivocation monitor** (what rekor-monitor and immudb's auditor do): keeps the last green tree head and proves at every run that the ledger only grew; catches truncation, rewrite of old entries, forks and log-key changes; a red run never advances the baseline; the saved state is itself verified on load (signed head). Three modes, stated: **writer** (`--keyfile`, signs the head), **auditor** (`--trusted-pubkey`, never writes an unsigned state, advances only with a signed head published by the writer via `--sth-file`), none (blind trust, declared). Declared limits: the blind window between two runs, and deletion/replay of the state file (keep it where the ledger writer cannot write, or anchor each signed head externally). | RFC 6962 consistency proofs |
 | `eidas_ledger_check.py` | **Self-assessment** of a ledger against IR 2025/2531 (REQ-7.5-03/04/05/06, Art. 45l): what is met by construction (hash list + Merkle, SHA-256/SHA3-256, immediate detectability), what needs the deployment's qualified pieces (qualified certificates, QTSP timestamps, certified signing device), what no code can give (being a QTSP). Produces the automated **ledger report** (Annex §2) and an **Electronic Ledger Practice Statement** skeleton (REQ-6.1-12) filled from what was measured. Never a claim of qualification. | eIDAS 2.0, IR 2025/2531, ETSI EN 319 401 |
@@ -554,6 +555,79 @@ python3 test_ledger_evidence.py                                         # 18 tes
 Honest scope, once more: a receipt signed by the log key proves what the log key holder published; a
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
+
+## A signature layer that does not verify is a FAIL; Ed25519 keys and R of small or mixed order are refused; Merkle leaves follow §3; a cut bytecode cache is compiled again (2026-10-14, 0.21.0)
+
+SPEC v0.4. Every change below has a test that fails on 0.20.3 and mutants of its lines that the tests kill. Receipts in
+file mode: the 83 cases of the bench of 0.20.3 (the six verifiers and the Python commands) are identical to 0.20.3 on
+Python 3.9, 3.11 and 3.13 (81 byte for byte, 2 by their own rule: generated keys); the bench sees a change made on
+purpose (3 cases differ when `verifier.py` prints with another indent). On 458 ledgers of the development machine (every
+one of the 2 880 of 12/10 whose text carries a signature field name, 58, and 400 drawn at random) the six verifiers give
+the verdict and exit code of 0.20.3 on all; the receipts that change are 25 of those 58 files (FAIL in 0.20.3 and now), which now name the
+signature layer or count it. What changes on purpose:
+
+- **The signature profile (SPEC §5 step 5).** In the four verifiers that check signatures (JS, Go, Java, Swift) a
+  signature layer that does not verify is a FAIL without `--pubkey` too, the failing entries named (until 0.20.3 the
+  verdict was the chain's, PASS, and the failure only reported); the layer is any of `signature`, `signer`,
+  `signature_pq`, `signer_pq` in any entry (until 0.20.3 only `signature`). A valid signature by an unknown key stays a
+  PASS without a key: pinning the key is the caller's. `verifier.py` and the Rust verifier do not check signatures: their
+  receipt now has `signatures_not_checked`, the number of entries carrying a signature field, only when it is not zero.
+  ML-DSA-65: Go and Java verify it (a broken one is now a FAIL without a key too); JS and Swift count it,
+  `pq_not_checked`. The matrix of 12/10 (9 cases, no key / right key / wrong key, six verifiers and `signer.py`) was rerun
+  on 0.20.3 before the change and gave the same table. 21 vectors in `spec/vectors/signatures/` (`make_vectors.py`
+  regenerates the same bytes): the six verifiers and `signer.py verify` reproduce all 21; the code of 0.20.3 differs on
+  129 of the 147 results.
+- **Ed25519 keys and R of small or mixed order.** RFC 8032 lets a verifier use either equation, and libraries differ
+  outside the subgroup of order L. On the 12 classes of novifinancial/ed25519-speccheck rebuilt on ledger entries (our
+  keys: the published cases sign other messages), 0.20.3 verified six with or without a pinned key in JS (Node), Go,
+  Swift (swift-crypto) and `signer.py` (OpenSSL through `cryptography`) — a key or an R of small order, a key of mixed
+  order, a key with x = 0 and the sign bit set — and four in Java. Now a key must decode as RFC 8032 5.1.3 says, not be of
+  small order and lie in the subgroup of order L; R must decode and not be of small order (`small_order_key`,
+  `mixed_order_key`, `key_not_decodable`, `small_order_r`, `r_not_decodable`), before the library's equation, for entry
+  signatures and the signed chain tip, in the four verifiers, `signer.py` and `cryptovalid_tip.py` (`ed25519_order.py`,
+  standard library); all 12 refused, as by the x402 acceptance checker of the same author. One scalar multiplication per
+  distinct key, three doublings per signature. Not changed: the other modules that verify Ed25519 (receipts, checkpoints,
+  witness, JWS, COSE receipts, SCITT, APS, Cedulon, the evidence pack's manifest signature, the ingest's tree heads) keep
+  the library's rule (`cryptovalid_acta.py` already refused keys of small order).
+- **Merkle leaves (SPEC §9).** A leaf is the canonical form of §3. Until 0.20.3 it kept `signature_pq`, `signer_pq` and
+  `tsa_token`: signing a ledger with ML-DSA, or adding a timestamp token after a tree head, changed the root of entries
+  already covered while the chain stayed PASS (`examples/sample_ledger.jsonl`: 95db8b0b... unsigned and signed Ed25519,
+  264cbff9... hybrid, 67d223d0... with a token; now 95db8b0b... for all four). The root of a ledger without those fields is
+  unchanged; a tree head, checkpoint or receipt made by 0.20.3 for a ledger that carries them is reproduced by 0.20.3, not
+  by 0.21.0 (vector `spec/vectors/merkle_leaves.json`, with both roots, computed by an independent RFC 6962 code).
+- **LOTL: a QTST history out of order or with two entries at one instant is an error** (ETSI TS 119 615 PRO-4.3.4-03A;
+  TS 119 612 5.5.10 orders the history by descending StatusStartingTime). Such a service is not counted and its
+  certificates are named (`qtst_status_at`, `load_qualified_status`; the cache rule moves to /2, so a cache of 0.20.x is
+  rebuilt); a token from it is `indeterminate` (`qualification()`), not "not qualified": the ingest warns
+  `tsa_qualification_indeterminate`, the seal metadata carries `eidas_indeterminate`, the report says INCONCLUSIVE, the
+  `cryptovalid_lotl` command adds `indeterminate` (only then). Until 0.20.3 the service was counted, the first entry of a
+  tie taken (the same entry 03 b names). Measured: 39 services tie in their history on 26 national lists of 12/10 and on
+  the 30 of 14/10 (one could not be fetched), none of them a QTST: the fingerprints are those of 0.20.3 at three instants
+  (652 on the lists of 12/10, 1 081 on those of 14/10). A tie between the ServiceInformation and one history entry is not
+  03A: the ServiceInformation applies, as before.
+- **A bytecode cache already cut is compiled from the source** (the rest of the 0.20.3 note on the cache, "it reads one
+  that is there"). Measured on 0.20.3: `verifier`'s `.pyc` cut at any offset from byte 16 on made every command that imports it
+  (all but `verifier.py` itself) exit 1, the code of a FAIL, on Python 3.9, 3.11 and 3.13 (3.13 writes no cut cache but
+  reads one). Each command's guard now wraps the loader: an `EOFError` or `ValueError` from a cache is followed by a compile of the
+  source. Cost: +0.2 to +1.4 ms per start (median of 20 runs, three commands, three Pythons);
+  `sys.pycache_prefix = os.devnull` cost +26 to +47 ms (it recompiles the standard library) and is not used.
+- **Declared.** An openssl that starts and is then killed by a signal, or a wrapper that exits 127, has answered: the
+  token is not verified (`rfc3161.verified: false`), not "check not run" — an input that makes openssl crash does not
+  become a check that did not run (the same in 0.20.3, now tested). The pack's `valid` does not depend on the timestamp,
+  as before (a claimed token that does not verify leaves `valid: true`: RFC 3161 anchoring is optional). On macOS, read in the XNU
+  source and not measured on a Mac (`vn_write`, bsd/vfs/vfs_vnops.c, xnu-12377.1.9): the file size limit is compared with
+  the descriptor's offset, not the end of the file, so stdout appended (`>>`) to a file already past the limit takes a
+  receipt that fits under the limit whole, exit 0 — the case the macOS job met on 13/10 — and a receipt that crosses the
+  limit is cut and exits 74, as on Linux (the Swift suite asserts the first on macOS, the second everywhere).
+- **The Kiva pre-registration** (`spec/PREREG_KIVA_20260820.md`) names reviewer roles instead of model names and no
+  private note; the pre-registered bytes (SHA3-256 `db5671af...`, cited by the two validation reports) are that file at
+  public commit `401e6b2`.
+- **Found and not changed in 0.21.0 (planned for 0.22.0).** `evidence_pack.py verify` reports a declared RFC 3161
+  token that does not verify (`rfc3161.claimed: true`, `verified: false`) and still returns `valid: true`, exit 0
+  (measured 17/10/2026 on a pack of `examples/sample_ledger.jsonl` with a token that is not a TimeStampResp): the
+  anchor is optional, but one that is claimed and fails is not yet a failure. The evidence pack's manifest signature and
+  the ingest's tree heads, both formats of this project, still verify Ed25519 with the library's rule (see above); they
+  will refuse keys and R of small or mixed order as the ledger verifiers now do.
 
 ## An outcome that is not written whole is exit 74; promised files and ledger lines are whole or absent (2026-10-13, 0.20.3)
 

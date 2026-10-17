@@ -420,13 +420,13 @@ class TestAutoAnchorTSA(unittest.TestCase):
         # il buco ALTA della review: cache LOTL nella dir dell'archivio = avvelenabile
         import cryptovalid_lotl as lotl
         seen = {}
-        orig = lotl.load_qualified_fingerprints
+        orig = lotl.load_qualified_status   # 0.21.0: the callers load the status with its history errors
 
         def spy(ms, cache_path=None, **kw):
             seen["cache_path"] = cache_path
-            return set(), []
+            return set(), [], {}
 
-        lotl.load_qualified_fingerprints = spy
+        lotl.load_qualified_status = spy
         try:
             w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
             w._request_timestamp = self._fake_tsa_ok
@@ -435,13 +435,33 @@ class TestAutoAnchorTSA(unittest.TestCase):
             w.seal(); w.close(seal=False)
             r = ing.verify_archive(self.d, lotl_check=True, lotl_member_states=["ES"])
         finally:
-            lotl.load_qualified_fingerprints = orig
+            lotl.load_qualified_status = orig
         self.assertIn("cache_path", seen)
         self.assertFalse(os.path.abspath(seen["cache_path"]).startswith(
             os.path.abspath(self.d)), "cache LOTL dentro l'archivio: avvelenabile")
         # e con zero impronte il verdetto resta onesto: nessun qualified, warning presente
         self.assertEqual(r["eidas_qualified_segments"], 0)
         self.assertTrue(any("tsa_not_qualified" in x for x in r["warnings"]))
+
+    def test_lotl_history_error_is_indeterminate_not_unqualified(self):
+        # 0.21.0, ETSI TS 119 615 PRO-4.3.4-03A: a token from a QTST service whose history is an error is named apart
+        import cryptovalid_lotl as lotl
+        orig_s, orig_f = lotl.load_qualified_status, lotl.token_cert_fingerprints
+        lotl.load_qualified_status = lambda ms, cache_path=None, **kw: (set(), [], {"ab" * 32: "history_duplicate_start https://tl"})
+        lotl.token_cert_fingerprints = lambda tok: {"ab" * 32}
+        try:
+            w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
+            w._request_timestamp = self._fake_tsa_ok
+            for i in range(10):
+                w.append({"i": i})
+            w.seal(); w.close(seal=False)
+            r = ing.verify_archive(self.d, lotl_check=True, lotl_member_states=["ES"])
+        finally:
+            lotl.load_qualified_status, lotl.token_cert_fingerprints = orig_s, orig_f
+        self.assertEqual(r["eidas_qualified_segments"], 0)
+        self.assertTrue(any(x.startswith("tsa_qualification_indeterminate: 1 ") and "history_duplicate_start" in x
+                            for x in r["warnings"]), r["warnings"])
+        self.assertFalse(any(x.startswith("tsa_not_qualified") for x in r["warnings"]), r["warnings"])
 
     def test_tsa_failure_never_blocks_ingestion(self):
         def boom(digest, url, timeout=30):

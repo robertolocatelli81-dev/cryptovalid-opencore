@@ -289,7 +289,9 @@ final class ProfileFamilyTests: XCTestCase {
             let text = signed(s.replacingOccurrences(of: "\n", with: "\\n"), signer)
             let r = CryptoValidVerifier.verify(ledgerText: text)
             XCTAssertEqual(r.signatures_all_verified, false, why)
-            XCTAssertEqual(r.verdict, "PASS", "\(why): without --pubkey the signature layer is informational (Python, JS, Go, Java)")
+            // 0.21.0 (SPEC v0.4 §5 step 5): without --pubkey a layer that does not verify is a FAIL (until 0.20.3 informational)
+            XCTAssertEqual(r.verdict, "FAIL", "\(why): a signature layer that does not verify, no key")
+            XCTAssertEqual(r.chain_integrity, true, why)
         }
     }
 }
@@ -461,8 +463,12 @@ final class CLIFamilyTests: XCTestCase {
 
     /// 0.20.3 (13/10): a regular file that stops growing (bash `ulimit -f 1` with 24 bytes left, `ulimit -f 0`) is exit 74
     /// with one line (SIGXFSZ killed the process before: no exit code). The case with 24 bytes left runs on Linux only: on
-    /// the macOS CI runner (13/10/2026, run 38403932117) it exited 0 with nothing on stderr, while `ulimit -f 0` gave 74;
-    /// the cause is not established (no macOS to measure on), so it is declared, not asserted
+    /// the macOS CI runner (13/10/2026, run 38403932117) it exited 0 with nothing on stderr, while `ulimit -f 0` gave 74.
+    /// 0.21.0, read in the XNU source, not measured on a Mac (bsd/vfs/vfs_vnops.c vn_write, xnu-12377.1.9, commit f6217f89):
+    /// XNU compares RLIMIT_FSIZE with the OFFSET of the descriptor, not with the end of the file, also under O_APPEND
+    /// (VNOP_WRITE moves to the end afterwards); `>>` opens at offset 0, so 0 + 194 bytes of receipt <= 1024 passes and the
+    /// receipt is appended WHOLE past the limit: exit 0 is right there. A write that crosses the limit from that offset is
+    /// shortened, and the next one, at the end of the file, is EFBIG: 74 (testFileSizeLimitMacOS asserts both on macOS)
     func testFileSizeLimitIsExit74() throws {
         let v = try write(validEntry("1"))
         #if os(Linux)
@@ -477,6 +483,34 @@ final class CLIFamilyTests: XCTestCase {
             XCTAssertEqual(r.code, 74, "ulimit -f \(blocks): stderr \(r.err)")
             XCTAssertTrue(r.err.hasPrefix("receipt not written: "), "ulimit -f \(blocks): \(r.err)")
         }
+    }
+
+    #if os(macOS)
+    /// 0.21.0: the expectation derived from XNU's vn_write (see above), asserted where it applies: appended to 1000 bytes
+    /// under `ulimit -f 1` (1024 bytes in bash), exit 0 and the receipt whole after the 1000 bytes.
+    func testFileSizeLimitMacOS() throws {
+        let v = try write(validEntry("1"))
+        let whole = try run([v])
+        let f = try write(Array(repeating: UInt8(ascii: "x"), count: 1000))
+        let a = try shell("ulimit -f 1; exec \"$0\" \"$1\" >>\"$2\"", [v, f])
+        XCTAssertFalse(a.signaled); XCTAssertEqual(a.code, 0, a.err)
+        let got = try Data(contentsOf: URL(fileURLWithPath: f))
+        XCTAssertEqual(got.count, 1000 + whole.out.utf8.count)
+        XCTAssertEqual(String(decoding: got.suffix(whole.out.utf8.count), as: UTF8.self), whole.out)
+    }
+    #endif
+
+    /// 0.21.0: a receipt longer than the limit, written from offset 0 (`>`): shortened to the limit, then EFBIG — 74 on Linux
+    /// (measured) and, by XNU's vn_write, on macOS too (the CI job measures it)
+    func testFileSizeLimitCrossedFromOffsetZeroIs74() throws {
+        var lines = ""
+        for i in 0..<200 { lines += "{\"idx\":\(i),\"ts\":\"t\",\"data\":{},\"prev_hash\":\"\(String(repeating: "1", count: 64))\",\"self_hash\":\"\(String(repeating: "7", count: 64))\"}\n" }
+        let big = try write(Array(lines.utf8))
+        let g = try write([])
+        let b = try shell("ulimit -f 1; exec \"$0\" \"$1\" >\"$2\"", [big, g])
+        XCTAssertFalse(b.signaled); XCTAssertEqual(b.code, 74, b.err)
+        XCTAssertTrue(b.err.hasPrefix("receipt not written: "), b.err)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: g)).count, 1024)
     }
 
     /// 0.20.3 (13/10): a NON-BLOCKING stdout read once the pipe is full gets a receipt larger than the pipe buffer whole, exit 1 (it was

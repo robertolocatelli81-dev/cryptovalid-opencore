@@ -44,6 +44,15 @@ from __future__ import annotations
 import sys as _sys_0203
 if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
     _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
+    _L0210 = type(__loader__)   # 0.21.0: a .pyc already cut (CPython 3.9/3.11 installed one) is compiled from the source
+    if _L0210.__name__ == "SourceFileLoader":   # instead of failing every later run (EOFError: marshal data too short)
+        def _get_code_0210(self, fullname, _get_code=_L0210.get_code):
+            try:
+                return _get_code(self, fullname)
+            except (EOFError, ValueError):
+                path = self.get_filename(fullname)
+                return self.source_to_code(self.get_data(path), path)
+        _L0210.get_code = _get_code_0210
 import glob
 import hashlib
 import json
@@ -283,9 +292,12 @@ class Ingestor:
                 meta["token_file"] = os.path.basename(seg_path) + ".sth.tsr"
             if self._lotl_check and token:
                 import cryptovalid_lotl as lotl
-                fprs, _cov = lotl.load_qualified_fingerprints(
+                fprs, _cov, herr = lotl.load_qualified_status(
                     self._lotl_ms, cache_path=_default_lotl_cache(self._lotl_ms))
-                meta["eidas_qualified"] = bool(lotl.is_qualified(token, fprs))
+                verdict, why = lotl.qualification(token, fprs, herr)
+                meta["eidas_qualified"] = verdict == "qualified"
+                if why:   # 0.21.0: TS 119 615 PRO-4.3.4-03A, neither qualified nor not
+                    meta["eidas_indeterminate"] = why
             with self._lock:
                 self.last_anchor_error = None
         except Exception as e:  # noqa: BLE001 — l'ancora è best-effort, l'errore va nel receipt
@@ -468,15 +480,20 @@ def verify_archive(directory: str, prefix: str = "ledger",
     if lotl_check and timestamped:
         import cryptovalid_lotl as lotl
         try:
-            fprs, _cov = lotl.load_qualified_fingerprints(
+            fprs, _cov, herr = lotl.load_qualified_status(
                 lotl_member_states, cache_path=_default_lotl_cache(lotl_member_states))
         except Exception as e:  # noqa: BLE001 — network, or a LOTL that is not a trusted list (0.20.2: parsed as XML)
             fprs = None
             warnings.append(f"lotl_unavailable: {type(e).__name__}: {e}"[:300])
         if fprs is not None:
-            qualified_count = sum(1 for _n, tok in timestamped if lotl.is_qualified(tok, fprs))
-            if qualified_count < len(timestamped):
-                warnings.append(f"tsa_not_qualified: {len(timestamped) - qualified_count} "
+            verdicts = [lotl.qualification(tok, fprs, herr) for _n, tok in timestamped]
+            qualified_count = sum(1 for v, _w in verdicts if v == "qualified")
+            undecided = [w for v, w in verdicts if v == "indeterminate"]
+            if undecided:   # 0.21.0: TS 119 615 PRO-4.3.4-03A
+                warnings.append(f"tsa_qualification_indeterminate: {len(undecided)} token(s) from a QTST service whose "
+                                f"trusted-list history is an error ({undecided[0]})"[:300])
+            if qualified_count + len(undecided) < len(timestamped):
+                warnings.append(f"tsa_not_qualified: {len(timestamped) - qualified_count - len(undecided)} "
                                 "token(s) from a TSA not in the EU Trusted Lists (QTST)")
 
     return {"ok": bool(sealed) and not failures,

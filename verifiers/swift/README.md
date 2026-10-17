@@ -28,9 +28,12 @@ within +/-(2^53-1), no raw control character in a string, `\u` = four ASCII hex 
 unpaired ones refused, no duplicate key (compared by Unicode scalars), nesting at most 512, LF the only line separator,
 a file that is not UTF-8 a FAIL. The file is read to its end through a file handle, so a FIFO (`cvverify <(cat
 ledger.jsonl)`) is read as by the other five (0.20.2; it was `FILE_ERROR`). CLI: the ledger path first, then `--algo sha256|sha3_256` and `--pubkey <value>` (every entry must carry a valid signature
-whose `signer` equals it, else FAIL — wrong key, unsigned or partly signed ledger — as in JS, Go and Java); an unknown flag, a missing or empty value, a value starting with `-`, an
+whose `signer` equals it, else FAIL — wrong key, unsigned or partly signed ledger — as in JS, Go and Java; since 0.21.0 a
+signature layer that does not verify is a FAIL without `--pubkey` too, keys and R values of small or mixed order are refused
+(`Ed25519Order.swift`, the same rule on every platform), and `pq_not_checked` counts the entries carrying ML-DSA-65, which this
+verifier does not check); an unknown flag, a missing or empty value, a value starting with `-`, an
 `--algo` outside the two profiles or a second positional is a usage error (exit 2, no verdict). Exit 0 PASS, 1 FAIL, 2 usage or `FILE_ERROR`, 74 when the receipt could not be written
 whole (stdout full, closed, under a file size limit or a reader gone; since 0.20.3), whatever the verdict. A full
 non-blocking stdout is waited for in `poll` and the receipt arrives whole (0.20.2 exited 1 with 65 536 or 65 537 of 417 975 bytes in the pipe, by timing); a
-usage error stays exit 2 with stderr full or closed (it was SIGILL: `FileHandle.write` traps). Not built on macOS / iOS in this environment (CI has a macOS job).
+usage error stays exit 2 with stderr full or closed (it was SIGILL: `FileHandle.write` traps). Not built on macOS / iOS in this environment (CI has a macOS job). Under a file size limit on macOS (0.21.0, read in the XNU source, not measured on a Mac: `vn_write` in bsd/vfs/vfs_vnops.c, xnu-12377.1.9) the limit is compared with the offset of the descriptor, not with the end of the file: stdout appended (`>>`, offset 0) to a file already past the limit takes a receipt that fits under the limit whole, exit 0 (the case the macOS job met on 13/10, run 38403932117); a receipt that crosses the limit is shortened and the next write fails, exit 74, as on Linux. `testFileSizeLimitMacOS` asserts the first on macOS, `testFileSizeLimitCrossedFromOffsetZeroIs74` the second everywhere.
 Honest scope as the JS verifier; no signed-tip or ML-DSA checks (declared in `../../CONFORMANCE.md`).

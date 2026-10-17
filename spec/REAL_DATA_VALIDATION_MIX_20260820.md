@@ -62,6 +62,6 @@ detector**. Verificato caso per caso (es. write-off 0,39; ~8 record risk-coverag
   pubblico). Adozione: **ancora ZERO** — questo è credibilità tecnica misurata, non un utente.
 
 ## Provenienza
-Metro coerente con `opencore/spec/PREREG_KIVA_20260820.md` (SHA3 `db5671af`). Fonte MIX: World Bank Data Catalog
+Metro coerente con `opencore/spec/PREREG_KIVA_20260820.md` (SHA3 `db5671af` = il file al commit pubblico `401e6b2`). Fonte MIX: World Bank Data Catalog
 (`dcwb0038647`), "Financial Performance in USD", versione 2023-01-19. Analisi in venv usa-e-getta (openpyxl),
 python di sistema non toccato.

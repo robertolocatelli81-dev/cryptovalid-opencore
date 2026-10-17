@@ -260,5 +260,101 @@ class TestCurrentStatusAndHistory(unittest.TestCase):
         self.assertEqual(L.load_qualified_fingerprints(cache_path=cache)[0], set())   # now read from the cache
 
 
+class TestHistoryOrder(unittest.TestCase):
+    """ETSI TS 119 615 PRO-4.3.4-03A (0.21.0): for a QTST service, ServiceHistoryInstance entries not in descending order
+    of StatusStartingTime (TS 119 612 5.5.10), or two with the same StatusStartingTime, are an error: the service is not
+    counted and its certificates are named. Until 0.20.3 the first entry of a tie was taken (counted)."""
+    AT = __import__("datetime").datetime(2026, 10, 14, tzinfo=__import__("datetime").timezone.utc)
+    F1 = _fp(b"SERVICE-1-CERT")
+
+    def test_duplicate_history_start_is_an_error(self):
+        for order in ((("granted",) * 1 + ("withdrawn",)), ("withdrawn", "granted")):
+            tl = _tl(_svc(_QTST, "granted", "2026-01-01T00:00:00Z", _C1,
+                          history=[(_QTST, order[0], "2020-01-01T00:00:00Z", None), (_QTST, order[1], "2020-01-01T00:00:00Z", None)]))
+            self.assertEqual(L.qtst_fingerprints(tl, now=self.AT), set(), order)   # 0.20.3: {F1} (the old API fails first)
+            st = L.qtst_status_at(tl, self.AT)
+            self.assertEqual(st, {"granted": set(), "errors": {self.F1: L.HISTORY_DUPLICATE_START}}, order)
+
+    def test_history_in_ascending_order_is_an_error(self):
+        tl = _tl(_svc(_QTST, "granted", "2026-01-01T00:00:00Z", _C1,
+                      history=[(_QTST, "withdrawn", "2018-01-01T00:00:00Z", None), (_QTST, "granted", "2020-01-01T00:00:00Z", None)]))
+        self.assertEqual(L.qtst_fingerprints_at(tl, self.AT), set())   # 0.20.3: {F1}
+        self.assertEqual(L.qtst_status_at(tl, self.AT)["errors"], {self.F1: L.HISTORY_NOT_ORDERED})
+
+    def test_controls(self):
+        # descending history: no error, counted (positive control)
+        ok = _tl(_svc(_QTST, "granted", "2026-01-01T00:00:00Z", _C1,
+                      history=[(_QTST, "withdrawn", "2020-01-01T00:00:00Z", None), (_QTST, "granted", "2018-01-01T00:00:00Z", None)]))
+        self.assertEqual(L.qtst_status_at(ok, self.AT), {"granted": {self.F1}, "errors": {}})
+        # ServiceInformation and one history entry with the same start: not 03A; the ServiceInformation applies (03 b)
+        tie = _tl(_svc(_QTST, "granted", "2020-01-01T00:00:00Z", _C1, history=[(_QTST, "withdrawn", "2020-01-01T00:00:00Z", None)]))
+        self.assertEqual(L.qtst_status_at(tie, self.AT), {"granted": {self.F1}, "errors": {}})
+        tie_w = _tl(_svc(_QTST, "withdrawn", "2020-01-01T00:00:00Z", _C1, history=[(_QTST, "granted", "2020-01-01T00:00:00Z", None)]))
+        self.assertEqual(L.qtst_status_at(tie_w, self.AT), {"granted": set(), "errors": {}})
+        # a service that is not QTST is outside the procedure (its certificate is never a QTST match)
+        qc = _tl(_svc(_QC, "granted", "2026-01-01T00:00:00Z", _C1,
+                      history=[(_QC, "granted", "2020-01-01T00:00:00Z", None), (_QC, "withdrawn", "2020-01-01T00:00:00Z", None)]))
+        self.assertEqual(L.qtst_status_at(qc, self.AT), {"granted": set(), "errors": {}})
+        # one error does not hide another service of the same list
+        both = _tl(_svc(_QTST, "granted", "2026-01-01T00:00:00Z", _C1,
+                        history=[(_QTST, "granted", "2020-01-01T00:00:00Z", None), (_QTST, "granted", "2020-01-01T00:00:00Z", None)]),
+                   _svc(_QTST, "granted", "2017-03-01T00:00:00Z", _C2))
+        self.assertEqual(L.qtst_status_at(both, self.AT), {"granted": {_fp(b"SERVICE-2-CERT")},
+                                                             "errors": {self.F1: L.HISTORY_DUPLICATE_START}})
+        # the same certificate in a service in error and in a good one: the error wins (03A stops the procedure for it)
+        shared = _tl(_svc(_QTST, "granted", "2026-01-01T00:00:00Z", _C1,
+                          history=[(_QTST, "granted", "2020-01-01T00:00:00Z", None), (_QTST, "granted", "2020-01-01T00:00:00Z", None)]),
+                     _svc(_QTST, "granted", "2017-03-01T00:00:00Z", _C1))
+        self.assertEqual(L.qtst_status_at(shared, self.AT), {"granted": set(), "errors": {self.F1: L.HISTORY_DUPLICATE_START}})
+        with self.assertRaises(ValueError):
+            L.qtst_status_at(ok, __import__("datetime").datetime(2020, 1, 1))
+
+    def test_qualification_is_three_valued(self):
+        orig = L.token_cert_fingerprints
+        L.token_cert_fingerprints = lambda tok: {"ab" * 32}
+        try:
+            self.assertEqual(L.qualification(b"t", {"ab" * 32}, {}), ("qualified", None))
+            self.assertEqual(L.qualification(b"t", set(), {}), ("not_qualified", None))
+            self.assertEqual(L.qualification(b"t", set(), None), ("not_qualified", None))
+            self.assertEqual(L.qualification(b"t", set(), {"ab" * 32: "history_not_ordered u"}), ("indeterminate", "history_not_ordered u"))
+            self.assertEqual(L.qualification(b"t", set(), {"cd" * 32: "x"}), ("not_qualified", None))
+        finally:
+            L.token_cert_fingerprints = orig
+
+    def test_loader_names_the_errors_and_caches_them(self):
+        import json
+        import tempfile
+        d = tempfile.mkdtemp(); self.addCleanup(__import__("shutil").rmtree, d, True)
+        cache = os.path.join(d, "c.json")
+        lotl = (b'<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#" xmlns:a="http://uri.etsi.org/02231/v2/additionaltypes#">'
+                b'<SchemeInformation><PointersToOtherTSL><OtherTSLPointer><TSLLocation>https://tl.example/x.xml</TSLLocation>'
+                b'<AdditionalInformation><OtherInformation><TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>'
+                b'</OtherInformation><OtherInformation><a:MimeType>application/vnd.etsi.tsl+xml</a:MimeType></OtherInformation>'
+                b'</AdditionalInformation></OtherTSLPointer></PointersToOtherTSL></SchemeInformation></TrustServiceStatusList>')
+        tl = _tl(_svc(_QTST, "granted", "2026-01-01T00:00:00Z", _C1,
+                      history=[(_QTST, "granted", "2020-01-01T00:00:00Z", None), (_QTST, "granted", "2020-01-01T00:00:00Z", None)]),
+                 _svc(_QTST, "granted", "2017-03-01T00:00:00Z", _C2))
+        orig = L._get
+        L._get = lambda url, timeout=45: lotl if url == L.LOTL_URL else tl
+        try:
+            fprs, cov, errs = L.load_qualified_status(cache_path=cache)
+            # the certificate in error is granted by another list: the error still wins
+            two = lotl.replace(b"</PointersToOtherTSL>", lotl[lotl.index(b"<OtherTSLPointer>"):lotl.index(b"</PointersToOtherTSL>")]
+                               .replace(b"tl.example/x.xml", b"tl.example/y.xml") + b"</PointersToOtherTSL>")
+            good = _tl(_svc(_QTST, "granted", "2017-03-01T00:00:00Z", _C1))
+            L._get = lambda url, timeout=45: two if url == L.LOTL_URL else (tl if url.endswith("x.xml") else good)
+            f2, c2, e2 = L.load_qualified_status(cache_path=os.path.join(d, "c2.json"))
+            self.assertEqual((f2, len(c2), e2), ({_fp(b"SERVICE-2-CERT")}, 2, errs))
+        finally:
+            L._get = orig
+        self.assertEqual(fprs, {_fp(b"SERVICE-2-CERT")}); self.assertEqual(cov, ["https://tl.example/x.xml"])
+        self.assertEqual(errs, {self.F1: "history_duplicate_start https://tl.example/x.xml"})
+        rec = json.load(open(cache))
+        self.assertEqual(rec["rule"], L.RULE); self.assertEqual(rec["history_errors"], errs)
+        self.assertEqual(L.load_qualified_status(cache_path=cache), (fprs, cov, errs))   # read back from the cache
+        self.assertEqual(L.load_qualified_fingerprints(cache_path=cache), (fprs, cov))
+        self.assertTrue(L.RULE.endswith("/2"))   # a cache of rule /1 (0.20.2-0.20.3) is rebuilt
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

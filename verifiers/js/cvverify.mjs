@@ -74,6 +74,60 @@ function detectAlgo(entries) {
 const SPKI = Buffer.from("302a300506032b6570032100", "hex");
 // strict decoding with b64Strict and HEX64 (defined below), as Python's signer._b64_strict and Java's b64Strict (audit V1 #12, 30/09/2026):
 // Node's Buffer.from(s, "base64") skips junk characters and takes the URL alphabet and non-canonical padding bits
+// 0.21.0: Ed25519 points of small and mixed order. Node's verify (OpenSSL) implements RFC 8032 5.1.7 with the cofactorless
+// equation and accepted a key or an R of small order, a key of mixed order and a key with x = 0 and the sign bit set
+// (measured 14/10/2026 on the 12 classes of novifinancial/ed25519-speccheck rebuilt on ledger entries); the x402 acceptance
+// checker refuses all 12 (b37e471). The key must decode as RFC 8032 5.1.3 says, not be of small order ([8]A neutral) and
+// lie in the subgroup of order L ([L]A neutral); R must decode and not be of small order (with A in the subgroup the
+// cofactorless equation refuses an R of mixed order). One scalar multiplication per distinct key (cached), three doublings
+// per R. BigInt, not constant time (public values only); the same checks as the Go, Java, Swift and Python code.
+const ED_P = (1n << 255n) - 19n, ED_L = (1n << 252n) + 27742317777372353535851937790883648493n;
+const edm = (a) => ((a % ED_P) + ED_P) % ED_P;
+const edPow = (b, e) => { let r = 1n; b = edm(b); while (e > 0n) { if (e & 1n) r = r * b % ED_P; b = b * b % ED_P; e >>= 1n; } return r; };
+const ED_D = edm(-121665n * edPow(121666n, ED_P - 2n)), ED_I = edPow(2n, (ED_P - 1n) / 4n);
+function edDecode(b) {   // RFC 8032 5.1.3; null when the 32 octets are not a point
+  if (!b || b.length !== 32) return null;
+  let n = 0n; for (let i = 31; i >= 0; i--) n = (n << 8n) | BigInt(b[i]);
+  const x0 = n >> 255n, y = n & ((1n << 255n) - 1n);
+  if (y >= ED_P) return null;
+  const u = edm(y * y - 1n), v = edm(ED_D * y * y + 1n);
+  let x = edm(u * edPow(v, 3n) % ED_P * edPow(u * edPow(v, 7n), (ED_P - 5n) / 8n));
+  const vxx = edm(v * x * x);
+  if (vxx === u) { /* root */ } else if (vxx === edm(-u)) x = edm(x * ED_I); else return null;
+  if (x === 0n && x0 === 1n) return null;
+  if ((x & 1n) !== x0) x = ED_P - x;
+  return [x, y, 1n, edm(x * y)];
+}
+function edAdd(P, Q) {   // RFC 8032 5.1.4
+  const a = edm((P[1] - P[0]) * (Q[1] - Q[0])), b = edm((P[1] + P[0]) * (Q[1] + Q[0]));
+  const c = edm(P[3] * 2n * ED_D * Q[3]), d = edm(P[2] * 2n * Q[2]);
+  const e = b - a, f = d - c, g = d + c, h = b + a;
+  return [edm(e * f), edm(g * h), edm(f * g), edm(e * h)];
+}
+function edMulPt(k, P) { let R = [0n, 1n, 1n, 0n]; for (let i = BigInt(k.toString(2).length) - 1n; i >= 0n; i--) { R = edAdd(R, R); if ((k >> i) & 1n) R = edAdd(R, P); } return R; }
+const edNeutral = (P) => P[0] === 0n && edm(P[1] - P[2]) === 0n;
+export function ed25519KeyProblem(pk) {
+  const A = edDecode(pk);
+  if (A === null) return "key_not_decodable";
+  if (edNeutral(edMulPt(8n, A))) return "small_order_key";
+  if (!edNeutral(edMulPt(ED_L, A))) return "mixed_order_key";
+  return null;
+}
+export function ed25519RProblem(sig) {
+  const R = sig && sig.length === 64 ? edDecode(sig.subarray(0, 32)) : null;
+  if (R === null) return "r_not_decodable";
+  return edNeutral(edMulPt(8n, R)) ? "small_order_r" : null;
+}
+const ED_KEY_CACHE = new Map();
+function edStrict(pkBuf, msg, sigBuf) {   // null when it verifies, else the reason
+  const hx = pkBuf.toString("hex");
+  if (!ED_KEY_CACHE.has(hx)) ED_KEY_CACHE.set(hx, ed25519KeyProblem(pkBuf));
+  const kp = ED_KEY_CACHE.get(hx); if (kp) return kp;
+  const rp = ed25519RProblem(sigBuf); if (rp) return rp;
+  const key = createPublicKey({ key: Buffer.concat([SPKI, pkBuf]), format: "der", type: "spki" });
+  return edVerify(null, msg, key, sigBuf) ? null : "bad_signature";
+}
+
 function verifySig(entry, expectedPubHex) {
   const { signature, signer, self_hash } = entry;
   if (!signature || !signer || !self_hash) return { ok: false, reason: "missing signature/signer/self_hash" };
@@ -81,9 +135,8 @@ function verifySig(entry, expectedPubHex) {
   const rawSig = b64Strict(signature, 64);
   if (rawSig === null || typeof signer !== "string" || !HEX64.test(signer)) return { ok: false, reason: "malformed_signature_field" };
   try {
-    const key = createPublicKey({ key: Buffer.concat([SPKI, Buffer.from(signer, "hex")]), format: "der", type: "spki" });
-    const ok = edVerify(null, Buffer.from(self_hash, "utf-8"), key, rawSig);
-    return ok ? { ok: true } : { ok: false, reason: "bad_signature" };
+    const why = edStrict(Buffer.from(signer, "hex"), Buffer.from(self_hash, "utf-8"), rawSig);
+    return why === null ? { ok: true } : { ok: false, reason: why };
   } catch (e) { return { ok: false, reason: "verify_error" }; }
 }
 
@@ -204,12 +257,11 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
   // "PASS but untrusted" an automation reads as exit 0 — council 15/09)
   if (!trustedPubkeyHex) return { ok: false, pq_protected: false, trusted: false, error: "tip_untrusted: no trusted log key given (--trusted-pubkey); the key inside the tip cannot be trusted" };
   if (tip.log_pubkey_hex && tip.log_pubkey_hex !== trustedPubkeyHex) return { ok: false, pq_protected: false, error: "tip_invalid: tip log key differs from the trusted log key" };   // "" = absent, as in Python/Go
-  let sigOk = false;
+  let why = "bad_signature";
   try {
-    const key = createPublicKey({ key: Buffer.concat([SPKI, Buffer.from(trustedPubkeyHex, "hex")]), format: "der", type: "spki" });
-    sigOk = edVerify(null, tipPayload(Number(tip.entries), tip.ledger_id, tip.tip_sha256, tip.ts), key, Buffer.from(tip.signature_hex, "hex"));
-  } catch (e) { sigOk = false; }
-  if (!sigOk) return { ok: false, pq_protected: false, error: "tip_invalid: tip signature invalid" };
+    why = edStrict(Buffer.from(trustedPubkeyHex, "hex"), tipPayload(Number(tip.entries), tip.ledger_id, tip.tip_sha256, tip.ts), Buffer.from(tip.signature_hex, "hex"));
+  } catch (e) { why = "bad_signature"; }
+  if (why !== null) return { ok: false, pq_protected: false, error: "tip_invalid: tip signature invalid" + (why === "bad_signature" ? "" : ` (${why})`) };   // 0.21.0: named
   const n = Number(tip.entries), trusted = Boolean(trustedPubkeyHex);
   if (expectLedgerId && tip.ledger_id !== expectLedgerId) return { ok: false, pq_protected: false, trusted, error: "ledger_id_mismatch: the tip belongs to a different ledger than the one you expect" };
   if (firstSelfHash !== null && entriesCount > 0 && tip.ledger_id !== firstSelfHash) return { ok: false, pq_protected: false, trusted, error: "tip_of_another_ledger: the tip's ledger_id is not this file's first self_hash" };
@@ -297,16 +349,26 @@ export function verifyLedger(text, { algo = null, pubkey = null, tip = null, tru
   const chainIntegrity = hashFailures.length === 0 && linkFailures.length === 0 && idxOk && errors.length === 0 && schemaFailures.length === 0;   // SPEC §2.1
 
   let signatures = null;
-  if (entries.some((e) => e.signature) || pubkey) {
+  // 0.21.0 (SPEC v0.4 §5 step 5, signature profile): the layer is any of the four signature fields in any entry (until 0.20.3
+  // a truthy "signature"); a layer that does not verify is a FAIL with or without a key (until 0.20.3 only with --pubkey)
+  const SIG_FIELDS = ["signature", "signer", "signature_pq", "signer_pq"];
+  const has = (e, k) => e !== null && typeof e === "object" && Object.prototype.hasOwnProperty.call(e, k);
+  const layer = entries.some((e) => SIG_FIELDS.some((k) => has(e, k)));
+  if (layer || pubkey) {
     const failures = []; let verified = 0; const signers = new Set();
     entries.forEach((e, i) => { const r = verifySig(e, pubkey); if (r.ok) { verified++; signers.add(e.signer); } else failures.push({ idx: e.idx ?? i, reason: r.reason }); });
     signatures = { all_verified: failures.length === 0 && entries.length > 0, verified, failures, signers: [...signers] };
+    // ML-DSA-65 is not verified here (Node has no ML-DSA): said, by count, when the ledger carries it
+    const pq = entries.filter((e) => has(e, "signature_pq") || has(e, "signer_pq")).length;
+    if (pq > 0) signatures.pq_not_checked = pq;
   }
   // with --pubkey the caller PINNED the signer: a signature layer that does not verify fails the run, as in Java -pubkey
   // (audit V1 A16, 30/09/2026: before, a broken signature gave all_verified false but verdict PASS, exit 0)
   const pinnedSigFail = Boolean(pubkey) && !(signatures && signatures.all_verified);
   if (pinnedSigFail) errors.push({ error: "signatures_failed: the pinned signature layer does not verify" });
-  const verdictPass = chainIntegrity && !pinnedSigFail;
+  const layerSigFail = !pubkey && layer && !(signatures && signatures.all_verified);
+  if (layerSigFail) errors.push({ error: "signatures_failed: the signature layer the ledger carries does not verify (no key pinned)" });
+  const verdictPass = chainIntegrity && !pinnedSigFail && !layerSigFail;
   const receiptPayload = Buffer.from(canon({ algorithm: use, chain_integrity: chainIntegrity, entries: entries.length,
     hash_failures_idx: hashFailures.map((f) => f.idx), link_failures_idx: linkFailures.map((f) => f.idx),
     verdict: verdictPass ? "PASS" : "FAIL" }), "utf-8");

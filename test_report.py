@@ -83,6 +83,22 @@ class TestReportPositive(_Base):
         r = report.generate_report(self.pack, html_only=True)
         self.assertFalse(r["eidas"]["checked"])               # rete solo opt-in
 
+    def test_lotl_history_error_is_inconclusive(self):
+        # 0.21.0, ETSI TS 119 615 PRO-4.3.4-03A: neither QUALIFIED nor NOT QUALIFIED
+        import base64 as _b64
+        import cryptovalid_lotl as lotl
+        man = {"rfc3161_timestamp": {"anchored": True, "tsr_b64": _b64.b64encode(b"tok").decode(), "tsa": "t"}}
+        orig = lotl.load_qualified_status, lotl.token_cert_fingerprints
+        lotl.token_cert_fingerprints = lambda tok: {"ab" * 32}
+        try:
+            for herr, qual in (({"ab" * 32: "history_not_ordered u"}, None), ({}, False)):
+                lotl.load_qualified_status = lambda member_states=None, cache_path=None, h=herr: (set(), [], h)
+                r = report.lotl_status(man)
+                self.assertIs(r["qualified"], qual, r)
+                self.assertEqual("history_not_ordered" in r.get("note", ""), qual is None, r)
+        finally:
+            lotl.load_qualified_status, lotl.token_cert_fingerprints = orig
+
     @unittest.skipUnless(_HAVE_WEASY, "WeasyPrint not installed (honest skip)")
     def test_pdf_rendered_when_weasyprint_present(self):
         r = report.generate_report(self.pack)

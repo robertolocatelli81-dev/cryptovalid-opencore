@@ -101,11 +101,14 @@ ok("signature: pubkey pin mismatch flagged", !verifyLedger(JSON.stringify(signed
   ok("pinned pubkey + valid signature: PASS", verifyLedger(JSON.stringify(signed), { pubkey: pk }).verdict === "PASS");
   const broken = verifyLedger(JSON.stringify(badSig), { pubkey: pk });
   ok("pinned pubkey + broken signature: verdict FAIL", broken.verdict === "FAIL" && broken.errors.some((e) => e.error.startsWith("signatures_failed")));
-  ok("the independent receipt carries the FAIL too (NEMESIS JS6)", broken.independent_receipt_sha256 !== verifyLedger(JSON.stringify(badSig)).independent_receipt_sha256);
+  ok("the independent receipt carries the FAIL too (NEMESIS JS6)", broken.independent_receipt_sha256 !== verifyLedger(JSON.stringify(signed)).independent_receipt_sha256);
   const { signature: _s, signer: _g, ...unsignedValid } = signed;   // a valid chain entry, no signature fields
   ok("control: unsigned valid entry PASSES without --pubkey", verifyLedger(JSON.stringify(unsignedValid)).verdict === "PASS");
   ok("pinned pubkey + no signature at all: verdict FAIL", verifyLedger(JSON.stringify(unsignedValid), { pubkey: pk }).verdict === "FAIL");
-  ok("no pubkey: broken signature reported, chain verdict unchanged (declared)", verifyLedger(JSON.stringify(badSig)).verdict === "PASS" && !verifyLedger(JSON.stringify(badSig)).signatures.all_verified);
+  // 0.21.0 (SPEC v0.4 §5 step 5): without a key a layer that does not verify is a FAIL too (until 0.20.3 PASS, reported)
+  const nokey = verifyLedger(JSON.stringify(badSig));
+  ok("no pubkey: broken signature FAIL, named", nokey.verdict === "FAIL" && !nokey.signatures.all_verified && nokey.chain_integrity === true
+     && nokey.errors.some((e) => e.error.startsWith("signatures_failed: the signature layer the ledger carries")), JSON.stringify(nokey.errors));
 }
 
 // 5) robustness: never throws on garbage
@@ -298,6 +301,29 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
     }
   }
   ok("lib: unknown algo throws (as hash_with in verifier.py)",(() => { try { verifyLedger(good.toString(), { algo: "foo" }); return false; } catch (e) { return e.message.startsWith("unsupported_algo"); } })());
+}
+
+// 0.21.0: the signature-profile vectors (spec/vectors/signatures): verdict and failing entries with their reason, without a key;
+// the normative block of steps 1-4 holds for each (chain_integrity true)
+{
+  const SDIR = join(VDIR, "signatures");
+  const { readdirSync } = await import("node:fs");
+  const files = readdirSync(SDIR).filter((x) => x.endsWith(".expected.json")).sort();
+  ok("signature vectors present", files.length >= 21, String(files.length));
+  for (const f of files) {
+    const exp = JSON.parse(readFileSync(join(SDIR, f), "utf-8"));
+    const r = verifyLedger(readFileSync(join(SDIR, exp.input), "utf-8"));
+    const got = (r.signatures ? r.signatures.failures : []).map((x) => [x.idx, x.reason]);
+    const want = exp.signature_profile.failures.map((x) => [x.idx, x.reason]);
+    ok(`signature profile ${exp.input}`, r.verdict === exp.signature_profile.verdict && r.chain_integrity === exp.normative.chain_integrity
+       && JSON.stringify(got) === JSON.stringify(want), JSON.stringify({ verdict: r.verdict, got }));
+  }
+  // ML-DSA-65 is not verified here: counted by name, the verdict is the Ed25519 layer's
+  const hy = verifyLedger(readFileSync(join(SDIR, "signed_valid.jsonl"), "utf-8").split("\n").filter(Boolean)
+    .map((l) => { const e = JSON.parse(l); e.signature_pq = "AAAA"; e.signer_pq = "AAAA"; return JSON.stringify(e); }).join("\n"));
+  ok("pq_not_checked counts the ML-DSA layer", hy.verdict === "PASS" && hy.signatures.pq_not_checked === 3, JSON.stringify(hy.signatures));
+  const none = verifyLedger(readFileSync(join(VDIR, "valid_sha256.jsonl"), "utf-8"));
+  ok("no signature field: no signatures block (receipt of 0.20.3)", none.signatures === null && none.verdict === "PASS");
 }
 
 console.log(`\ncvverify test: ${pass} passed, ${fail} failed`);

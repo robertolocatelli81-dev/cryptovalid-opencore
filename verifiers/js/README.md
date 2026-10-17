@@ -19,8 +19,11 @@ of 64 bytes; signer: 64 lowercase hex, as the Python reference and the Java veri
 1 on FAIL, 2 when the file cannot be read (`FILE_ERROR`) or on a usage error, 74 when the receipt could not be written
 whole (stdout full, under a file size limit, or a reader gone; since 0.20.3), whatever the verdict. A regular file is
 written in a loop to the last byte (Node's stream took what fitted under `ulimit -f` and the code was the verdict's). With stdout closed (`>&-`) Node reopens it on
-`/dev/null`: the write succeeds there and the program cannot tell. Without `--pubkey` the verdict covers the chain only and a signature that does not verify is reported in
-`signatures` (`all_verified: false`); with `--pubkey` it fails the run, as `java CvVerify.java -pubkey`.
+`/dev/null`: the write succeeds there and the program cannot tell. Since 0.21.0 (SPEC v0.4 §5 step 5) a signature
+layer that does not verify fails the run with or without `--pubkey` (until 0.20.3 it was only reported in `signatures` without
+a key), the failing entries named in `signatures.failures`; a key or an R of small order and a key of mixed order are refused
+(`small_order_key`, `mixed_order_key`, `small_order_r`, `key_not_decodable`, `r_not_decodable`), the signed tip too; ML-DSA-65
+is not verified here: `signatures.pq_not_checked` counts the entries that carry it.
 Library: `import { verifyLedger, conformance } from "./cvverify.mjs"` (no CLI side-effect).
 
 Honest scope: proves integrity, linkage and signature; it does NOT prove the truth of

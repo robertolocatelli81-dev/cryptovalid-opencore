@@ -289,6 +289,29 @@ class TestCheckNotRunMore(_Tmp):
         self.assertEqual(rc, EX_IOERR, out + err)
         self.assertIn(b"cannot run openssl here", err)
 
+    def test_openssl_ended_by_a_signal_or_127_is_not_verified(self):
+        # 0.21.0, declared (audit R2 of class 16, 13/10/2026): openssl that STARTED and then was killed by a signal, or a
+        # wrapper that exits 127, answered: the token is "not verified" (rfc3161.verified false), not "check not run" (74) —
+        # an input that makes openssl crash must not become a check that did not run. Measured on 0.20.3: the same. The
+        # pack's `valid` does not depend on the timestamp (README: RFC 3161 anchoring is optional), so it stays true, exit 0.
+        import cryptovalid_tsa as T
+        for body in ("#!/bin/sh\nkill -KILL $$\n", "#!/bin/sh\nkill -SEGV $$\n", "#!/bin/sh\nexit 127\n"):
+            with self.subTest(body=body):
+                shutil.rmtree(os.path.join(self.d, "bin"), ignore_errors=True)
+                shutil.rmtree(os.path.join(self.d, "pack"), ignore_errors=True)
+                pack = self._pack()
+                env = self._fake_openssl(body)
+                rc, out, err = self.run_py([os.path.join(HERE, "evidence_pack.py"), "verify", pack], env=env)
+                r = json.loads(out)
+                self.assertEqual((rc, r["valid"], r["rfc3161"]["claimed"], r["rfc3161"]["verified"]), (0, True, True, False), out + err)
+                old = os.environ["PATH"]
+                os.environ["PATH"] = env["PATH"]
+                try:
+                    self.assertIs(T.verify_with_openssl(b"x", b"y"), False)
+                    self.assertIs(T.verify_cms_signature(b"x"), False)
+                finally:
+                    os.environ["PATH"] = old
+
     def test_pack_build_stamp_not_run_is_74(self):
         if not shutil.which("openssl"):
             self.skipTest("openssl absent")

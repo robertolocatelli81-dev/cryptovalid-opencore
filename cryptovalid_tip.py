@@ -30,6 +30,15 @@ ledgers lets the pair file+tip of B be substituted for A). The verifier checks i
 import sys as _sys_0203
 if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
     _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
+    _L0210 = type(__loader__)   # 0.21.0: a .pyc already cut (CPython 3.9/3.11 installed one) is compiled from the source
+    if _L0210.__name__ == "SourceFileLoader":   # instead of failing every later run (EOFError: marshal data too short)
+        def _get_code_0210(self, fullname, _get_code=_L0210.get_code):
+            try:
+                return _get_code(self, fullname)
+            except (EOFError, ValueError):
+                path = self.get_filename(fullname)
+                return self.source_to_code(self.get_data(path), path)
+        _L0210.get_code = _get_code_0210
 import argparse
 import calendar
 import hashlib
@@ -240,6 +249,13 @@ def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str], trusted_p
     if tip.get("log_pubkey_hex") not in (None, "", trusted_pubkey_hex):   # "" = absent, as in Go/JS
         return {"ok": False, "why": "tip log key differs from the trusted log key", "pq_protected": False}
     payload = tip_payload(int(tip["entries"]), tip["ledger_id"], tip["tip_sha256"], tip["ts"])
+    try:   # 0.21.0: a key or an R of small order, a key of mixed order or not decodable, named (ed25519_order)
+        import ed25519_order as _edo
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore import ed25519_order as _edo
+    why = _edo.strict_problem(bytes.fromhex(trusted_pubkey_hex), bytes.fromhex(tip["signature_hex"]))
+    if why is not None:
+        return {"ok": False, "why": f"tip signature invalid: {why}", "pq_protected": False}
     try:
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(trusted_pubkey_hex)).verify(bytes.fromhex(tip["signature_hex"]), payload)
     except Exception as e:  # noqa: BLE001 — any failure is one verdict

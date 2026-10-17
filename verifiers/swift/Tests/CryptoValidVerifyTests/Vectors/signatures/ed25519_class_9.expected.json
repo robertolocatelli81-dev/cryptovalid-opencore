@@ -1,0 +1,23 @@
+{
+ "input": "ed25519_class_9.jsonl",
+ "normative": {
+  "algorithm": "sha256",
+  "chain_integrity": true,
+  "entries": 1,
+  "hash_failures_idx": [],
+  "link_failures_idx": [],
+  "verdict": "PASS"
+ },
+ "signature_profile": {
+  "failures": [
+   {
+    "idx": 0,
+    "reason": "mixed_order_key"
+   }
+  ],
+  "verdict": "FAIL"
+ },
+ "without_step5": {
+  "signatures_not_checked": 1
+ }
+}

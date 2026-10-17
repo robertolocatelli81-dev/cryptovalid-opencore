@@ -1,0 +1,19 @@
+{
+ "input": "merkle_leaves.jsonl",
+ "description": "SPEC \u00a79 (v0.4, cryptovalid-opencore 0.21.0): a leaf is the canonical form of \u00a73, without self_hash and the five attestation fields; entries 1-3 carry signature_pq/signer_pq/tsa_token (placeholder values: this vector fixes the leaves, not the attestations)",
+ "normative": {
+  "tree_size": 5,
+  "root_sha256": "368c56ae34e2b780a264020cc2ffc775fbaf141a2d7f95f7b5c40177bfef1939",
+  "leaf_hashes": [
+   "71084616e8c4955320572874185c71be96963333b8278f641eeaa1e7d0c5669f",
+   "3846f60c67eaa5c6d4765f613dc82bcbe3305bdfadab257a90d326c857b8c69e",
+   "7ee974ca64cc2f51e91f4da603eab431324526dc8d9db2e45b18fa4af459218f",
+   "278b8eaf5a6fcea5e5daf658056f6ec4ddf250f793e7de65e40c5737dbec891c",
+   "4dda6c658eeca5c51a01abd09d4eb10cca3c999b2e55ae34762e1d46148536cd"
+  ]
+ },
+ "until_0_20_3": {
+  "root_sha256": "577ec956aabb835ff04a9d6454d6bf2328617f300c30123f5fad7405812df45c",
+  "note": "leaves kept signature_pq, signer_pq and tsa_token"
+ }
+}

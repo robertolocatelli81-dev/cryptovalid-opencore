@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.3 (2026-10-12)
+# CryptoValid Evidence Format — candidate standard v0.4 (2026-10-14; v0.3 2026-10-12)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -125,7 +125,15 @@ forces a boolean where reality had none.
    mismatch → FAIL.
 3. Check the chain rule for every entry → any mismatch → FAIL.
 4. Check `idx == position` for every entry → any mismatch → FAIL.
-5. If `signature`/`signer` present: verify Ed25519 over the `self_hash` string (its UTF-8 bytes).
+5. If any entry carries a signature field (`signature`, `signer`, `signature_pq`, `signer_pq`): verify Ed25519 over the
+   `self_hash` string (its UTF-8 bytes) for every entry — the **signature profile**, NORMATIVE for a verifier that performs
+   this step since v0.4: a layer that does not verify (an entry unsigned or partly signed, a signature broken or malformed,
+   a key or an R refused below) is a FAIL, with or without a pinned key, and the failing entries are named. The public key
+   MUST decode as RFC 8032 5.1.3 says (`y < p`; `x = 0` with the sign bit set refused), MUST NOT be of small order (`[8]A`
+   neutral) and MUST lie in the subgroup of order L (`[L]A` neutral); R MUST decode and MUST NOT be of small order; the
+   equation is RFC 8032 5.1.7's (an R of mixed order with such a key cannot satisfy the cofactorless equation). Without a
+   pinned key a valid signature by any key is a PASS: the key is the caller's to pin. Vectors: `spec/vectors/signatures/`
+   (21: their `normative` block is steps 1-4, their `signature_profile` block step 5).
 6. If `tsa_token` present: verify the RFC 3161 token binds `self_hash` and a
    TSA time consistent with `ts`. (No verifier in this repository performs this step: see below.)
 7. A ledger with zero entries is FAIL (nothing was verified; `empty_ledger` error). Emit a JSON receipt including counts, failures (capped), verdict PASS/FAIL,
@@ -133,19 +141,27 @@ forces a boolean where reality had none.
    excluded).
 
 Reference implementation: `verifier.py` (steps 1–4 + receipt, stdlib-only); `signer.py verify` (step 5, Ed25519 and,
-when present, ML-DSA-65). Steps 5–6 are OPTIONAL profiles; their absence never weakens steps 1–4. Who performs them,
-measured on 2026-10-12 (0.20.2) on a three-entry ledger with one signature changed, missing, malformed or by another key:
+when present, ML-DSA-65). Steps 5–6 are OPTIONAL profiles: a verifier may leave them out (and says so: see below), their
+absence never weakens steps 1–4; a verifier that performs step 5 follows its profile. Who performs them, measured on
+2026-10-12 (0.20.2) on a three-entry ledger with one signature changed, missing, malformed or by another key, and on
+2026-10-14 (0.21.0) on the 21 vectors of `spec/vectors/signatures/` in the six verifiers and `signer.py`:
 
-- `verifier.py` and the Rust verifier do not verify signatures and have no key option: a broken signature is PASS.
+- `verifier.py` and the Rust verifier do not perform step 5 and have no key option: a broken signature is PASS. Since 0.21.0
+  their receipt says so when it matters: `signatures_not_checked` = the number of entries carrying a signature field, present
+  only when it is not zero (the receipt of a ledger without signature fields is unchanged).
 - `signer.py verify` verifies every entry: an unsigned, broken, malformed or partial layer is `ok: false`, exit 1, with or
   without `--pubkey`; with `--pubkey` a foreign signer is too.
-- The JS, Go, Java and Swift verifiers verify Ed25519 when an entry carries `signature` or a key is given (`--pubkey`,
-  Go/Java `-pubkey`). Without a key the result is reported (`signatures.all_verified` in JS, `signatures.ok` in Go and
-  Java, `signatures_all_verified` in Swift) and the verdict is the chain's: PASS on a broken, missing or malformed
-  signature and on a foreign signer. With a key, a layer that does not verify — an entry unsigned, a signature broken or
-  malformed, another signer — makes the verdict FAIL.
-- ML-DSA-65 (`signature_pq`): `signer.py`, Go and Java verify it (with a key, a broken one is FAIL); JS and Swift do not
-  (with `--pubkey`, a ledger whose `signature_pq` is broken is PASS there).
+- The JS, Go, Java and Swift verifiers perform step 5 (the signature profile above) when an entry carries any signature
+  field or a key is given (`--pubkey`, Go/Java `-pubkey`); the result is in `signatures.all_verified` (JS),
+  `signatures.ok` (Go, Java), `signatures_all_verified` (Swift). Since 0.21.0 a layer that does not verify is a FAIL
+  without a key too (until 0.20.3 the verdict was the chain's: PASS on a broken, missing or malformed signature; and only
+  `signature` opened the layer). A foreign signer is a PASS without a key and a FAIL with one. The small/mixed-order rule
+  applies to the entry signatures and to the signed chain tip (measured 14/10/2026: until 0.20.3 OpenSSL through
+  `cryptography`, Node, Go and swift-crypto verified 6 of the 12 classes of novifinancial/ed25519-speccheck rebuilt on
+  ledger entries, the JDK 4; now none in the five).
+- ML-DSA-65 (`signature_pq`): `signer.py`, Go and Java verify it (a broken one is FAIL, with or without a key since 0.21.0);
+  JS and Swift do not: they count the entries that carry it (`pq_not_checked`), and a ledger whose `signature_pq` is broken
+  is PASS there.
 - Step 6: no verifier in this repository performs it. `tsa_token` is accepted (§2.1) and excluded from the hash (§3), and
   not checked. `evidence_pack.py` timestamps the pack's manifest digest with RFC 3161 (verified against a real DigiCert
   TSA), not entries; `cryptovalid_tsa.py` requests and checks a token over any digest (e.g. a Merkle root).
@@ -156,15 +172,19 @@ were "verified when present".
 ## 6. Versioning
 
 The spec is versioned semver-style. Ledgers MAY carry
-`{"spec": "cryptovalid-evidence/0.3"}` inside `data` of entry 0. Breaking
+`{"spec": "cryptovalid-evidence/0.4"}` inside `data` of entry 0. Breaking
 changes bump major (before 1.0, minor). Verifiers should state the versions they support; the six verifiers of this
-repository implement v0.3, do not state it in their receipts and do not read the `spec` value yet.
+repository implement v0.4, do not state it in their receipts and do not read the `spec` value yet.
 v0.3 (2026-10-12, cryptovalid-opencore 0.20.2) collects the changes since v0.2 (2026-08-13) that turn a PASS into a FAIL:
 a ledger with zero entries is FAIL (§5 step 7, cryptovalid-opencore 0.9.3, 2026-09-11: until then the JS verifier said
 PASS on it, exit 0, and the reference EMPTY, exit 1); the closed entry schema of §2.1 (0.19.0: an undefined top-level key fails); `idx` required on every
 path (0.20.0); `tsa_token` outside the canonical form of §3 (0.20.2: a token hashed as content fails step 2). The first
 three were made without a version bump (§2.1 carried its own label, v0.2.1, while the header stayed v0.2); this list
 was corrected after the release of 0.20.2, which named three changes, without the empty ledger.
+v0.4 (2026-10-14, cryptovalid-opencore 0.21.0) changes the Merkle leaves (§9: the canonical form of §3; a different root
+for a ledger carrying `signature_pq`, `signer_pq` or `tsa_token`) and makes step 5 a normative profile (§5): for the
+verifiers that perform it, a signature layer that does not verify, a key or an R of small order, a key of mixed order
+turn a PASS into a FAIL without a key.
 
 ## 7. Conformance (normative)
 
@@ -189,11 +209,13 @@ flagged, never silently trusted — the format never lets outdated regulatory st
 
 ## 9. Optional Merkle extension (RFC 6962) — efficient inclusion & consistency
 
-For large ledgers, `cryptovalid_merkle.py` builds an **RFC 6962** Merkle tree whose leaves are each entry
-serialised by the rules of §3 without `self_hash`, `signature` and `signer` only — so a leaf keeps `signature_pq`,
-`signer_pq` and `tsa_token`, which the canonical form of §3 leaves out (corrected 2026-10-12: this line said "the
-canonical form of each entry (§3)"; whether the leaves follow §3 is open, since it changes the root of any ledger that
-carries those fields), giving:
+For large ledgers, `cryptovalid_merkle.py` builds an **RFC 6962** Merkle tree whose leaf data is the **canonical form of
+§3** of each entry — the bytes its `self_hash` is computed over, without `self_hash` and the five attestation fields
+(NORMATIVE since v0.4, cryptovalid-opencore 0.21.0; vector `spec/vectors/merkle_leaves.json`). An attestation added after a
+tree head (a `tsa_token`, an ML-DSA layer) does not change the root. **Compatibility:** until 0.20.3 a leaf kept
+`signature_pq`, `signer_pq` and `tsa_token`; the root of a ledger that carries any of them differs from 0.21.0 on, and a
+tree head, checkpoint or receipt computed for such a ledger before 0.21.0 is reproduced by cryptovalid-opencore 0.20.3,
+not by later versions (the vector records both roots). The root of a ledger without those fields is unchanged. Giving:
 
 - **inclusion proofs** — verify one entry in `O(log n)` (audit path), no full-chain recompute;
 - **consistency proofs** — cryptographic proof that a newer ledger *append-only extends* an older one;

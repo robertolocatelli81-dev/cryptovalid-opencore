@@ -12,7 +12,6 @@ package cryptovalid
 // binds the signed bytes to the content.
 
 import (
-	"crypto/ed25519"
 	"encoding/hex"
 	"fmt"
 	"sort"
@@ -42,6 +41,7 @@ func VerifySignatures(entries []*Object, expectedPubkeyHex, expectedPQPubkeyB64 
 	require := requirePQ || expectedPQPubkeyB64 != ""
 	signers, pqSigners := map[string]bool{}, map[string]bool{}
 	pqPresent, pqUnverifiable := 0, 0
+	keyCache := map[string]string{}
 	for i, e := range entries {
 		if e == nil {
 			sc.Failures = append(sc.Failures, fmt.Sprintf("idx %d: missing signature/signer/self_hash", i))
@@ -64,11 +64,12 @@ func VerifySignatures(entries []*Object, expectedPubkeyHex, expectedPQPubkeyB64 
 			continue
 		}
 		pk, _ := hex.DecodeString(signer) // already validated: 64 lowercase hex
-		if ed25519.Verify(ed25519.PublicKey(pk), []byte(sh), rawSig) {
+		// 0.21.0: a key or an R of small order, a key of mixed order or not decodable is refused by name (ed25519order.go)
+		if ok, why := ed25519Strict(pk, []byte(sh), rawSig, keyCache); ok {
 			sc.Verified++
 			signers[signer] = true
 		} else {
-			sc.Failures = append(sc.Failures, fmt.Sprintf("idx %d: bad_signature", i))
+			sc.Failures = append(sc.Failures, fmt.Sprintf("idx %d: %s", i, why))
 		}
 		pqSigV, hasSig := e.Vals["signature_pq"]
 		pqSignerV, hasSigner := e.Vals["signer_pq"]

@@ -4,11 +4,21 @@
 # Copyright (C) 2026 Roberto Locatelli
 """RFC 6962 Merkle extension for cryptovalid-opencore: O(log n) inclusion and
 consistency (append-only) proofs, third-party-verifiable, QTSP-ready Signed Tree Head.
-Leaves are each ledger entry without self_hash, signature and signer, serialised as the canonical form (sorted keys,
-compact separators); unlike the self_hash rule (SPEC §3) they keep signature_pq, signer_pq and tsa_token. Stdlib-only."""
+A leaf is the canonical form of SPEC §3 (the bytes self_hash is computed over: the entry without self_hash and the five
+attestation fields). Until 0.20.3 a leaf kept signature_pq, signer_pq and tsa_token, so an ML-DSA signature or a timestamp
+token added after a tree head changed the root of entries it already covered. Stdlib-only."""
 import sys as _sys_0203
 if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
     _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
+    _L0210 = type(__loader__)   # 0.21.0: a .pyc already cut (CPython 3.9/3.11 installed one) is compiled from the source
+    if _L0210.__name__ == "SourceFileLoader":   # instead of failing every later run (EOFError: marshal data too short)
+        def _get_code_0210(self, fullname, _get_code=_L0210.get_code):
+            try:
+                return _get_code(self, fullname)
+            except (EOFError, ValueError):
+                path = self.get_filename(fullname)
+                return self.source_to_code(self.get_data(path), path)
+        _L0210.get_code = _get_code_0210
 import hashlib
 import json
 
@@ -131,8 +141,8 @@ def consistency_verdict(m, n, proof, old_root, new_root) -> str:
 
 
 def canonical(entry):
-    d = {k: v for k, v in entry.items() if k not in ("self_hash", "signature", "signer")}
-    return json.dumps(d, sort_keys=True, separators=(",", ":")).encode()
+    """The leaf data of an entry: the canonical form of SPEC §3, the one function verifier.canonical_payload (0.21.0)."""
+    return canonical_payload(entry)
 
 
 def leaves_from_ledger(path):
@@ -159,9 +169,9 @@ def signed_tree_head(leaves):
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say
+    from verifier import Parser, canonical_payload, emit, receipt_cli, say
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say
+    from opencore.verifier import Parser, canonical_payload, emit, receipt_cli, say
 
 
 @receipt_cli

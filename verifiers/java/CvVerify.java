@@ -231,6 +231,64 @@ public class CvVerify {
         return KeyFactory.getInstance(alg).generatePublic(new X509EncodedKeySpec(spki));
     }
     static boolean edVerify(byte[] pk, byte[] msg, byte[] sig) { try { Signature v = Signature.getInstance("Ed25519"); v.initVerify(key("Ed25519", ED_SPKI, pk)); v.update(msg); return v.verify(sig); } catch (Exception e) { return false; } }
+    // 0.21.0: Ed25519 points of small and mixed order. The JDK's Ed25519 (RFC 8032 5.1.7, cofactorless) verified a key or an R
+    // of small order and a key of mixed order (measured 14/10/2026 on the 12 classes of novifinancial/ed25519-speccheck rebuilt
+    // on ledger entries: classes 0-3); the x402 acceptance checker refuses all 12 (b37e471). The key must decode as RFC 8032
+    // 5.1.3 says, not be of small order ([8]A neutral) and lie in the subgroup of order L ([L]A neutral); R must decode and
+    // not be of small order (with A in the subgroup the cofactorless equation refuses an R of mixed order). BigInteger,
+    // not constant time (public values only); the same checks as the Go, JS, Swift and Python code.
+    static final java.math.BigInteger EP = java.math.BigInteger.ONE.shiftLeft(255).subtract(java.math.BigInteger.valueOf(19));
+    static final java.math.BigInteger EL = java.math.BigInteger.ONE.shiftLeft(252).add(new java.math.BigInteger("27742317777372353535851937790883648493"));
+    static final java.math.BigInteger ED = java.math.BigInteger.valueOf(-121665).multiply(java.math.BigInteger.valueOf(121666).modInverse(EP)).mod(EP);
+    static final java.math.BigInteger EI = java.math.BigInteger.TWO.modPow(EP.subtract(java.math.BigInteger.ONE).shiftRight(2), EP);
+    static java.math.BigInteger[] edDecode(byte[] b) {   // RFC 8032 5.1.3; null when the 32 octets are not a point
+        if (b == null || b.length != 32) return null;
+        byte[] be = new byte[32]; for (int i = 0; i < 32; i++) be[31 - i] = b[i];
+        java.math.BigInteger n = new java.math.BigInteger(1, be);
+        boolean x0 = n.testBit(255); java.math.BigInteger y = n.clearBit(255);
+        if (y.compareTo(EP) >= 0) return null;
+        java.math.BigInteger yy = y.multiply(y).mod(EP), u = yy.subtract(java.math.BigInteger.ONE).mod(EP), v = ED.multiply(yy).add(java.math.BigInteger.ONE).mod(EP);
+        java.math.BigInteger v3 = v.modPow(java.math.BigInteger.valueOf(3), EP), v7 = v.modPow(java.math.BigInteger.valueOf(7), EP);
+        java.math.BigInteger x = u.multiply(v3).multiply(u.multiply(v7).mod(EP).modPow(EP.subtract(java.math.BigInteger.valueOf(5)).shiftRight(3), EP)).mod(EP);
+        java.math.BigInteger vxx = v.multiply(x).multiply(x).mod(EP);
+        if (vxx.equals(u)) { } else if (vxx.equals(u.negate().mod(EP))) x = x.multiply(EI).mod(EP); else return null;
+        if (x.signum() == 0 && x0) return null;
+        if (x.testBit(0) != x0) x = EP.subtract(x);
+        return new java.math.BigInteger[]{x, y, java.math.BigInteger.ONE, x.multiply(y).mod(EP)};
+    }
+    static java.math.BigInteger[] edAdd(java.math.BigInteger[] P, java.math.BigInteger[] Q) {   // RFC 8032 5.1.4
+        java.math.BigInteger two = java.math.BigInteger.TWO;
+        java.math.BigInteger a = P[1].subtract(P[0]).multiply(Q[1].subtract(Q[0])).mod(EP), b = P[1].add(P[0]).multiply(Q[1].add(Q[0])).mod(EP);
+        java.math.BigInteger c = P[3].multiply(two).multiply(ED).multiply(Q[3]).mod(EP), d = P[2].multiply(two).multiply(Q[2]).mod(EP);
+        java.math.BigInteger e = b.subtract(a), f = d.subtract(c), g = d.add(c), h = b.add(a);
+        return new java.math.BigInteger[]{e.multiply(f).mod(EP), g.multiply(h).mod(EP), f.multiply(g).mod(EP), e.multiply(h).mod(EP)};
+    }
+    static java.math.BigInteger[] edMul(java.math.BigInteger k, java.math.BigInteger[] P) {
+        java.math.BigInteger[] R = {java.math.BigInteger.ZERO, java.math.BigInteger.ONE, java.math.BigInteger.ONE, java.math.BigInteger.ZERO};
+        for (int i = k.bitLength() - 1; i >= 0; i--) { R = edAdd(R, R); if (k.testBit(i)) R = edAdd(R, P); }
+        return R;
+    }
+    static boolean edNeutral(java.math.BigInteger[] P) { return P[0].mod(EP).signum() == 0 && P[1].subtract(P[2]).mod(EP).signum() == 0; }
+    static String edKeyProblem(byte[] pk) {
+        java.math.BigInteger[] A = edDecode(pk);
+        if (A == null) return "key_not_decodable";
+        if (edNeutral(edMul(java.math.BigInteger.valueOf(8), A))) return "small_order_key";
+        if (!edNeutral(edMul(EL, A))) return "mixed_order_key";
+        return null;
+    }
+    static String edRProblem(byte[] sig) {
+        java.math.BigInteger[] R = sig != null && sig.length == 64 ? edDecode(Arrays.copyOf(sig, 32)) : null;
+        if (R == null) return "r_not_decodable";
+        return edNeutral(edMul(java.math.BigInteger.valueOf(8), R)) ? "small_order_r" : null;
+    }
+    static final Map<String, String> ED_KEY_CACHE = new HashMap<>();
+    static String edStrict(byte[] pk, byte[] msg, byte[] sig) {   // null when it verifies, else the reason
+        String h = toHex(pk);
+        if (!ED_KEY_CACHE.containsKey(h)) ED_KEY_CACHE.put(h, edKeyProblem(pk));
+        String kp = ED_KEY_CACHE.get(h); if (kp != null) return kp;
+        String rp = edRProblem(sig); if (rp != null) return rp;
+        return edVerify(pk, msg, sig) ? null : "bad_signature";
+    }
     static Boolean mldsaSupported() { try { Signature.getInstance("ML-DSA-65"); return true; } catch (Exception e) { return false; } }
     static boolean mldsaVerify(byte[] pk, byte[] msg, byte[] sig) { try { Signature v = Signature.getInstance("ML-DSA-65"); v.initVerify(key("ML-DSA", MLDSA65_SPKI, pk)); v.update(msg); return v.verify(sig); } catch (Exception e) { return false; } }
 
@@ -367,13 +425,18 @@ public class CvVerify {
         // per-entry signatures (same rules as signer.py / Go VerifyLedgerFull)
         if (reqPQ && epq.isEmpty()) { failures.add("require_pq_without_key: -require-pq needs -pq-pubkey (a post-quantum layer verified against the key inside the ledger is self-declared)"); v.put("verdict", "FAIL"); v.put("scope", SCOPE); return v; }
         if (!epq.isEmpty() && epk.isEmpty()) { failures.add("pq_key_without_ed25519_key: -pq-pubkey needs -pubkey (hybrid means both keys are pinned)"); v.put("verdict", "FAIL"); v.put("scope", SCOPE); return v; }
-        boolean hasSig = false; for (Obj o : objects) if (o != null && o.vals.containsKey("signature")) { hasSig = true; break; }
+        // 0.21.0 (SPEC v0.4 §5 step 5, signature profile): the layer is any of the four signature fields in any entry (until
+        // 0.20.3 only "signature"), and a layer that does not verify is a FAIL with or without a key (until 0.20.3 only with -pubkey)
+        boolean hasSig = false;
+        for (Obj o : objects) if (o != null && (o.vals.containsKey("signature") || o.vals.containsKey("signer") || o.vals.containsKey("signature_pq") || o.vals.containsKey("signer_pq"))) { hasSig = true; break; }
         if (hasSig || !epk.isEmpty() || !epq.isEmpty()) {
             Map<String, Object> sc = signatures(objects, epk, epq, reqPQ);
             v.put("signatures", sc);
             Object pqp = sc.get("pq_protected");
             if ((!epk.isEmpty() || !epq.isEmpty()) && (!(Boolean) sc.get("ok") || (!epq.isEmpty() && !Boolean.TRUE.equals(pqp)))) {
                 v.put("verdict", "FAIL"); failures.add("signatures_failed: the pinned signature layer does not verify (" + sc.get("pq_status") + ")");
+            } else if (epk.isEmpty() && epq.isEmpty() && !(Boolean) sc.get("ok")) {
+                v.put("verdict", "FAIL"); failures.add("signatures_failed: the signature layer the ledger carries does not verify (no key pinned)");
             }
         }
         // signed chain tip
@@ -420,7 +483,8 @@ public class CvVerify {
             if (!epk.isEmpty() && !signer.equals(epk)) { fails.add("idx " + k + ": signer_mismatch"); continue; }
             byte[] rawSig = b64Strict(sig, 64);
             if (rawSig == null || !isHexN(signer, 64)) { fails.add("idx " + k + ": malformed_signature_field"); continue; }
-            if (edVerify(hex(signer), sh.getBytes(StandardCharsets.UTF_8), rawSig)) { verified++; signers.add(signer); } else fails.add("idx " + k + ": bad_signature");
+            String why = edStrict(hex(signer), sh.getBytes(StandardCharsets.UTF_8), rawSig);   // 0.21.0: small/mixed order, named
+            if (why == null) { verified++; signers.add(signer); } else fails.add("idx " + k + ": " + why);
             boolean hasS = e.vals.containsKey("signature_pq"), hasK = e.vals.containsKey("signer_pq");
             if (!hasS && !hasK) { if (require) pqFails.add("idx " + k + ": pq_missing"); continue; }
             pqPresent++;
@@ -465,7 +529,9 @@ public class CvVerify {
         if (pqPresent && (!isHexN(spq, 6618) || b64Strict(kpq, 1952) == null)) { tc.put("why", "tip_invalid: malformed post-quantum fields (signature_pq_hex 6618 lowercase hex, log_pq_pubkey_b64 strict base64 of 1952 bytes)"); return tc; }
         if (logPk != null && !logPk.isEmpty() && !logPk.equals(tpk)) { tc.put("why", "tip_invalid: tip log key differs from the trusted log key"); return tc; }
         byte[] payload = ("{\"entries\":" + n + ",\"kind\":\"" + TIP_KIND + "\",\"ledger_id\":\"" + ledgerId + "\",\"tip_sha256\":\"" + tipSha + "\",\"ts\":\"" + ts + "\"}").getBytes(StandardCharsets.UTF_8);
-        if (!isHexN(tpk, 64) || !edVerify(hex(tpk), payload, hex(sigHex))) { tc.put("why", "tip_invalid: tip signature invalid"); return tc; }
+        if (!isHexN(tpk, 64)) { tc.put("why", "tip_invalid: tip signature invalid"); return tc; }
+        String tipWhy = edStrict(hex(tpk), payload, hex(sigHex));   // 0.21.0: small/mixed order, named
+        if (tipWhy != null) { tc.put("why", "tip_invalid: tip signature invalid" + ("bad_signature".equals(tipWhy) ? "" : " (" + tipWhy + ")")); return tc; }
         tc.put("trusted", true);
         if (!lid.isEmpty() && !ledgerId.equals(lid)) { tc.put("why", "ledger_id_mismatch: the tip belongs to a different ledger than the one you expect"); return tc; }
         if (entries > 0 && !ledgerId.equals(first)) { tc.put("why", "tip_of_another_ledger: the tip's ledger_id is not this file's first self_hash"); return tc; }

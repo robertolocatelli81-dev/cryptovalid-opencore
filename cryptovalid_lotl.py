@@ -9,7 +9,10 @@ Fetches the EU List of Trusted Lists (LOTL), then each member-state Trusted List
 (ServiceTypeIdentifier .../Svctype/TSA/QTST, status 'granted' IN FORCE NOW: ServiceInformation from its
 StatusStartingTime, ServiceHistory before it), and checks whether the RFC 3161 token's TSA certificate is among them. A
 match says the issuing service is a qualified timestamp service NOW; whether it was at the token's time is
-`qtst_fingerprints_at(tl, genTime)`, which needs the token's genTime from the caller (not extracted here).
+`qtst_fingerprints_at(tl, genTime)`, which needs the token's genTime from the caller (not extracted here). Since 0.21.0 a
+QTST service whose ServiceHistoryInstance entries are out of order or share a StatusStartingTime is an error (ETSI TS 119
+615 PRO-4.3.4-03A): not counted, named (`qtst_status_at`, `load_qualified_status`), and a token from it is
+"indeterminate" (`qualification`), neither qualified nor not.
 
 Protocol/XML parsing is stdlib (urllib, xml.etree with the ETSI namespace for the LOTL and every list, UTF-8 only, DTDs refused); the TSA cert is pulled from the CMS
 token via `cryptography` (already a dependency). Results cache locally; network failures on a
@@ -17,6 +20,15 @@ single Trusted List are skipped, not fatal (honest partial coverage is logged by
 import sys as _sys_0203
 if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
     _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
+    _L0210 = type(__loader__)   # 0.21.0: a .pyc already cut (CPython 3.9/3.11 installed one) is compiled from the source
+    if _L0210.__name__ == "SourceFileLoader":   # instead of failing every later run (EOFError: marshal data too short)
+        def _get_code_0210(self, fullname, _get_code=_L0210.get_code):
+            try:
+                return _get_code(self, fullname)
+            except (EOFError, ValueError):
+                path = self.get_filename(fullname)
+                return self.source_to_code(self.get_data(path), path)
+        _L0210.get_code = _get_code_0210
 import hashlib
 import json
 import os
@@ -32,7 +44,13 @@ _GRANTED_URI = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
 # Until 0.20.1 a TSPService counted as qualified when the text "Svcstatus/granted" appeared ANYWHERE in it, its
 # ServiceHistory included: a service withdrawn today with "granted" in its history was qualified (measured 12/10/2026 on 26
 # of the 30 national lists the LOTL points to: 984 fingerprints against 652 in force on that day).
-RULE = "etsi-ts-119612/status-in-force:QTST+granted/1"
+# 0.21.0 (rule /2): ETSI TS 119 615 PRO-4.3.4-03A — a QTST service whose ServiceHistoryInstance entries are not in
+# descending order of StatusStartingTime (TS 119 612 5.5.10), or two of which share one StatusStartingTime, is an ERROR
+# for that service: not counted, and its certificates named with the reason (until 0.20.3 it was counted, the first
+# entry of the tie taken; measured 14/10/2026 on 26 lists of 12/10: 39 services with such a tie, none of them QTST).
+RULE = "etsi-ts-119612/status-in-force:QTST+granted/2"
+HISTORY_NOT_ORDERED = "history_not_ordered"           # PRO-4.3.4-03A a)
+HISTORY_DUPLICATE_START = "history_duplicate_start"   # PRO-4.3.4-03A b)
 
 def _get(url, timeout=45):
     with urllib.request.urlopen(url, timeout=timeout) as r:
@@ -164,6 +182,42 @@ def qtst_fingerprints(tl_xml: bytes, now=None):
     from datetime import datetime, timezone
     return qtst_fingerprints_at(tl_xml, now or datetime.now(timezone.utc))
 
+def _history_error(timeline):
+    """PRO-4.3.4-03A over the ServiceHistoryInstance entries (timeline[1:], document order): None, or the reason."""
+    starts = [e[0] for e in timeline[1:]]
+    if len(set(starts)) < len(starts):
+        return HISTORY_DUPLICATE_START
+    if any(starts[i] < starts[i + 1] for i in range(len(starts) - 1)):
+        return HISTORY_NOT_ORDERED
+    return None
+
+def qtst_status_at(tl_xml: bytes, at):
+    """{"granted": fingerprints, "errors": {fingerprint: reason}} at the instant `at` (aware datetime). `granted` is
+    qtst_fingerprints_at; `errors` names the certificates of QTST services (type of their ServiceInformation, as TS 119 615
+    PRO-4.3.4-03 selects them) whose history TS 119 615 PRO-4.3.4-03A makes an error: such a service is in neither set
+    of `granted`, and a token from it is neither qualified nor not qualified (see qualification)."""
+    from datetime import datetime
+    if not isinstance(at, datetime) or at.tzinfo is None:
+        raise ValueError("`at` must be a timezone-aware datetime")
+    fprs, errors = set(), {}
+    for svc in services(tl_xml):
+        tl = svc["timeline"]
+        if any(start is None for start, *_ in tl):
+            continue
+        if tl[0][1] == _QTST_URI:
+            why = _history_error(tl)
+            if why:
+                for f in svc["certs"]:
+                    errors[f] = why
+                continue
+        in_force = [e for e in tl if e[0] <= at]
+        if not in_force:
+            continue
+        _start, typ, status, _certs_of_entry = max(in_force, key=lambda e: e[0])
+        if typ == _QTST_URI and status == _GRANTED_URI:
+            fprs |= svc["certs"]
+    return {"granted": fprs - set(errors), "errors": errors}
+
 def qtst_fingerprints_at(tl_xml: bytes, at):
     """Fingerprints of services that were qualified timestamp services AT the instant `at` (an aware datetime, e.g. the
     genTime of a token): the entry in force is the one, among ServiceInformation and the ServiceHistoryInstance entries,
@@ -172,22 +226,9 @@ def qtst_fingerprints_at(tl_xml: bytes, at):
     119 615 (PRO-4.3.4-03) matches a certificate against the 'Service digital identity' of the ServiceInformation entry;
     a certificate found only in a history instance is not counted (none on 12/10/2026 in 30 lists). A service with
     an entry whose StatusStartingTime is missing or not a dateTime is not counted at any instant (its timeline cannot be
-    ordered). The genTime is NOT extracted from the token here: the caller gives it."""
-    from datetime import datetime
-    if not isinstance(at, datetime) or at.tzinfo is None:
-        raise ValueError("`at` must be a timezone-aware datetime")
-    fprs = set()
-    for svc in services(tl_xml):
-        tl = svc["timeline"]
-        if any(start is None for start, *_ in tl):
-            continue
-        in_force = [e for e in tl if e[0] <= at]
-        if not in_force:
-            continue
-        _start, typ, status, _certs_of_entry = max(in_force, key=lambda e: e[0])
-        if typ == _QTST_URI and status == _GRANTED_URI:
-            fprs |= svc["certs"]
-    return fprs
+    ordered). A QTST service whose history TS 119 615 PRO-4.3.4-03A makes an error is not counted
+    (qtst_status_at names it). The genTime is NOT extracted from the token here: the caller gives it."""
+    return qtst_status_at(tl_xml, at)["granted"]
 
 def _ms_of_url(url: str) -> str:
     """Member-state hint dal TLD dell'host della Trusted List (crc.bg -> BG).
@@ -201,7 +242,14 @@ CACHE_MAX_AGE_S = 24 * 3600   # a cache holds the statuses in force on the day i
 
 def load_qualified_fingerprints(member_states=None, cache_path=None, timeout=45, log=lambda *_: None,
                                 cache_max_age_s=CACHE_MAX_AGE_S):
-    """Build the set of qualified-TSA cert fingerprints from the EU LOTL.
+    """(fingerprints, coverage) of load_qualified_status, without the history errors."""
+    fprs, coverage, _errors = load_qualified_status(member_states, cache_path, timeout, log, cache_max_age_s)
+    return fprs, coverage
+
+def load_qualified_status(member_states=None, cache_path=None, timeout=45, log=lambda *_: None,
+                          cache_max_age_s=CACHE_MAX_AGE_S):
+    """Build the set of qualified-TSA cert fingerprints from the EU LOTL, with the history errors (fingerprint ->
+    "<reason> <list url>", qtst_status_at): returns (fingerprints, coverage, errors).
     member_states: optional iterable of 2-letter codes to restrict fetching (else all).
     A cache is read only when it was built by this RULE and less than `cache_max_age_s` seconds ago (it records
     `built_at`): the set is the status in force when it was built, so an old cache would answer for an old day."""
@@ -213,25 +261,31 @@ def load_qualified_fingerprints(member_states=None, cache_path=None, timeout=45,
         age = (datetime.now(timezone.utc) - built).total_seconds() if built else None
         if isinstance(d, dict) and d.get("rule") == RULE and isinstance(d.get("fingerprints"), list) \
                 and age is not None and 0 <= age <= cache_max_age_s:
-            return set(d["fingerprints"]), d.get("coverage", [])
+            errs = d.get("history_errors", {})
+            return set(d["fingerprints"]), d.get("coverage", []), dict(errs) if isinstance(errs, dict) else {}
         log(f"LOTL cache {cache_path} not used (rule {d.get('rule') if isinstance(d, dict) else None!r}, "
             f"built_at {d.get('built_at') if isinstance(d, dict) else None!r}): rebuilt")
     lotl = _get(LOTL_URL, timeout)
     ptrs = lotl_pointers(lotl)
-    fprs, coverage = set(), []
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc)
+    fprs, coverage, errors = set(), [], {}
     wanted = {m.upper() for m in member_states} if member_states else None
     for url in ptrs:
         if wanted and _ms_of_url(url) not in wanted:
             continue
         try:
-            tl = _get(url, timeout); n0 = len(fprs); fprs |= qtst_fingerprints(tl)
-            coverage.append(url); log(f"TL ok: {url} (+{len(fprs)-n0} QTST cert)")
+            tl = _get(url, timeout); n0 = len(fprs); st = qtst_status_at(tl, now); fprs |= st["granted"]
+            errors.update({f: f"{why} {url}" for f, why in st["errors"].items()})
+            coverage.append(url); log(f"TL ok: {url} (+{len(fprs)-n0} QTST cert)"
+                                      + (f", {len(st['errors'])} cert in a history error" if st["errors"] else ""))
         except Exception as e:  # una TL irraggiungibile non e' fatale
             log(f"TL skip: {url} ({type(e).__name__})")
     if cache_path:
         write_output(cache_path, json.dumps({"rule": RULE, "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                                             "fingerprints": sorted(fprs), "coverage": coverage}))   # whole, or not at all (0.20.3)
-    return fprs, coverage
+                                             "fingerprints": sorted(fprs - set(errors)), "coverage": coverage,
+                                             "history_errors": dict(sorted(errors.items()))}))   # whole, or not at all (0.20.3)
+    return fprs - set(errors), coverage, errors
 
 def token_cert_fingerprints(token_der: bytes):
     """SHA-256 fingerprints of every certificate embedded in an RFC 3161 token (CMS)."""
@@ -242,6 +296,17 @@ def token_cert_fingerprints(token_der: bytes):
 def is_qualified(token_der: bytes, qualified_fingerprints: set):
     """True iff the token's TSA certificate is a qualified-timestamp service in the EU LOTL."""
     return bool(token_cert_fingerprints(token_der) & qualified_fingerprints)
+
+def qualification(token_der: bytes, qualified_fingerprints: set, history_errors=None):
+    """("qualified", None), ("not_qualified", None) or ("indeterminate", reason): indeterminate when no certificate of the
+    token is qualified and one is a certificate of a QTST service whose history TS 119 615 PRO-4.3.4-03A makes an error."""
+    got = token_cert_fingerprints(token_der)
+    if got & qualified_fingerprints:
+        return "qualified", None
+    hit = sorted(f for f in got if f in (history_errors or {}))
+    if hit:
+        return "indeterminate", (history_errors or {})[hit[0]]
+    return "not_qualified", None
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
@@ -260,11 +325,14 @@ def main(argv=None):
     p.add_argument("--cache", default=None, help="cache file for qualified fingerprints")
     p.add_argument("--ms", nargs="*", default=None, help="restrict to member-state codes (e.g. IT DE)")
     a = p.parse_args(argv)
-    fprs, cov = load_qualified_fingerprints(a.ms, a.cache, log=lambda m: emit("  " + m))
+    fprs, cov, errs = load_qualified_status(a.ms, a.cache, log=lambda m: emit("  " + m))
     tok = base64.b64decode(a.token_b64)
-    q = is_qualified(tok, fprs)
-    emit(json.dumps({"qualified": q, "qualified_certs_in_lotl": len(fprs),
-                      "trusted_lists_covered": len(cov)}, indent=2))
+    verdict, why = qualification(tok, fprs, errs)
+    q = verdict == "qualified"
+    out = {"qualified": q, "qualified_certs_in_lotl": len(fprs), "trusted_lists_covered": len(cov)}
+    if why:   # 0.21.0: only then, so every other output is the one of 0.20.3
+        out["indeterminate"] = why
+    emit(json.dumps(out, indent=2))
     return 0 if q else 1
 
 if __name__ == "__main__":

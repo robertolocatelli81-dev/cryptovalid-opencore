@@ -205,3 +205,30 @@ fn cli_algo_closed() {
         assert!(o.stdout.is_empty(), "no receipt for --algo {}", a);
     }
 }
+
+// 0.21.0 (SPEC v0.4 §5 step 5): this verifier does not check signatures; on the signature-profile vectors (a copy of
+// spec/vectors/signatures) the verdict is the chain's (steps 1-4: PASS) and the receipt counts the entries that carry a
+// signature field (`without_step5`); a ledger without one keeps the receipt of 0.20.3 (no such field)
+#[test]
+fn signature_vectors_are_counted_not_checked() {
+    let dir = vdir().join("signatures");
+    let mut count = 0;
+    for entry in fs::read_dir(&dir).unwrap() {
+        let p = entry.unwrap().path();
+        if !p.to_string_lossy().ends_with(".expected.json") {
+            continue;
+        }
+        count += 1;
+        let exp = fs::read_to_string(&p).unwrap();
+        let input = field(&exp, "input").to_string();
+        let r = verify_ledger(&fs::read_to_string(dir.join(&input)).unwrap(), None);
+        assert_eq!(r.verdict, "PASS", "{}", input);
+        let n = field(&exp, "signatures_not_checked");
+        assert_eq!(r.signatures_not_checked.to_string(), n, "{}", input);
+        assert!(r.to_json().contains(&format!(",\"signatures_not_checked\":{},", n)), "{}", input);
+    }
+    assert!(count >= 21, "signature vectors: {}", count);
+    let plain = verify_ledger(&fs::read_to_string(vdir().join("valid_sha256.jsonl")).unwrap(), None);
+    assert_eq!(plain.signatures_not_checked, 0);
+    assert!(!plain.to_json().contains("signatures_not_checked"));
+}

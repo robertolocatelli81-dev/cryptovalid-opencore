@@ -37,6 +37,15 @@ from __future__ import annotations
 import sys as _sys_0203
 if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
     _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
+    _L0210 = type(__loader__)   # 0.21.0: a .pyc already cut (CPython 3.9/3.11 installed one) is compiled from the source
+    if _L0210.__name__ == "SourceFileLoader":   # instead of failing every later run (EOFError: marshal data too short)
+        def _get_code_0210(self, fullname, _get_code=_L0210.get_code):
+            try:
+                return _get_code(self, fullname)
+            except (EOFError, ValueError):
+                path = self.get_filename(fullname)
+                return self.source_to_code(self.get_data(path), path)
+        _L0210.get_code = _get_code_0210
 import argparse
 import base64
 import binascii

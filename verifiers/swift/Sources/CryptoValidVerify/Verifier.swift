@@ -18,6 +18,8 @@ public struct VerifyResult: Codable, Equatable {
     /// entries whose top level carries a key outside ENTRY_KEYS (SPEC §2.1)
     public var schema_failures_idx: [Int]
     public var signatures_all_verified: Bool?
+    /// 0.21.0: entries carrying an ML-DSA-65 layer, which this verifier does not check (nil, omitted, when there is none)
+    public var pq_not_checked: Int? = nil
     /// set when the input could not be read as a ledger at all (e.g. not UTF-8); nil otherwise (omitted from the JSON)
     public var error: String? = nil
 }
@@ -119,22 +121,32 @@ public enum CryptoValidVerifier {
         var sigAll: Bool? = nil
         // --pubkey is a CONSTRAINT (JS, Go, Java and signer.py: every entry signed by that key, else FAIL): with a key given
         // the layer is checked even when no entry is signed, and its result enters the verdict (NEMESIS 12/10/2026: a wrong
-        // key, an unsigned or a partly signed ledger was PASS, exit 0, here alone). Without a key it stays informational.
-        if expectedPubkeyHex != nil || entries.contains(where: { $0["signature"] != nil }) {
+        // key, an unsigned or a partly signed ledger was PASS, exit 0, here alone). 0.21.0 (SPEC v0.4 §5 step 5, signature
+        // profile): the layer is any of the four signature fields in any entry (until 0.20.3 only "signature"), and a layer
+        // that does not verify is a FAIL without a key too (until 0.20.3 informational).
+        let sigFields: [JSONKey] = ["signature", "signer", "signature_pq", "signer_pq"]
+        let layer = entries.contains(where: { e in sigFields.contains(where: { e[$0] != nil }) })
+        var keyCache: [Data: String?] = [:]
+        if expectedPubkeyHex != nil || layer {
             var allOk = true
             for e in entries {
                 guard let sig = str(e["signature"]), let signer = str(e["signer"]), let sh = str(e["self_hash"]),
                       let sigData = b64Strict(sig, 64), let pubData = hex64(signer),
                       let pub = try? Curve25519.Signing.PublicKey(rawRepresentation: pubData) else { allOk = false; continue }
                 if let exp = expectedPubkeyHex, !scalarEqual(signer, exp) { allOk = false; continue }
+                // 0.21.0: a key or an R of small order, a key of mixed order or not decodable is refused (Ed25519Order.swift)
+                if keyCache[pubData] == nil { keyCache[pubData] = .some(Ed25519Order.keyProblem(Array(pubData))) }
+                if keyCache[pubData]! != nil || Ed25519Order.rProblem(Array(sigData)) != nil { allOk = false; continue }
                 if !pub.isValidSignature(sigData, for: Data(sh.utf8)) { allOk = false }
             }
             sigAll = allOk
         }
-        let pass = chain && (expectedPubkeyHex == nil || sigAll == true)
+        let pqCount = entries.filter { $0["signature_pq"] != nil || $0["signer_pq"] != nil }.count
+        let pass = chain && (expectedPubkeyHex == nil ? !(layer && sigAll != true) : sigAll == true)
         return VerifyResult(verdict: pass ? "PASS" : "FAIL", chain_integrity: chain, algorithm: use,
                             entries: entries.count, hash_failures_idx: hashFail, link_failures_idx: linkFail,
-                            schema_failures_idx: schemaFail, signatures_all_verified: sigAll)
+                            schema_failures_idx: schemaFail, signatures_all_verified: sigAll,
+                            pq_not_checked: pqCount > 0 ? pqCount : nil)
     }
     /// signer: exactly 64 LOWERCASE ASCII hex digits (Python signer._HEX64, JS/Java HEX64; audit V1 #12, 30/09/2026).
     /// UInt8(_:radix:) took "+f" and uppercase, so a lax hex is refused here before any key is built.

@@ -1,0 +1,18 @@
+{
+ "input": "foreign_signer.jsonl",
+ "normative": {
+  "algorithm": "sha256",
+  "chain_integrity": true,
+  "entries": 3,
+  "hash_failures_idx": [],
+  "link_failures_idx": [],
+  "verdict": "PASS"
+ },
+ "signature_profile": {
+  "failures": [],
+  "verdict": "PASS"
+ },
+ "without_step5": {
+  "signatures_not_checked": 3
+ }
+}

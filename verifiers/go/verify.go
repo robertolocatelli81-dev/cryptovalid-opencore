@@ -216,12 +216,15 @@ func VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64,
 		v.Failures = append(v.Failures, "pq_key_without_ed25519_key: -pq-pubkey needs -pubkey (hybrid means both keys are pinned)")
 		return v
 	}
+	// 0.21.0 (SPEC v0.4 §5 step 5, signature profile): the layer is any of the four signature fields in any entry
+	// (until 0.20.3 only "signature" opened it, and without a key a layer that does not verify was reported, verdict PASS)
 	hasSig := false
 	for _, o := range v.objects {
 		if o != nil {
-			if _, ok := o.Vals["signature"]; ok {
-				hasSig = true
-				break
+			for _, k := range []string{"signature", "signer", "signature_pq", "signer_pq"} {
+				if _, ok := o.Vals[k]; ok {
+					hasSig = true
+				}
 			}
 		}
 	}
@@ -231,6 +234,9 @@ func VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64,
 		if (pubkeyHex != "" || pqPubkeyB64 != "") && (!sc.OK || (pqPubkeyB64 != "" && (sc.PQProtected == nil || !*sc.PQProtected))) {
 			v.Verdict = "FAIL"
 			v.Failures = append(v.Failures, "signatures_failed: the pinned signature layer does not verify ("+sc.PQStatus+")")
+		} else if pubkeyHex == "" && pqPubkeyB64 == "" && !sc.OK {
+			v.Verdict = "FAIL"
+			v.Failures = append(v.Failures, "signatures_failed: the signature layer the ledger carries does not verify (no key pinned)")
 		}
 	}
 	if tipPath == "" {

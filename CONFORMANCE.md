@@ -67,6 +67,16 @@ Honest scope: these verifiers prove integrity and linkage — and signatures in 
 and in `signer.py verify`, not in `verifier.py` or the Rust verifier (who checks what, and when a signature enters the
 verdict: SPEC §5) — not the truth of the recorded facts; Ed25519 is not post-quantum.
 
+## Signature-profile vectors (spec/vectors/signatures/, 0.21.0)
+
+21 vectors, all passing steps 1-4 (`normative`); `signature_profile` is what a verifier that performs step 5 returns without
+a key (verdict and failing entries with their reason), `without_step5` what `verifier.py` and Rust add
+(`signatures_not_checked`). Measured 14/10/2026: the six verifiers and `signer.py verify` reproduce all 21 (JS `test.mjs`,
+Go `signatures_test.go`, Swift `SignatureProfileTests`, Rust `signature_vectors_are_counted_not_checked`, Java and the
+Python side in `test_signature_profile_20261014.py`); the code of 0.20.3 differs on 129 of the 147 results. Fourteen of them
+are the 12 classes of novifinancial/ed25519-speccheck rebuilt on ledger entries plus two of ours (a key of prime order with R
+the neutral point, an R of mixed order); `make_vectors.py` regenerates the same bytes.
+
 ## Canonical acceptance profile (enforced identically by all four + reference)
 
 Verified by `verifiers/differential_oracle.py` (feeds an adversarial corpus to Python|JS|Rust|Swift and

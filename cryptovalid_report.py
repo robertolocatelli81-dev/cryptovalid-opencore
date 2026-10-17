@@ -38,6 +38,15 @@ from __future__ import annotations
 import sys as _sys_0203
 if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
     _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
+    _L0210 = type(__loader__)   # 0.21.0: a .pyc already cut (CPython 3.9/3.11 installed one) is compiled from the source
+    if _L0210.__name__ == "SourceFileLoader":   # instead of failing every later run (EOFError: marshal data too short)
+        def _get_code_0210(self, fullname, _get_code=_L0210.get_code):
+            try:
+                return _get_code(self, fullname)
+            except (EOFError, ValueError):
+                path = self.get_filename(fullname)
+                return self.source_to_code(self.get_data(path), path)
+        _L0210.get_code = _get_code_0210
 import argparse
 import base64
 import hashlib
@@ -67,7 +76,7 @@ def lotl_status(manifest: Dict, member_states: Optional[List[str]] = None,
     try:
         import cryptovalid_lotl as lotl
         import cryptovalid_tsa as tsa
-        fps, _coverage = lotl.load_qualified_fingerprints(member_states=member_states,
+        fps, _coverage, herr = lotl.load_qualified_status(member_states=member_states,
                                                           cache_path=cache_path)
         raw = base64.b64decode(ts["tsr_b64"])
         # il pack conserva la RISPOSTA TimeStampResp; il token CMS è il suo 2° figlio
@@ -80,8 +89,11 @@ def lotl_status(manifest: Dict, member_states: Optional[List[str]] = None,
         if not got:
             return {"checked": True, "qualified": None,
                     "note": "no certificate extractable from token (inconclusive)"}
-        q = lotl.is_qualified(token, fps)
-        return {"checked": True, "qualified": bool(q), "tsa": ts.get("tsa"),
+        verdict, why = lotl.qualification(token, fps, herr)
+        if why:   # 0.21.0: TS 119 615 PRO-4.3.4-03A
+            return {"checked": True, "qualified": None, "tsa": ts.get("tsa"),
+                    "note": f"inconclusive: the TSA's trusted-list history is an error ({why})"}
+        return {"checked": True, "qualified": verdict == "qualified", "tsa": ts.get("tsa"),
                 "trusted_fingerprints": len(fps)}
     except Exception as e:  # noqa: BLE001
         return {"checked": True, "qualified": None,

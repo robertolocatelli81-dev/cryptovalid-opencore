@@ -52,5 +52,37 @@ class TestMerkle(unittest.TestCase):
         self.assertTrue(M.verify_inclusion(1, len(lv), lv[1], M.inclusion_proof(1, lv), root))
         self.assertEqual(M.signed_tree_head(lv)["tree_size"], len(lv))
 
+    # 0.21.0 (SPEC §9, v0.4): a leaf is the canonical form of §3. Until 0.20.3 it kept signature_pq, signer_pq and
+    # tsa_token, so signing a ledger with ML-DSA or adding a timestamp token AFTER a tree head changed the root of entries
+    # already covered (the chain still PASS): measured 14/10/2026 on examples/sample_ledger.jsonl.
+    def test_leaves_vector(self):
+        import json
+        v = json.load(open(os.path.join(_HERE, "spec", "vectors", "merkle_leaves.json"), encoding="utf-8"))
+        lv = M.leaves_from_ledger(os.path.join(_HERE, "spec", "vectors", v["input"]))
+        self.assertEqual(M.tree_head(lv)["root_sha256"], v["normative"]["root_sha256"])
+        self.assertEqual([M.leaf_hash(x).hex() for x in lv], v["normative"]["leaf_hashes"])
+    def test_attestation_added_later_keeps_the_root(self):
+        import copy, json
+        base = [json.loads(l) for l in open(os.path.join(_HERE, "examples", "sample_ledger.jsonl"), encoding="utf-8") if l.strip()]
+        root0 = M.mth([M.canonical(e) for e in base])
+        for field in ("signature", "signer", "signature_pq", "signer_pq", "tsa_token", "self_hash"):
+            with self.subTest(field=field):
+                later = copy.deepcopy(base); later[0][field] = "QUJD"
+                lv = [M.canonical(e) for e in later]
+                self.assertEqual(M.mth(lv), root0)
+                self.assertEqual(M.consistency_verdict(len(lv), len(lv), [], root0, M.mth(lv)), "consistent")
+    def test_leaf_is_the_self_hash_preimage(self):
+        import json
+        for line in open(os.path.join(_HERE, "spec", "vectors", "merkle_leaves.jsonl"), encoding="utf-8"):
+            e = json.loads(line)
+            self.assertEqual(hashlib.sha256(M.canonical(e)).hexdigest(), e["self_hash"])
+    def test_content_still_changes_the_root(self):   # control: the leaf is not emptied
+        import copy, json
+        base = [json.loads(l) for l in open(os.path.join(_HERE, "examples", "sample_ledger.jsonl"), encoding="utf-8") if l.strip()]
+        for k in ("idx", "ts", "data", "prev_hash"):
+            with self.subTest(k=k):
+                t = copy.deepcopy(base); t[1][k] = "x"
+                self.assertNotEqual(M.mth([M.canonical(e) for e in t]), M.mth([M.canonical(e) for e in base]))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

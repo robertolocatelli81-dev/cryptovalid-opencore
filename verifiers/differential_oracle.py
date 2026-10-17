@@ -508,6 +508,18 @@ if TIP_CASE:
                           ("hybrid-tip-pq-required-missing", "trusted ML-DSA-65 key given, Ed25519-only tip: pq_missing on Python/Go/Java, unchecked by JS/Rust/Swift (declared)")):
             DECLARED_DIVERGENCE[name] = ({"python": "FAIL", "js": "PASS", "go": "FAIL", "java": "FAIL", "rust": "PASS", "swift": "PASS"}, why)
 PQ_CASES = {"hybrid-tip-valid", "hybrid-tip-bad-pq", "hybrid-tip-pq-required-missing"}
+# 0.21.0 (SPEC v0.4 §5 step 5, signature profile): JS, Go, Java and Swift verify the signature layer the ledger carries and
+# FAIL when it does not verify, without a key; Python's verifier.py and Rust do not perform step 5 (they count the entries,
+# signatures_not_checked). One case per kind from spec/vectors/signatures, declared; the valid one must AGREE (PASS).
+_SIGDIR = os.path.join(HERE, "..", "spec", "vectors", "signatures")
+for _n, _f in (("sig-valid", "signed_valid"), ("sig-broken", "signed_broken_e1"), ("sig-partial", "signed_partial_e1"),
+               ("sig-ed25519-small-key", "ed25519_class_0"), ("sig-ed25519-mixed-key-both-eq", "ed25519_class_3"),
+               ("sig-ed25519-small-r", "ed25519_class_12")):
+    with open(os.path.join(_SIGDIR, _f + ".jsonl"), encoding="utf-8") as _fh:
+        CORPUS[_n] = _fh.read().rstrip("\n")
+    if _n != "sig-valid":
+        DECLARED_DIVERGENCE[_n] = ({"python": "PASS", "rust": "PASS", "js": "FAIL", "go": "FAIL", "java": "FAIL", "swift": "FAIL"},
+                                   "signature layer that does not verify, no key: FAIL on JS/Go/Java/Swift (step 5), counted not checked by Python/Rust (declared)")
 
 
 def build_java(tmp):

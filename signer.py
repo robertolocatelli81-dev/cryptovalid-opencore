@@ -29,6 +29,15 @@ from __future__ import annotations
 import sys as _sys_0203
 if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
     _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)
+    _L0210 = type(__loader__)   # 0.21.0: a .pyc already cut (CPython 3.9/3.11 installed one) is compiled from the source
+    if _L0210.__name__ == "SourceFileLoader":   # instead of failing every later run (EOFError: marshal data too short)
+        def _get_code_0210(self, fullname, _get_code=_L0210.get_code):
+            try:
+                return _get_code(self, fullname)
+            except (EOFError, ValueError):
+                path = self.get_filename(fullname)
+                return self.source_to_code(self.get_data(path), path)
+        _L0210.get_code = _get_code_0210
 import argparse
 import base64, binascii, re
 import hashlib
@@ -56,6 +65,15 @@ ATTEST = ("self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_
 PQ_CTX_ENTRY = b""     # kept as a named constant: the profile's context is EMPTY, on purpose
 PQ_SIG_LEN, PQ_PK_LEN = 3309, 1952
 _HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+def _edo():
+    """ed25519_order (0.21.0), from the source tree or the installed package."""
+    try:
+        import ed25519_order
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore import ed25519_order
+    return ed25519_order
 
 
 def _b64_strict(s, n: int):
@@ -273,6 +291,7 @@ def verify_ledger_signatures(entries: List[Dict], expected_pubkey_hex: Optional[
     require = bool(require_pq or expected_pq_pubkey_b64)
     verified, failures, signers = 0, [], set()
     pq_ok, pq_failures, pq_signers, pq_present = 0, [], set(), 0
+    key_cache: Dict[bytes, Optional[str]] = {}   # 0.21.0: ed25519_order.key_problem once per distinct key
     for i, e in enumerate(entries):
         if isinstance(e, _Undecodable):
             failures.append({"idx": i, "reason": "json_decode"})          # audit V1 #4 (30/09/2026): never a traceback
@@ -294,12 +313,17 @@ def verify_ledger_signatures(entries: List[Dict], expected_pubkey_hex: Optional[
         if raw_sig is None or not (isinstance(signer, str) and _HEX64.fullmatch(signer)):
             failures.append({"idx": i, "reason": "malformed_signature_field"})   # strict, like the PQ fields and the tip
             continue
-        try:
-            Ed25519PublicKey.from_public_bytes(bytes.fromhex(signer)).verify(raw_sig, sh.encode())
+        why = _edo().strict_problem(bytes.fromhex(signer), raw_sig, key_cache)   # 0.21.0: small/mixed order, named
+        if why is None:
+            try:
+                Ed25519PublicKey.from_public_bytes(bytes.fromhex(signer)).verify(raw_sig, sh.encode())
+            except Exception:  # noqa: BLE001
+                why = "bad_signature"
+        if why is None:
             verified += 1
             signers.add(signer)
-        except Exception:  # noqa: BLE001
-            failures.append({"idx": i, "reason": "bad_signature"})
+        else:
+            failures.append({"idx": i, "reason": why})
         pq_sig, pq_signer = e.get("signature_pq"), e.get("signer_pq")
         if not (pq_sig or pq_signer):
             if require:

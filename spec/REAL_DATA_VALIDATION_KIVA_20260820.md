@@ -3,7 +3,8 @@
 Ordine di Roberto: trovare la prima MFI che usa CryptoValid e procedere solo se anche la revisione indipendente è d'accordo.
 Gate: **revisione indipendente** (D'ACCORDO-CON-CORREZIONE, 3 correzioni incorporate).
 Metro **pre-registrato e hashato PRIMA** del dato: `opencore/spec/PREREG_KIVA_20260820.md`
-(SHA3-256 `db5671af0156683c646aabbb02814fcb80a0feb0ed6a1f88916691ea1d2a04fe`, `~/.omega/prereg/prereg_ledger.jsonl`).
+(SHA3-256 `db5671af0156683c646aabbb02814fcb80a0feb0ed6a1f88916691ea1d2a04fe`, `~/.omega/prereg/prereg_ledger.jsonl`: il file
+al commit pubblico `401e6b2`; dal 2026-10-14 il file corrente ha ruoli al posto dei nomi dei revisori, vedi la sua nota).
 
 ## Stato onesto (Correzione 1 della revisione — un dataset NON è un utente)
 Questo esercizio porta `microfinance.py` da **"validato su SINTETICO"** a **"validato su DATO REALE pubblico"**
