@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cryptovalid-opencore"
-version = "0.21.0"
+version = "0.22.0"
 description = "Verifiable compliance evidence: hash-chained ledgers + standalone offline verifier (flat-layout modules, unchanged declared commands)"
 license = {text = "AGPL-3.0-or-later"}
 requires-python = ">=3.9"
@@ -24,7 +24,10 @@ sign = ["cryptography>=48"]
 # (it built packs the reference refuses). Without this extra the ap2 subcommand is a refusal that names it.
 # <2: a major release of ap2-evidence-pack may change verify_evidence(); the weekly CI run (verify.yml, schedule) installs
 # the newest 1.x from the index and runs every suite, so a break in a 1.x release turns this repository red too.
-ap2 = ["ap2-evidence-pack>=1.3.0,<2"]
+# >=1.6.0 since 0.22.0: the front-end copies the reference's `admission` / `states` / `policy` (SPEC §6.9 of 1.6.0);
+# 1.3.0-1.5.4 have none. Its 74-with-receipt (SPEC §6.10) is raised only with tsa_cert or trust_anchor, which the
+# front-end does not pass: the branch that turns it into this front-end's 74 is kept for a later 1.x.
+ap2 = ["ap2-evidence-pack>=1.6.0,<2"]
 
 [project.urls]
 Homepage = "https://github.com/robertolocatelli81-dev/cryptovalid-opencore"

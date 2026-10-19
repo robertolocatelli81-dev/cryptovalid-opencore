@@ -71,7 +71,8 @@ class TestNoPathSharedWithAp2EvidencePack(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(HERE, "ap2_evidence.py")))
         self.assertFalse(os.path.isdir(os.path.join(HERE, "pqcrypto")))
         ap2 = p["project"]["optional-dependencies"]["ap2"]
-        self.assertTrue(any(re.match(r"ap2-evidence-pack\s*>=\s*1\.3", x) for x in ap2), ap2)
+        # the floor follows pyproject: 1.3 until 0.21.0, 1.6 since 0.22.0 (states and the 74 receipt of ap2-evidence-pack 1.6.0)
+        self.assertTrue(any(re.match(r"ap2-evidence-pack\s*>=\s*1\.6\.0,", x) for x in ap2), ap2)
 
     @unittest.skipIf(tomllib is None, "tomllib: Python >= 3.11")
     def test_positive_control_the_0_17_2_layout_fails(self):

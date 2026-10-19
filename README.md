@@ -250,9 +250,15 @@ python3 evidence_pack.py verify pack_dir/
 ```
 
 `verify` returns `valid: true` only if every file digest matches the manifest, the manifest is
-self-consistent, and every ledger passes its hash chain **and** (if signed) its signatures — no server,
-no account, no vendor. Tamper any file and it drops to `valid: false`. RFC 3161 anchoring is optional
-(needs `openssl` + a TSA); its absence never invalidates the pack. Tests: `python3 test_evidence_pack.py`.
+self-consistent, every ledger passes its hash chain **and** (if any entry carries a signature field) its signatures, and
+a claimed RFC 3161 token is not refuted — no server, no account, no vendor. Tamper any file and it drops to `valid: false`.
+RFC 3161 anchoring is optional (needs `openssl` + a TSA): its absence never invalidates the pack; since 0.22.0 a claim
+without a token, or a token that openssl reads here as not granted or bound to another digest, does. The TSA's signature
+is not checked (`time_anchor: tsa_not_checked`), and where openssl is absent the token is not read at all
+(`time_anchor: not_evaluated / instrument_failure`, with the exit `valid` gives). The receipt also says, in one closed field per subject, what was checked and
+how it came out (`admission`, `states`: SPEC §10) — a refusal of the manifest itself (`format_unsupported`,
+`unknown_member`, `malformed`) is told apart from tampering. Tests: `python3 test_evidence_pack.py`,
+`python3 test_pack_states_20261019.py`.
 
 This is the difference from closed GRC evidence tools: **your evidence is a bundle anyone can re-execute
 to verify — forever, offline, without trusting us.**
@@ -285,7 +291,11 @@ Without the `ap2` extra, `cryptovalid-verify ap2` is a refusal receipt that name
 
 Honest scope: proves these exact artifacts verified with this key material at build time (and
 existed at the TSA's time, if stamped). It does **not** confer eIDAS art. 45j qualified-archive
-legal presumption and does not validate x5c chains to a trust anchor. ES256 only, loudly.
+legal presumption and does not by itself validate x5c chains to a trust anchor (ap2-evidence-pack does it for a
+relying party that gives one, `--trust-anchor`; `cryptovalid-verify ap2` passes none). ES256 only, loudly.
+Since 0.22.0 the front-end needs ap2-evidence-pack >= 1.6.0 and copies its `admission`, `refusal_class`,
+`states_vocabulary`, `states` and `policy` (SPEC_AP2_EVIDENCE.md §6.9) into its receipt untouched; the refusal class
+leads the reason of the reference's layer.
 Tests of the format live in ap2-evidence-pack; here `test_verify_evidence.py` and `test_mcp.py` test the front-end and
 the MCP tool `verify_ap2_evidence` (read-only), and skip without the package.
 
@@ -556,6 +566,68 @@ Honest scope, once more: a receipt signed by the log key proves what the log key
 qualified electronic ledger needs a qualified trust service provider, qualified certificates/timestamps and
 certified devices — `eidas_ledger_check.py` tells you exactly which of those you still owe.
 
+## The evidence pack receipt says what was checked; a claimed token that does not verify is a failure; small-order keys refused in the pack and the ingest (2026-10-19, 0.22.0)
+
+Not additive: verdicts change (SPEC v0.5, §6 lists them; §10 is the receipt). The ledger format, its vectors and the six
+ledger verifiers do not change.
+
+- **The pack receipt names admission and states** (SPEC §10; the design of ap2-evidence-pack 1.6.0, aligned with
+  draft-krausz-verification-state-03 §3.1, §3.3, §5.4.2, work in progress). `admission` is `admitted` or `refused`; a
+  refusal has `refusal_class` (`format_unsupported`, `unknown_member`, `malformed`), `states: null` and its reason in
+  `error`. An admitted pack has `states_vocabulary: "cryptovalid-evidence-pack/states-1"` and three subjects —
+  `sealed_content`, `producer_signature`, `time_anchor` — each `{state, reasons, detail?}` with the precedence
+  contradicted > instrument failure > other not evaluated > verified. `time_anchor` is never `verified`: this verifier
+  binds the token to the manifest digest and does not check the TSA's signature (`tsa_not_checked`). `valid` is
+  computed as before plus the changes below; how it relates to the states is written in §10 and checked on a generative
+  bench (`verifiers/pack_states_bench.py`).
+- **A claimed RFC 3161 token that does not verify makes the pack not valid** (the limit declared in 0.21.0): `anchored:
+  true` with a token that is not a granted TimeStampResp for this digest, or with no token, is `valid: false`, exit 1
+  (`time_anchor: contradicted`, `token_invalid` / `binding_mismatch` / `token_missing`). Until 0.21.0: `valid: true`,
+  exit 0. A pack without a token, or whose token cannot be checked because openssl is absent, keeps its verdict.
+- **A check that cannot run gives the whole receipt and exit 74.** openssl that cannot start, does not answer in time, or
+  is ended by a signal while `evidence_pack.py verify` (or `cryptovalid-verify pack`) checks a token: the complete receipt
+  on stdout with `time_anchor: not_evaluated / instrument_failure`, one line `check not run here: <reason>` on stderr,
+  exit 74. Until 0.21.0 stdout was empty, and openssl ended by a signal was "token not verified" (the pack stayed valid);
+  now that a token that does not verify fails the pack, a crashed tool must not read as a forged token. A receipt that
+  cannot be written is still 74 with `receipt not written`. The MCP server returns that receipt (`check_not_run`) where
+  it returned only an error string.
+- **The manifest is read as a closed, typed object.** An unknown `pack_format` (1.0 included; until 0.21.0 the field was
+  not read), a key written twice, and a field this verifier reads with a type `build_pack` never writes are refusals;
+  until 0.21.0 `rfc3161_timestamp: []` or `ledgers: true` were a traceback (exit 1) and `anchored: "yes"` counted as a
+  claim. The unknown keys of SPEC §2.1 are now `refusal_class: unknown_member` (same exit, same `valid: false`).
+- **A ledger's signature layer is opened by any entry**, as SPEC §5 step 5 says: until 0.21.0 the pack checked
+  signatures only when the first entry carried `signature`, so a ledger whose first entry was unsigned and whose second
+  carried a signature that does not verify was valid. And a manifest that claims a post-quantum layer
+  (`pq_protected: true`) for a ledger that does not carry it is not valid (it was valid, with `pq_reason: pq_absent`).
+- **Keys and R of small or mixed order are refused in the pack manifest signature and in the ingest's tree-head
+  signatures** (the second limit declared in 0.21.0; `ed25519_order`, the rule the ledger verifiers apply since 0.21.0).
+  Measured on 0.21.0 on 19/10/2026: a manifest "signed" by the neutral point with R neutral and S = 0 — a signature that
+  `cryptography` 50.0.1 accepts for any message under that key — was `manifest_authenticated: true`,
+  and an ingest archive whose STH and HEAD carried that signature was `ok: true`, also with that key pinned. The signer
+  is read as 64 lowercase hex characters and the signature as strict base64 of 64 bytes (both were read leniently).
+- **`cryptovalid-verify ap2` needs ap2-evidence-pack >= 1.6.0** (the `ap2` extra; the floor CI job installs 1.6.0): it
+  copies the reference's `admission`, `refusal_class`, `states_vocabulary`, `states` and `policy` into its receipt
+  untouched and puts the refusal class first in the reason of the reference's layer. An `Ap2WriteError` that carries the
+  reference's complete receipt (SPEC_AP2_EVIDENCE.md §6.10) would become this front-end's receipt and exit 74; 1.6.0 raises
+  it only with `tsa_cert` or `trust_anchor`, which the front-end does not pass, so today that branch is not reached
+  (measured 19/10/2026: openssl killed, absent or not answering leaves `cryptovalid-verify ap2` at exit 0 on a valid
+  vector with a token, whose binding 1.6.0 reads without openssl). A pack with
+  zero artifacts no longer passes the signature layer of the front-end (`all()` of nothing was true; the reference's own
+  verdict already failed it). CONFORMANCE.md counted 8 ap2 vectors: there are 42 at v1.6.0.
+- **Not done in 0.22.0, and why.** The states are not added to the six ledger verifiers: the design's table has no cell
+  for a ledger, an unknown key there is a FAIL in normative vectors of six implementations rather than a refusal, and the
+  verifiers do not perform the same steps (two do not check signatures, two do not check ML-DSA) — that needs its own
+  pre-registered design. The ingest archive gets the small-order rule but no states, for the same first reason.
+- **The receipts of `cryptovalid_receipt.py` refuse the same keys** (the JSON tree head `cryptovalid_sth/1` and the COSE
+  receipts, formats of this project). Measured on 0.21.0 on 19/10/2026: the forged signature above was
+  `signature_valid: true` for any tree head (`ok: false` without a trusted key, `ok: true` with the neutral point as the
+  trusted key), and a COSE inclusion receipt re-signed that way was `ok: true` under that key; on one tree head, 13 of the
+  14 encodings of points of small order were accepted as a trusted key with an R of small order and S = 0, and a key of
+  mixed order (torsion of order 2) with a signature the library accepts. Now `signature_valid: false` / `ok: false` with the reason (`small_order_key`, `mixed_order_key`,
+  `small_order_r`).
+- **`evidence_pack.py build --tsa`**: openssl ended by a signal while it reads the TSA's reply is exit 74 and no pack (the
+  0.20.3 rule for a check that cannot run while building); until 0.21.0 the pack was written unanchored.
+
 ## A signature layer that does not verify is a FAIL; Ed25519 keys and R of small or mixed order are refused; Merkle leaves follow §3; a cut bytecode cache is compiled again (2026-10-14, 0.21.0)
 
 SPEC v0.4. Every change below has a test that fails on 0.20.3, and the mutants we ran on its lines are killed by the tests (on
@@ -628,7 +700,7 @@ signature layer or count it. What changes on purpose:
 - **The Kiva pre-registration** (`spec/PREREG_KIVA_20260820.md`) names reviewer roles instead of model names and no
   private note; the pre-registered bytes (SHA3-256 `db5671af...`, cited by the two validation reports) are that file at
   public commit `401e6b2`.
-- **Found and not changed in 0.21.0 (planned for 0.22.0).** `evidence_pack.py verify` reports a declared RFC 3161
+- **Found and not changed in 0.21.0 (planned for 0.22.0; done there, see the 0.22.0 section).** `evidence_pack.py verify` reports a declared RFC 3161
   token that does not verify (`rfc3161.claimed: true`, `verified: false`) and still returns `valid: true`, exit 0
   (measured 17/10/2026 on a pack of `examples/sample_ledger.jsonl` with a token that is not a TimeStampResp): the
   anchor is optional, but one that is claimed and fails is not yet a failure. The evidence pack's manifest signature and
@@ -1607,8 +1679,8 @@ ML-DSA-65, COSE, JWS, AP2) need `cryptography` (≥ 48: the floor where ML-DSA-6
 pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ 'cryptovalid-opencore[sign]'
 ```
 
-AP2 dispute evidence needs the `ap2` extra (`'cryptovalid-opencore[ap2]'`), which installs ap2-evidence-pack >= 1.3.0,
-< 2 from the same index. Every CI run of this repository (each push, and a weekly schedule) installs the newest 1.x
+AP2 dispute evidence needs the `ap2` extra (`'cryptovalid-opencore[ap2]'`), which installs ap2-evidence-pack >= 1.6.0,
+< 2 from the same index (>= 1.3.0 until 0.21.0). Every CI run of this repository (each push, and a weekly schedule) installs the newest 1.x
 from the index and runs every suite, so a 1.x release that breaks this front-end turns this repository red. Since
 2026-10-05 ap2-evidence-pack's own CI (job `downstream-cryptovalid`, first run 37287815388) clones this repository's
 master on each of its changes and runs `test_verify_evidence.py`, `test_mcp.py`, `test_audit_v1_types.py`,

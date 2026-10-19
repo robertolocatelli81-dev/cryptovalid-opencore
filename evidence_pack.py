@@ -20,7 +20,9 @@ give you this: their evidence lives in a vendor database and dies with the subsc
 
 Honest scope: proves what was recorded, when, in which order, and who signed — plus that it was
 not altered afterwards. NOT the truth of the recorded facts. RFC 3161 is optional (needs openssl
-+ a TSA); its absence never invalidates the pack (signatures + hash chain already stand).
++ a TSA); its absence never invalidates the pack (signatures + hash chain already stand); a claim without a token, or a
+token that openssl reads here as not granted or bound to another digest, does (0.22.0, SPEC §10; the TSA's signature is
+not checked, and without openssl the token is not read: `time_anchor: instrument_failure`).
 
 Usage:
   python3 evidence_pack.py build  out_dir/  ledger1.jsonl [ledger2.jsonl ...] [--subject "..."] [--tsa URL]
@@ -107,6 +109,8 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15) -
         _T._tmp_write(tsr, base64.b64decode(tsr_b64))
         r = _T._run_openssl(  # nosec B603 - exe da shutil.which('openssl'), args FISSI, no shell
             [exe, "ts", "-reply", "-in", tsr, "-text"], capture_output=True, text=True, timeout=timeout)
+        if r.returncode < 0:   # 0.22.0 — SPEC §10, as ap2-evidence-pack 1.6.0 §6.10: a crashed tool is a check not run here
+            raise CheckNotRun(f"cannot run openssl here: terminated by signal {-r.returncode}")
         text = r.stdout or ""
         granted = "Status: Granted" in text or "Granted." in text
         # estrai i BYTE della sezione 'Message data' dal dump openssl:
@@ -127,7 +131,8 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15) -
                         hexbytes.append(tok.lower())
         imprint = "".join(hexbytes)
         imprint_ok = imprint == expected_digest_hex.lower()
-        return {"verified": bool(granted and imprint_ok), "granted": granted, "imprint_ok": imprint_ok}
+        return {"verified": bool(granted and imprint_ok), "granted": granted, "imprint_ok": imprint_ok,
+                "imprint_read": bool(imprint)}   # 0.22.0: internal (binding_mismatch vs token_invalid, SPEC §10); not in the receipt
     except CheckNotRun:
         raise
     except Exception as e:  # noqa: BLE001
@@ -189,9 +194,10 @@ def _summary_md(m: Dict) -> str:
         f"- RFC 3161: {'anchored (' + str(ts.get('tsa')) + ')' if ts.get('anchored') else 'not anchored'}\n\n"
         f"## Ledgers\n{lines}\n\n"
         "## Verify it yourself (vendor-free)\n```\npython3 evidence_pack.py verify <this-folder>\n```\n"
-        "`valid: true` = every file digest matches the manifest, the manifest is self-consistent, and "
-        "every ledger passes its hash chain and (if signed) its signatures — checked with nothing but "
-        "this repository.\n\n"
+        "`valid: true` = every file digest matches the manifest, the manifest is self-consistent, "
+        "every ledger passes its hash chain and (if signed) its signatures, and a claimed RFC 3161 token is not refuted "
+        "(granted and bound to this manifest's digest where openssl can read it; the TSA's signature is not checked) — "
+        "checked with nothing but this repository.\n\n"
         "**Honest scope:** proves what/when/order/who-signed + non-alteration — not the truth of the facts.\n")
 
 
@@ -278,13 +284,159 @@ RFC3161_KEYS = frozenset({"anchored", "tsa", "tsr_b64", "note"})   # every key _
 
 def _manifest_unknown_fields(man: Dict) -> List[str]:
     out = [f"MANIFEST.{k}" for k in man if k not in MANIFEST_KEYS]
-    for i, led in enumerate(man.get("ledgers") or []):
+    leds = man.get("ledgers")
+    for i, led in enumerate(leds if isinstance(leds, list) else []):   # 0.22.0: `ledgers: true` was a traceback
         if isinstance(led, dict):
             out += [f"ledgers[{i}].{k}" for k in led if k not in LEDGER_ENTRY_KEYS]
     ts = man.get("rfc3161_timestamp")
     if isinstance(ts, dict):
         out += [f"rfc3161_timestamp.{k}" for k in ts if k not in RFC3161_KEYS]
     return sorted(out)
+
+
+STATES_VOCABULARY = "cryptovalid-evidence-pack/states-1"   # 0.22.0 — SPEC §10: immutable; a change of meaning is a new identifier
+PACK_FORMAT = "cryptovalid-evidence-pack/1.1"                 # the one format this verifier admits (SPEC §10: 1.0 is refused)
+_SIG_FIELDS = ("signature", "signer", "signature_pq", "signer_pq")   # SPEC §5 step 5: any of them opens the layer
+
+
+def _subject(elements: List[tuple]) -> Dict:
+    """SPEC §10 (the precedence of ap2-evidence-pack 1.6.0 §6.9): contradicted > not_evaluated/instrument_failure > other
+    not_evaluated > verified; `verified` only when every element is; one reason per element that is not verified."""
+    def rank(e):
+        return 3 if e[0] == "contradicted" else 2 if e[1] == "instrument_failure" else 1 if e[0] == "not_evaluated" else 0
+    state = max(elements, key=rank)[0]
+    out = {"state": state, "reasons": [e[1] for e in elements if e[0] != "verified"]}
+    details = [e[2] for e in elements if len(e) > 2 and e[2]]
+    if details:
+        out["detail"] = "; ".join(details)
+    return out
+
+
+def _refused(error: str, cls: str) -> Dict:
+    """A refusal (SPEC §10): the fail values of every 0.21 field, the reason in `error`, no states."""
+    return {"files_ok": False, "file_ok": {}, "manifest_ok": False, "manifest_authenticated": False,
+            "ledgers_ok": False, "ledgers": [], "rfc3161": {}, "valid": False, "error": error,
+            "admission": "refused", "refusal_class": cls, "states_vocabulary": STATES_VOCABULARY, "states": None}
+
+
+def _manifest_type_problem(man: Dict) -> Optional[str]:
+    """SPEC §10, class malformed: a field this verifier reads, of a type build_pack never writes. None when all hold."""
+    for k in ("manifest_digest_sha256", "manifest_signer", "manifest_signature"):
+        if k in man and not isinstance(man[k], str):
+            return f"manifest_bad_type: {k} must be a string"
+    if "rfc3161_timestamp" in man:
+        ts = man["rfc3161_timestamp"]
+        if not isinstance(ts, dict):
+            return "manifest_bad_type: rfc3161_timestamp must be an object"
+        if "anchored" not in ts or not isinstance(ts["anchored"], bool):
+            return "manifest_bad_type: rfc3161_timestamp.anchored must be true or false"
+        for k in ("tsa", "tsr_b64", "note"):
+            if k in ts and not isinstance(ts[k], str):
+                return f"manifest_bad_type: rfc3161_timestamp.{k} must be a string"
+        if "tsr_b64" in ts and ts["anchored"] is not True:
+            return "manifest_bad_type: rfc3161_timestamp.tsr_b64 without anchored: true"
+    for i, lm in enumerate(man.get("ledgers") or []):
+        if "entries" in lm and (not isinstance(lm["entries"], int) or isinstance(lm["entries"], bool)):
+            return f"manifest_bad_type: ledgers[{i}].entries must be an integer"
+        if "head_self_hash" in lm and not (lm["head_self_hash"] is None or isinstance(lm["head_self_hash"], str)):
+            return f"manifest_bad_type: ledgers[{i}].head_self_hash must be a string or null"
+        if "pq_protected" in lm and lm["pq_protected"] not in (True, False, None):
+            return f"manifest_bad_type: ledgers[{i}].pq_protected must be true, false or null"
+    return None
+
+
+def _has_signature_field(path: str) -> bool:
+    """SPEC §5 step 5: the signature layer is opened by a signature field on ANY entry (0.21.0 read entry 0 only)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for ln in f:
+                if not ln.strip():
+                    continue
+                try:
+                    e = json.loads(ln)
+                except (ValueError, RecursionError):
+                    continue
+                if isinstance(e, dict) and any(k in e for k in _SIG_FIELDS):
+                    return True
+    except (OSError, UnicodeDecodeError):
+        pass
+    return False
+
+
+def _manifest_signature_element(man: Dict, manifest_signer_hex: Optional[str]) -> tuple:
+    """(state, reason, detail) of the manifest signature, and whether it authenticates (SPEC §10, producer_signature)."""
+    sig, pub = man.get("manifest_signature"), man.get("manifest_signer")
+    if not sig:
+        return ("not_evaluated", "not_present"), False
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey as _Pk
+    except ImportError:
+        return ("not_evaluated", "backend_missing", "manifest signature: cryptography not available"), False
+    raw_sig = signer._b64_strict(sig, 64)
+    if not (isinstance(pub, str) and signer._HEX64.fullmatch(pub)) or raw_sig is None:
+        return ("contradicted", "signature_invalid", "manifest signature: manifest_signer must be 64 lowercase hex, "
+                "manifest_signature strict base64 of 64 bytes"), False
+    why = signer._edo().strict_problem(bytes.fromhex(pub), raw_sig)   # 0.22.0: small/mixed-order key or R refused
+    if why is None:
+        try:
+            _Pk.from_public_bytes(bytes.fromhex(pub)).verify(raw_sig, man["manifest_digest_sha256"].encode())
+        except Exception:  # noqa: BLE001
+            why = "bad_signature"
+    if why is not None:
+        return ("contradicted", "signature_invalid", f"manifest signature: {why}"), False
+    if not manifest_signer_hex:
+        return ("not_evaluated", "self_asserted"), True
+    if pub != manifest_signer_hex:
+        return ("not_evaluated", "key_unresolved", "manifest signature: signer is not the pinned manifest signer"), True
+    return ("verified", None), True
+
+
+def _ed_layer_element(name: str, sv: Dict, pinned: bool) -> tuple:
+    fails = sv.get("failures") or []
+    if fails:
+        if all(f.get("reason") == "signer_mismatch" for f in fails):
+            return ("not_evaluated", "key_unresolved", f"{name}: signer is not the pinned key")
+        return ("contradicted", "signature_invalid", f"{name}: " + ", ".join(sorted({str(f.get('reason')) for f in fails}))[:160])
+    if not sv.get("total") or sv.get("verified") != sv.get("total"):
+        return ("contradicted", "signature_invalid", f"{name}: no entry verified")
+    return ("verified", None) if pinned else ("not_evaluated", "self_asserted")
+
+
+def _pq_layer_element(name: str, sv: Dict, claimed: bool, pinned: bool, pq, pq_reason: str) -> Optional[tuple]:
+    """The post-quantum layer, an element only when the manifest claims it, a key pins it, or it is carried broken."""
+    pqf = sv.get("pq_failures") or []
+    if not (claimed or pinned or pqf):
+        return None
+    reasons = {f.get("reason") for f in pqf}
+    if pqf:
+        if reasons == {"pq_unverifiable"}:
+            return ("not_evaluated", "backend_missing", f"{name}: ML-DSA-65 cannot be checked here")
+        if reasons == {"pq_signer_mismatch"}:
+            return ("not_evaluated", "key_unresolved", f"{name}: ML-DSA-65 signer is not the pinned key")
+        return ("contradicted", "signature_invalid", f"{name}: ML-DSA-65 " + ", ".join(sorted(map(str, reasons))))
+    if pq is True:
+        return ("verified", None)
+    if pq_reason in ("pq_absent", "pq_partial", "pq_invalid", "pq_layer_lost"):
+        return ("contradicted", "signature_invalid", f"{name}: the manifest claims a post-quantum layer ({pq_reason})")
+    if pq_reason == "pq_unverifiable" or sv.get("pq_status") == "unverifiable":
+        return ("not_evaluated", "backend_missing", f"{name}: ML-DSA-65 cannot be checked here")
+    return ("not_evaluated", "self_asserted", f"{name}: ML-DSA-65 verified against the key it carries")
+
+
+def _time_anchor_element(ts, rfc: Dict) -> tuple:
+    if not isinstance(ts, dict) or ts.get("anchored") is not True:
+        return ("not_evaluated", "not_present")
+    if "tsr_b64" not in ts:
+        return ("contradicted", "token_missing", "anchored: true and no tsr_b64")
+    v = rfc.get("verified")
+    if v is True:
+        return ("not_evaluated", "tsa_not_checked")
+    if v is None:
+        return ("not_evaluated", "instrument_failure", str(rfc.get("note") or "token not checked"))
+    if rfc.get("imprint_read") and rfc.get("imprint_ok") is False:
+        return ("contradicted", "binding_mismatch", "the token's imprint is another digest")
+    return ("contradicted", "token_invalid", str(rfc.get("note") or ("status not granted" if rfc.get("granted") is False
+                                                                     else "no imprint read")))
 
 
 def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubkey_hex: Optional[str] = None,
@@ -296,33 +448,33 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
     pins the manifest signer (`manifest_signer_hex`) and the manifest signature verifies against it. Otherwise a
     ledger marked `pq_protected: true` is reported null with `pq_reason: manifest_unpinned` (the pack is NOT
     quantum-resistant on its own: its manifest is signed with Ed25519 only). A lost/invalid layer → sig_pass false
-    (`pq_layer_lost`); a host that cannot verify ML-DSA → sig_pass false (`pq_unverifiable`)."""
+    (`pq_layer_lost`); a host that cannot verify ML-DSA → sig_pass false (`pq_unverifiable`).
+
+    0.22.0 (SPEC §10): the receipt also carries `admission` / `refusal_class`, `states_vocabulary` and `states` (three
+    subjects); a claimed RFC 3161 token that does not verify (or a claim without a token) makes the pack not valid; when
+    openssl cannot be run here, CheckNotRun carries the COMPLETE receipt (`.receipt`)."""
     if pq_pubkey_b64 and not signer_pubkey_hex:
         raise ValueError("pq_pubkey_b64 needs signer_pubkey_hex: hybrid means both keys are pinned (a classical pack may pin the Ed25519 key alone)")
     if _too_large(os.path.join(pack_dir, "MANIFEST.json")):
-        return {"files_ok": False, "file_ok": {}, "manifest_ok": False, "manifest_authenticated": False,
-                "ledgers_ok": False, "ledgers": [], "rfc3161": {}, "valid": False,
-                "error": "input_too_large: MANIFEST exceeds the verifier's size bound"}
-    def _fail(error):   # the SAME key set as the normal receipt, every field at its fail value (never a traceback)
-        return {"files_ok": False, "file_ok": {}, "manifest_ok": False, "manifest_authenticated": False,
-                "ledgers_ok": False, "ledgers": [], "rfc3161": {}, "valid": False, "error": error}
+        return _refused("input_too_large: MANIFEST exceeds the verifier's size bound", "malformed")
     try:
         with open(os.path.join(pack_dir, "MANIFEST.json"), encoding="utf-8") as f:
             raw = f.read()
     except (OSError, UnicodeDecodeError) as e:   # missing, a directory, not UTF-8 (audit V1 #5, 30/09/2026)
-        return _fail(f"manifest_unreadable: {type(e).__name__}")
+        return _refused(f"manifest_unreadable: {type(e).__name__}", "malformed")
     depth = _json_depth(raw)
     if depth > _MAX_JSON_DEPTH:
-        # Nesting beyond the normative bound (linear pre-scan, same rule as verifier.py, 2026-09-13):
-        # a FAIL receipt with the SAME key set as the normal one (every field at its fail value) + error.
-        return {"files_ok": False, "file_ok": {}, "manifest_ok": False, "manifest_authenticated": False,
-                "ledgers_ok": False, "ledgers": [], "rfc3161": {}, "valid": False,
-                "error": f"json_too_deep: MANIFEST nesting {depth} exceeds the acceptance-profile bound {_MAX_JSON_DEPTH}"}
+        # Nesting beyond the normative bound (linear pre-scan, same rule as verifier.py, 2026-09-13)
+        return _refused(f"json_too_deep: MANIFEST nesting {depth} exceeds the acceptance-profile bound {_MAX_JSON_DEPTH}", "malformed")
     try:
-        man = json.loads(raw)
-    except (ValueError, RecursionError) as e:
-        return _fail(f"manifest_not_json: {type(e).__name__}")
-    # shape of the parts this function reads (audit V1 #5): anything else is a named FAIL, never a traceback; a file
+        man = json.loads(raw, object_pairs_hook=verifier._reject_dup)   # 0.22.0: a key twice is a refusal, not "last wins"
+    except ValueError as e:
+        if str(e).startswith("duplicate JSON key"):
+            return _refused(f"manifest_duplicate_key: {str(e)[19:][:120]}", "malformed")
+        return _refused(f"manifest_not_json: {type(e).__name__}", "malformed")
+    except RecursionError as e:
+        return _refused(f"manifest_not_json: {type(e).__name__}", "malformed")
+    # shape of the parts this function reads (audit V1 #5): anything else is a named refusal, never a traceback; a file
     # name must stay inside the pack (no absolute path, no '..' component), like a vector name in the runners
     def _inside(name):
         # separators of THIS platform only (on POSIX "\\" is an ordinary character, not a separator: NEMESIS P2, 01/10/2026)
@@ -333,39 +485,46 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
             parts = parts.replace(sep, "/")
         return ".." not in parts.split("/")
     if not isinstance(man, dict):
-        return _fail("manifest_not_an_object")
+        return _refused("manifest_not_an_object", "malformed")
+    # 0.22.0 — SPEC §10: the format first (until 0.21.0 the field was not read). A later revision may add members: its
+    # pack is format_unsupported, not unknown_member (the order of ap2-evidence-pack 1.6.0; NEMESIS 19/10/2026)
+    if man.get("pack_format") != PACK_FORMAT:
+        return _refused(f"pack_format_unsupported: {json.dumps(man.get('pack_format'), ensure_ascii=False)[:80]} "
+                        f"(this verifier admits {PACK_FORMAT})", "format_unsupported")
     unknown = _manifest_unknown_fields(man)
     if unknown:   # SPEC §2.1: the manifest is a closed object — named, never silent
-        return _fail("manifest_unknown_field: " + ", ".join(unknown)[:200])
+        return _refused("manifest_unknown_field: " + ", ".join(unknown)[:200], "unknown_member")
     digs, leds = man.get("file_digests_sha256", {}), man.get("ledgers", [])
     if not isinstance(digs, dict) or not all(_inside(k) and isinstance(v, str) for k, v in digs.items()):
-        return _fail("manifest_bad_file_digests: an object of file name (inside the pack) -> sha256 hex")
+        return _refused("manifest_bad_file_digests: an object of file name (inside the pack) -> sha256 hex", "malformed")
     if not isinstance(leds, list) or not all(isinstance(lm, dict) and _inside(lm.get("file")) for lm in leds):
-        return _fail("manifest_bad_ledgers: a list of objects with a file name inside the pack")
+        return _refused("manifest_bad_ledgers: a list of objects with a file name inside the pack", "malformed")
+    bad = _manifest_type_problem(man)
+    if bad:
+        return _refused(bad, "malformed")
     root = os.path.realpath(pack_dir)
 
     def _real_inside(path):   # where the file REALLY is: a symlink out of the pack is not read (NEMESIS P3, 01/10/2026)
         rp = os.path.realpath(path)
         return rp == root or rp.startswith(root + os.sep)
+    sealed: List[tuple] = []
     file_ok = {}
     for name, dig in man.get("file_digests_sha256", {}).items():
         p = os.path.join(pack_dir, name)
         file_ok[name] = _real_inside(p) and os.path.isfile(p) and _sha256_file(p) == dig
+        sealed.append(("verified", None) if file_ok[name] else ("contradicted", "digest_mismatch", f"file {name}"))
+    if not file_ok:
+        sealed.append(("contradicted", "digest_mismatch", "no file listed in file_digests_sha256"))
     m2 = {k: v for k, v in man.items()
           if k not in ("manifest_digest_sha256", "rfc3161_timestamp",
                        "manifest_signature", "manifest_signer")}
     manifest_ok = hashlib.sha256(_canon(m2)).hexdigest() == man.get("manifest_digest_sha256")
+    sealed.append(("verified", None) if manifest_ok else ("contradicted", "digest_mismatch", "manifest digest"))
 
-    # FIX C — autenticità del manifest: se firmato, la firma DEVE verificare (chiude il re-forge)
-    manifest_authenticated = False
-    if man.get("manifest_signature") and man.get("manifest_signer"):
-        try:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey as _Pk
-            _Pk.from_public_bytes(bytes.fromhex(man["manifest_signer"])).verify(
-                base64.b64decode(man["manifest_signature"]), man["manifest_digest_sha256"].encode())
-            manifest_authenticated = True
-        except Exception:  # noqa: BLE001
-            manifest_authenticated = False
+    # FIX C — autenticità del manifest: se firmato, la firma DEVE verificare (chiude il re-forge); 0.22.0: chiavi e R di
+    # ordine piccolo o misto rifiutati, manifest_signer e manifest_signature letti in modo stretto (SPEC §10)
+    man_elem, manifest_authenticated = _manifest_signature_element(man, manifest_signer_hex)
+    producer: List[tuple] = [man_elem]
 
     ledger_results, ledgers_ok = [], True
     for lm in man.get("ledgers", []):
@@ -373,12 +532,14 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
         if not (_real_inside(p) and os.path.isfile(p)):
             ledger_results.append({"file": lm["file"], "hash_pass": False, "sig_pass": False, "untruncated": False,
                                    "pq_protected": False, "pq_reason": "not_a_file_inside_the_pack"})
+            sealed.append(("contradicted", "artifact_invalid", f"ledger {lm['file']}: not a file inside the pack"))
             ledgers_ok = False
             continue
         hp = os.path.exists(p) and verifier.verify_ledger(p).get("verdict") == "PASS"
+        sealed.append(("verified", None) if hp else ("contradicted", "artifact_invalid", f"ledger {lm['file']}: hash chain"))
         sp = True
         pq, pq_reason = False, ""
-        if _first_entry(p).get("signature"):
+        if _has_signature_field(p):
             expected_pq, expected_ed = pq_pubkey_b64, signer_pubkey_hex
             # council 16/09 round 3: the manifest signature covers the DECLARED digest string; the body is bound to it
             # only by manifest_ok — both must hold before any key recorded in the body is trusted, and the recorded
@@ -390,45 +551,75 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
                       and isinstance(rec_ed, list) and len(rec_ed) == 1 and isinstance(rec_ed[0], str) and signer._HEX64.fullmatch(rec_ed[0]))
             if expected_pq is None and lm.get("pq_protected") is True and manifest_pinned and rec_ok:
                 expected_pq, expected_ed = rec_pq[0], rec_ed[0]   # pinned by a manifest the CALLER trusts, digest AND signature verified
-            sv = signer.verify_file(p, expected_ed, expected_pq)
-            sp = sv["ok"]
-            pq = sv.get("pq_protected", False)
-            if lm.get("pq_protected") is True and pq is not True:
-                if expected_pq is None:
-                    if sv.get("pq_status") in ("absent", "partial", "invalid"):
-                        pq_reason = "pq_" + sv["pq_status"]         # refuted by the file itself, whoever pins (round 3: never soften a fact)
+            try:
+                sv = signer.verify_file(p, expected_ed, expected_pq)
+            except RuntimeError as e:   # no `cryptography` here: the layer cannot be checked (0.21.0: a traceback, exit 1)
+                sp, pq, pq_reason = False, False, "signature_layer_unverifiable"
+                producer.append(("not_evaluated", "backend_missing", f"ledger {lm['file']}: {str(e)[:80]}"))
+                sv = None
+            if sv is not None:
+                sp = sv["ok"]
+                pq = sv.get("pq_protected", False)
+                if lm.get("pq_protected") is True and pq is not True:
+                    if expected_pq is None:
+                        if sv.get("pq_status") in ("absent", "partial", "invalid"):
+                            pq_reason = "pq_" + sv["pq_status"]         # refuted by the file itself, whoever pins (round 3: never soften a fact)
+                            sp = False                                   # 0.22.0 — SPEC §10: a claim the file refutes is not valid
+                        else:
+                            pq, pq_reason = None, "manifest_unpinned"   # nobody pinned a key: the claim is not confirmed, not refuted
                     else:
-                        pq, pq_reason = None, "manifest_unpinned"   # nobody pinned a key: the claim is not confirmed, not refuted
-                else:
-                    sp = False        # the manifest promised a post-quantum layer and it cannot be confirmed now
-                    pq_reason = "pq_unverifiable" if sv.get("pq_status") == "unverifiable" else "pq_layer_lost"
+                        sp = False        # the manifest promised a post-quantum layer and it cannot be confirmed now
+                        pq_reason = "pq_unverifiable" if sv.get("pq_status") == "unverifiable" else "pq_layer_lost"
+                producer.append(_ed_layer_element(f"ledger {lm['file']}", sv, bool(expected_ed)))
+                pqe = _pq_layer_element(f"ledger {lm['file']}", sv, lm.get("pq_protected") is True, expected_pq is not None,
+                                        pq, pq_reason)
+                if pqe is not None:
+                    producer.append(pqe)
         # FIX B — anti-troncamento: conteggio+testa devono combaciare col manifest
         n_entries, head = _entries_and_head(p)
         untruncated = (n_entries == lm.get("entries") and head == lm.get("head_self_hash"))
+        if not untruncated:
+            sealed.append(("contradicted", "binding_mismatch", f"ledger {lm['file']}: entry count or head"))
         ledger_results.append({"file": lm["file"], "hash_pass": hp, "sig_pass": sp,
                                "untruncated": untruncated, "pq_protected": pq, **({"pq_reason": pq_reason} if pq_reason else {})})
         ledgers_ok = ledgers_ok and hp and sp and untruncated
     files_ok = all(file_ok.values()) if file_ok else False
+    if len(producer) > 1 and producer[0][1] == "not_present":
+        producer = producer[1:]   # an unsigned manifest next to signed ledgers: the subject is the ledgers' layers
 
-    # FIX D — RFC3161: verifica CRITTOGRAFICA del token (non credere al campo 'anchored')
+    # FIX D — RFC3161: verifica CRITTOGRAFICA del token (non credere al campo 'anchored'); 0.22.0: un token dichiarato che
+    # non verifica, o dichiarato senza token, rende il pack non valido (SPEC §10)
     ts = man.get("rfc3161_timestamp", {})
     rfc = {"claimed": ts.get("anchored", False), "verified": None}
-    if ts.get("anchored") and ts.get("tsr_b64"):
-        rfc = {"claimed": True, **_verify_rfc3161(ts["tsr_b64"], man.get("manifest_digest_sha256", ""))}
+    not_run = None
+    if ts.get("anchored") and "tsr_b64" in ts:
+        try:
+            rfc = {"claimed": True, **_verify_rfc3161(ts["tsr_b64"], man.get("manifest_digest_sha256", ""))}
+        except CheckNotRun as e:
+            not_run = e
+            rfc = {"claimed": True, "verified": None, "note": f"check not run here: {e}"}
+    anchor = _time_anchor_element(ts, rfc)
+    rfc.pop("imprint_read", None)
 
     # una firma manifest PRESENTE ma ROTTA = manomissione → invalida; assente = onesto non-autenticato
     signature_broken = bool(man.get("manifest_signature")) and not manifest_authenticated
-    return {"files_ok": files_ok, "file_ok": file_ok, "manifest_ok": manifest_ok,
-            "manifest_authenticated": manifest_authenticated,
-            "ledgers_ok": ledgers_ok, "ledgers": ledger_results,
-            "rfc3161": rfc,
-            "valid": bool(files_ok and manifest_ok and ledgers_ok and not signature_broken)}
+    receipt = {"files_ok": files_ok, "file_ok": file_ok, "manifest_ok": manifest_ok,
+               "manifest_authenticated": manifest_authenticated,
+               "ledgers_ok": ledgers_ok, "ledgers": ledger_results,
+               "rfc3161": rfc,
+               "valid": bool(files_ok and manifest_ok and ledgers_ok and not signature_broken and anchor[0] != "contradicted"),
+               "admission": "admitted", "refusal_class": None, "states_vocabulary": STATES_VOCABULARY,
+               "states": {"sealed_content": _subject(sealed), "producer_signature": _subject(producer),
+                          "time_anchor": _subject([anchor])}}
+    if not_run is not None:
+        raise CheckNotRun(str(not_run), receipt=receipt)
+    return receipt
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import CheckNotRun, Parser, copy_output, emit, receipt_cli, say, write_output
+    from verifier import CheckNotRun, Parser, check_not_run_exit, copy_output, emit, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import CheckNotRun, Parser, copy_output, emit, receipt_cli, say, write_output
+    from opencore.verifier import CheckNotRun, Parser, check_not_run_exit, copy_output, emit, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -447,7 +638,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                                     sign_key=a.sign_key), indent=1))
         return 0
     if a.cmd == "verify":
-        r = verify_pack(a.dir)
+        try:
+            r = verify_pack(a.dir)
+        except CheckNotRun as e:   # 0.22.0 — SPEC §10: the complete receipt, then 74 (without one: receipt_cli, 74)
+            if e.receipt is None:
+                raise
+            return check_not_run_exit(e, json.dumps(e.receipt, indent=1))
         emit(json.dumps(r, indent=1))
         return 0 if r["valid"] else 1
     p.print_help(); return 2

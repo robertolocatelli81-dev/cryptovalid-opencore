@@ -80,7 +80,16 @@ class OutputNotWritten(OSError):
 class CheckNotRun(OutputNotWritten):
     """a check the input asks for that cannot be RUN here (openssl cannot be started: fork refused, no descriptor left;
     no temporary file for the bytes openssl reads): exit 74, never a verdict on the input — it is neither the PASS nor
-    the FAIL of that check (measured 13/10/2026 on 0.20.2 under RLIMIT_NPROC 1: a valid pack was `valid: false`, exit 1)"""
+    the FAIL of that check (measured 13/10/2026 on 0.20.2 under RLIMIT_NPROC 1: a valid pack was `valid: false`, exit 1)
+
+    0.22.0: a verifier that computed everything else may attach its COMPLETE receipt (`receipt`, a dict) — the check that
+    did not run marked there (`not_evaluated` / `instrument_failure`, SPEC §10); the command writes it with
+    check_not_run_exit() (stderr `check not run here: <reason>`, exit 74). Without one, receipt_cli says `receipt not
+    written: <reason>` and exits 74, as before."""
+
+    def __init__(self, *args, receipt=None):
+        super().__init__(*args)
+        self.receipt = receipt
 
 
 def _text_layer_bytes(out, buf, text: str) -> bytes:
@@ -226,6 +235,16 @@ def receipt_lost(reason: str, stdout_failed: bool = True) -> int:
     if stdout_failed:
         silence(sys.stdout)
     say(f"receipt not written: {reason}\n")
+    return EX_IOERR
+
+
+def check_not_run_exit(e: "CheckNotRun", text: str) -> int:
+    """0.22.0 (SPEC §10): write the COMPLETE receipt `text` a verifier computed although one check could not run here,
+    then `check not run here: <reason>` on stderr, exit 74; if the receipt is not taken whole, `receipt not written`."""
+    why = write_stdout(text)
+    if why is not None:
+        return receipt_not_written(why)
+    say(f"check not run here: {e}\n")
     return EX_IOERR
 
 

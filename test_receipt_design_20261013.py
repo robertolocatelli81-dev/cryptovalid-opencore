@@ -210,7 +210,11 @@ class TestJavaWaitShape(_Tmp):
             if n[0] >= cap:
                 break
             time.sleep(0.02)
-        time.sleep(0.3)
+        # 0.22.0: 2 s for the JVM to settle before the CPU window (was 0.3 s): its own compiler and GC threads, still at work
+        # just after the pipe fills, took 0.31-0.52 s of the 3 s window in 3 of 8 runs on 0.21.0 with JDK 17 (19/10/2026);
+        # with 2 s, 0 of 10. A waiting loop that spins takes 2.5-3.0 s of the window (control: Thread.sleep replaced by a
+        # busy loop, 3 of 3 red)
+        time.sleep(2.0)
 
         def cpu():
             f = open("/proc/%d/stat" % p.pid).read().rsplit(")", 1)[1].split()
@@ -527,12 +531,22 @@ class TestCheckThatCannotRun(_Tmp):
         self.assertEqual(rc, 0, out[-500:] + err[-300:])   # control: the token verifies, the pack is valid
         rc, out, err = sh('exec "$@"', ep)
         self.assertEqual((rc, json.loads(out)["rfc3161"]["verified"]), (0, True))
+        # 0.22.0 — SPEC §10: the COMPLETE receipt on stdout (time_anchor not_evaluated / instrument_failure, the rest evaluated),
+        # one line `check not run here: <reason>` on stderr, exit 74; until 0.21.0 stdout was empty ("receipt not written")
         for pre, why in (("ulimit -u 1; ", b"cannot run openssl here"), ("ulimit -f 0; ", b"cannot write a temporary file for openssl")):
             for cmd in (ve, ep):
                 rc, out, err = sh(pre + 'exec "$@"', cmd, env=dict(ENV, TMPDIR=self.d))
-                self.assertOneLine74(rc, err, f"{pre}{cmd[2]}")
+                label = f"{pre}{cmd[2]}"
+                self.assertEqual(rc, EX_IOERR, f"{label}: {err[-300:]!r}")
+                lines = err.decode("utf-8", "replace").splitlines()
+                self.assertEqual(len(lines), 1, f"{label}: {err[-400:]!r}")
+                self.assertTrue(lines[0].startswith("check not run here: "), f"{label}: {lines!r}")
                 self.assertIn(why, err)
-                self.assertEqual(out, b"")
+                r = json.loads(out)
+                self.assertEqual(r["states"]["time_anchor"], {"state": "not_evaluated", "reasons": ["instrument_failure"],
+                                                              "detail": r["states"]["time_anchor"].get("detail")}, label)
+                self.assertIn(why.decode(), r["states"]["time_anchor"]["detail"], label)
+                self.assertEqual(r["states"]["sealed_content"]["state"], "verified", label)
 
 
 if __name__ == "__main__":

@@ -279,8 +279,20 @@ class TestCheckNotRunMore(_Tmp):
         env = self._fake_openssl("#!/bin/sh\nsleep 25\nexec /usr/bin/env -i openssl \"$@\"\n")
         rc, out, err = self.run_py([os.path.join(HERE, "evidence_pack.py"), "verify", pack], env=env, timeout=90)
         self.assertEqual(rc, EX_IOERR, out + err)
-        self.assertEqual(out, b"")
         self.assertIn(b"no answer within", err)
+        self._assert_whole_receipt_74(out, err)
+
+    def _assert_whole_receipt_74(self, out, err):
+        # 0.22.0 — SPEC §10: the COMPLETE receipt on stdout (time_anchor not_evaluated / instrument_failure, the other subjects
+        # evaluated), one line `check not run here: ...` on stderr; until 0.21.0 stdout was empty
+        r = json.loads(out)
+        self.assertEqual(r["admission"], "admitted")
+        self.assertEqual(r["states"]["time_anchor"]["state"], "not_evaluated")
+        self.assertEqual(r["states"]["time_anchor"]["reasons"], ["instrument_failure"])
+        self.assertEqual(r["states"]["sealed_content"]["state"], "verified")
+        lines = err.decode("utf-8", "replace").splitlines()
+        self.assertEqual(len(lines), 1, err)
+        self.assertTrue(lines[0].startswith("check not run here: cannot run openssl here"), lines)
 
     def test_openssl_that_cannot_exec_is_74(self):
         pack = self._pack()
@@ -288,22 +300,32 @@ class TestCheckNotRunMore(_Tmp):
         rc, out, err = self.run_py([os.path.join(HERE, "evidence_pack.py"), "verify", pack], env=env)
         self.assertEqual(rc, EX_IOERR, out + err)
         self.assertIn(b"cannot run openssl here", err)
+        self._assert_whole_receipt_74(out, err)
 
-    def test_openssl_ended_by_a_signal_or_127_is_not_verified(self):
-        # 0.21.0, declared (audit R2 of class 16, 13/10/2026): openssl that STARTED and then was killed by a signal, or a
-        # wrapper that exits 127, answered: the token is "not verified" (rfc3161.verified false), not "check not run" (74) —
-        # an input that makes openssl crash must not become a check that did not run. Measured on 0.20.3: the same. The
-        # pack's `valid` does not depend on the timestamp (README: RFC 3161 anchoring is optional), so it stays true, exit 0.
+    def test_openssl_ended_by_a_signal_is_74_and_127_is_not_verified(self):
+        # 0.21.0 declared (audit R2 of class 16, 13/10/2026) that openssl killed by a signal, or a wrapper that exits 127,
+        # had answered: `verified: false` with the pack valid, exit 0. 0.22.0 (SPEC §10, as ap2-evidence-pack 1.6.0 §6.10;
+        # draft-krausz-verification-state-03 §3.1 "a crashed dependency"): in `evidence_pack.py verify` a tool ended by a
+        # signal is a check NOT run here — the complete receipt, time_anchor instrument_failure, exit 74 (74 is never a pass,
+        # so an input that makes openssl crash gains nothing); an exit 127 without a signal is an answer: the token does not
+        # verify, `time_anchor: contradicted`, and since 0.22.0 the pack is not valid (exit 1). The other commands that run
+        # openssl through cryptovalid_tsa keep the 0.21.0 rule (`verify_with_openssl`, `verify_cms_signature`: False).
         import cryptovalid_tsa as T
-        for body in ("#!/bin/sh\nkill -KILL $$\n", "#!/bin/sh\nkill -SEGV $$\n", "#!/bin/sh\nexit 127\n"):
+        for body, expect in (("#!/bin/sh\nkill -KILL $$\n", 74), ("#!/bin/sh\nkill -SEGV $$\n", 74), ("#!/bin/sh\nexit 127\n", 1)):
             with self.subTest(body=body):
                 shutil.rmtree(os.path.join(self.d, "bin"), ignore_errors=True)
                 shutil.rmtree(os.path.join(self.d, "pack"), ignore_errors=True)
                 pack = self._pack()
                 env = self._fake_openssl(body)
                 rc, out, err = self.run_py([os.path.join(HERE, "evidence_pack.py"), "verify", pack], env=env)
-                r = json.loads(out)
-                self.assertEqual((rc, r["valid"], r["rfc3161"]["claimed"], r["rfc3161"]["verified"]), (0, True, True, False), out + err)
+                self.assertEqual(rc, expect, out + err)
+                if expect == 74:
+                    self.assertIn(b"terminated by signal", err)
+                    self._assert_whole_receipt_74(out, err)
+                else:
+                    r = json.loads(out)
+                    self.assertEqual((r["valid"], r["rfc3161"]["claimed"], r["rfc3161"]["verified"]), (False, True, False), out + err)
+                    self.assertEqual(r["states"]["time_anchor"]["state"], "contradicted")
                 old = os.environ["PATH"]
                 os.environ["PATH"] = env["PATH"]
                 try:

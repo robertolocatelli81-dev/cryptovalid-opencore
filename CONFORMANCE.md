@@ -4,10 +4,12 @@ The CryptoValid evidence format has one normative contract: `spec/vectors/*`.
 
 ## ap2-evidence-pack (dependency since 0.18.0)
 
-The AP2 dispute-evidence format, its normative text (`SPEC_AP2_EVIDENCE.md`), its vector set (`spec/vectors/ap2/`, 8
-vectors), the conformance runner and the differential oracle live in the ap2-evidence-pack repository
+The AP2 dispute-evidence format, its normative text (`SPEC_AP2_EVIDENCE.md`), its vector set (`spec/vectors/ap2/`, 42
+vectors at tag v1.6.0, counted with `ls spec/vectors/ap2/*.expected.json | wc -l` on 19/10/2026; this paragraph said 8
+until 0.21.0), the conformance runner and the differential oracle live in the ap2-evidence-pack repository
 (https://github.com/robertolocatelli81-dev/ap2-evidence-pack). This repository's `cryptovalid-verify ap2` calls that
-package's `verify_evidence` and adds nothing to the verdict; the vectors it used to carry (6, built by an older copy
+package's `verify_evidence` and adds nothing to the verdict; since 0.22.0 (which needs ap2-evidence-pack >= 1.6.0) it copies
+the reference's `admission`, `refusal_class`, `states_vocabulary`, `states` and `policy` into its receipt untouched; the vectors it used to carry (6, built by an older copy
 of the builder) were refused by the reference since its 1.1.0 (measured: 1.0.2 accepts them) and were removed in 0.18.0.
 
 ## Closed entry and manifest schemas (SPEC §2.1, 2026-10-10; every verifier aligned 2026-10-11)

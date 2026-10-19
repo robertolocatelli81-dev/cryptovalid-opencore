@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.4 (2026-10-14; v0.3 2026-10-12)
+# CryptoValid Evidence Format — candidate standard v0.5 (2026-10-19; v0.4 2026-10-14)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -53,7 +53,7 @@ recomputed over it) verified PASS in the reference with no trace in the receipt.
 domain-specific (§4): keys inside `data` are not constrained by this section. The same rule applies to the evidence
 pack manifest (`evidence_pack.py`): `MANIFEST.json`, each `ledgers[i]` entry and the `rfc3161_timestamp` block are
 closed objects (keys listed in `evidence_pack.MANIFEST_KEYS`, `LEDGER_ENTRY_KEYS`, `RFC3161_KEYS`); an unknown key
-is `manifest_unknown_field` and the pack is not valid. The ledger rule is applied by every verifier of `verifiers/`
+is `manifest_unknown_field` and the pack is not valid (since v0.5 a refusal of class `unknown_member`, §10). The ledger rule is applied by every verifier of `verifiers/`
 (JS, Go, Java, Rust, Swift — aligned 2026-10-11, see CONFORMANCE.md): the same closed list, the failure named
 `unknown_field:<keys>` (keys in code-point order; Rust and Swift, whose receipts carry no reason text, name the entry in
 `schema_failures_idx`). The pack manifest is verified by the reference only (`evidence_pack.py`): the other verifiers do
@@ -185,6 +185,21 @@ v0.4 (2026-10-14, cryptovalid-opencore 0.21.0) changes the Merkle leaves (§9: t
 for a ledger carrying `signature_pq`, `signer_pq` or `tsa_token`) and makes step 5 a normative profile (§5): for the
 verifiers that perform it, a signature layer that does not verify, a key or an R of small order, a key of mixed order
 turn a PASS into a FAIL without a key.
+v0.5 (2026-10-19, cryptovalid-opencore 0.22.0) adds §10, the evidence pack's receipt (`admission`, `states`), and changes
+the pack's verdict — not additive: a claimed RFC 3161 token that does not verify, or a claim without a token, makes the pack
+not valid; an unknown `pack_format`, a key written twice in one object, a manifest field of the wrong type, an
+`rfc3161_timestamp` without `anchored` and a `tsr_b64` without `anchored: true` are refusals; `manifest_signer` is read as
+64 lowercase hex and `manifest_signature` as strict base64 of 64 bytes (a signer in capitals, a signature with a space or a
+newline verified until 0.21.0); a ledger's signature layer is
+opened by a signature field on any entry (§5 step 5), not only on the first; a manifest that claims a post-quantum layer the
+file does not carry makes the pack not valid; the manifest signature and the ingest's tree-head signatures refuse keys and
+R of small or mixed order (§5 step 5's rule); a check that cannot run while verifying a pack (openssl that cannot start,
+does not answer, is ended by a signal — the last was "not verified" until 0.21.0) writes the complete receipt and exits
+74 (stdout was empty); `evidence_pack.py build --tsa`, when openssl is ended by a signal while it reads the TSA's reply,
+exits 74 and writes no pack (until 0.21.0 it wrote the pack unanchored). The ledger format (§2–§5) and its vectors do not
+change. The JSON tree head (`cryptovalid_sth/1`) and the COSE receipts of `cryptovalid_receipt.py` refuse keys of small or
+mixed order and R of small order by the same rule (until 0.21.0 the neutral point with R neutral and S = 0 was
+`signature_valid: true` for any tree head).
 
 ## 7. Conformance (normative)
 
@@ -225,3 +240,66 @@ not by later versions (the vector records both roots). The root of a ledger with
 This is an **optional, additive** layer: the linear hash-chain (§2, §3) remains the interoperable
 core; Merkle proofs are computed on demand and verified by any third party with
 `(entry, index, tree_size, audit_path, root)`. Domain separation: `0x00` leaves, `0x01` nodes.
+
+## 10. Evidence pack receipt: admission and states (NORMATIVE since v0.5, cryptovalid-opencore 0.22.0)
+
+`evidence_pack.py verify` (library `evidence_pack.verify_pack`, and `cryptovalid-verify pack`, which copies these fields)
+answers on two axes, so that a reader takes one closed field per subject instead of combining booleans. The design is the
+one ap2-evidence-pack 1.6.0 uses (its SPEC §6.9, vocabulary `ap2-evidence-pack/states-1`): the same states, the same reason
+tokens with the same meaning, the same precedence. It is aligned with draft-krausz-verification-state-03 §3.1, §3.3, §5.4.2
+(work in progress); the identifier is ours: `states_vocabulary: "cryptovalid-evidence-pack/states-1"` (immutable: a change
+of meaning is a new identifier).
+
+**Admission.** `admission` is `"admitted"` or `"refused"`. A refused pack has `refusal_class` — `format_unsupported`
+(`pack_format` absent, not a string, or not `cryptovalid-evidence-pack/1.1`; packs of format 1.0 included), `unknown_member`
+(a key outside §2.1's lists: `manifest_unknown_field`), `malformed` (anything else that makes the manifest unreadable as this
+format: not readable, not UTF-8 JSON, a key twice in one object, nested deeper than the bound, larger than the bound, not an
+object, `file_digests_sha256` not an object of names inside the pack to strings, `ledgers` not a list of objects naming a file inside the pack, `rfc3161_timestamp` not an object,
+`anchored` not a boolean, `tsa` / `tsr_b64` / `note` not strings, `tsr_b64` without `anchored: true`,
+`manifest_digest_sha256` / `manifest_signer` / `manifest_signature` not strings, `ledgers[i].entries` not an integer
+(a boolean is not one), `ledgers[i].head_self_hash` not a string or null, `ledgers[i].pq_protected` not a boolean or null) — `states: null`, `valid: false`, exit 1, and the reason text in `error` (the field this receipt has carried since
+0.9). The order of the checks is the order of this list's classes as the code meets them: size, read, depth, JSON, object,
+format, unknown keys, shapes and types (the format first, as in ap2-evidence-pack 1.6.0: a later revision that adds a
+member is `format_unsupported`, not `unknown_member`). The other fields of a refused receipt keep their fail values (`files_ok`,
+`manifest_ok`, `ledgers_ok` false): a reader of those fields alone sees a failure, and must read `admission` to tell a
+refusal from tampering.
+
+**States** (admitted only). `states` is a closed object with exactly three subjects — the pack has no holder binding and no
+issuer chain, so ap2's `holder_binding` and `issuer_identity` are absent, not `not_present`. Each subject is
+`{"state": S, "reasons": [R, ...], "detail"?: str}` with S ∈ `verified` | `contradicted` | `indeterminate` |
+`not_evaluated`; `indeterminate` is reserved and no pack produces it. A subject is computed from its elements in order;
+its state is the state of the element of highest rank: `contradicted` > `not_evaluated` with `instrument_failure` > other
+`not_evaluated` > `verified` (`verified` only when every element is); `reasons` lists one reason per element that is not
+`verified`, in element order.
+
+| subject | elements, in order | verified | contradicted | not_evaluated |
+|---|---|---|---|---|
+| `sealed_content` | each name of `file_digests_sha256`; the manifest's own digest; for each `ledgers[i]`: the file inside the pack, its hash chain (§5 steps 1–4), its entry count and head equal to the manifest's | every element holds | `digest_mismatch` (a file absent, outside the pack or of another digest; the manifest digest; no file listed at all), `artifact_invalid` (a ledger that is not a file inside the pack, or whose chain fails), `binding_mismatch` (entry count or head differ from the manifest: truncation or extension) | — |
+| `producer_signature` | the manifest signature; then, for each ledger whose entries carry a signature field (any entry, §5 step 5), its signature layer, then its post-quantum layer when the manifest claims one (`pq_protected: true`) | every element verifies under a key the CALLER pinned (`manifest_signer_hex`; `signer_pubkey_hex` and, for the post-quantum layer, `pq_pubkey_b64`) | `signature_invalid` (a signature that was checked and fails: broken, malformed, a key or R of small or mixed order, an entry of a signed ledger unsigned; a post-quantum layer the manifest claims and the file does not carry, carries partly, or carries broken) | `not_present` (no manifest signature, no signed ledger), `self_asserted` (it verifies under the key it carries; nobody pinned one: draft-krausz §5.4.2(a)), `key_unresolved` (a pin was given and the signer is another key), `backend_missing` (`cryptography`, or ML-DSA-65 in it, is not available here) |
+| `time_anchor` | the `rfc3161_timestamp` block | never: this verifier does not check the TSA's signature (a self-issued token binds as well as a real one) | `token_missing` (`anchored: true` and no `tsr_b64`), `binding_mismatch` (an imprint was read and is another digest), `token_invalid` (otherwise: not a TimeStampResp, status not granted, no imprint read) | `not_present` (no block, or `anchored: false`), `tsa_not_checked` (status granted, imprint = the manifest digest), `instrument_failure` (openssl absent; openssl that cannot be started, gives no answer in time, is ended by a signal, or no temporary file: exit 74, below) |
+
+**Disposition.** `valid` is computed as before v0.5 plus the changes listed in §6 (v0.5); it is not derived from
+`states`. Two rules hold between them (proved on the generative bench of 0.22.0, receipt fields only): a `valid` pack is
+admitted and has no `contradicted` subject; an admitted pack that is not valid and has no `contradicted` subject has a
+`producer_signature` reason `key_unresolved` (a ledger signed by a key other than the one pinned) or `backend_missing` (a
+manifest signature, an Ed25519 layer, or a pinned post-quantum layer that cannot be checked here). The converse does not
+hold, by design: a manifest signed by a key other than `manifest_signer_hex` (library only; it pins the post-quantum keys the
+manifest records, as since 0.12.0) is `key_unresolved` and leaves `valid` as it was, and a post-quantum layer that nobody
+pinned and that cannot be checked here is `backend_missing` with the pack valid. The post-quantum layer of a ledger is an
+element only when the manifest claims it (`pq_protected: true`), a key pins it, or the file carries it broken; otherwise
+it is reported in `ledgers[i].pq_protected` as before and is not part of what the pack asserts.
+
+**A check that cannot run here.** openssl present but not startable (fork refused, no descriptor), not answering within
+the timeout, ended by a signal (draft-krausz-verification-state-03 §3.1, "a crashed dependency"; as ap2-evidence-pack 1.6.0
+§6.10), or no temporary file for the token: the receipt is written WHOLE with `time_anchor: not_evaluated / instrument_failure` (its `detail` names the
+cause) and every other subject evaluated, `check not run here: <reason>` on stderr, exit 74; the library raises
+`verifier.CheckNotRun` carrying that receipt in `receipt`. A run that cannot write its receipt exits 74 with
+`receipt not written: <reason>` and no complete JSON on stdout: on 74, a complete JSON receipt means a check did not run,
+none (or a cut one) means the write failed. openssl absent is `instrument_failure` too, with the exit `valid` gives (as
+before v0.5: an absent tool is not a failed run). An openssl that exits with a code and no signal has answered: a token
+it does not accept is `token_invalid`. Other commands of this repository that run openssl (`cryptovalid_tsa`, the ingest's
+token check) keep their rule of 0.21.0: a tool ended by a signal there is a token not verified.
+
+**What no state can say.** The RFC 3161 block and the manifest signature lie outside the manifest digest: a copy with the
+block removed has the states of a pack that never had one (`time_anchor: not_present`), and a copy with the manifest
+signature removed those of an unsigned pack. Only a pinned manifest signer or a hash of the whole folder tells them apart.

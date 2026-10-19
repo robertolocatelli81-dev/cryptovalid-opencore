@@ -277,6 +277,11 @@ def handle(msg: Dict) -> Optional[Dict]:
         except KeyError as e:
             return _rpc_error(id_, -32602, f"missing required argument: {e}")
         except Exception as e:  # noqa: BLE001 - fail-honest: tipo+messaggio, mai traceback su stdout
+            rec = getattr(e, "receipt", None)
+            if isinstance(rec, dict):   # 0.22.0: a check that could not run here, with the verifier's COMPLETE receipt
+                return _rpc_result(id_, {"content": [   # (evidence pack SPEC §10, ap2-evidence-pack 1.6.0 §6.10): never dropped
+                    {"type": "text", "text": json.dumps({"result": rec, "check_not_run": str(e)[:200]}, ensure_ascii=False)}],
+                    "isError": True})
             return _rpc_result(id_, {"content": [
                 {"type": "text",
                  "text": json.dumps({"error": f"{type(e).__name__}: {str(e)[:200]}"})}],

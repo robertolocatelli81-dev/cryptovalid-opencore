@@ -349,7 +349,6 @@ def _check_signature(doc: Dict, expected_pubkey_hex) -> Optional[str]:
     expected_pubkey_hex: None, UNA chiave hex, o un ITERABILE di chiavi fidate —
     la rotazione delle chiavi (es. file→HSM) lascia in archivio segmenti firmati
     dalla chiave precedente: restano validi se quella chiave è nel set fidato."""
-    import base64
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     try:
         if expected_pubkey_hex:
@@ -357,8 +356,19 @@ def _check_signature(doc: Dict, expected_pubkey_hex) -> Optional[str]:
                        else set(expected_pubkey_hex))
             if doc.get("signer") not in allowed:
                 return "signer_mismatch"
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(doc["signer"])).verify(
-            base64.b64decode(doc["signature"]), _sth_canonical_hash(doc).encode())
+        # 0.22.0: the signer as 64 lowercase hex, the signature as strict base64 of 64 bytes, and keys and R of small or
+        # mixed order refused (ed25519_order, SPEC §5 step 5's rule; until 0.21.0 the neutral point with R neutral and
+        # S = 0 was accepted for any tree head, measured 19/10/2026)
+        try:
+            import signer as _sg
+        except ImportError:   # python3 -m opencore.<module> from the parent directory
+            from opencore import signer as _sg
+        pub, raw_sig = doc.get("signer"), _sg._b64_strict(doc.get("signature"), 64)
+        if not (isinstance(pub, str) and _sg._HEX64.fullmatch(pub)) or raw_sig is None:
+            return "signature_invalid"
+        if _sg._edo().strict_problem(bytes.fromhex(pub), raw_sig) is not None:
+            return "signature_invalid"
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(raw_sig, _sth_canonical_hash(doc).encode())
         return None
     except Exception:
         return "signature_invalid"
@@ -411,7 +421,8 @@ def verify_archive(directory: str, prefix: str = "ledger",
             failures.append({"segment": name, "reason": "sth_chain_break"})
         if sth.get("signature"):
             signed_count += 1
-            signers.add(sth.get("signer"))
+            if isinstance(sth.get("signer"), str):   # NEMESIS 19/10/2026: a list or object here was a TypeError traceback
+                signers.add(sth.get("signer"))       # (0.21.0 and 0.22.0 draft); any other type is sth_signature_invalid below
             reason = _check_signature(sth, expected_pubkey_hex)
             if reason:
                 failures.append({"segment": name, "reason": f"sth_{reason}"})

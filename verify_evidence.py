@@ -125,47 +125,69 @@ def verify_ledger(path: str) -> dict:
     return _rollup("ledger", layers)
 
 
+_REFERENCE_STATE_KEYS = ("admission", "refusal_class", "states_vocabulary", "states", "policy")
+
+
+def _with_reference_states(rollup: dict, r: dict) -> dict:
+    """0.22.0: the reference's own admission and states, copied untouched (this front-end derives none)."""
+    for k in _REFERENCE_STATE_KEYS:
+        if isinstance(r, dict) and k in r:
+            rollup[k] = r[k]
+    return rollup
+
+
+def _pack_layers(r: dict, pack_dir: str) -> list:
+    layers = [_layer("file digests == manifest", "PASS" if r.get("files_ok") else "FAIL"),
+              _layer("manifest auto-consistente", "PASS" if r.get("manifest_ok") else "FAIL")]
+    auth = r.get("manifest_authenticated")
+    try:
+        with open(os.path.join(pack_dir, "MANIFEST.json"), encoding="utf-8") as fh:
+            sig_present = bool(json.load(fh).get("manifest_signature"))
+    except (OSError, ValueError, AttributeError):
+        sig_present = False
+    # a manifest signature that is PRESENT but does not verify is tampering, never "unsigned" (audit V1 #1, 30/09/2026)
+    layers.append(_layer("manifest autenticato (Ed25519)",
+                         "PASS" if auth else ("FAIL" if sig_present else "SKIP"),
+                         "firmato" if auth else ("firma presente ma NON valida" if sig_present
+                                                 else "non firmato o cryptography assente")))
+    layers.append(_layer("ledger: hash+firma+anti-troncamento", "PASS" if r.get("ledgers_ok") else "FAIL"))
+    rfc = r.get("rfc3161") or {}
+    ta = (r.get("states") or {}).get("time_anchor") or {}
+    if rfc.get("claimed"):
+        v = rfc.get("verified")
+        # 0.22.0: the reference's time_anchor decides FAIL (contradicted: token missing, invalid, another digest) vs SKIP
+        layers.append(_layer("RFC 3161 timestamp",
+                             "PASS" if v is True else ("FAIL" if ta.get("state") == "contradicted" or v is False else "SKIP"),
+                             "" if v is True else str(ta.get("detail") or rfc.get("note") or "openssl assente")))
+    else:
+        layers.append(_layer("RFC 3161 timestamp", "SKIP", "nessun timestamp nel pack"))
+    # the reference verifier's own verdict is a mandatory layer: this front-end never passes what it rejects
+    layers.append(_layer("verdetto del verificatore di riferimento (evidence_pack.verify_pack)",
+                         "PASS" if r.get("valid") is True else "FAIL",
+                         "" if r.get("valid") is True else str(r.get("error") or "")))
+    return layers
+
+
 def verify_pack(pack_dir: str) -> dict:
     """Evidence pack completo: digest dei file, manifest auto-consistente, ogni ledger
-    (hash+firma+anti-troncamento), token RFC 3161. Riusa evidence_pack.verify_pack."""
-    layers = []
+    (hash+firma+anti-troncamento), token RFC 3161. Riusa evidence_pack.verify_pack.
+    0.22.0: copies the reference's `admission` / `states` (SPEC §10); a check that cannot run here is the COMPLETE
+    receipt and exit 74 (CheckNotRun carries it), as in evidence_pack.py verify."""
     if not _need_opencore():
         return _rollup("pack", [_layer("evidence pack", "SKIP",
                                        "opencore/ non trovato: serve il repo per la verifica completa")])
     try:
         import evidence_pack
         r = evidence_pack.verify_pack(pack_dir)
-        layers.append(_layer("file digests == manifest", "PASS" if r.get("files_ok") else "FAIL"))
-        layers.append(_layer("manifest auto-consistente", "PASS" if r.get("manifest_ok") else "FAIL"))
-        auth = r.get("manifest_authenticated")
-        try:
-            with open(os.path.join(pack_dir, "MANIFEST.json"), encoding="utf-8") as fh:
-                sig_present = bool(json.load(fh).get("manifest_signature"))
-        except (OSError, ValueError, AttributeError):
-            sig_present = False
-        # a manifest signature that is PRESENT but does not verify is tampering, never "unsigned" (audit V1 #1, 30/09/2026)
-        layers.append(_layer("manifest autenticato (Ed25519)",
-                             "PASS" if auth else ("FAIL" if sig_present else "SKIP"),
-                             "firmato" if auth else ("firma presente ma NON valida" if sig_present
-                                                     else "non firmato o cryptography assente")))
-        layers.append(_layer("ledger: hash+firma+anti-troncamento",
-                             "PASS" if r.get("ledgers_ok") else "FAIL"))
-        rfc = r.get("rfc3161") or {}
-        if rfc.get("claimed"):
-            v = rfc.get("verified")
-            layers.append(_layer("RFC 3161 timestamp",
-                                 "PASS" if v is True else ("SKIP" if v is None else "FAIL"),
-                                 "openssl assente" if v is None else ""))
-        else:
-            layers.append(_layer("RFC 3161 timestamp", "SKIP", "nessun timestamp nel pack"))
-        # the reference verifier's own verdict is a mandatory layer: this front-end never passes what it rejects
-        layers.append(_layer("verdetto del verificatore di riferimento (evidence_pack.verify_pack)",
-                             "PASS" if r.get("valid") is True else "FAIL"))
     except Exception as e:  # noqa: BLE001
+        rec = getattr(e, "receipt", None)
+        if _not_run(e) and isinstance(rec, dict):
+            from verifier import CheckNotRun
+            raise CheckNotRun(str(e), receipt=_with_reference_states(_rollup("pack", _pack_layers(rec, pack_dir)), rec)) from e
         if _not_run(e):
             raise
-        layers.append(_layer("evidence pack", "FAIL", f"{type(e).__name__}: {e}"))
-    return _rollup("pack", layers)
+        return _rollup("pack", [_layer("evidence pack", "FAIL", f"{type(e).__name__}: {e}")])
+    return _with_reference_states(_rollup("pack", _pack_layers(r, pack_dir)), r)
 
 
 def verify_archive(directory: str, prefix: str = "ledger") -> dict:
@@ -187,9 +209,41 @@ def verify_archive(directory: str, prefix: str = "ledger") -> dict:
     return _rollup("archive", layers)
 
 
+def _ap2_layers(r: dict) -> list:
+    layers = [_layer("digest file", "PASS" if r.get("digest_ok") else "FAIL")]
+    arts = r.get("artifacts") or []
+    # 0.22.0: zero artifacts is not a pass of this layer (ap2-evidence-pack 1.6.0 refuses with `artifacts: []`; all() of
+    # nothing is True)
+    layers.append(_layer("firme ES256 + disclosure + binding",
+                         "PASS" if arts and all(a.get("signature_ok") and a.get("claims_match") for a in arts)
+                         and r.get("bindings_ok") else "FAIL"))
+    rfc = r.get("rfc3161") or {}
+    v = rfc.get("verified")
+    layers.append(_layer("RFC 3161", "PASS" if v is True else ("SKIP" if v in (None,) and not rfc.get("claimed") else ("SKIP" if v is None else "FAIL"))))
+    prod = r.get("producer_signatures") or {}
+    if prod.get("present"):
+        # a producer signature that is PRESENT but does not verify is tampering (audit V1 #2, 30/09/2026)
+        layers.append(_layer("firma producer", "PASS" if prod.get("ok") else "FAIL",
+                             "" if prod.get("ok") else "firma presente ma NON valida"))
+    if r.get("self_asserted_only"):
+        layers.append(_layer("provenienza chiavi", "SKIP",
+                             "solo jwk auto-asserito: firma prova coerenza, non identità"))
+    # the reference's own reason reaches the auditor: 1.2.x receipts carry `refused` (the copy shipped until 0.17.2
+    # wrote `error`); without it a refused pack was a FAIL with an empty detail (measured 2026-10-05); 1.6.0 adds the class
+    why = str(r.get("refused") or r.get("error") or "")
+    if r.get("refusal_class"):
+        why = f"{r['refusal_class']}: {why}"
+    layers.append(_layer("verdetto del verificatore di riferimento (ap2_evidence.verify_evidence)",
+                         "PASS" if r.get("valid") is True else "FAIL", "" if r.get("valid") is True else why))
+    return layers
+
+
 def verify_ap2(path: str) -> dict:
-    """Evidenza di mandati agentici SD-JWT (AP2): firme ES256, disclosure, binding, KB-JWT."""
-    layers = []
+    """Evidenza di mandati agentici SD-JWT (AP2): firme ES256, disclosure, binding, KB-JWT.
+    0.22.0: copies the reference's `admission`, `refusal_class`, `states_vocabulary`, `states`, `policy` (ap2-evidence-pack
+    >= 1.6.0, SPEC §6.9) untouched; an `Ap2WriteError` carrying the reference's COMPLETE receipt (a check that could not run
+    here, SPEC §6.10) becomes this front-end's complete receipt and exit 74 — 1.6.0 raises it only with tsa_cert or
+    trust_anchor, which this function does not pass (measured 19/10/2026: unreachable from here today, kept for a later 1.x)."""
     if not _need_opencore():
         return _rollup("ap2", [_layer("ap2 evidence", "SKIP", "opencore/ non trovato")])
     try:
@@ -199,32 +253,15 @@ def verify_ap2(path: str) -> dict:
                                       "ap2-evidence-pack not installed: pip install 'cryptovalid-opencore[ap2]'")])
     try:
         r = ap2_evidence.verify_evidence(path)
-        layers.append(_layer("digest file", "PASS" if r.get("digest_ok") else "FAIL"))
-        layers.append(_layer("firme ES256 + disclosure + binding",
-                             "PASS" if all(a.get("signature_ok") and a.get("claims_match")
-                                           for a in r.get("artifacts", [])) and r.get("bindings_ok")
-                             else "FAIL"))
-        rfc = r.get("rfc3161") or {}
-        v = rfc.get("verified")
-        layers.append(_layer("RFC 3161", "PASS" if v is True else ("SKIP" if v in (None,) and not rfc.get("claimed") else ("SKIP" if v is None else "FAIL"))))
-        prod = r.get("producer_signatures") or {}
-        if prod.get("present"):
-            # a producer signature that is PRESENT but does not verify is tampering (audit V1 #2, 30/09/2026)
-            layers.append(_layer("firma producer", "PASS" if prod.get("ok") else "FAIL",
-                                 "" if prod.get("ok") else "firma presente ma NON valida"))
-        if r.get("self_asserted_only"):
-            layers.append(_layer("provenienza chiavi", "SKIP",
-                                 "solo jwk auto-asserito: firma prova coerenza, non identità"))
-        # the reference's own reason reaches the auditor: 1.2.x receipts carry `refused` (the copy shipped until 0.17.2
-        # wrote `error`); without it a refused pack was a FAIL with an empty detail (measured 2026-10-05)
-        layers.append(_layer("verdetto del verificatore di riferimento (ap2_evidence.verify_evidence)",
-                             "PASS" if r.get("valid") is True else "FAIL",
-                             "" if r.get("valid") is True else str(r.get("refused") or r.get("error") or "")))
     except Exception as e:  # noqa: BLE001
+        rec = getattr(e, "receipt", None)
+        if type(e).__name__ == "Ap2WriteError" and isinstance(rec, dict):
+            from verifier import CheckNotRun
+            raise CheckNotRun(str(e), receipt=_with_reference_states(_rollup("ap2", _ap2_layers(rec)), rec)) from e
         if _not_run(e):
             raise
-        layers.append(_layer("ap2 evidence", "FAIL", f"{type(e).__name__}: {e}"))
-    return _rollup("ap2", layers)
+        return _rollup("ap2", [_layer("ap2 evidence", "FAIL", f"{type(e).__name__}: {e}")])
+    return _with_reference_states(_rollup("ap2", _ap2_layers(r)), r)
 
 
 def verify_cldma(path: str) -> dict:
@@ -318,7 +355,13 @@ def _main(argv=None) -> int:
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     fn = {"auto": verify_auto, "pack": verify_pack, "archive": verify_archive,
           "ledger": verify_ledger, "ap2": verify_ap2, "cldma": verify_cldma}[a.cmd]
-    r = fn(a.path)
+    from verifier import CheckNotRun, check_not_run_exit
+    try:
+        r = fn(a.path)
+    except CheckNotRun as e:   # 0.22.0: a check that could not run here, with the complete receipt: written whole, then 74
+        if getattr(e, "receipt", None) is None:
+            raise
+        return check_not_run_exit(e, json.dumps(e.receipt, ensure_ascii=False, indent=1))
     why = write_stdout(json.dumps(r, ensure_ascii=False, indent=1))
     if why is not None:   # the receipt was not written whole: 74 (EX_IOERR), whatever `valid` says
         return receipt_not_written(why)

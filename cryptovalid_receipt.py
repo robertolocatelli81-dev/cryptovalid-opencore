@@ -157,6 +157,18 @@ def _ed():
     return Ed25519PrivateKey, Ed25519PublicKey, serialization
 
 
+def _order_problem(pub: bytes, sig: bytes):
+    """0.22.0 (NEMESIS 19/10/2026): keys of small or mixed order and R of small order are refused here too, by the rule the
+    ledger verifiers apply since 0.21.0 (ed25519_order). Until then the neutral point, with R neutral and S = 0, was
+    `signature_valid: true` for ANY tree head (JSON `cryptovalid_sth/1`) and `ok: true` for any COSE receipt under that
+    key — `cryptography` accepts it. None when the key and R are usable."""
+    try:
+        import ed25519_order as _o
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore import ed25519_order as _o
+    return _o.strict_problem(pub, sig)   # a key or a signature of another length: key_not_decodable / r_not_decodable
+
+
 def _load_sk(keyfile: str):
     Ed25519PrivateKey, _, ser = _ed()
     with open(keyfile, encoding="utf-8") as f:
@@ -195,6 +207,9 @@ def verify_sth(sth: Dict, trusted_pubkey_hex: Optional[str] = None) -> Dict:
     else:
         note = "signature verified against the trusted log key"
     try:
+        why = _order_problem(bytes.fromhex(pk), bytes.fromhex(sth["signature_hex"]))
+        if why is not None:
+            return {"ok": False, "signature_valid": False, "why": f"STH signature invalid: {why}"}
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(pk)).verify(
             bytes.fromhex(sth["signature_hex"]), _sth_payload(sth["tree_size"], sth["root_sha256"], sth["ts"]))
         return {"ok": bool(trusted_pubkey_hex), "signature_valid": True, "why": note}
@@ -407,6 +422,9 @@ def verify_cose(cose: bytes, trusted_pubkey_hex: str, leaf_hash_hex: Optional[st
         if ph.get(4) != bytes.fromhex(trusted_pubkey_hex):
             return {"ok": False, "why": "kid differs from the trusted log key"}
         pk = Ed25519PublicKey.from_public_bytes(bytes.fromhex(trusted_pubkey_hex))
+        why = _order_problem(bytes.fromhex(trusted_pubkey_hex), sig if isinstance(sig, bytes) else b"")
+        if why is not None:   # 0.22.0: small/mixed-order log key or small-order R (NEMESIS 19/10/2026)
+            return {"ok": False, "why": f"signature invalid: {why}"}
         vdp = unprotected.get(LABEL_VDP) or {}          # proofs live in the UNPROTECTED header (RFC 9942): not signed
         if PROOF_INCLUSION in vdp:
             if payload is None:
