@@ -82,6 +82,9 @@ def sign_entry(entry: Dict, keyfile: str, x5c: Optional[List[str]] = None) -> st
     return f"{h}.{p}.{_b64u(sig)}"
 
 
+SUPPORTED_CRIT: frozenset = frozenset()   # JOSE extensions this verifier understands when listed in "crit": none
+
+
 def verify(jws: str, trusted_pubkey_hex: Optional[str] = None) -> Dict:
     """Verifies the EdDSA signature; the key must be the TRUSTED one given by the relying party (`kid` in the
     header is informative). Returns the decoded record and the header (x5c passed back for CA validation)."""
@@ -89,6 +92,22 @@ def verify(jws: str, trusted_pubkey_hex: Optional[str] = None) -> Dict:
     try:
         h, p, s = jws.split(".")
         header = json.loads(_b64u_dec(h))
+        if not isinstance(header, dict):
+            return {"ok": False, "why": "header_not_an_object"}
+        # RFC 7515 §4.1.11 + Appendix E: a critical extension that is not understood makes the JWS invalid; an empty,
+        # non-list, non-string or duplicated "crit" breaks the producer rules (recipients MAY reject: we do). No
+        # critical extension is supported here (fleet audit 04/11/2026: crit=["zz-ext"] was accepted). These refusals
+        # come before the signature check, so they say nothing about the signature (no `signature_valid`, like `alg`).
+        if "crit" in header:
+            crit = header["crit"]
+            if (not isinstance(crit, list) or not crit or not all(isinstance(n, str) for n in crit)
+                    or len(set(crit)) != len(crit)):
+                return {"ok": False, "why": "crit_malformed"}
+            unsupported = [n for n in crit if n not in SUPPORTED_CRIT]
+            if unsupported:
+                # the names come from anyone, before the signature: ascii, or a lone surrogate stops the receipt (exit 74)
+                return {"ok": False, "why": "crit_unsupported:"
+                        + ",".join(unsupported)[:120].encode("ascii", "backslashreplace").decode("ascii")}
         if header.get("alg") != "EdDSA":
             return {"ok": False, "why": f"alg non supportato: {header.get('alg')!r}"}
         kid = header.get("kid")

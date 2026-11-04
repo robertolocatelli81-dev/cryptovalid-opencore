@@ -430,6 +430,56 @@ class TestJWS(unittest.TestCase):
         self.assertFalse(J.verify(bad, self.pk)["ok"])
         self.assertFalse(J.verify("non.un.jws", self.pk)["ok"])
 
+    def _signed_with_header(self, header):
+        """A JWS over the same record with a chosen protected header, signed by self.k (valid signature)."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(open(self.k).read().strip()))
+        h = J._b64u(json.dumps(header, sort_keys=True, separators=(",", ":")).encode())
+        p = J._b64u(M.canonical(self.e))
+        return f"{h}.{p}." + J._b64u(sk.sign(f"{h}.{p}".encode("ascii")))
+
+    def test_crit_not_understood_is_refused(self):
+        # fleet audit 04/11/2026: crit=["zz-ext"] with the trusted key gave ok True. RFC 7515 §4.1.11 + Appendix E.
+        base = {"alg": "EdDSA", "typ": "JOSE", "kid": self.pk}
+        self.assertTrue(J.verify(self._signed_with_header(base), self.pk)["ok"])          # positive control
+        v = J.verify(self._signed_with_header(dict(base, crit=["zz-ext"], **{"zz-ext": True})), self.pk)
+        self.assertFalse(v["ok"]); self.assertEqual(v["why"], "crit_unsupported:zz-ext")
+        for crit in ([], "zz-ext", ["a", "a"], [1], {"a": 1}, None):
+            v = J.verify(self._signed_with_header(dict(base, crit=crit)), self.pk)
+            self.assertFalse(v["ok"], repr(crit)); self.assertEqual(v["why"], "crit_malformed", repr(crit))
+        tok = self._signed_with_header(dict(base, crit=["zz-ext", "yy"], **{"zz-ext": 1, "yy": 1}))
+        from unittest import mock
+        with mock.patch.object(J, "SUPPORTED_CRIT", frozenset({"zz-ext", "yy"})):
+            self.assertTrue(J.verify(tok, self.pk)["ok"])                                   # the gate is the list
+        with mock.patch.object(J, "SUPPORTED_CRIT", frozenset({"zz-ext"})):
+            self.assertEqual(J.verify(tok, self.pk)["why"], "crit_unsupported:yy")
+        v = J.verify(J._b64u(b"[1]") + "." + J._b64u(b"{}") + "." + J._b64u(b"x"), self.pk)
+        self.assertEqual((v["ok"], v["why"]), (False, "header_not_an_object"))
+
+    def test_crit_refusal_is_a_receipt_from_anyone(self):
+        # the crit refusals come before the signature: a token with no valid signature reaches them, so its name must
+        # not stop the receipt (a lone surrogate gave exit 74, no receipt; the previous code gave exit 1) and the
+        # receipt must not state anything about a signature it did not check
+        import subprocess
+        h = J._b64u(b'{"alg":"EdDSA","kid":"%s","crit":["\\ud800"]}' % self.pk.encode())
+        tok = f"{h}.{J._b64u(b'{}')}.{J._b64u(bytes(64))}"
+        v = J.verify(tok, self.pk)
+        self.assertEqual((v["ok"], v["why"]), (False, "crit_unsupported:\\ud800"))
+        self.assertNotIn("signature_valid", v)
+        long = self._signed_with_header({"alg": "EdDSA", "kid": self.pk, "crit": ["x" * 300]})
+        self.assertEqual(J.verify(long, self.pk)["why"], "crit_unsupported:" + "x" * 120)     # the name is bounded
+        p = os.path.join(self.tmp, "t.jws")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(tok)
+        cp = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "cryptovalid_jws.py"), "verify", p, self.pk],
+                            capture_output=True, text=True, timeout=120)
+        self.assertEqual(cp.returncode, 1, cp.stderr)
+        self.assertEqual(json.loads(cp.stdout)["why"], "crit_unsupported:\\ud800")
+        good = self._signed_with_header({"alg": "EdDSA", "typ": "JOSE", "kid": self.pk, "crit": ["zz"], "zz": 1})
+        self.assertNotIn("signature_valid", J.verify(good, self.pk))
+        self.assertNotIn("signature_valid", J.verify(J._b64u(b"[1]") + "." + J._b64u(b"{}") + "." + J._b64u(b"x"), self.pk))
+        self.assertNotIn("signature_valid", J.verify(self._signed_with_header({"alg": "EdDSA", "kid": self.pk, "crit": []}), self.pk))
+
     def test_x5c_passthrough_and_validation(self):
         import base64
         cert = base64.b64encode(b"\x30\x82fake-der").decode()
