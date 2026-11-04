@@ -150,7 +150,10 @@ absence never weakens steps 1–4; a verifier that performs step 5 follows its p
   their receipt says so when it matters: `signatures_not_checked` = the number of entries carrying a signature field, present
   only when it is not zero (the receipt of a ledger without signature fields is unchanged).
 - `signer.py verify` verifies every entry: an unsigned, broken, malformed or partial layer is `ok: false`, exit 1, with or
-  without `--pubkey`; with `--pubkey` a foreign signer is too.
+  without `--pubkey`; with `--pubkey` a foreign signer is too. Its receipt names whether the signer was pinned:
+  `classical_status` is `pinned` with `--pubkey` and `unpinned` without (a valid signature by any key; added 2026-11-04,
+  the verdict and the exit code are unchanged). An empty `--pubkey ""` is a usage refusal, exit 2, as in JS and Java, and so is
+  an empty `--pq-pubkey ""` (2026-11-04: an unset variable dropped the pin it was given for, with exit 0).
 - The JS, Go, Java and Swift verifiers perform step 5 (the signature profile above) when an entry carries any signature
   field or a key is given (`--pubkey`, Go/Java `-pubkey`); the result is in `signatures.all_verified` (JS),
   `signatures.ok` (Go, Java), `signatures_all_verified` (Swift). Since 0.21.0 a layer that does not verify is a FAIL

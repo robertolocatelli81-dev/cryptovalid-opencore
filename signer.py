@@ -378,7 +378,13 @@ def verify_ledger_signatures(entries: List[Dict], expected_pubkey_hex: Optional[
             "verified": verified, "total": len(entries), "failures": failures,
             "signers": sorted(signers),
             "pq_protected": pq_protected, "pq_status": pq_status, "pq_verified": pq_ok, "pq_failures": pq_failures,
-            "pq_signers": sorted(pq_signers), "pq_note": pq_note}
+            "pq_signers": sorted(pq_signers), "pq_note": pq_note,
+            # fleet audit 04/11/2026 (C1-M7): without --pubkey any key passes (SPEC §5 step 5: "the key is the
+            # caller's to pin"); the receipt now says so, like pq_status "unpinned" does for the post-quantum layer
+            "classical_status": "pinned" if expected_pubkey_hex else "unpinned",
+            "classical_note": ("Ed25519 signatures checked against the expected key" if expected_pubkey_hex else
+                               "Ed25519 signatures verified against the EMBEDDED key only (any key passes): "
+                               "pass --pubkey to pin the signer")}
 
 
 class _Undecodable:
@@ -459,6 +465,8 @@ def _main(argv: Optional[List[str]] = None) -> int:
         return _emit(json.dumps(sign_ledger(a.ledger, a.out, a.keyfile, backend=be,
                                             pq_backend=pq_backend_from_args(a.pq_key, a.pq_kms, a.pq_kms_region, a.pq_kms_profile)), indent=1), 0)
     if a.cmd == "verify":
+        if a.pubkey == "" or a.pq_pubkey == "":     # an unset variable: the pin asked for would vanish (usage, as JS and Java)
+            p.error("verify: --pubkey and --pq-pubkey need a value (an empty key pins nothing)")
         if a.require_pq and not a.pq_pubkey:
             p.error("verify: --require-pq needs --pq-pubkey (a post-quantum layer verified against the key INSIDE the ledger is self-declared)")
         if a.pq_pubkey and not a.pubkey:

@@ -100,6 +100,35 @@ class TestSigner(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertEqual(r["failures"][0]["reason"], "signer_mismatch")
 
+    def test_unpinned_signer_is_declared(self):
+        """Fleet audit 04/11/2026, C1-M7: without --pubkey a ledger signed by ANY key verified with nothing in the
+        receipt saying the signer was not pinned (the post-quantum branch said `unpinned`). SPEC §5 step 5 keeps
+        the PASS (the key is the caller's to pin); the receipt now names the state."""
+        signer.keygen(self.key)
+        signer.sign_ledger(self.ledger, self.signed, self.key)
+        r = signer.verify_file(self.signed)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["classical_status"], "unpinned")
+        self.assertIn("EMBEDDED", r["classical_note"])
+        pk = r["signers"][0]
+        r = signer.verify_file(self.signed, pubkey_hex=pk)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["classical_status"], "pinned")
+        self.assertIn("expected key", r["classical_note"])
+        r = signer.verify_file(self.signed, pubkey_hex="00" * 32)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["classical_status"], "pinned")
+        r = signer.verify_file(self.signed, pubkey_hex="")     # an empty key pins nothing: said, not assumed
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["classical_status"], "unpinned")
+        for flag in ("--pubkey=", "--pq-pubkey="):              # and the command refuses it, as JS and Java do
+            cp = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "signer.py"), "verify", self.signed, flag],
+                                capture_output=True, text=True, timeout=60)
+            self.assertEqual((cp.returncode, cp.stdout), (2, ""), flag)
+        cp = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "signer.py"), "verify", self.signed],
+                            capture_output=True, text=True, timeout=60)
+        self.assertEqual(json.loads(cp.stdout)["classical_status"], "unpinned")
+
     def test_cli_roundtrip(self):
         env = {**os.environ}
         subprocess.run([sys.executable, "signer.py", "keygen", self.key], cwd=_HERE, check=True, env=env,
