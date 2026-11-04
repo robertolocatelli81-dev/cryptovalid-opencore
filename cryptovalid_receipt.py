@@ -409,6 +409,32 @@ def to_cose(r: Dict, keyfile: str) -> bytes:
     return b"\xd2" + cbor_encode([protected, {LABEL_VDP: proof}, payload, sig])     # tag 18 = COSE_Sign1
 
 
+# RFC 9052 §3.1 "crit": the labels an application "is required to understand"; at least one value; a label listed and not in
+# the protected bucket is "a fatal error". Understood = its value is compared, validated or returned by the verifier that
+# calls, so each verifier has its own list: seen as present only (x5chain 33, x5t 34, and kid 4 where the trusted key decides)
+# is not understood, and neither is a label that verifier never reads. cryptovalid_cose_receipts keeps its lists per profile.
+COSE_CRIT_STATEMENT = frozenset({1, 3, 15})          # verify_signed_statement: alg, content type (returned), CWT Claims
+COSE_CRIT_SCITT_RECEIPT = frozenset({1, 4, 15, 395})  # the receipts of verify_transparent_statement: alg, kid, CWT Claims, vds
+COSE_CRIT_RECEIPT = frozenset({1, 4, 395})           # verify_cose: alg, kid, vds
+
+
+def cose_crit_problem(protected: Dict, unprotected: Dict, understood: frozenset) -> Optional[str]:
+    """None, or why the `crit` header parameter (label 2) makes this COSE_Sign1 one these verifiers must not accept."""
+    if 2 in unprotected:
+        return "crit_unprotected"
+    if 2 not in protected:
+        return None
+    crit = protected[2]
+    if (not isinstance(crit, list) or not crit
+            or not all(isinstance(x, str) or (isinstance(x, int) and not isinstance(x, bool)) for x in crit)):
+        return "crit_malformed"
+    if any(x not in protected for x in crit):
+        return "crit_label_not_in_protected"
+    if any(x not in understood for x in crit):
+        return "crit_unsupported"
+    return None
+
+
 def verify_cose(cose: bytes, trusted_pubkey_hex: str, leaf_hash_hex: Optional[str] = None,
                 trusted_root_1_hex: Optional[str] = None) -> Dict:
     _, Ed25519PublicKey, _ = _ed()
@@ -417,6 +443,9 @@ def verify_cose(cose: bytes, trusted_pubkey_hex: str, leaf_hash_hex: Optional[st
             return {"ok": False, "why": "not a tagged COSE_Sign1 (tag 18)"}
         protected, unprotected, payload, sig = cbor_decode(cose[1:])
         ph = cbor_decode(protected)
+        crit = cose_crit_problem(ph, unprotected, COSE_CRIT_RECEIPT)
+        if crit:
+            return {"ok": False, "why": crit}
         if ph.get(1) != COSE_ALG_EDDSA or ph.get(LABEL_VDS) != VDS_RFC9162_SHA256:
             return {"ok": False, "why": "unsupported alg/vds"}
         if ph.get(4) != bytes.fromhex(trusted_pubkey_hex):

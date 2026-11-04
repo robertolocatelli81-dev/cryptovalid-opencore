@@ -115,8 +115,9 @@ def signed_statement(payload: bytes, content_type: str, iss: str, sub: str, keyf
     return TAG_COSE_SIGN1 + R.cbor_encode([protected, {}, None if detached else bytes(payload), sig])
 
 
-def parse_cose_sign1(cose: bytes) -> Tuple[bytes, Dict, Dict, Optional[bytes], bytes]:
-    """→ (protected bytes, protected map, unprotected map, payload | None, signature); structural checks only."""
+def parse_cose_sign1(cose: bytes, understood: frozenset = R.COSE_CRIT_STATEMENT) -> Tuple[bytes, Dict, Dict, Optional[bytes], bytes]:
+    """→ (protected bytes, protected map, unprotected map, payload | None, signature); structural checks, and `crit`
+    (RFC 9052 §3.1) against `understood`, the labels the caller processes."""
     if not isinstance(cose, (bytes, bytearray)) or cose[:1] != TAG_COSE_SIGN1:
         raise ScittError("not a tagged COSE_Sign1 (tag 18)")
     arr = R.cbor_decode(bytes(cose[1:]))
@@ -126,6 +127,9 @@ def parse_cose_sign1(cose: bytes) -> Tuple[bytes, Dict, Dict, Optional[bytes], b
     ph = R.cbor_decode(arr[0])
     if not isinstance(ph, dict):
         raise ScittError("protected header must be a map")
+    crit = R.cose_crit_problem(ph, arr[1], understood)
+    if crit:
+        raise ScittError(crit)
     return arr[0], ph, arr[1], arr[2], arr[3]
 
 
@@ -234,7 +238,7 @@ def transparent_statement(cose: bytes, receipts: List[bytes]) -> bytes:
         raise ScittError("at least one receipt (RFC 9943 Fig. 7: [+ bstr])")
     pbytes, _, uh, pl, sig = parse_cose_sign1(cose)
     for r in receipts:
-        parse_cose_sign1(r)              # each must itself be a COSE_Sign1
+        parse_cose_sign1(r, R.COSE_CRIT_SCITT_RECEIPT)       # each must itself be a COSE_Sign1
     uh = dict(uh); uh[L_RECEIPTS] = list(uh.get(L_RECEIPTS, [])) + [bytes(r) for r in receipts]
     return TAG_COSE_SIGN1 + R.cbor_encode([pbytes, uh, pl, sig])
 
@@ -265,7 +269,7 @@ def verify_transparent_statement(cose: bytes, issuer_pubkey_hex: str, ts_pubkey_
         res = {"index": i, "ok": False, "why": None}
         out["receipts"].append(res)
         try:
-            rp, rph, ruh, rpl, rsig = parse_cose_sign1(rb)
+            rp, rph, ruh, rpl, rsig = parse_cose_sign1(rb, R.COSE_CRIT_SCITT_RECEIPT)
             if rph.get(L_ALG) != ALG_EDDSA or rph.get(L_VDS) != VDS_RFC9162_SHA256:
                 res["why"] = "unsupported alg/vds"; continue
             cwt = rph.get(L_CWT)

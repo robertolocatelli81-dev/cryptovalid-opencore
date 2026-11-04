@@ -123,6 +123,9 @@ def _cose(octets: bytes, pinned_pem, content_type: str, stage_header: str, stage
         raise CedulonError(stage_header, f"protected header not CBOR: {e}")
     if not isinstance(ph, dict) or R.cbor_encode(ph) != arr[0]:
         raise CedulonError(stage_header, "protected header is not a deterministic CBOR map")
+    crit = R.cose_crit_problem(ph, arr[1], frozenset({1, 3, 4}))      # RFC 9052 §3.1: alg, content type and kid are compared below
+    if crit:
+        raise CedulonError(stage_header, crit)
     if ph.get(1) != ALG_ED25519:
         raise CedulonError(stage_header, f"alg {ph.get(1)!r} is not -19 (Ed25519, RFC 9864)")
     if ph.get(3) != content_type:

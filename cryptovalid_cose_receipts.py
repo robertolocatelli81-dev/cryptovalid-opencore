@@ -71,6 +71,12 @@ def _verify_sig(alg: int, pub, to_be_signed: bytes, sig: bytes) -> bool:
         return False
 
 
+# RFC 9052 §3.1 `crit`, per verifier and profile: the labels whose value that path compares or validates (see
+# cryptovalid_receipt). CWT Claims (15) are read only with the RFC 9943 header MUSTs, kid (4) only seen as present.
+_CRIT_STATEMENT = {"rfc9942": frozenset({1}), "rfc9943": frozenset({1, 15})}
+_CRIT_RECEIPT = {"rfc9942": frozenset({1, 395}), "rfc9943": frozenset({1, 15, 395})}
+
+
 def _header_musts(ph: Dict, what: str) -> Optional[str]:
     """RFC 9943 §6 header MUSTs; None when satisfied, else the reason."""
     cwt = ph.get(L_CWT)
@@ -92,7 +98,7 @@ def verify_statement(cose: bytes, issuer_key, payload: Optional[bytes] = None, p
     if profile not in PROFILES:
         raise ValueError(f"profile must be one of {PROFILES}")
     try:
-        pbytes, ph, _, pl, sig = parse_cose_sign1(cose)
+        pbytes, ph, _, pl, sig = parse_cose_sign1(cose, _CRIT_STATEMENT[profile])
         alg = ph.get(L_ALG)
         if alg not in (ALG_EDDSA, ALG_ES256, ALG_ES384):
             return _refuse("UNSUPPORTED_ALG", f"statement alg {alg!r} not supported")
@@ -119,7 +125,7 @@ def verify_receipt(receipt: bytes, entry: bytes, log_key, profile: str = "rfc994
     if profile not in PROFILES:
         raise ValueError(f"profile must be one of {PROFILES}")
     try:
-        rp, ph, uh, rpl, sig = parse_cose_sign1(receipt)
+        rp, ph, uh, rpl, sig = parse_cose_sign1(receipt, _CRIT_RECEIPT[profile])
         vds = ph.get(L_VDS)                              # protected header only: an unprotected vds is never read
         if type(vds) is not int or vds not in (VDS_RFC9162_SHA256, VDS_CCF_LEDGER_SHA256):   # CBOR true is not the uint 1
             return _refuse("UNSUPPORTED_VDS", f"protected vds {vds!r} is neither 1 (RFC9162_SHA256) nor 2 (CCF_LEDGER_SHA256)")

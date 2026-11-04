@@ -126,6 +126,16 @@ class TestCedulon(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(self.stage(self.L.verify(bend_record=self.bent(1, f))), "record-header")
 
+    def test_crit_not_processed_is_refused(self):
+        """RFC 9052 §3.1 (NEMESIS 04/11/2026: crit [999], [] and 5 reached the signature and were accepted)."""
+        sk = Ed25519PrivateKey.generate()
+        base = {1: -19, 3: "application/x", 4: _kid(sk)}
+        self.assertEqual(V._cose(_cose(sk, "application/x", {"a": 1}, protected={**base, 2: [1, 3, 4]}), _pem(sk), "application/x", "h", "s"), {"a": 1})
+        for extra, why in (({2: [999], 999: 1}, "crit_unsupported"), ({2: []}, "crit_malformed"), ({2: 5}, "crit_malformed"), ({2: [7]}, "crit_label_not_in_protected")):
+            with self.assertRaises(V.CedulonError) as c:
+                V._cose(_cose(sk, "application/x", {"a": 1}, protected={**base, **extra}), _pem(sk), "application/x", "h", "s")
+            self.assertIn(why, str(c.exception))
+
     def test_non_deterministic_protected_header(self):
         rk = self.L.rk
         pb = bytes([0xa3, 0x03]) + R.cbor_encode(V.CT_RECORD) + bytes([0x01, 0x32, 0x04]) + R.cbor_encode(_kid(rk))   # 3 before 1

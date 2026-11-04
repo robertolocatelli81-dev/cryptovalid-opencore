@@ -67,6 +67,99 @@ class TestMonitorIdentitySearch(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
+class TestCoseCrit(unittest.TestCase):
+    """RFC 9052 §3.1: a Signed Statement with a VALID signature of the trusted key and a `crit` these verifiers do not
+    process was ok True in every COSE verifier (measured 04/11/2026)."""
+
+    def setUp(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        self.sk = Ed25519PrivateKey.generate()
+        self.pk = self.sk.public_key().public_bytes_raw()
+
+    def _st(self, extra, unprotected=None):
+        ph = {SC.L_ALG: SC.ALG_EDDSA, SC.L_CTY: "application/json", SC.L_KID: self.pk, SC.L_CWT: {SC.CWT_ISS: "i", SC.CWT_SUB: "s"}}
+        ph.update(extra)
+        prot = R.cbor_encode(ph)
+        return SC.TAG_COSE_SIGN1 + R.cbor_encode([prot, unprotected or {}, b"x", self.sk.sign(SC._sig1(prot, b"x"))])
+
+    def test_crit_label_by_label_in_every_path(self):
+        """A label listed in crit passes only in the paths that compare, validate or return its value (NEMESIS 04/11/2026:
+        with one list per message kind crit [395] passed on statements and crit [15] on the default profile, unread)."""
+        import cryptovalid_cose_receipts as CR
+        from cryptography.hazmat.primitives import serialization as ser
+        import cryptovalid_merkle as M
+        pem = self.sk.public_key().public_bytes(ser.Encoding.PEM, ser.PublicFormat.SubjectPublicKeyInfo)
+        val = {3: "application/json", 4: self.pk, 15: {SC.CWT_ISS: "i", SC.CWT_SUB: "s"}, 395: 1, 33: b"x", 34: b"x", 999: 1}
+
+        def receipt(extra):
+            ph = {1: SC.ALG_EDDSA, 395: 1, 4: self.pk, 15: {SC.CWT_ISS: "t", SC.CWT_SUB: "t"}}
+            ph.update(extra)
+            prot = R.cbor_encode(ph)
+            return SC.TAG_COSE_SIGN1 + R.cbor_encode([prot, {396: {-1: [R.cbor_encode([1, 0, []])]}}, None,
+                                                      self.sk.sign(SC._sig1(prot, M.leaf_hash(b"e")))])
+
+        def cose(extra):
+            ph = {1: R.COSE_ALG_EDDSA, R.LABEL_VDS: R.VDS_RFC9162_SHA256, 4: self.pk}
+            ph.update(extra)
+            prot = R.cbor_encode(ph)
+            root = b"\x11" * 32
+            return R.verify_cose(b"\xd2" + R.cbor_encode([prot, {R.LABEL_VDP: {-1: [R.cbor_encode([1, 0, []])]}}, root,
+                                                          self.sk.sign(R._sig_structure(prot, root))]), self.pk.hex(), root.hex())
+
+        def in_transparent(extra):
+            st = self._st({})
+            leaf = json.dumps({"idx": 0, "ts": "t", "data": {"scitt": {"statement_sha256": SC.statement_id(st)}}, "prev_hash": "0" * 64}).encode()
+            ph = {1: SC.ALG_EDDSA, 395: 1, 4: self.pk, 15: {SC.CWT_ISS: "t", SC.CWT_SUB: "t"}}
+            ph.update(extra)
+            prot = R.cbor_encode(ph)
+            rc = SC.TAG_COSE_SIGN1 + R.cbor_encode([prot, {396: {-1: [R.cbor_encode([1, 0, []])]}, SC.L_LEAF: leaf}, None,
+                                                    self.sk.sign(SC._sig1(prot, M.leaf_hash(leaf)))])
+            arr = R.cbor_decode(st[1:])
+            return SC.verify_transparent_statement(SC.TAG_COSE_SIGN1 + R.cbor_encode([arr[0], {SC.L_RECEIPTS: [rc]}, arr[2], arr[3]]), self.pk.hex(), self.pk.hex())
+
+        paths = {
+            "verify_signed_statement": ({1, 3, 15}, lambda e: SC.verify_signed_statement(self._st(e), self.pk.hex())),
+            "statement rfc9942": ({1}, lambda e: CR.verify_statement(self._st(e), pem, None, "rfc9942")),
+            "statement rfc9943": ({1, 15}, lambda e: CR.verify_statement(self._st(e), pem, None, "rfc9943")),
+            "receipt rfc9942": ({1, 395}, lambda e: CR.verify_receipt(receipt(e), b"e", pem, "rfc9942")),
+            "receipt rfc9943": ({1, 15, 395}, lambda e: CR.verify_receipt(receipt(e), b"e", pem, "rfc9943")),
+            "verify_cose": ({1, 4, 395}, cose),
+            "receipt in a transparent statement": ({1, 4, 15, 395}, in_transparent),
+        }
+        for name, (understood, f) in paths.items():
+            self.assertTrue(f({})["ok"], name)                                      # control, no crit
+            for label in (1, 3, 4, 15, 395, 33, 34, 999):
+                extra = {2: [label]}
+                if label != 1:
+                    extra[label] = val[label]
+                self.assertEqual(f(extra)["ok"], label in understood, (name, label))
+        SC.transparent_statement(self._st({}), [receipt({2: [395]})])              # the builder reads a receipt as a receipt
+        with self.assertRaises(SC.ScittError):
+            SC.transparent_statement(self._st({}), [receipt({2: [3], 3: "a/b"})])
+
+    def test_crit(self):
+        import cryptovalid_cose_receipts as CR
+        ok = lambda t: SC.verify_signed_statement(t, self.pk.hex(), b"x")
+        self.assertTrue(ok(self._st({}))["ok"])                                    # control
+        self.assertTrue(ok(self._st({2: [SC.L_CWT]}))["ok"])                       # listed and processed here
+        for extra, un, why in (({2: [999], 999: 1}, None, "crit_unsupported"), ({2: []}, None, "crit_malformed"), ({2: 5}, None, "crit_malformed"),
+                               ({2: [True]}, None, "crit_malformed"), ({2: [33]}, None, "crit_label_not_in_protected"), ({}, {2: [1]}, "crit_unprotected")):
+            t = self._st(extra, un)
+            r = ok(t)
+            self.assertFalse(r["ok"], repr(extra)); self.assertIn(why, r["why"])
+            self.assertFalse(CR.verify_statement(t, self.pk, b"x")["ok"], repr(extra))
+        ph = {1: R.COSE_ALG_EDDSA, R.LABEL_VDS: R.VDS_RFC9162_SHA256, 4: self.pk, 2: [999], 999: 1}
+        prot = R.cbor_encode(ph)
+        t = b"\xd2" + R.cbor_encode([prot, {R.LABEL_VDP: {}}, None, bytes(64)])
+        self.assertEqual(R.verify_cose(t, self.pk.hex())["why"], "crit_unsupported")
+        for label in (33, 34):      # present is not processed: x5chain and x5t are not validated here
+            self.assertIn("crit_unsupported", ok(self._st({2: [label], label: b"x"}))["why"])
+        ph = {1: R.COSE_ALG_EDDSA, R.LABEL_VDS: R.VDS_RFC9162_SHA256, 4: self.pk, 2: [15], 15: {}}
+        t = b"\xd2" + R.cbor_encode([R.cbor_encode(ph), {R.LABEL_VDP: {}}, None, bytes(64)])
+        self.assertEqual(R.verify_cose(t, self.pk.hex())["why"], "crit_unsupported")     # verify_cose does not read 15
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
 class TestScitt(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
