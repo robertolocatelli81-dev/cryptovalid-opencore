@@ -38,7 +38,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Dict, Optional
 from urllib.parse import urlparse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -63,10 +63,15 @@ def _reachable(url: str, timeout: int = 15) -> bool:
         return False
 
 
-def refresh(profiles_path: str = PROFILES, check_urls: bool = False) -> Dict:
+def refresh(profiles_path: str = PROFILES, check_urls: bool = False, now: Optional[datetime] = None) -> Dict:
+    """`now` (timezone-aware) defaults to the system clock; tests pass a fixed instant so their verdict does not
+    depend on the calendar. The command line always uses the clock: staleness is what it reports."""
     with open(profiles_path, encoding="utf-8") as f:
         prof = json.load(f)
-    now = datetime.now(timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
     needs_review = []
     for r in prof.get("regulations", []):
         stale = _days_since(r.get("as_of", "1970-01-01"), now) > STALE_DAYS
