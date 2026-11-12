@@ -1,6 +1,9 @@
 """
 CryptoValid · mutation runner SISTEMATICO (stdlib) — annichila W7.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 W7 (adversarial review): finora solo mutanti SCELTI A MANO → "il banco becca un verifier corrotto"
 era estrapolato da pochi mutanti su guardie già coperte. mutmut/cosmic-ray NON sono installabili qui
 (PEP 668, env gestito). Questo runner colma il gap SENZA dipendenze: genera mutanti da REGOLE (operatori

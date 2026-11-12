@@ -23,6 +23,9 @@ Uso:
   python3 verify_evidence.py ap2      <evidence.json># mandati agentici SD-JWT (AP2)
   python3 verify_evidence.py cldma    <attest.json>  # attestazione CLDMA (ratio impegnato)
 
+Status: `auto`, `pack` and `ledger` are the maintained core; `archive`, `ap2` and `cldma` are EXPERIMENTAL
+(README, "Core and experimental modules"): kept and tested, no new scope is added to them.
+
 Esce 0 se l'evidenza è valida per ciò che era verificabile, 1 altrimenti; 74 se la ricevuta non è stata scritta per
 intero su stdout (pieno, chiuso, lettore assente), qualunque sia il verdetto (0.20.3).
 """

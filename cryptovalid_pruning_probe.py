@@ -1,6 +1,9 @@
 """
 CryptoValid — pruning / evidence-decay probe (opencore).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 The honest risk (adversarial review, 2026-08-19): free public Solana RPCs PRUNE historical
 transactions. A STRICT verify (min_witnesses>=2) that passes at t=0 can FAIL on an *honest* old
 anchor months later — a self-DoS of the evidence. This probe MEASURES current retention across a

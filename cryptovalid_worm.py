@@ -1,6 +1,9 @@
 """
 CryptoValid · WORM escrow adapter — annichila W2 (tiene l'HASH, non il DATO).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 W2 (adversarial review, 2026-08-19): l'ancora conserva l'hash, non il record → i requisiti WORM del
 DATO (SEC 17a-4, MiFID: ritenzione 5-7 anni immutabile) non erano soddisfatti PER COSTRUZIONE. Fix (chiusura
 ingegneristica): un adapter OPZIONALE che mette il RECORD (cifrato) su storage write-once, con

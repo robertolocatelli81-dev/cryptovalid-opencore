@@ -6,7 +6,11 @@
 consistency (append-only) proofs, third-party-verifiable, QTSP-ready Signed Tree Head.
 A leaf is the canonical form of SPEC §3 (the bytes self_hash is computed over: the entry without self_hash and the five
 attestation fields). Until 0.20.3 a leaf kept signature_pq, signer_pq and tsa_token, so an ML-DSA signature or a timestamp
-token added after a tree head changed the root of entries it already covered. Stdlib-only."""
+token added after a tree head changed the root of entries it already covered. Stdlib-only.
+
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+"""
 import sys as _sys_0203
 if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecode cache: CPython 3.9 and 3.11 write
     _sys_0203.dont_write_bytecode = True   # a .pyc with one raw write; cut by a file size limit, every later run died (13/10/2026)

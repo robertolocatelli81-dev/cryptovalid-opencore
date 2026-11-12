@@ -5,6 +5,9 @@
 """
 CryptoValid — self-updating regulatory profiles.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 Keeps `spec/regulatory_profiles.json` HONEST over time. It:
   1. re-checks each regulation's source URL is reachable (provenance still lives);
   2. stamps `last_checked_utc`;

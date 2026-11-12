@@ -1,6 +1,9 @@
 """
 CryptoValid · re-ancoraggio schedulato + ALERT di decadimento — annichila W4.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 W4 (misurato 2026-08-19): su RPC pubblici gratuiti un anchor onesto perde testimoni col tempo (publicnode
 aveva PRUNATO un anchor di 73.8 giorni; strict min_witnesses>=2 fallisce già a ~2.5 mesi). L'evidenza non
 sparisce dalla chain, ma diventa INACCESSIBILE via RPC pubblici → l'auto-DoS dell'evidenza.

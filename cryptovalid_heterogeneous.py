@@ -1,6 +1,9 @@
 """
 CryptoValid · ancoraggio ETEROGENEO — fault-independence VERA, non repliche same-chain.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 Annichila la criticità W3 (adversarial review, 2026-08-19): N RPC di UNA chain sono repliche di una
 sola fonte (~1.x testimoni) e NON proteggono da monocultura client / bug di protocollo / attacco alla
 chain. La difesa reale è ancorare lo stesso digest su DOMINI DI GUASTO DISTINTI — sistemi di consenso/

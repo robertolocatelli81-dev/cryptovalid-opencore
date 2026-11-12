@@ -3,6 +3,9 @@
 """COSE Receipts (RFC 9942, VDS 1 = RFC9162_SHA256) and SCITT Signed Statements (RFC 9943) from ANY implementation —
 offline, fail-closed, two declared profiles.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 cryptovalid_scitt verifies what THIS repository's Transparency Service emits (EdDSA, its own ledger entry as the leaf).
 This module verifies receipts and statements produced elsewhere, as exchanged between implementers (IETF AUDIT BoF
 preparation, 2026-10-03):

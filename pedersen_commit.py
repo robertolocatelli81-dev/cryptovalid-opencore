@@ -3,6 +3,9 @@
 """
 pedersen_commit — impegni di Pedersen (Pedersen 1991) per l'auditabilita' CONFIDENZIALE di CLDMA.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 BISOGNO (post-2030 salvato): auditabilita' privacy-preserving per CBDC/RWA — provare una metrica derivata
 (ratio, riserva) senza rivelare i singoli record. CLDMA oggi pubblica i TOTALI in chiaro e apre i record
 sfidati; questo modulo aggiunge un layer CONFIDENZIALE reale.

@@ -3,6 +3,9 @@
 """
 cryptovalid_solana.py — NATIVE verification of a Solana public-chain anchor for CryptoValid.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 CryptoValid anchors evidence natively via RFC 3161 timestamps and Merkle STH roots. This
 module adds a SECOND, independent anchor: a Solana mainnet transaction whose SPL-memo carries
 the evidence digest (`sha3:<hex>`). Given a tx signature and the expected digest, it queries

@@ -3,6 +3,9 @@
 """
 dora_incident — tamper-evident, verifiable evidence for the DORA ICT-incident lifecycle.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 WHY (measured, 2026-08-21): under EU DORA, supervisors moved to *evidence-driven* enforcement in
 2026 — they want "timestamps, classification rationales, log trails", not policy PDFs. Major ICT
 incidents have a hard reporting lifecycle: initial notification within 4h of major classification

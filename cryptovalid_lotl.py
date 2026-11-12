@@ -4,6 +4,9 @@
 # Copyright (C) 2026 Roberto Locatelli
 """eIDAS LOTL validation for cryptovalid-opencore — certify a timestamp as QUALIFIED.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 Fetches the EU List of Trusted Lists (LOTL), then each member-state Trusted List
 (ETSI TS 119 612), extracts the certificates of **qualified timestamping** services
 (ServiceTypeIdentifier .../Svctype/TSA/QTST, status 'granted' IN FORCE NOW: ServiceInformation from its

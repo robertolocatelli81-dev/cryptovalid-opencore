@@ -3,6 +3,9 @@
 """Agent Passport System (APS) action references and Accountability Records — written from the published texts, not
 from any implementation (2026-10-03, vector exchange of the IETF AUDIT BoF preparation).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 The draft moved under the vectors (draft-pidlisnyi-aps-01 → -03 → -04 rewrote §4), so each form is named by the
 revision that defines it, and none is silently substituted for another:
 

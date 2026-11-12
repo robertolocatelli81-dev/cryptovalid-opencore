@@ -3,6 +3,9 @@
 """Cedulon Decision Records — a clean-room verifier written from the drafts, not from any implementation (2026-10-03,
 for the vector exchange of the IETF AUDIT BoF preparation).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 Sources, and nothing else: draft-dogru-cedulon-decision-profile-03 (§4.1 claim labels, §4.2 claim rules, §4.3
 presentation, §4.4 chain and checkpoints, §5.1/§5.2 Effect Extract, §6.1 binding); draft-dogru-cedulon-08, the document
 that profile cites as [CEDULON] (§6.2 COSE_Sign1 headers, §6.1 checkpoint labels, §11.1 checkpoint claims); RFC 9864

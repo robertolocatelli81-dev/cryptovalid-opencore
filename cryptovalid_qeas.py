@@ -3,6 +3,9 @@
 """
 cryptovalid_qeas — adapter verso un Qualified Electronic Archiving Service (eIDAS art. 45j).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 IL VALORE LEGALE (2026-08-21, ricerca reale): l'evidenza a prova di manomissione, da sola, non
 ha presunzione legale — un tribunale può sempre chiedere "chi garantisce che non l'hai riscritta
 tu?". eIDAS risponde con i TRUST SERVICE QUALIFICATI accreditati:

@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """OMEGA-FUNDCERT · cross-source check ("killer experiment" in the Popperian sense: one fund, one date, TWO real sources)
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 runner del KILLER-EXPERIMENT VERO — stesso fondo, stesso giorno, DUE fonti reali.
 
 Il test che decide se il cross-source regge su dati reali indipendenti (non sintetici): prendi lo STESSO

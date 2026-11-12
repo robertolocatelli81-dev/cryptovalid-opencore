@@ -3,6 +3,9 @@
 """
 tx_evidence — verifiable, reproducible audit trail for digital-asset transactions.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 WHY (measured, 2026-08-21): IRS Form 1099-DA requires cost-basis reporting from 2026, but
 brokers do NOT report basis for assets acquired before 2026 and do not cover non-custodial/
 DeFi activity — the taxpayer must track and, on audit, PROVE their own transactions. Tax

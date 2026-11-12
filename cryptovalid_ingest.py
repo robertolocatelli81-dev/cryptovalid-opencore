@@ -3,6 +3,9 @@
 """
 CryptoValid Open Core — high-frequency ingestion into court-admissible evidence.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 SPDX-License-Identifier: AGPL-3.0-or-later
 Copyright (C) 2026 Roberto Locatelli
 

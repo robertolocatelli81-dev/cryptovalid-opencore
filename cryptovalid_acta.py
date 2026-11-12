@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """cryptovalid-opencore — Signed Decision Receipts, draft-farley-acta-signed-receipts-03 (0.16.0, 2026-09-24).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 draft-farley-acta-signed-receipts-03 (T. Farley, ScopeBlind / Veritas Acta, 29 August 2026, expires 2 March 2027;
 individual Internet-Draft, Informational — copy downloaded 2026-09-20): a portable, signed receipt of a machine-to-machine
 access-control decision (an AI agent calling a tool). What this module implements, transcribed from the draft:

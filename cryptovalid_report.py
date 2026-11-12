@@ -3,6 +3,9 @@
 """
 CryptoValid Open Core — auditor-facing report (HTML always, PDF when WeasyPrint exists).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 SPDX-License-Identifier: AGPL-3.0-or-later
 Copyright (C) 2026 Roberto Locatelli
 

@@ -5,6 +5,9 @@
 """
 CryptoValid Open Core — JWS (RFC 7515) container for a ledger record, EdDSA (RFC 8037), optional `x5c`.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 Why (2026-09-13): Implementing Regulation (EU) 2025/2531 names JAdES (ETSI TS 119 182-1) among the signature
 formats for qualified electronic ledgers and requires the `x5c` header (RFC 7515 §4.1.6) to be present. This
 module produces and verifies the JWS COMPACT SERIALISATION of a record's canonical form with `alg: EdDSA`,

@@ -5,6 +5,9 @@
 """
 CryptoValid Open Core — portable RECEIPTS for ledger entries (RFC 9942 semantics, RFC 6962/9162 proofs).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 What a receipt is (2026-09-13, after comparing with Sigstore Rekor, immudb, Azure Confidential Ledger and
 the IETF SCITT architecture): a small, self-contained proof that ONE entry is included in the ledger at a
 given tree head — signed by the LOG KEY — that a relying party verifies OFFLINE without the ledger.

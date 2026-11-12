@@ -3,6 +3,9 @@
 """
 committed_attestation — Committed-Ledger Derived-Metric Attestation (CLDMA).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 Il gap (verificato 2026-08-20, revisione indipendente + ricerca): i primitivi esistono separati
 (proof-of-reserves Merkle prova una SOMMA; ZK-PoR prova con privacy; selective disclosure),
 ma NESSUNO prova che un RATIO REGOLATORIO DERIVATO (PAR30, write-off ratio, risk coverage)

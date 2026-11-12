@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """OMEGA-MICROFINANCE — evidenza verificabile per la trasparenza del MICROCREDITO (adattamento SDG 1/8/10).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 Applica le primitive di FUNDCERT (canonicalizzazione deterministica, attestazione di coerenza, evidence-record,
 hash-chain) a un oggetto diverso: il **portafoglio-prestiti** di un istituto di microfinanza (MFI). Permette a un
 DONATORE o REGOLATORE di verificare che il portafoglio dichiarato è quello reale — SENZA fidarsi dell'MFI e SENZA

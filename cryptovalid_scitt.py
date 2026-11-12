@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """cryptovalid-opencore — SCITT Signed Statements and Transparent Statements (RFC 9943, 0.14.0, 2026-09-19).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 RFC 9943 (IETF SCITT architecture, Proposed Standard, June 2026 — copy downloaded 2026-09-19):
   * a Signed Statement is a COSE_Sign1 (tag 18) whose protected header MUST carry the CWT Claims parameter (label 15)
     with iss (1) and sub (2); alg (1), content type (3) and kid (4, MUST be present without x5t/x5chain) — §6, Fig. 3/5;

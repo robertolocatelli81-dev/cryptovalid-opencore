@@ -3,6 +3,9 @@
 """
 cldma_confidential — PROPOSTA FUTURA additiva: attestazione CLDMA con contributi CONFIDENZIALI.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 ADDITIVO PER COSTRUZIONE (ordine Roberto 2026-08-22): NON modifica `committed_attestation` ne'
 `pedersen_commit` — li IMPORTA e li COMPONE. Il sistema CLDMA esistente resta identico e funzionante;
 questo e' un layer opt-in, una proposta seria per il post-2030 (auditabilita' privacy-preserving CBDC/RWA),

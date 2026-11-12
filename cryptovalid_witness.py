@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """cryptovalid-opencore — a transparency-log WITNESS for checkpoints (0.14.0, 2026-09-19).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 What Certificate Transparency does with gossip and what Sigstore does with witnesses (c2sp.org/tlog-witness): an
 independent party keeps the LAST checkpoint it cosigned for each log origin, and cosigns a new one only if the log
 proves (RFC 6962 consistency proof) that the new tree extends the old one. Consequences, measured in the tests:

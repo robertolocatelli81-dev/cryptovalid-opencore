@@ -1,6 +1,9 @@
 """
 OMEGA-FUNDCERT · canonicalizzazione deterministica di artefatti di fund-servicing (PCF/holdings/NAV-basket).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 Stessa architettura di CryptoValid, oggetto diverso e più OSTILE. L'hash-chain di CryptoValid funziona solo
 se lo STESSO portafoglio produce SEMPRE lo stesso digest. Nei record finanziari questo si rompe su:
 precisione decimale/arrotondamento, ORDINAMENTO delle posizioni, notazione (scientifica vs decimale),

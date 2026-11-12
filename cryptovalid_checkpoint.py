@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """cryptovalid-opencore — transparency-log CHECKPOINTS and SIGNED NOTES (0.14.0, 2026-09-19).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 Implements, byte for byte, three public specifications used by the transparency ecosystem (Sigstore, Go sum DB, the
 transparency-dev witnesses; editor's copies downloaded 2026-09-19 from github.com/C2SP/C2SP):
   - c2sp.org/tlog-checkpoint  : note text = origin \\n tree size \\n base64(RFC 6962 root) [\\n extension lines]

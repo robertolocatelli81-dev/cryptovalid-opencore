@@ -5,6 +5,9 @@
 """
 CryptoValid Open Core — self-assessment of a ledger against the eIDAS 2.0 QUALIFIED ELECTRONIC LEDGER rules.
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 The metre (read on 2026-09-13 from the Official Journal): Regulation (EU) 2024/1183 (eIDAS 2.0) introduces
 "electronic ledgers" (Art. 3(52): "a sequence of electronic data records, ensuring the integrity of those
 records and the accuracy of the chronological ordering of those records") and, for QUALIFIED ones, Art. 45l;

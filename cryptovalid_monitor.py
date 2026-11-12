@@ -5,6 +5,9 @@
 """
 CryptoValid Open Core — MONITOR / AUDITOR of a ledger over time (append-only, non-equivocation).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
 What Sigstore's rekor-monitor and immudb's auditor do, for a cryptovalid ledger, stdlib-only: the monitor keeps
 the LAST tree head it saw (state file) and, at every run, proves that the ledger only GREW from that head
 (RFC 6962/9162 consistency proof). What it catches — and the verifier of a single snapshot cannot:

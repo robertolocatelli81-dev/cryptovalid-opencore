@@ -3,6 +3,9 @@
 """The Vaara Receipt (draft-sirkkavaara-vaara-receipt-12) — a verifier written from the draft, not from any
 implementation (2026-10-03, vector exchange of the IETF AUDIT BoF preparation).
 
+Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
+modules"): kept, installed and tested, no new scope is added here.
+
   §2    every digest and signed payload is over JCS (RFC 8785); digests are "sha256:" + lowercase hex; the
         evidenceRef canonicalization labels "jcs-rfc8785", "JCS", "jcs-json-v1" MUST all be accepted.
   §3    envelope: version 1; alg ES256 (64-byte r||s, RFC 7518), RS256 (RSASSA-PKCS1-v1_5/SHA-256), HS256 (HMAC-SHA-256,
