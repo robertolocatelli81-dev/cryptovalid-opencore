@@ -53,7 +53,7 @@ class TestRegulatoryProfiles(unittest.TestCase):
         return p
 
     def test_refresh_current_is_clean(self):
-        # The verdict must not depend on the calendar: "now" is fixed to the newest as_of + STALE_DAYS, the last
+        # The verdict must not depend on the calendar: "now" is fixed to the oldest as_of + STALE_DAYS, the last
         # day on which every entry is still inside the window. Staleness of the shipped file today is reported by
         # the CI step `refresh_regulatory.py --check-urls`, which reads the system clock.
         prof = json.load(open(os.path.join(_HERE, "spec", "regulatory_profiles.json")))

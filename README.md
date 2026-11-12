@@ -21,9 +21,10 @@ trust that system:
   reporting obligations (Art. 14) already from 11 September 2026 (Art. 71(2)).
   [cra-evidence](https://github.com/robertolocatelli81-dev/cra-evidence) writes that evidence in this repository's
   ledger profile (see *What cra-evidence relies on*).
-- **Providers of high-risk AI systems** must keep automatically generated logs (EU AI Act, Regulation (EU) 2024/1689,
-  Art. 12) for at least six months (Art. 19); for Annex III systems those obligations apply from 2 December 2027
-  (amended by Regulation (EU) 2026/1744).
+- **Providers of high-risk AI systems** must keep the logs their systems generate automatically (EU AI Act,
+  Regulation (EU) 2024/1689, Art. 12(1)), to the extent the logs are under their control, for at least six months unless
+  Union or national law provides otherwise (Art. 19); for Annex III systems those obligations apply from 2 December
+  2027 (Art. 113 as amended by Regulation (EU) 2026/1744).
 - **Auditors and supervisors** receive a log, a database export or a vendor dashboard and have to decide whether it
   was altered, truncated or re-written. A hash chain alone cannot tell a shorter prefix from the whole file; a
   vendor's database asks to be trusted.
@@ -74,16 +75,17 @@ reader gone), whatever the verdict.
 
 ## Core and experimental modules
 
-The maintained core is the evidence format and what cra-evidence relies on. Everything else stays in the repository
-and in the wheel, keeps its tests and its CI step, and is marked **experimental** in its module docstring: no new
+The maintained core is the evidence format and what cra-evidence relies on. Every other module at the top of the
+repository stays in the repository and in the wheel, is still run by the same CI (every `test_*.py`;
+`fundcert_crosssource.py` has no test of its own), and is marked **experimental** in its module docstring: no new
 scope is added to it.
 
 | Core | What it is |
 |---|---|
-| `SPEC_EVIDENCE_FORMAT.md` §1-7, §10 | ledger container, closed entry schema, canonical JSON and hashing, verification algorithm, versioning, conformance, evidence-pack receipt |
+| `SPEC_EVIDENCE_FORMAT.md` §1-7, §10 | ledger container, closed entry schema, canonical JSON and hashing, evidence payload conventions, verification algorithm, versioning, conformance, evidence-pack receipt |
 | `verifier.py` | stdlib-only reference verifier (SHA-256 / SHA3-256 chains, strict JSON profile, signed tip check) |
 | `cryptovalid_tip.py`, `ed25519_order.py` | signed chain tip (`cryptovalid_tip/1`); refusal of small- and mixed-order Ed25519 keys and R |
-| `signer.py`, `cryptovalid_kms.py` | per-entry Ed25519 (+ optional ML-DSA-65) signatures; keys in a PKCS#11 HSM, AWS KMS or Vault Transit |
+| `signer.py`, `cryptovalid_kms.py` | per-entry Ed25519 (+ optional ML-DSA-65) signatures; keys in a PKCS#11 HSM, AWS KMS, Vault Transit or a Nitrokey NetHSM |
 | `cryptovalid_tsa.py` | RFC 3161 timestamp client and token check |
 | `evidence_pack.py`, `verify_evidence.py` (`auto`, `pack`, `ledger`) | auditor bundle and the `cryptovalid-verify` front-end |
 | `conformance.py`, `spec/vectors/`, `verifiers/` | conformance vectors and the JS, Go, Java, Rust and Swift verifiers |
@@ -103,8 +105,8 @@ scope is added to it.
 | Regulatory profiles (SPEC §8) | `refresh_regulatory.py`, `spec/regulatory_profiles.json` |
 | Development tooling | `mutation_runner.py` |
 
-Each experimental module documents its use in its docstring and `--help`; the history of each is in
-[CHANGELOG.md](CHANGELOG.md).
+Each experimental module documents its use in its docstring; 21 of the 33 also print their usage with `--help`. The
+release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ### What cra-evidence relies on
 
@@ -153,9 +155,12 @@ python3 signer.py sign ledger.jsonl out.jsonl --backend "awskms:key_id=alias/cry
 python3 signer.py sign ledger.jsonl out.jsonl --backend "vault:url=https://vault:8200;key=cryptovalid"
 ```
 
-PKCS#11 is tested end to end against a real SoftHSM2 token in CI; AWS KMS is tested against its API contract
-(`MessageType RAW`, `ED25519_SHA_512`) with an injected client, and an ML-DSA-65 key in AWS KMS was verified live (0.13.0);
-Vault Transit is tested against a local stub.
+In CI, PKCS#11 is tested end to end against a real SoftHSM2 token, AWS KMS against its API contract (`MessageType RAW`,
+`ED25519_SHA_512`) with an injected client, and Vault Transit against a local stub. Outside CI, on 2026-11-08,
+signatures were measured against SoftHSM2 2.6.1, real AWS KMS (eu-central-1) and a Vault 1.20 dev server (logs not in
+this repository); an ML-DSA-65 key in AWS KMS was verified live in 0.13.0. The Nitrokey NetHSM backend (`nethsm:`) is
+exercised by `test_kms.py` against Nitrokey's public demo instance when it is reachable (an integration bench, never
+key custody).
 
 ## Evidence pack
 

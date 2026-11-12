@@ -11,7 +11,7 @@
       "milestone": "transitional period end (CASP authorisation required)",
       "name": "Markets in Crypto-Assets Regulation (EU) 2023/1114",
       "needs_review": false,
-      "notes": "Art. 143(3): CASPs providing services under national law may continue until 1 Jul 2026 at the latest. Shorter national periods notified to ESMA (List of MiCA grandfathering periods, art. 143(3), https://www.esma.europa.eu/sites/default/files/2024-12/List_of_MiCA_grandfathering_periods_art._143_3.pdf): 6 months NL, FI, LV, HU, SI, PL; 9 months SE; 12 months DE, IE, LT, AT, SK, NO. Re-read on EUR-Lex and on the ESMA list on 2026-11-12.",
+      "notes": "Art. 143(3): CASPs providing services under national law may continue until 1 Jul 2026 at the latest. Shorter national periods communicated to ESMA by the national authorities, some possibly not yet in national law (List of MiCA grandfathering periods, art. 143(3), https://www.esma.europa.eu/sites/default/files/2024-12/List_of_MiCA_grandfathering_periods_art._143_3.pdf): 6 months NL, FI, LV, HU, SI, PL; 9 months SE; 12 months DE, IE, LT, AT, SK, NO. Re-read on EUR-Lex and on the ESMA list on 2026-11-12.",
       "source_url": "https://eur-lex.europa.eu/eli/reg/2023/1114/oj/eng",
       "status": "in_force"
     },
@@ -67,7 +67,7 @@
       "milestone": "Crypto Token regime in force (DIFC; CP 143 instruments)",
       "name": "UAE DFSA (DIFC)",
       "needs_review": false,
-      "notes": "Registered as a profile; requirement mapping NOT yet done (declared gap, human review pending). Amended regime (CP 168) reported in force from 12 Jan 2026 (token suitability assessed by the firm; no recognised-token list except Fiat Crypto Tokens): secondary sources only, not read on dfsa.ae.",
+      "notes": "Registered as a profile; requirement mapping NOT yet done (declared gap, human review pending). Amended by the CP 168 rule-making instruments (GEN No. 423 of 2025 and others), in force from 12 Jan 2026 (same Rulebook page: Notice of Amendments to Legislation December 2025, issued 15 Dec 2025). What the amendment changes (token suitability assessed by the firm; no recognised-token list except Fiat Crypto Tokens) is from secondary sources only, not read on dfsa.ae.",
       "source_url": "https://dfsaen.thomsonreuters.com/entiresection/14913",
       "status": "in_force",
       "status_provenance": "re-read on 2026-11-12 on the DFSA Rulebook notice of 18 Oct 2022 ('come into force on the date the Law comes into force (November 1, 2022)'); dfsa.ae answered 403 to automated reads"
@@ -76,7 +76,7 @@
       "as_of": "2026-11-12",
       "effective_utc": "2018-06-25",
       "id": "UAE_ADGM",
-      "milestone": "crypto asset framework launched (now the Virtual Asset framework under FSMR)",
+      "milestone": "crypto asset framework launched (ADGM now calls them Virtual Assets)",
       "name": "UAE ADGM/FSRA (Abu Dhabi)",
       "needs_review": false,
       "notes": "Registered as a profile; requirement mapping NOT yet done (declared gap, human review pending).",

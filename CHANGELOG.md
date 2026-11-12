@@ -4,7 +4,8 @@
 Release notes and assets: [GitHub Releases](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/releases).
 Until 0.22.0 the history was written in README.md; on 2026-11-12 those sections were moved here unchanged (headings
 one level down), under the release that shipped them. Dates in the moved headings are the authors' dates; the date
-next to each version is the date of its git tag.
+next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
+run by the same author, not by a third party.
 
 ## Unreleased
 
@@ -14,6 +15,15 @@ next to each version is the date of its git tag.
   experimental in its docstring (README, "Core and experimental modules"). No module, test or CI step was removed.
 - README rewritten: problem, demo, proofs, core and experimental modules, guarantees and assumptions. The release
   history moved here.
+- `cryptovalid_kms.py`: PKCS#11 signs with a single-part `C_Sign` on the module (pkcs11-tool 0.23 streams inputs over
+  1024 bytes and EdDSA is single-part only), serialised with a lock and a timeout; the PIN buffer is zeroed also when
+  the login fails. Backend URIs are read in a closed form: an unknown, repeated or empty key is a `ValueError`.
+  Backends measured on 2026-11-08 against SoftHSM2 2.6.1, real AWS KMS and Vault 1.20 (logs not in this repository).
+  Here the PKCS#11 path runs in `test_kms.py` and in the CI SoftHSM2 step; the tests written for the other changes are
+  not in this repository.
+- `spec/regulatory_profiles.json`: the eight entries re-read on their primary sources on 2026-11-12 (`as_of`
+  2026-11-12, next review due by 2027-02-10); UAE_CBUAE `effective_utc` 2024-06-01 → 2024-08-31 (CBUAE Rulebook);
+  each `source_url` is the page that was read.
 
 ## 0.22.0 (2026-10-19)
 
