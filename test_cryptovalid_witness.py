@@ -1,6 +1,6 @@
 """C2SP checkpoints, signed notes, cosignatures and the witness (0.14.0, 2026-09-19).
 
-Every claim of the README section "Witness / split-view" is measured here: the spec vector of c2sp.org/signed-note
+Every claim of the 0.14.0 section "Checkpoints, witnesses, split-view" (CHANGELOG.md) is measured here: the spec vector of c2sp.org/signed-note
 verifies; a tampered note, a substituted key and a forged timestamp are refused; the witness refuses a fork (same size,
 different root), a rollback and an extension without a valid consistency proof, keeping BOTH log-signed notes as
 evidence; a relying party can demand N witnesses and a maximum age. No wall clock: every timestamp is explicit.
