@@ -1,0 +1,35 @@
+{
+ "kind": "cryptovalid_canonical_vs_jcs/1",
+ "spec": "SPEC_EVIDENCE_FORMAT.md \u00a73 (v0.6)",
+ "note": "profile = the canonical form of \u00a73 (verifier.canonical_payload); jcs = RFC 8785 on the same document (strings: only \", \\ and U+0000..U+001F escaped; members sorted by UTF-16 code units). The profile and JCS give the same bytes only when every character is in U+0000..U+007E.",
+ "cases": [
+  {
+   "name": "ascii_only",
+   "document_json_ascii": "{\"b\": [1, \"x\", null, true], \"a\": {\"k\": \"v\\n\\\"~\"}}",
+   "profile_hex": "7b2261223a7b226b223a22765c6e5c227e227d2c2262223a5b312c2278222c6e756c6c2c747275655d7d",
+   "jcs_hex": "7b2261223a7b226b223a22765c6e5c227e227d2c2262223a5b312c2278222c6e756c6c2c747275655d7d",
+   "same_bytes": true
+  },
+  {
+   "name": "u007f",
+   "document_json_ascii": "{\"d\": \"\\u007f\"}",
+   "profile_hex": "7b2264223a225c7530303766227d",
+   "jcs_hex": "7b2264223a227f227d",
+   "same_bytes": false
+  },
+  {
+   "name": "non_ascii",
+   "document_json_ascii": "{\"note\": \"\\u00e8\"}",
+   "profile_hex": "7b226e6f7465223a225c7530306538227d",
+   "jcs_hex": "7b226e6f7465223a22c3a8227d",
+   "same_bytes": false
+  },
+  {
+   "name": "beyond_bmp_member_order",
+   "document_json_ascii": "{\"\\ue000\": 1, \"\\ud800\\udc00\": 2}",
+   "profile_hex": "7b225c7565303030223a312c225c75643830305c7564633030223a327d",
+   "jcs_hex": "7b22f0908080223a322c22ee8080223a317d",
+   "same_bytes": false
+  }
+ ]
+}
