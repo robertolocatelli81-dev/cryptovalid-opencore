@@ -191,8 +191,12 @@ python3 conformance.py     # exit 0 = conformant
   anchor are the systematic answer. Types are strict: `entries` is a non-negative JSON integer (a `"10"` or
   `10.0` would sign the same bytes but is refused by all three checkers).
 - **RFC 3161** timestamping: the token's message imprint MUST equal the stamped digest. The per-entry `tsa_token` (SPEC §2,
-  §5 step 6) is not checked by any verifier in this repository (2026-10-12); the RFC 3161 checks here are on the evidence
-  pack's manifest digest (`evidence_pack.py`) and on any digest given to `cryptovalid_tsa.py`.
+  §5 step 6) is not checked by any ledger verifier in this repository (2026-10-12); the RFC 3161 checks here are on the
+  evidence pack's manifest digest (`evidence_pack.py`) and, by SPEC §11 (`cryptovalid_tsa.verify_token`, 2026-11-13), on
+  the ingest's tree heads, the entries' `tsa_token` in `eidas_ledger_check.py`, the inclusion receipt, the rfc3161 domain of
+  `cryptovalid_heterogeneous.py` and any digest given to `cryptovalid_tsa.py`. §11 reads the TSTInfo closed and counts a
+  token only against a pinned TSA certificate (or, in the ingest with `--lotl`, a signer in the EU trusted lists); its
+  vectors are `spec/vectors/rfc3161/` (tokens of four public TSAs and five negative tokens).
 - **Regulatory profiles** (`spec/regulatory_profiles.json`, self-updated by `refresh_regulatory.py`):
   a ledger entry MAY set `data.regulatory_ref = "<id>"` to declare which EU requirement it supports.
   The profile carries provenance and an `as_of` date; stale entries are flagged, never silently trusted.

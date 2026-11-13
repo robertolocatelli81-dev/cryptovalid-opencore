@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.5 (2026-10-19; v0.4 2026-10-14)
+# CryptoValid Evidence Format — candidate standard v0.6 (2026-11-13; v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -87,8 +87,11 @@ in an entry:
 `self_hash = HEX( H(canonical_bytes) )` where `H` is **SHA-256** (profile
 `sha256`, default) or **SHA3-256** (profile `sha3_256`). A ledger uses ONE
 profile throughout; verifiers MUST auto-detect by recomputing entry 0.
-(A future minor version may adopt RFC 8785 JCS; the constrained profile above is a
-strict subset that stdlib `json` already produces, chosen to stay vendor-free.)
+The constrained profile above gives the same bytes as RFC 8785 JCS only when every character of every key and string is
+in U+0000..U+007E; it differs for U+007F and for any non-ASCII character (escaped here, raw UTF-8 in JCS), and beyond the
+BMP the member order differs too (code points here, UTF-16 code units in JCS). It is not a subset of JCS. Vector:
+`spec/vectors/canonical_vs_jcs.json` (corrected 2026-11-13: until v0.5 this paragraph called the profile "a strict
+subset" of JCS; the profile and every hash are unchanged).
 
 Chain rule: `entry[i].prev_hash == entry[i-1].self_hash`; `entry[0].prev_hash`
 is `"0" * 64`. Genesis is not special-cased beyond that.
@@ -135,7 +138,8 @@ forces a boolean where reality had none.
    pinned key a valid signature by any key is a PASS: the key is the caller's to pin. Vectors: `spec/vectors/signatures/`
    (21: their `normative` block is steps 1-4, their `signature_profile` block step 5).
 6. If `tsa_token` present: verify the RFC 3161 token binds `self_hash` and a
-   TSA time consistent with `ts`. (No verifier in this repository performs this step: see below.)
+   TSA time consistent with `ts`. A verifier that performs it follows the token profile of §11. (No ledger verifier in
+   this repository performs this step: see below.)
 7. A ledger with zero entries is FAIL (nothing was verified; `empty_ledger` error). Emit a JSON receipt including counts, failures (capped), verdict PASS/FAIL,
    and the receipt's own SHA-256 (receipt-of-receipt, deterministic: timestamp
    excluded).
@@ -165,8 +169,8 @@ absence never weakens steps 1–4; a verifier that performs step 5 follows its p
 - ML-DSA-65 (`signature_pq`): `signer.py`, Go and Java verify it (a broken one is FAIL, with or without a key since 0.21.0);
   JS and Swift do not: they count the entries that carry it (`pq_not_checked`), and a ledger whose `signature_pq` is broken
   is PASS there.
-- Step 6: no verifier in this repository performs it. `tsa_token` is accepted (§2.1) and excluded from the hash (§3), and
-  not checked. `evidence_pack.py` timestamps the pack's manifest digest with RFC 3161 (verified against a real DigiCert
+- Step 6: no ledger verifier in this repository performs it. `tsa_token` is accepted (§2.1) and excluded from the hash
+  (§3), and not checked by them; `eidas_ledger_check.py` counts the entries whose token passes §11 (since v0.6). `evidence_pack.py` timestamps the pack's manifest digest with RFC 3161 (verified against a real DigiCert
   TSA), not entries; `cryptovalid_tsa.py` requests and checks a token over any digest (e.g. a Merkle root).
 
 Until 0.20.1 this paragraph named `evidence_pack.py` as the implementation of step 6 and §2 said the optional fields
@@ -203,6 +207,14 @@ exits 74 and writes no pack (until 0.21.0 it wrote the pack unanchored). The led
 change. The JSON tree head (`cryptovalid_sth/1`) and the COSE receipts of `cryptovalid_receipt.py` refuse keys of small or
 mixed order and R of small order by the same rule (until 0.21.0 the neutral point with R neutral and S = 0 was
 `signature_valid: true` for any tree head).
+v0.6 (2026-11-13, unreleased) adds §11, the profile for checking an RFC 3161 token, used by the ingest's verify, the
+ingest's seal, `eidas_ledger_check.py`, the inclusion receipt of `cryptovalid_receipt.py`, the rfc3161 domain of
+`cryptovalid_heterogeneous.py` and the LOTL qualification. Not additive: until v0.5 a token "bound" a digest when the
+bytes `04 20 <digest>` appeared anywhere in it and a CMS signature verified with any certificate the blob carried, so a
+CMS blob signed with a key made on the spot, whose content is only that OCTET STRING, counted as a timestamp
+(`timestamped_segments`, `record_con_token_rfc3161`); and the LOTL called a token qualified when any certificate it
+carried was a QTST certificate, signer or not. From v0.6 such tokens are refused or not counted (§11). §3 corrects the
+sentence on RFC 8785. The ledger format (§2–§5), its hashes and its vectors do not change.
 
 ## 7. Conformance (normative)
 
@@ -300,9 +312,71 @@ cause) and every other subject evaluated, `check not run here: <reason>` on stde
 `receipt not written: <reason>` and no complete JSON on stdout: on 74, a complete JSON receipt means a check did not run,
 none (or a cut one) means the write failed. openssl absent is `instrument_failure` too, with the exit `valid` gives (as
 before v0.5: an absent tool is not a failed run). An openssl that exits with a code and no signal has answered: a token
-it does not accept is `token_invalid`. Other commands of this repository that run openssl (`cryptovalid_tsa`, the ingest's
-token check) keep their rule of 0.21.0: a tool ended by a signal there is a token not verified.
+it does not accept is `token_invalid`. The token check of §11 (v0.6) follows the same rule: a tool ended by a signal is a
+check not run. The older functions `cryptovalid_tsa.verify_cms_signature` and `verify_with_openssl`, kept for callers
+outside this repository, keep their rule of 0.21.0: a tool ended by a signal there is a token not verified.
 
 **What no state can say.** The RFC 3161 block and the manifest signature lie outside the manifest digest: a copy with the
 block removed has the states of a pack that never had one (`time_anchor: not_present`), and a copy with the manifest
 signature removed those of an unsigned pack. Only a pinned manifest signer or a hash of the whole folder tells them apart.
+
+## 11. RFC 3161 token check (NORMATIVE since v0.6, 2026-11-13)
+
+One function checks a token in this repository: `cryptovalid_tsa.verify_token(token_der, digest, hash_alg=None,
+tsa_certs=None)`. Its input is a TimeStampToken (a CMS ContentInfo, RFC 3161 §2.4.2) or a whole TimeStampResp, whose
+status MUST then be granted (0) or grantedWithMods (1) and whose token is the one checked. The steps, in order; the
+first that fails gives the outcome:
+
+1. **Structure, closed.** DER only (RFC 5652 §1 asks DER for the signed attributes; a token is read as DER throughout):
+   definite lengths in the shortest form, no high tag numbers, no byte after the outer element, INTEGER and OBJECT
+   IDENTIFIER in minimal form. ContentInfo = `{contentType id-signedData (1.2.840.113549.1.7.2), [0] SignedData}`.
+   SignedData = `{version 3, digestAlgorithms SET, encapContentInfo, [0] certificates OPTIONAL, [1] crls OPTIONAL,
+   signerInfos SET}` in this order, nothing else; exactly one SignerInfo (RFC 3161 §2.4.2: no signature other than the
+   TSA's). encapContentInfo = `{eContentType, [0] eContent}`, the eContent present as one primitive OCTET STRING.
+2. **Content type.** eContentType MUST be id-ct-TSTInfo (1.2.840.113549.1.9.16.1.4); anything else is
+   `econtent_type_not_tstinfo`.
+3. **TSTInfo, closed.** `{version 1, policy OID, messageImprint {hashAlgorithm {OID, NULL or absent}, hashedMessage
+   OCTET STRING}, serialNumber INTEGER (not negative), genTime GeneralizedTime}` then, each at most once and in this
+   order, `accuracy` (SEQUENCE), `ordering` (BOOLEAN, DER: 00 or FF), `nonce` (INTEGER), `tsa` ([0]), `extensions`
+   ([1]); any other element, a repeated one or one out of order is `tstinfo_unknown_element`. genTime is
+   `YYYYMMDDhhmmss[.f+]Z` (RFC 3161 §2.4.2: UTC, no trailing zero in the fraction) and a real calendar time.
+4. **Hash algorithm, closed list.** sha256, sha384, sha512, sha3-256, sha3-384, sha3-512 (NIST OIDs
+   2.16.840.1.101.3.4.2.{1,2,3,8,9,10}); any other (SHA-1 included) is `hash_algorithm_not_allowed`. hashedMessage MUST
+   have the algorithm's length. When the caller names the algorithm it stamped with (`hash_alg`), another one is
+   `hash_algorithm_mismatch`.
+5. **Imprint.** `messageImprint.hashedMessage` MUST equal the expected digest byte for byte (`imprint_mismatch`). It is
+   read from the parsed TSTInfo, never searched for in the bytes.
+6. **Signature.** openssl `cms -verify -noverify` over the token: the CMS signature and the messageDigest signed attribute
+   against the eContent, with the certificate the SignerInfo names (`signature_invalid` if not). The signer
+   certificate's SHA-256 is returned (`signer_sha256`).
+7. **Anchor.** With `tsa_certs` (certificates the verifier pins: the TSA certificate or a CA above it), openssl
+   `ts -verify` checks the token against them: signer certificate, ESS signing-certificate attribute, extended key
+   usage timeStamping, chain to a pinned certificate (`-partial_chain`), validity at genTime (`-attime`). Failure is
+   `not_issued_by_pinned_tsa`. Without `tsa_certs` there is no anchor (step 8).
+
+Outcome `status`, a closed set:
+
+| status | when | counts as a timestamp |
+|---|---|---|
+| `verified` | steps 1–7 pass with pinned certificates | yes |
+| `signature_only` | steps 1–6 pass, nothing pinned: "signature valid with the certificate contained in the token, chain not established" | no |
+| `invalid` | a step fails; `reason` names it (`malformed`, `not_signed_data`, `response_not_granted`, `econtent_type_not_tstinfo`, `tstinfo_unknown_element`, `hash_algorithm_not_allowed`, `hash_algorithm_mismatch`, `imprint_mismatch`, `signature_invalid`, `not_issued_by_pinned_tsa`), `detail` says where | no |
+| `not_evaluated` | steps 1–5 pass and openssl is absent | no |
+
+openssl present that cannot start, does not answer in time or is ended by a signal is a check not run here
+(`CheckNotRun`, exit 74 in a command), as in §10. The outcome carries the parsed `tst_info` (policy, hash algorithm,
+hashed message, serial number, `gen_time` as ISO 8601 UTC, nonce) whenever steps 1–4 pass.
+
+**LOTL.** A token is qualified only through its signer: `cryptovalid_lotl.qualification` takes the certificate that
+verified the signature (step 6) and looks up that one certificate in the trusted lists; a certificate the token merely
+carries does not count (until v0.5 any of them did). In `cryptovalid_ingest verify --lotl` a token whose signer is a
+QTST certificate counts as a timestamp even without `--tsa-cert`: the trusted list is the anchor. The trusted-list status
+is the status now, not at genTime (unchanged).
+
+**Not checked here.** Revocation of the TSA certificate (no CRL or OCSP is fetched); the TSA's `accuracy` against `ts`;
+whether genTime is consistent with `ts` (§5 step 6: genTime is returned for the caller to compare). Without `tsa_certs`
+the ESS signing-certificate attribute and the extended key usage are not checked (they are part of step 7).
+
+Vectors: `spec/vectors/rfc3161/` — tokens of public TSAs requested on 2026-11-13 over one digest, with their source and
+time, and negative tokens (a CMS blob whose content is the digest's OCTET STRING, a token for another digest, a token whose
+content is not a TSTInfo, a token with its signature altered); `manifest.json` gives the expected outcome of each.
