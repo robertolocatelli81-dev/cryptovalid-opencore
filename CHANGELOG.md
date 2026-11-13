@@ -9,6 +9,36 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **One check of an RFC 3161 token, read closed** (SPEC v0.6, §11 new; not additive: counts change). Measured on 0.22.0
+  on 2026-11-13: a CMS blob signed with an RSA key made on the spot, whose content is only the OCTET STRING of the
+  digest, gave `token_contains_digest` True and `verify_cms_signature` True; `cryptovalid_ingest verify` counted it in
+  `timestamped_segments` with no warning (exit 0), `eidas_ledger_check.py` in `record_con_token_rfc3161` (REQ-7.5-04-bis
+  PARZIALE), the inclusion receipt as `anchored: true`; and `cryptovalid_lotl.qualification` called a token qualified
+  when it merely carried a QTST certificate. Now `cryptovalid_tsa.verify_token` is the one check, used by the ingest
+  (seal and verify), `eidas_ledger_check.py`, `cryptovalid_receipt.py`, the rfc3161 domain of
+  `cryptovalid_heterogeneous.py` and `cryptovalid_tsa.py`: the content must be a TSTInfo (id-ct-TSTInfo), read as DER in
+  a closed form (unknown, repeated or out-of-order elements, non-minimal lengths, BER, a second SignerInfo are refused
+  with a reason); the imprint compared is `messageImprint.hashedMessage` under a closed list of hash algorithms (SHA-1
+  refused); the signature is checked by openssl; `genTime` is returned. A token counts as a timestamp only when it is
+  verified against a TSA certificate the caller pins (`--tsa-cert`, new in `cryptovalid_ingest.py verify`,
+  `eidas_ledger_check.py`, `cryptovalid_receipt.py inclusion`, `cryptovalid_tsa.py`) or, in the ingest with `--lotl`,
+  when the certificate that signed it is a QTST certificate; otherwise the outcome says "signature valid with the
+  certificate contained in the token, chain not established" and the token is not counted (ingest warning
+  `tsa_chain_not_established`; `record_con_token_firma_senza_catena`; receipt `status: signature_only`,
+  `anchored: false`). openssl absent: `not_evaluated`, never counted (until 0.22.0 the ingest counted the token on the
+  digest's bytes alone, with a warning). openssl ended by a signal: a check not run (exit 74), as SPEC §10. The LOTL looks
+  up the signer's certificate only. `token_contains_digest` now reads the TSTInfo instead of searching the bytes;
+  `verify_cms_signature` and `verify_with_openssl` are no longer used here and keep their behaviour.
+  Vectors: `spec/vectors/rfc3161/` — tokens of freetsa.org, DigiCert, Sectigo and GlobalSign requested on 2026-11-13
+  (and a SHA-512 one), the certificates to pin, five negative tokens. Tests: `test_tsa_token_20261113.py` (the
+  regressions fail on 0.22.0 by assertion; generative mutations of the real tokens), and the ingest, eidas, LOTL and
+  report tests now build real TSTInfo tokens with a local openssl TSA where they used a CMS blob carrying the digest.
+  Not checked: revocation of the TSA certificate, `accuracy`, genTime against the entry's `ts`.
+- **SPEC §3 on RFC 8785 corrected**: it said the canonical profile "is a strict subset" of JCS. Measured: the bytes are
+  the same only when every character is in U+0000..U+007E; they differ for U+007F and any non-ASCII character, and beyond
+  the BMP the member order differs too. The profile and every hash are unchanged. Vector
+  `spec/vectors/canonical_vs_jcs.json`, test `test_canonical_vs_jcs_20261113.py` (two JCS encoders: one from the RFC
+  rules, Node's `JSON.stringify`).
 - `refresh_regulatory.refresh()` takes an optional timezone-aware `now`; `test_standard` no longer fails because of the
   calendar (it failed from 2026-11-12, 90 days after the oldest `as_of`). The command line still reads the clock.
 - The core is narrowed to the evidence format and what cra-evidence relies on; every other module is marked
