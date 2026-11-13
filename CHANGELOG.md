@@ -7,7 +7,7 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
-## Unreleased
+## 0.23.0 (2026-11-13)
 
 - **One check of an RFC 3161 token, read closed** (SPEC v0.6, §11 new; not additive: counts change). Measured on 0.22.0
   on 2026-11-13: a CMS blob signed with an RSA key made on the spot, whose content is only the OCTET STRING of the
