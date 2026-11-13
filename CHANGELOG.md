@@ -33,10 +33,19 @@ run by the same author, not by a third party.
   (and a SHA-512 one), the certificates to pin, five negative tokens. Tests: `test_tsa_token_20261113.py` (the
   regressions fail on 0.22.0 by assertion; generative mutations of the real tokens), and the ingest, eidas, LOTL and
   report tests now build real TSTInfo tokens with a local openssl TSA where they used a CMS blob carrying the digest.
+  With `--tsa-cert`, `cryptovalid_ingest.py verify` reports a token of another TSA as a failure
+  (`tsa_token_not_issued_by_pinned_tsa`, exit 1); `eidas_ledger_check.py` does not count it. The inclusion receipt's
+  `tsa` block drops `cms_signature_ok`, adds `status`, `gen_time` and `signer_sha256`, and keeps `token_b64` only when the
+  token is not invalid. A `--tsa-cert` that is not a readable regular file of certificates is a usage error (exit 2).
+  The SignerInfo is read too: signedAttrs required, its digest algorithm held to the same closed list (a token signed
+  with SHA-1 or MD5 is refused); a critical TSTInfo extension is refused; a token without a certificate (certReq FALSE)
+  is checked with the pinned one. The pack report (`cryptovalid_report.py`) no longer says "Token cryptographically
+  verified" on the pack's imprint check alone: its RFC 3161 row shows the outcome of `verify_token` (until now a token of
+  a TSA made on the spot, or with its signature altered, was shown VERIFIED).
   Not checked: revocation of the TSA certificate, `accuracy`, genTime against the entry's `ts`.
 - **SPEC §3 on RFC 8785 corrected**: it said the canonical profile "is a strict subset" of JCS. Measured: the bytes are
-  the same only when every character is in U+0000..U+007E; they differ for U+007F and any non-ASCII character, and beyond
-  the BMP the member order differs too. The profile and every hash are unchanged. Vector
+  the same only when every character is in U+0000..U+007E; they differ for U+007F and any non-ASCII character, beyond
+  the BMP the member order can differ too, and so does an integer that JCS writes as an IEEE 754 double (10^21, 2^53+1). The profile and every hash are unchanged. Vector
   `spec/vectors/canonical_vs_jcs.json`, test `test_canonical_vs_jcs_20261113.py` (two JCS encoders: one from the RFC
   rules, Node's `JSON.stringify`).
 - `refresh_regulatory.refresh()` takes an optional timezone-aware `now`; `test_standard` no longer fails because of the

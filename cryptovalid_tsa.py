@@ -232,7 +232,17 @@ def parse_token(der: bytes) -> dict:
     _check(rest[-1] == 0x31, "malformed", "SignedData does not end with signerInfos")
     _check(rest[:-1] in ([], [0xA0], [0xA1], [0xA0, 0xA1]), "malformed", "SignedData: an element other than "
            "[0] certificates and [1] crls, repeated or out of order")
-    _check(len(_der_items(sd[-1][1], "signerInfos")) == 1, "malformed", "not exactly one SignerInfo (RFC 3161 §2.4.2)")
+    sis = _der_items(sd[-1][1], "signerInfos")
+    _check(len(sis) == 1 and sis[0][0] == 0x30, "malformed", "not exactly one SignerInfo (RFC 3161 §2.4.2)")
+    si = _der_items(sis[0][1], "SignerInfo")   # review of 13/11/2026: its elements read too (DER, closed, digest algorithm)
+    _check([t for t, _ in si[:6]] in ([0x02, 0x30, 0x30, 0xA0, 0x30, 0x04], [0x02, 0x80, 0x30, 0xA0, 0x30, 0x04])
+           and [t for t, _ in si[6:]] in ([], [0xA1]), "malformed", "SignerInfo is not {version, sid, digestAlgorithm, "
+           "signedAttrs, signatureAlgorithm, signature[, unsignedAttrs]} (RFC 5652 §5.3: signedAttrs present for a TSTInfo)")
+    sdal = _der_items(si[2][1], "SignerInfo.digestAlgorithm")
+    _check(sdal and sdal[0][0] == 0x06 and (len(sdal) == 1 or (len(sdal) == 2 and sdal[1] == (0x05, b""))), "malformed",
+           "SignerInfo.digestAlgorithm is not {OID, NULL or absent}")
+    sdoid = _der_oid(sdal[0][1], "SignerInfo.digestAlgorithm")
+    _check(sdoid in HASH_ALGORITHMS, "hash_algorithm_not_allowed", f"SignerInfo digest algorithm {sdoid}")
     eci = _der_items(sd[2][1], "encapContentInfo")
     _check(eci and eci[0][0] == 0x06, "malformed", "encapContentInfo without eContentType")
     ctype = _der_oid(eci[0][1], "eContentType")
@@ -251,6 +261,15 @@ def parse_token(der: bytes) -> dict:
             _check(v in (b"\x00", b"\xff"), "malformed", "ordering is not a DER BOOLEAN")
         if t == 0x02:
             nonce = _der_uint(v, "nonce")
+        if t == 0xA1:   # review of 13/11/2026: Extensions (RFC 5280 §4.1): a critical one is not understood here, so refused
+            exts = _der_items(v, "extensions")
+            _check(exts and all(et == 0x30 for et, _ in exts), "malformed", "extensions is not SEQUENCE SIZE (1..MAX) OF Extension")
+            for _et, ev in exts:
+                e = _der_items(ev, "Extension")
+                _check(len(e) in (2, 3) and e[0][0] == 0x06 and e[-1][0] == 0x04 and (len(e) == 2 or e[1] == (0x01, b"\xff")),
+                       "malformed", "Extension is not {OID, critical TRUE (DER: absent when FALSE), OCTET STRING}")
+                if len(e) == 3:
+                    raise TokenError("tstinfo_unknown_element", f"critical extension {_der_oid(e[0][1], 'extnID')} not understood")
     mi = _der_items(tst[2][1], "messageImprint")
     _check(len(mi) == 2 and mi[0][0] == 0x30 and mi[1][0] == 0x04, "malformed", "messageImprint is not {alg, OCTET STRING}")
     alg = _der_items(mi[0][1], "hashAlgorithm")
@@ -321,14 +340,24 @@ def _pem_certs(items) -> bytes:
     """The pinned certificates as one PEM file: each item a path or bytes, PEM or DER. Anything else is a ValueError."""
     import base64
     out = []
+    import stat
     for it in items:
-        if isinstance(it, str):
-            with open(it, "rb") as f:
-                it = f.read()
+        if isinstance(it, str):   # review of 13/11/2026: a FIFO hung, a missing file or a directory was a traceback
+            try:
+                if not stat.S_ISREG(os.stat(it).st_mode):
+                    raise ValueError(f"tsa_certs: {it!r} is not a regular file")
+                with open(it, "rb") as f:
+                    it = f.read()
+            except OSError as e:
+                raise ValueError(f"tsa_certs: cannot read {it!r}: {e.strerror or e}") from None
         if not isinstance(it, (bytes, bytearray)) or not it:
             raise ValueError("tsa_certs: each item is a path or the bytes of a certificate")
         it = bytes(it)
         if b"-----BEGIN CERTIFICATE-----" in it:
+            blocks = it.split(b"-----BEGIN CERTIFICATE-----")[1:]
+            if not all(b"-----END CERTIFICATE-----" in bl and (_first_pem_der(b"-----BEGIN CERTIFICATE-----" + bl) or b"")[:1]
+                       == b"\x30" for bl in blocks):
+                raise ValueError("tsa_certs: a PEM block is not a certificate")
             out.append(it if it.endswith(b"\n") else it + b"\n")
         elif it[:1] == b"\x30":
             b64 = base64.encodebytes(it).replace(b"\n", b"")
@@ -337,6 +366,17 @@ def _pem_certs(items) -> bytes:
         else:
             raise ValueError("tsa_certs: an item is neither a PEM nor a DER certificate")
     return b"".join(out)
+
+
+def tsa_cert_arg(path: str) -> str:
+    """argparse `type` of --tsa-cert (review of 13/11/2026): a path that is not a readable regular file holding certificates
+    is a usage error (exit 2) named on stderr, never a traceback or a FIFO read forever."""
+    import argparse
+    try:
+        _pem_certs([path])
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+    return path
 
 
 def _first_pem_der(pem: bytes):
@@ -381,7 +421,7 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
         out.update(reason=e.reason, detail=e.detail)
         return out
     pins = _pem_certs(tsa_certs) if tsa_certs else None
-    state, signer, why = token_signer(t["token_der"])
+    state, signer, why = token_signer(t["token_der"], pins)
     if state == "not_evaluated":
         out.update(status="not_evaluated", reason="openssl_absent", note="openssl absent: signature not checked")
         return out
@@ -399,10 +439,10 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
         _tmp_write(cp, pins)
         at = int(datetime.strptime(t["gen_time"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
         p = _run_openssl(["openssl", "ts", "-verify", "-token_in", "-in", tp, "-digest", t["hashed_message"].hex(),
-                          "-CAfile", cp, "-partial_chain", "-attime", str(at)], capture_output=True, timeout=30)
+                          "-CAfile", cp, "-untrusted", cp, "-partial_chain", "-attime", str(at)], capture_output=True, timeout=30)
         if p.returncode < 0:
             raise _not_run("cannot run openssl here", OSError(f"terminated by signal {-p.returncode}"))
-        if p.returncode != 0:
+        if p.returncode != 0 or b"Verification: OK" not in (p.stdout or b"").splitlines():
             out.update(reason="not_issued_by_pinned_tsa", detail=_last_line(p.stderr, "openssl ts -verify refused it"))
             return out
         out.update(status="verified", counts_as_timestamp=True, note="verified against the pinned TSA certificate(s)")
@@ -411,11 +451,12 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
         shutil.rmtree(d, ignore_errors=True)
 
 
-def token_signer(token_der: bytes):
+def token_signer(token_der: bytes, pins_pem: bytes = None):
     """SPEC §11 step 6 on a token that passes steps 1-4: ("valid", signer certificate SHA-256 hex, None), ("invalid", None,
     reason) or ("not_evaluated", None, "openssl absent"). openssl `cms -verify -noverify`: the CMS signature and the
-    messageDigest attribute, with the certificate the SignerInfo names; no chain. openssl present that cannot run here,
-    does not answer or is ended by a signal: CheckNotRun."""
+    messageDigest attribute, with the certificate the SignerInfo names, looked up in the token and, when given, in
+    `pins_pem` (a token requested with certReq FALSE carries no certificate, RFC 3161 §2.4.1); no chain. openssl present
+    that cannot run here, does not answer or is ended by a signal: CheckNotRun."""
     import hashlib
     import shutil
     try:
@@ -428,7 +469,11 @@ def token_signer(token_der: bytes):
     try:
         tp, sp = os.path.join(d, "t.der"), os.path.join(d, "signer.pem")
         _tmp_write(tp, tok)
-        p = _run_openssl(["openssl", "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", tp,
+        extra = []
+        if pins_pem:
+            _tmp_write(os.path.join(d, "pinned.pem"), pins_pem)
+            extra = ["-certfile", os.path.join(d, "pinned.pem")]
+        p = _run_openssl(["openssl", "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", tp, *extra,
                           "-signer", sp, "-out", os.devnull], capture_output=True, timeout=30)
         if p.returncode < 0:
             raise _not_run("cannot run openssl here", OSError(f"terminated by signal {-p.returncode}"))
@@ -512,7 +557,7 @@ def main(argv=None):
     p.add_argument("digest_hex", help="SHA-256 digest hex (e.g. a Merkle STH root_sha256)")
     p.add_argument("--tsa", default="https://freetsa.org/tsr",
                    help="TSA URL (point at an eIDAS qualified TSP for a QUALIFIED timestamp)")
-    p.add_argument("--tsa-cert", action="append", default=None, metavar="PEM",
+    p.add_argument("--tsa-cert", action="append", default=None, metavar="PEM", type=tsa_cert_arg,
                    help="pin the TSA certificate (or a CA above it); repeatable. Without it the outcome is at most "
                         "signature_only (SPEC §11)")
     a = p.parse_args(argv)

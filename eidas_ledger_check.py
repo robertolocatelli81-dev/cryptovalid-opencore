@@ -267,10 +267,14 @@ except ImportError:   # python3 -m opencore.<module> from the parent directory
 @receipt_cli
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
+    try:
+        import cryptovalid_tsa as _T_arg
+    except ImportError:   # python3 -m opencore.<module>
+        from opencore import cryptovalid_tsa as _T_arg
     p = Parser(prog="eidas_ledger_check", description="self-assessment vs eIDAS 2.0 qualified electronic ledger rules (IR 2025/2531)")
     p.add_argument("ledger"); p.add_argument("--report", action="store_true"); p.add_argument("--practice-statement", action="store_true")
     p.add_argument("--provider", default="<provider>"); p.add_argument("--deployment", help="JSON: qualified_certificates, qtsp_timestamps, signing_device, provider_is_qtsp")
-    p.add_argument("--tsa-cert", action="append", default=None, metavar="PEM",
+    p.add_argument("--tsa-cert", action="append", default=None, metavar="PEM", type=_T_arg.tsa_cert_arg,
                    help="pin the TSA certificate (or a CA above it), repeatable: a tsa_token counts only when verified "
                         "against it (SPEC §11)")
     a = p.parse_args(argv)

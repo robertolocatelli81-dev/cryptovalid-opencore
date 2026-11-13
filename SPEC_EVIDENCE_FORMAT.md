@@ -88,8 +88,9 @@ in an entry:
 `sha256`, default) or **SHA3-256** (profile `sha3_256`). A ledger uses ONE
 profile throughout; verifiers MUST auto-detect by recomputing entry 0.
 The constrained profile above gives the same bytes as RFC 8785 JCS only when every character of every key and string is
-in U+0000..U+007E; it differs for U+007F and for any non-ASCII character (escaped here, raw UTF-8 in JCS), and beyond the
-BMP the member order differs too (code points here, UTF-16 code units in JCS). It is not a subset of JCS. Vector:
+in U+0000..U+007E; it differs for U+007F and for any non-ASCII character (escaped here, raw UTF-8 in JCS), beyond the
+BMP the member order can differ too (code points here, UTF-16 code units in JCS), and so does an integer that JCS writes
+as an IEEE 754 double (10^21 is `1e+21` there, 2^53+1 becomes 9007199254740992). It is not a subset of JCS. Vector:
 `spec/vectors/canonical_vs_jcs.json` (corrected 2026-11-13: until v0.5 this paragraph called the profile "a strict
 subset" of JCS; the profile and every hash are unchanged).
 
@@ -322,37 +323,46 @@ signature removed those of an unsigned pack. Only a pinned manifest signer or a 
 
 ## 11. RFC 3161 token check (NORMATIVE since v0.6, 2026-11-13)
 
-One function checks a token in this repository: `cryptovalid_tsa.verify_token(token_der, digest, hash_alg=None,
-tsa_certs=None)`. Its input is a TimeStampToken (a CMS ContentInfo, RFC 3161 §2.4.2) or a whole TimeStampResp, whose
+One function checks a token's structure, imprint, signature and anchor in this repository:
+`cryptovalid_tsa.verify_token(token_der, digest, hash_alg=None, tsa_certs=None)`. `evidence_pack.py verify` reads a
+pack's token for its status and imprint only (§10, `tsa_not_checked`); the pack's report (`cryptovalid_report.py`) shows
+the outcome of this function for that token, with no TSA pinned. Its input is a TimeStampToken (a CMS ContentInfo, RFC 3161 §2.4.2) or a whole TimeStampResp, whose
 status MUST then be granted (0) or grantedWithMods (1) and whose token is the one checked. The steps, in order; the
 first that fails gives the outcome:
 
-1. **Structure, closed.** DER only (RFC 5652 §1 asks DER for the signed attributes; a token is read as DER throughout):
-   definite lengths in the shortest form, no high tag numbers, no byte after the outer element, INTEGER and OBJECT
-   IDENTIFIER in minimal form. ContentInfo = `{contentType id-signedData (1.2.840.113549.1.7.2), [0] SignedData}`.
+1. **Structure, closed.** DER (RFC 5652 §1 asks DER for the signed attributes) at every level this function reads —
+   ContentInfo, SignedData, encapContentInfo, the TSTInfo and its messageImprint, the SignerInfo's elements: definite
+   lengths in the shortest form, no high tag numbers, no byte after the outer element, INTEGER and OBJECT IDENTIFIER in
+   minimal form. The certificates, the crls and the inside of the SignerInfo's elements are read by openssl, which
+   accepts BER there. ContentInfo = `{contentType id-signedData (1.2.840.113549.1.7.2), [0] SignedData}`.
    SignedData = `{version 3, digestAlgorithms SET, encapContentInfo, [0] certificates OPTIONAL, [1] crls OPTIONAL,
    signerInfos SET}` in this order, nothing else; exactly one SignerInfo (RFC 3161 §2.4.2: no signature other than the
-   TSA's). encapContentInfo = `{eContentType, [0] eContent}`, the eContent present as one primitive OCTET STRING.
+   TSA's) = `{version, sid, digestAlgorithm, signedAttrs, signatureAlgorithm, signature[, unsignedAttrs]}` (RFC 5652
+   §5.3: signedAttrs present, the content is not id-data). encapContentInfo = `{eContentType, [0] eContent}`, the eContent present as one primitive OCTET STRING.
 2. **Content type.** eContentType MUST be id-ct-TSTInfo (1.2.840.113549.1.9.16.1.4); anything else is
    `econtent_type_not_tstinfo`.
 3. **TSTInfo, closed.** `{version 1, policy OID, messageImprint {hashAlgorithm {OID, NULL or absent}, hashedMessage
    OCTET STRING}, serialNumber INTEGER (not negative), genTime GeneralizedTime}` then, each at most once and in this
    order, `accuracy` (SEQUENCE), `ordering` (BOOLEAN, DER: 00 or FF), `nonce` (INTEGER), `tsa` ([0]), `extensions`
-   ([1]); any other element, a repeated one or one out of order is `tstinfo_unknown_element`. genTime is
+   ([1], Extensions of RFC 5280 §4.1); any other element, a repeated one or one out of order, and any extension marked
+   critical (none is understood here), is `tstinfo_unknown_element`. genTime is
    `YYYYMMDDhhmmss[.f+]Z` (RFC 3161 §2.4.2: UTC, no trailing zero in the fraction) and a real calendar time.
 4. **Hash algorithm, closed list.** sha256, sha384, sha512, sha3-256, sha3-384, sha3-512 (NIST OIDs
    2.16.840.1.101.3.4.2.{1,2,3,8,9,10}); any other (SHA-1 included) is `hash_algorithm_not_allowed`. hashedMessage MUST
-   have the algorithm's length. When the caller names the algorithm it stamped with (`hash_alg`), another one is
-   `hash_algorithm_mismatch`.
+   have the algorithm's length. The SignerInfo's digestAlgorithm (the hash under the signed attributes and the
+   signature) is held to the same list (`hash_algorithm_not_allowed`). When the caller names the algorithm it stamped
+   with (`hash_alg`), another one is `hash_algorithm_mismatch`.
 5. **Imprint.** `messageImprint.hashedMessage` MUST equal the expected digest byte for byte (`imprint_mismatch`). It is
    read from the parsed TSTInfo, never searched for in the bytes.
 6. **Signature.** openssl `cms -verify -noverify` over the token: the CMS signature and the messageDigest signed attribute
-   against the eContent, with the certificate the SignerInfo names (`signature_invalid` if not). The signer
+   against the eContent, with the certificate the SignerInfo names, looked up in the token and among the pinned
+   certificates (a token requested with certReq FALSE carries none, RFC 3161 §2.4.1) (`signature_invalid` if not). The signer
    certificate's SHA-256 is returned (`signer_sha256`).
 7. **Anchor.** With `tsa_certs` (certificates the verifier pins: the TSA certificate or a CA above it), openssl
    `ts -verify` checks the token against them: signer certificate, ESS signing-certificate attribute, extended key
-   usage timeStamping, chain to a pinned certificate (`-partial_chain`), validity at genTime (`-attime`). Failure is
-   `not_issued_by_pinned_tsa`. Without `tsa_certs` there is no anchor (step 8).
+   usage timeStamping, the `tsa` field against the signer's name, chain to a pinned certificate (`-partial_chain`;
+   the pinned certificates are also given as `-untrusted`), validity at genTime (`-attime`); it passes on exit 0 with
+   `Verification: OK` on stdout. Failure is `not_issued_by_pinned_tsa`. Without `tsa_certs` there is no anchor (step 8).
 
 Outcome `status`, a closed set:
 
@@ -374,8 +384,10 @@ QTST certificate counts as a timestamp even without `--tsa-cert`: the trusted li
 is the status now, not at genTime (unchanged).
 
 **Not checked here.** Revocation of the TSA certificate (no CRL or OCSP is fetched); the TSA's `accuracy` against `ts`;
-whether genTime is consistent with `ts` (§5 step 6: genTime is returned for the caller to compare). Without `tsa_certs`
-the ESS signing-certificate attribute and the extended key usage are not checked (they are part of step 7).
+whether genTime is consistent with `ts` (§5 step 6: genTime is returned for the caller to compare); the content-type
+signed attribute against eContentType (RFC 5652 §11.1; openssl does not compare them). Without `tsa_certs` the ESS
+signing-certificate attribute, the extended key usage, the `tsa` field and the content of `accuracy` are not checked
+(they are part of step 7).
 
 Vectors: `spec/vectors/rfc3161/` — tokens of public TSAs requested on 2026-11-13 over one digest, with their source and
 time, and negative tokens (a CMS blob whose content is the digest's OCTET STRING, a token for another digest, a token whose

@@ -218,6 +218,32 @@ table.grid td { padding: 1.6mm 2mm; border-bottom: .4pt solid #e5e7eb;
 """
 
 
+def _token_badge(manifest: Dict, ts: Dict):
+    """The RFC 3161 row when the pack's check passed (status granted, imprint = manifest digest; SPEC §10 `tsa_not_checked`).
+    The token itself is checked by SPEC §11 (`cryptovalid_tsa.verify_token`), no TSA pinned here. review of 13/11/2026: until
+    then the row said "VERIFIED — Token cryptographically verified" for a token whose signature was altered and for a
+    token of a TSA made on the spot (measured on 0.22.0 and on e84d945)."""
+    import cryptovalid_tsa as T
+    try:
+        tok = base64.b64decode(ts.get("tsr_b64") or "", validate=True)
+        chk = T.verify_token(tok, bytes.fromhex(manifest.get("manifest_digest_sha256") or ""), "sha256")
+    except Exception as e:  # noqa: BLE001 — openssl that cannot run here (CheckNotRun) or a value that is not base64
+        return (_badge(None, na="IMPRINT BOUND, SIGNATURE NOT CHECKED"),
+                f"Granted, imprint = the manifest digest; the token was not checked here ({type(e).__name__}: {str(e)[:80]}). "
+                f"TSA: {ts.get('tsa')}")
+    if chk["status"] == "verified":   # not reached: no TSA is pinned in this report
+        return _badge(True, yes="VERIFIED"), f"Token verified against a pinned TSA certificate (SPEC §11). TSA: {ts.get('tsa')}"
+    if chk["status"] == "signature_only":
+        return (_badge(None, na="IMPRINT BOUND, TSA NOT PINNED"),
+                f"Granted, imprint = the manifest digest; {T.SIGNATURE_ONLY_NOTE} (SPEC §11). TSA: {ts.get('tsa')}")
+    if chk["status"] == "not_evaluated":
+        return (_badge(None, na="IMPRINT BOUND, SIGNATURE NOT CHECKED"),
+                f"Granted, imprint = the manifest digest; signature not checked (openssl absent). TSA: {ts.get('tsa')}")
+    return (_badge(False, no="TOKEN INVALID"),
+            f"Granted, imprint = the manifest digest, but the token does not pass SPEC §11: {chk['reason']} "
+            f"({str(chk['detail'])[:120]}). TSA: {ts.get('tsa')}")
+
+
 def render_html(manifest: Dict, verification: Dict, lotl: Dict,
                 title: str = "Compliance Evidence — Audit Report",
                 pack_dir: str = "", solana: Optional[Dict] = None) -> str:
@@ -248,8 +274,7 @@ def render_html(manifest: Dict, verification: Dict, lotl: Dict,
         rfc_badge, rfc_note = _badge(None, na="NOT ANCHORED"), \
             "No RFC 3161 timestamp in this pack (optional; chain + signatures stand on their own)."
     elif rfc.get("verified") is True:
-        rfc_badge, rfc_note = _badge(True, yes="VERIFIED"), \
-            f"Token cryptographically verified (Granted + digest imprint match). TSA: {ts.get('tsa')}"
+        rfc_badge, rfc_note = _token_badge(manifest, ts)
     elif rfc.get("verified") is None:
         rfc_badge, rfc_note = _badge(None, na="RECORDED, NOT VERIFIED"), \
             "Token recorded but not verifiable here (openssl absent)."

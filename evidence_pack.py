@@ -95,7 +95,8 @@ def _entries_and_head(path: str):
 
 
 def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15) -> Dict:
-    """Verifica CRITTOGRAFICA del token RFC 3161: status Granted E message-imprint == digest atteso.
+    """Legame del token RFC 3161: status Granted E message-imprint == digest atteso. La firma della TSA NON è verificata qui
+    (SPEC §10 `tsa_not_checked`; il controllo del token è `cryptovalid_tsa.verify_token`, SPEC §11).
     Chiude il buco 'token spazzatura creduto ancorato'. Se openssl assente: verified=None (onesto:
     'registrato ma NON verificato'), mai un falso True. openssl presente ma non avviabile qui, o nessun file
     temporaneo: CheckNotRun (exit 74), mai `verified: false` (0.20.3: con fork negato un pack valido era `valid: false`)."""

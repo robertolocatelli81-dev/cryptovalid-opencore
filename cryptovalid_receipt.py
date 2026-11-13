@@ -514,12 +514,16 @@ except ImportError:   # python3 -m opencore.<module> from the parent directory
 @receipt_cli
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
+    try:
+        import cryptovalid_tsa as _T_arg
+    except ImportError:   # python3 -m opencore.<module>
+        from opencore import cryptovalid_tsa as _T_arg
     p = Parser(prog="cryptovalid_receipt", description="RFC 9942-style receipts for a cryptovalid ledger")
     sub = p.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("sth"); a.add_argument("ledger"); a.add_argument("keyfile")
     b = sub.add_parser("inclusion"); b.add_argument("ledger"); b.add_argument("index", type=int); b.add_argument("keyfile")
     b.add_argument("--tsa"); b.add_argument("--cose", help="write the COSE_Sign1 bytes to this file")
-    b.add_argument("--tsa-cert", action="append", default=None, metavar="PEM",
+    b.add_argument("--tsa-cert", action="append", default=None, metavar="PEM", type=_T_arg.tsa_cert_arg,
                    help="pin the TSA certificate (or a CA above it), repeatable: `tsa.anchored` needs it (SPEC §11)")
     c = sub.add_parser("consistency"); c.add_argument("old_sth_json"); c.add_argument("ledger"); c.add_argument("keyfile")
     v = sub.add_parser("verify"); v.add_argument("receipt_json"); v.add_argument("trusted_pubkey_hex")

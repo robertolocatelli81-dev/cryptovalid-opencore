@@ -565,6 +565,10 @@ except ImportError:   # python3 -m opencore.<module> from the parent directory
 @receipt_cli
 def main(argv=None) -> int:  # pragma: no cover - thin CLI
     import argparse
+    try:
+        import cryptovalid_tsa as _T_arg
+    except ImportError:   # python3 -m opencore.<module>
+        from opencore import cryptovalid_tsa as _T_arg
     p = Parser(prog="cryptovalid-ingest",
                                 description="High-frequency ingestion + archive verify.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -573,7 +577,7 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
     v.add_argument("--lotl", action="store_true",
                    help="certifica i token RFC 3161 come eIDAS-qualified via EU Trusted Lists (rete)")
     v.add_argument("--lotl-ms", nargs="*", default=None, help="restringi alle member state (es. ES IT)")
-    v.add_argument("--tsa-cert", action="append", default=None, metavar="PEM",
+    v.add_argument("--tsa-cert", action="append", default=None, metavar="PEM", type=_T_arg.tsa_cert_arg,
                    help="pin the TSA certificate (or a CA above it), repeatable: a token counts as timestamped only "
                         "when verified against it, or with --lotl (SPEC §11)")
     b = sub.add_parser("bench"); b.add_argument("directory")

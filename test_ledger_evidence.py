@@ -562,7 +562,7 @@ class TestEidasCountsBoundTokensOnly(unittest.TestCase):
         self.assertEqual(E._tsa_tokens([{"self_hash": "ab" * 32, "tsa_token": ""}]), (1, 0))   # present, empty
         import cryptovalid_tsa as T
         orig = T.token_signer
-        T.token_signer = lambda der: ("not_evaluated", None, "openssl absent")   # openssl absent: not counted
+        T.token_signer = lambda der, pins=None: ("not_evaluated", None, "openssl absent")   # openssl absent: not counted
         try:
             self.assertEqual(self._req(self._ledger(["real"])), ("NON_APPLICABILE", 0, 1))
         finally:
