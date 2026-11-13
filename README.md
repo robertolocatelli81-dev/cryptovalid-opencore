@@ -19,8 +19,8 @@ trust that system:
   documentation at the disposal of market surveillance authorities for at least 10 years after the product is placed
   on the market, or for the support period if longer (Art. 13(13)); the Regulation applies from 11 December 2027, its
   reporting obligations (Art. 14) already from 11 September 2026 (Art. 71(2)).
-  [cra-evidence](https://github.com/robertolocatelli81-dev/cra-evidence) writes that evidence in this repository's
-  ledger profile (see *What cra-evidence relies on*).
+  [omega-cra-evol](https://github.com/robertolocatelli81-dev/omega-cra-evol) (named cra-evidence until its 0.9.0) writes
+  that evidence in this repository's ledger profile (see *What omega-cra-evol relies on*).
 - **Providers of high-risk AI systems** must keep the logs their systems generate automatically (EU AI Act,
   Regulation (EU) 2024/1689, Art. 12(1)), to the extent the logs are under their control, for at least six months unless
   Union or national law provides otherwise (Art. 19); for Annex III systems those obligations apply from 2 December
@@ -67,7 +67,7 @@ reader gone), whatever the verdict.
 - **Conformance vectors:** `spec/vectors/` holds 11 normative ledger vectors with their expected receipts;
   `python3 conformance.py` exits 0 only if the reference reproduces all 11 (`"conformant": true, "vectors": 11`).
   Signature vectors are in `spec/vectors/signatures/`. Implementing the format elsewhere means matching these.
-- **Used downstream, measured in their CI:** cra-evidence runs a job (`interop-newest-cryptovalid`) that writes a
+- **Used downstream, measured in their CI:** omega-cra-evol runs a job (`interop-newest-cryptovalid`) that writes a
   ledger with a signed tip and requires the newest release of this package to verify it, and to fail it once
   truncated; ap2-evidence-pack runs a job (`downstream-cryptovalid`) that clones this repository and runs its AP2
   front-end suites against each new build. Both were green on their last runs (2026-11-04 and 2026-11-05).
@@ -75,7 +75,7 @@ reader gone), whatever the verdict.
 
 ## Core and experimental modules
 
-The maintained core is the evidence format and what cra-evidence relies on. Every other module at the top of the
+The maintained core is the evidence format and what omega-cra-evol relies on. Every other module at the top of the
 repository stays in the repository and in the wheel, is still run by the same CI (every `test_*.py`;
 `fundcert_crosssource.py` has no test of its own), and is marked **experimental** in its module docstring: no new
 scope is added to it.
@@ -108,9 +108,9 @@ scope is added to it.
 Each experimental module documents its use in its docstring; 21 of the 33 also print their usage with `--help`. The
 release history is in [CHANGELOG.md](CHANGELOG.md).
 
-### What cra-evidence relies on
+### What omega-cra-evol relies on
 
-Measured on cra-evidence `f18097e` (master, 2026-11-12): it declares no runtime dependency on this package
+Measured on `f18097e` (master, 2026-11-12, when the project was named cra-evidence; omega-cra-evol since 0.10.0): it declares no runtime dependency on this package
 (`dependencies = []`) and writes the ledger and the tip itself. What it relies on is the profile:
 
 - the ledger profile of SPEC §1-3 and §5 (canonical JSON, `prev_hash` / `self_hash`, strict JSON acceptance, the
