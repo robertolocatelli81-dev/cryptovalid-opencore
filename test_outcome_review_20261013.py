@@ -531,17 +531,20 @@ class TestLibraryPaths(unittest.TestCase):
         import cryptovalid_heterogeneous as H
         import cryptovalid_tsa as T
         from verifier import CheckNotRun
-        dig = "ab" * 32
-        att = [{"domain": "rfc3161", "token_der": b"x", "digest_data": b"d"}]
-        with mock.patch.object(T, "token_contains_digest", return_value=True), \
-                mock.patch.object(T, "verify_with_openssl", return_value=True):
+        import hashlib
+        dig = hashlib.sha256(b"d").hexdigest()
+        att = [{"domain": "rfc3161", "token_der": b"x", "digest_data": b"d", "tsa_certs": [b"pin"]}]
+        # since v0.6 of the spec (2026-11-13) the domain reads one outcome, cryptovalid_tsa.verify_token (SPEC §11)
+        ok = {"status": "verified", "tst_info": {"hash_algorithm": "sha256"}}
+        with mock.patch.object(T, "verify_token", return_value=ok):
             r = H.verify_heterogeneous_anchor(dig, att, min_domains=1)
         self.assertTrue(r["ok"], r)
-        with mock.patch.object(T, "token_contains_digest", return_value=True), \
-                mock.patch.object(T, "verify_with_openssl", return_value=None):
-            self.assertFalse(H.verify_heterogeneous_anchor(dig, att, min_domains=1)["ok"])
-        with mock.patch.object(T, "token_contains_digest", return_value=True), \
-                mock.patch.object(T, "verify_with_openssl", side_effect=CheckNotRun("cannot run openssl here: x")):
+        for st in ("signature_only", "not_evaluated", "invalid"):
+            with mock.patch.object(T, "verify_token", return_value=dict(ok, status=st)):
+                self.assertFalse(H.verify_heterogeneous_anchor(dig, att, min_domains=1)["ok"], st)
+        with mock.patch.object(T, "verify_token", return_value=ok):   # digest_data whose hash is not the digest
+            self.assertFalse(H.verify_heterogeneous_anchor(dig, [dict(att[0], digest_data=b"e")], min_domains=1)["ok"])
+        with mock.patch.object(T, "verify_token", side_effect=CheckNotRun("cannot run openssl here: x")):
             with self.assertRaises(CheckNotRun):
                 H.verify_heterogeneous_anchor(dig, att, min_domains=1)
 

@@ -310,16 +310,23 @@ class TestHistoryOrder(unittest.TestCase):
             L.qtst_status_at(ok, __import__("datetime").datetime(2020, 1, 1))
 
     def test_qualification_is_three_valued(self):
-        orig = L.token_cert_fingerprints
-        L.token_cert_fingerprints = lambda tok: {"ab" * 32}
+        # since v0.6 of the spec (2026-11-13) the qualification looks at the certificate that SIGNED the token
+        # (`signer_fingerprints`), not at every certificate it carries (`token_cert_fingerprints`, mocked here until then)
+        orig = L.signer_fingerprints
+        L.signer_fingerprints = lambda tok: {"ab" * 32}
         try:
             self.assertEqual(L.qualification(b"t", {"ab" * 32}, {}), ("qualified", None))
             self.assertEqual(L.qualification(b"t", set(), {}), ("not_qualified", None))
             self.assertEqual(L.qualification(b"t", set(), None), ("not_qualified", None))
             self.assertEqual(L.qualification(b"t", set(), {"ab" * 32: "history_not_ordered u"}), ("indeterminate", "history_not_ordered u"))
             self.assertEqual(L.qualification(b"t", set(), {"cd" * 32: "x"}), ("not_qualified", None))
+            self.assertEqual(L.qualification(b"t", {"cd" * 32}, {}, signer_sha256="cd" * 32), ("qualified", None))
+            L.signer_fingerprints = lambda tok: set()                     # signature does not verify: no signer
+            self.assertEqual(L.qualification(b"t", {"ab" * 32}, {}), ("not_qualified", None))
+            L.signer_fingerprints = lambda tok: None                      # openssl absent: signer not established
+            self.assertEqual(L.qualification(b"t", {"ab" * 32}, {})[0], "indeterminate")
         finally:
-            L.token_cert_fingerprints = orig
+            L.signer_fingerprints = orig
 
     def test_loader_names_the_errors_and_caches_them(self):
         import json

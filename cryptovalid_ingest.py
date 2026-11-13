@@ -288,8 +288,15 @@ class Ingestor:
             digest = bytes.fromhex(meta["sth_canonical_sha256"])
             granted, token, _ = self._request_timestamp(digest, self._tsa_url)
             meta["granted"] = bool(granted)
-            meta["digest_bound"] = bool(granted and token
-                                        and tsa_mod.token_contains_digest(token, digest))
+            # SPEC §11 (v0.6): the TSTInfo's messageImprint, not a search in the bytes; no pin here (verify pins)
+            chk = tsa_mod.verify_token(token, digest, "sha256") if (granted and token) else None
+            meta["digest_bound"] = bool(chk and chk["imprint_ok"])
+            if chk:
+                meta["token_status"] = chk["status"]
+                if chk["reason"]:
+                    meta["token_reason"] = chk["reason"]
+                if chk["tst_info"]:
+                    meta["gen_time"] = chk["tst_info"]["gen_time"]
             if token:
                 _write_bytes_atomic(seg_path + ".sth.tsr", token)
                 meta["token_file"] = os.path.basename(seg_path) + ".sth.tsr"
@@ -297,7 +304,8 @@ class Ingestor:
                 import cryptovalid_lotl as lotl
                 fprs, _cov, herr = lotl.load_qualified_status(
                     self._lotl_ms, cache_path=_default_lotl_cache(self._lotl_ms))
-                verdict, why = lotl.qualification(token, fprs, herr)
+                verdict, why = lotl.qualification(token, fprs, herr,
+                                                  signer_sha256=(chk or {}).get("signer_sha256"))
                 meta["eidas_qualified"] = verdict == "qualified"
                 if why:   # 0.21.0: TS 119 615 PRO-4.3.4-03A, neither qualified nor not
                     meta["eidas_indeterminate"] = why
@@ -387,22 +395,37 @@ def _load_json_object(path):
     return (obj, None) if isinstance(obj, dict) else (None, "not_a_json_object")
 
 
+# SPEC §11 reason → the failure reason of verify_archive (the names of 0.22.0 kept where they existed)
+_TSA_FAILURE = {"imprint_mismatch": "tsa_token_digest_mismatch", "hash_algorithm_mismatch": "tsa_token_digest_mismatch",
+                "signature_invalid": "tsa_token_cms_invalid", "malformed": "tsa_token_cms_invalid",
+                "not_signed_data": "tsa_token_cms_invalid", "response_not_granted": "tsa_token_cms_invalid",
+                "econtent_type_not_tstinfo": "tsa_token_not_tstinfo", "tstinfo_unknown_element": "tsa_token_not_tstinfo",
+                "hash_algorithm_not_allowed": "tsa_token_hash_algorithm_not_allowed",
+                "not_issued_by_pinned_tsa": "tsa_token_not_issued_by_pinned_tsa"}
+_SIGNATURE_ONLY = "signature valid with the certificate contained in the token, chain not established"
+
+
 def verify_archive(directory: str, prefix: str = "ledger",
                    expected_pubkey_hex=None,
-                   lotl_check: bool = False, lotl_member_states=None) -> Dict:
+                   lotl_check: bool = False, lotl_member_states=None, tsa_certs=None) -> Dict:
     """Third-party verification of a whole archive: every sealed segment's hash chain
     (verifier.py rules), Merkle root vs sidecar, STH chain across segments, the HEAD
     manifest (segment count + last STH — the tail-truncation guard), and signatures.
     Fail-closed on any mismatch; honest `warnings` for what is NOT protected:
     without a signed HEAD + pinned pubkey, tail removal/extension is NOT detectable
-    (whoever rewrites the archive rewrites an unsigned HEAD too)."""
+    (whoever rewrites the archive rewrites an unsigned HEAD too).
+    RFC 3161 tokens (`.sth.tsr`) are checked by SPEC §11 (`cryptovalid_tsa.verify_token`, v0.6): a segment counts as
+    timestamped only when its token is `verified` against `tsa_certs` (the TSA certificates the caller pins) or, with
+    `lotl_check`, when the certificate that signed it is a QTST certificate of the EU trusted lists; a token whose
+    signature verifies only with the certificate it carries is reported (`tsa_tokens`, a warning), not counted."""
     import verifier
     failures: List[Dict] = []
     warnings: List[str] = []
     signers: set = set()
     signed_count = 0
-    timestamped: List = []            # (nome segmento, token DER) con digest legato
-    cms_unverified = 0                # token accettati SENZA verifica CMS (openssl assente)
+    timestamped: List = []            # segments whose token counts (SPEC §11: pinned, or LOTL-qualified signer below)
+    checked: List = []                # (segment name, token DER, verify_token outcome) for every token that is not invalid
+    tsa_tokens: List[Dict] = []       # one line per token: segment, status, reason, gen_time, signer_sha256
     segs = sorted(glob.glob(os.path.join(directory, f"{prefix}-[0-9]*.jsonl")))
     sealed = [s for s in segs if os.path.exists(s + ".sth.json")]
     prev_sth = GENESIS_PREV
@@ -432,22 +455,24 @@ def verify_archive(directory: str, prefix: str = "ledger",
         elif expected_pubkey_hex:
             failures.append({"segment": name, "reason": "sth_unsigned_but_pubkey_expected"})
         prev_sth = _sth_canonical_hash(sth)
-        # ancora RFC 3161 (se presente): due controlli — (1) firma CMS valida via
-        # openssl (respinge blob forgiati; -noverify: la catena al QTST la fa la LOTL),
-        # (2) il messageImprint porta l'hash canonico dell'STH (binding pragmatico)
+        # RFC 3161 anchor (if present): SPEC §11 — a TSTInfo read closed, its messageImprint = the STH's canonical hash
+        # (sha256), the CMS signature, and the pinned TSA when given. Until 0.22.0 this searched the digest's bytes anywhere
+        # in the blob and checked the signature with the blob's own certificate: a CMS blob signed with a key made on the
+        # spot, content = the digest's OCTET STRING, counted as timestamped (measured 2026-11-13).
         if os.path.exists(s + ".sth.tsr"):
             import cryptovalid_tsa as tsa_mod
             with open(s + ".sth.tsr", "rb") as f:
                 token = f.read()
-            cms_ok = tsa_mod.verify_cms_signature(token)
-            if cms_ok is False:
-                failures.append({"segment": name, "reason": "tsa_token_cms_invalid"})
-            elif not tsa_mod.token_contains_digest(token, bytes.fromhex(prev_sth)):
-                failures.append({"segment": name, "reason": "tsa_token_digest_mismatch"})
+            chk = tsa_mod.verify_token(token, bytes.fromhex(prev_sth), "sha256", tsa_certs)
+            tsa_tokens.append({"segment": name, "status": chk["status"], "reason": chk["reason"],
+                               "gen_time": (chk["tst_info"] or {}).get("gen_time"), "signer_sha256": chk["signer_sha256"]})
+            if chk["status"] == "invalid":
+                failures.append({"segment": name, "reason": _TSA_FAILURE.get(chk["reason"], "tsa_token_invalid"),
+                                 "detail": f"{chk['reason']}: {chk['detail']}"[:300]})
             else:
-                timestamped.append((name, token))
-                if cms_ok is None:
-                    cms_unverified += 1
+                checked.append((name, token, chk))
+                if chk["status"] == "verified":
+                    timestamped.append(name)
 
     # HEAD manifest: guardia della CODA (conteggio + ultimo STH)
     head_path = os.path.join(directory, f"{prefix}.head.json")
@@ -481,17 +506,13 @@ def verify_archive(directory: str, prefix: str = "ledger",
     if sealed and not expected_pubkey_hex:
         warnings.append("no_pinned_pubkey: signatures (if any) checked against their "
                         "own embedded key, not an expected signer")
-    if sealed and not timestamped:
-        warnings.append("no_rfc3161_anchor: time rests on the HOST clock only "
-                        "(configure tsa_url to anchor each seal externally)")
-    if cms_unverified:
-        warnings.append(f"tsa_cms_unverified: {cms_unverified} token(s) accepted on "
-                        "digest-binding ONLY — install openssl for CMS signature checks")
-
     # certificazione eIDAS dei token (opt-in: tocca la rete/EU Trusted Lists).
     # La cache sta FUORI dall'archivio: una cache co-locata è avvelenabile.
+    # SPEC §11 (v0.6): the certificate looked up is the one that signed the token; a token whose signer is a QTST
+    # certificate counts as timestamped (the trusted list is its anchor), pinned or not.
+    signed_tokens = [(n, tok, c) for n, tok, c in checked if c["status"] in ("verified", "signature_only")]
     qualified_count: Optional[int] = None
-    if lotl_check and timestamped:
+    if lotl_check and signed_tokens:
         import cryptovalid_lotl as lotl
         try:
             fprs, _cov, herr = lotl.load_qualified_status(
@@ -500,15 +521,29 @@ def verify_archive(directory: str, prefix: str = "ledger",
             fprs = None
             warnings.append(f"lotl_unavailable: {type(e).__name__}: {e}"[:300])
         if fprs is not None:
-            verdicts = [lotl.qualification(tok, fprs, herr) for _n, tok in timestamped]
-            qualified_count = sum(1 for v, _w in verdicts if v == "qualified")
-            undecided = [w for v, w in verdicts if v == "indeterminate"]
+            verdicts = [(n, lotl.qualification(tok, fprs, herr, signer_sha256=c["signer_sha256"]))
+                        for n, tok, c in signed_tokens]
+            qualified = [n for n, (v, _w) in verdicts if v == "qualified"]
+            qualified_count = len(qualified)
+            timestamped += [n for n in qualified if n not in timestamped]
+            undecided = [w for _n, (v, w) in verdicts if v == "indeterminate"]
             if undecided:   # 0.21.0: TS 119 615 PRO-4.3.4-03A
                 warnings.append(f"tsa_qualification_indeterminate: {len(undecided)} token(s) from a QTST service whose "
                                 f"trusted-list history is an error ({undecided[0]})"[:300])
-            if qualified_count + len(undecided) < len(timestamped):
-                warnings.append(f"tsa_not_qualified: {len(timestamped) - qualified_count - len(undecided)} "
+            if qualified_count + len(undecided) < len(signed_tokens):
+                warnings.append(f"tsa_not_qualified: {len(signed_tokens) - qualified_count - len(undecided)} "
                                 "token(s) from a TSA not in the EU Trusted Lists (QTST)")
+    chain_open = [n for n, _t, c in checked if c["status"] == "signature_only" and n not in timestamped]
+    if chain_open:
+        warnings.append(f"tsa_chain_not_established: {len(chain_open)} token(s): {_SIGNATURE_ONLY}; not counted as "
+                        "timestamped (pin the TSA certificate with --tsa-cert, or --lotl)")
+    not_evaluated = sum(1 for _n, _t, c in checked if c["status"] == "not_evaluated")
+    if not_evaluated:
+        warnings.append(f"tsa_not_evaluated: {not_evaluated} token(s) not checked, openssl absent; not counted as "
+                        "timestamped")
+    if sealed and not timestamped:
+        warnings.append("no_rfc3161_anchor: time rests on the HOST clock only "
+                        "(configure tsa_url to anchor each seal externally)")
 
     return {"ok": bool(sealed) and not failures,
             "segments_verified": len(sealed),
@@ -516,6 +551,7 @@ def verify_archive(directory: str, prefix: str = "ledger",
             "signed_segments": signed_count, "signers": sorted(signers),
             "timestamped_segments": len(timestamped),
             "eidas_qualified_segments": qualified_count,
+            "tsa_tokens": tsa_tokens,
             "head_present": os.path.exists(head_path), "head_signed": head_signed,
             "warnings": warnings, "failures": failures}
 
@@ -537,12 +573,15 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
     v.add_argument("--lotl", action="store_true",
                    help="certifica i token RFC 3161 come eIDAS-qualified via EU Trusted Lists (rete)")
     v.add_argument("--lotl-ms", nargs="*", default=None, help="restringi alle member state (es. ES IT)")
+    v.add_argument("--tsa-cert", action="append", default=None, metavar="PEM",
+                   help="pin the TSA certificate (or a CA above it), repeatable: a token counts as timestamped only "
+                        "when verified against it, or with --lotl (SPEC §11)")
     b = sub.add_parser("bench"); b.add_argument("directory")
     b.add_argument("--n", type=int, default=50_000); b.add_argument("--batch", type=int, default=256)
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     if a.cmd == "verify":
         r = verify_archive(a.directory, a.prefix, a.pubkey,
-                           lotl_check=a.lotl, lotl_member_states=a.lotl_ms)
+                           lotl_check=a.lotl, lotl_member_states=a.lotl_ms, tsa_certs=a.tsa_cert)
         emit(json.dumps(r, indent=1)); return 0 if r["ok"] else 1
     ing = Ingestor(a.directory, prefix="bench", batch_size=a.batch,
                    rotate_entries=a.n + 1)

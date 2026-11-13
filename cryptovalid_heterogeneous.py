@@ -47,15 +47,26 @@ def _verify_solana(att: Dict, digest_hex: str) -> bool:
 
 
 def _verify_rfc3161(att: Dict, digest_hex: str) -> bool:
-    from cryptovalid_tsa import token_contains_digest, verify_with_openssl
+    """SPEC §11 (v0.6): True only for a token `verified` against pinned certificates — `att["tsa_certs"]` (paths or bytes)
+    when given, else the system CA bundle (/etc/ssl/certs/ca-certificates.crt; /etc/ssl/certs was the anchor `verify_with_openssl` used until 0.22.0). With
+    `digest_data`, its hash under the token's algorithm must also be the digest. openssl that cannot be run here raises
+    CheckNotRun, which the loop below lets through (exit 74), never a domain reported as failed."""
+    import hashlib
+    import os
+    from cryptovalid_tsa import verify_token
     token = att["token_der"]                       # bytes (DER del token RFC3161)
     digest = bytes.fromhex(digest_hex)
-    if not token_contains_digest(token, digest):   # il token deve impegnare QUESTO digest
+    bundle = "/etc/ssl/certs/ca-certificates.crt"
+    pins = att.get("tsa_certs") or ([bundle] if os.path.exists(bundle) else [])
+    if not pins:
         return False
-    # verify_with_openssl returns True / False / None (openssl absent): until 0.20.3 this read res.get(...) on that bool,
-    # an AttributeError on every token, so the rfc3161 domain never verified (measured 13/10/2026). openssl that cannot
-    # be run here raises CheckNotRun, which the loop below lets through (exit 74), never a domain reported as failed.
-    return verify_with_openssl(token, att.get("digest_data", digest)) is True
+    r = verify_token(token, digest, None, pins)
+    if r["status"] != "verified":
+        return False
+    if "digest_data" in att:
+        alg = r["tst_info"]["hash_algorithm"].replace("-", "_")
+        return hashlib.new(alg, att["digest_data"]).digest() == digest
+    return True
 
 
 # registro dei domini noti → verificatore nativo. Iniettabile nei test.

@@ -1,0 +1,28 @@
+{
+ "kind": "cryptovalid_rfc3161_vectors/1",
+ "spec": "SPEC_EVIDENCE_FORMAT.md §11 (v0.6)",
+ "data": "data.txt",
+ "digest_sha256": "17d8b17f0f81486e20a5643d8c64e7491bd438b3c563d1fa8bd8d90560d5b2fd",
+ "how": "openssl ts -query -digest <digest_sha256> -sha256 -cert (sha512: -data data.txt -sha512 -cert), POSTed as application/timestamp-query; each .signer.pem is the certificate openssl cms -verify -noverify -signer wrote for that token; freetsa_cacert.pem from https://freetsa.org/files/cacert.pem; the negatives from make_negatives.py",
+ "check": "cryptovalid_tsa.verify_token(token, digest, hash_alg, tsa_certs)",
+ "vectors": [
+  {"file": "freetsa.tsr", "source": "https://freetsa.org/tsr", "requested_utc": "2026-11-13T12:40:39Z", "gen_time": "2026-11-13T12:40:40Z", "hash_alg": "sha256",
+   "expect": {"unpinned": "signature_only", "pinned freetsa.signer.pem": "verified", "pinned freetsa_cacert.pem": "verified", "pinned digicert.signer.pem": "invalid/not_issued_by_pinned_tsa"}},
+  {"file": "digicert.tsr", "source": "http://timestamp.digicert.com", "requested_utc": "2026-11-13T12:40:40Z", "gen_time": "2026-11-13T12:40:41Z", "hash_alg": "sha256",
+   "expect": {"unpinned": "signature_only", "pinned digicert.signer.pem": "verified", "pinned freetsa.signer.pem": "invalid/not_issued_by_pinned_tsa"}},
+  {"file": "sectigo.tsr", "source": "http://timestamp.sectigo.com", "requested_utc": "2026-11-13T12:40:40Z", "gen_time": "2026-11-13T12:40:41Z", "hash_alg": "sha256",
+   "expect": {"unpinned": "signature_only", "pinned sectigo.signer.pem": "verified"}},
+  {"file": "globalsign.tsr", "source": "http://timestamp.globalsign.com/tsa/r6advanced1", "requested_utc": "2026-11-13T12:40:41Z", "gen_time": "2026-11-13T12:40:42Z", "hash_alg": "sha256",
+   "expect": {"unpinned": "signature_only", "pinned globalsign.signer.pem": "verified"}},
+  {"file": "freetsa_sha512.tsr", "source": "https://freetsa.org/tsr", "requested_utc": "2026-11-13T12:40:52Z", "hash_alg": "sha512", "digest": "sha512 of data.txt",
+   "expect": {"unpinned": "signature_only", "pinned freetsa_cacert.pem": "verified", "hash_alg sha256 expected": "invalid/hash_algorithm_mismatch"}},
+  {"file": "freetsa.tsr", "digest": "sha256 of b'x' (another digest)", "expect": {"unpinned": "invalid/imprint_mismatch"}},
+  {"file": "forged_cms_octet_string.der", "source": "measurement of 2026-11-13: CMS SignedData (eContentType id-data) signed with a key made on the spot, content 04 20 <digest_sha256>",
+   "expect": {"unpinned": "invalid/malformed (SignedData version 1)", "until 0.22.0": "token_contains_digest True, verify_cms_signature True"}},
+  {"file": "forged_cms_not_tstinfo.der", "source": "make_negatives.py: the same, eContentType 1.2.3.4", "expect": {"unpinned": "invalid/econtent_type_not_tstinfo"}},
+  {"file": "self_tsa.tsr", "source": "make_negatives.py: an openssl TSA whose key was made on the spot, a real TSTInfo over digest_sha256",
+   "expect": {"unpinned": "signature_only", "pinned digicert.signer.pem": "invalid/not_issued_by_pinned_tsa"}},
+  {"file": "self_tsa_sha1.tsr", "source": "make_negatives.py: the same TSA, SHA-1 imprint of data.txt", "expect": {"unpinned": "invalid/hash_algorithm_not_allowed"}},
+  {"file": "freetsa_signature_altered.tsr", "source": "make_negatives.py: freetsa.tsr, last byte of the signature value flipped", "expect": {"unpinned": "invalid/signature_invalid"}}
+ ]
+}

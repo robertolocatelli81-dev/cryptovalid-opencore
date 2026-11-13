@@ -221,7 +221,7 @@ def verify_sth(sth: Dict, trusted_pubkey_hex: Optional[str] = None) -> Dict:
 
 
 # ── receipts ───────────────────────────────────────────────────────────────────────────────
-def inclusion_receipt(ledger_path: str, index: int, keyfile: str, tsa_url: Optional[str] = None) -> Dict:
+def inclusion_receipt(ledger_path: str, index: int, keyfile: str, tsa_url: Optional[str] = None, tsa_certs=None) -> Dict:
     leaves = M.leaves_from_ledger(ledger_path)
     if not (0 <= index < len(leaves)):
         raise IndexError(f"index {index} fuori dal ledger ({len(leaves)} entry)")
@@ -236,7 +236,7 @@ def inclusion_receipt(ledger_path: str, index: int, keyfile: str, tsa_url: Optio
          "scope": ("proves the entry's canonical form is a leaf of the tree whose root the log key signed; "
                    "not a qualified seal nor a qualified timestamp")}
     if tsa_url:
-        r["tsa"] = _stamp(sth["root_sha256"], tsa_url)
+        r["tsa"] = _stamp(sth["root_sha256"], tsa_url, tsa_certs)
     return r
 
 
@@ -366,17 +366,30 @@ def consistency_roots(m: int, n: int, proof: List[bytes], old_root: bytes):
     return (fr, sr) if sn == 0 else None
 
 
-def _stamp(digest_hex: str, tsa_url: str) -> Dict:
+def _stamp(digest_hex: str, tsa_url: str, tsa_certs=None) -> Dict:
+    """RFC 3161 token over the signed root, checked by SPEC §11 (v0.6). `anchored` is true only for a token `verified`
+    against `tsa_certs` (the TSA certificates the caller pins); a token whose signature verifies only with the certificate
+    it carries is kept (`token_b64`, `status: signature_only`) and is not anchored. Until 0.22.0 `anchored` was the
+    presence of the digest's bytes anywhere in the token (a CMS blob signed with any key was anchored: measured
+    2026-11-13)."""
     try:
         import cryptovalid_tsa as T
         granted, tok, raw = T.request_timestamp(bytes.fromhex(digest_hex), tsa_url)
         if not granted or not tok:
             return {"anchored": False, "note": "TSA did not grant the timestamp"}
-        ok_imprint = T.token_contains_digest(tok, bytes.fromhex(digest_hex))
-        return {"anchored": bool(ok_imprint), "tsa": tsa_url, "token_b64": base64.b64encode(tok).decode(),
-                "imprint_ok": ok_imprint, "cms_signature_ok": T.verify_cms_signature(tok),
-                "note": "RFC 3161 token over the signed root (imprint checked; CMS signature checked with the embedded cert; "
-                        "TSA trust chain not established here); qualified only if the TSA is a QTSP"}
+        chk = T.verify_token(tok, bytes.fromhex(digest_hex), "sha256", tsa_certs)
+        r = {"anchored": chk["status"] == "verified", "tsa": tsa_url, "status": chk["status"],
+             "imprint_ok": chk["imprint_ok"], "gen_time": (chk["tst_info"] or {}).get("gen_time"),
+             "signer_sha256": chk["signer_sha256"],
+             "note": {"verified": "RFC 3161 token over the signed root, verified against the pinned TSA certificate; "
+                                  "qualified only if the TSA is a QTSP",
+                      "signature_only": "RFC 3161 token over the signed root: " + T.SIGNATURE_ONLY_NOTE + " (pin the TSA "
+                                        "certificate to anchor it); qualified only if the TSA is a QTSP",
+                      "not_evaluated": "RFC 3161 token over the signed root: signature not checked, openssl absent",
+                      "invalid": f"the TSA's token does not pass SPEC §11: {chk['reason']}"}[chk["status"]]}
+        if chk["status"] != "invalid":
+            r["token_b64"] = base64.b64encode(tok).decode()
+        return r
     except Exception as e:  # noqa: BLE001
         if type(e).__name__ == "CheckNotRun":   # openssl cannot be run here (0.20.3): exit 74, not "not anchored"
             raise
@@ -506,6 +519,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     a = sub.add_parser("sth"); a.add_argument("ledger"); a.add_argument("keyfile")
     b = sub.add_parser("inclusion"); b.add_argument("ledger"); b.add_argument("index", type=int); b.add_argument("keyfile")
     b.add_argument("--tsa"); b.add_argument("--cose", help="write the COSE_Sign1 bytes to this file")
+    b.add_argument("--tsa-cert", action="append", default=None, metavar="PEM",
+                   help="pin the TSA certificate (or a CA above it), repeatable: `tsa.anchored` needs it (SPEC §11)")
     c = sub.add_parser("consistency"); c.add_argument("old_sth_json"); c.add_argument("ledger"); c.add_argument("keyfile")
     v = sub.add_parser("verify"); v.add_argument("receipt_json"); v.add_argument("trusted_pubkey_hex")
     v.add_argument("--entry-json", help="inclusion: file with YOUR entry (JSON object)"); v.add_argument("--trusted-root-1", help="consistency: YOUR previous root (hex)")
@@ -513,7 +528,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.cmd == "sth":
         emit(json.dumps(signed_tree_head(M.leaves_from_ledger(args.ledger), args.keyfile), indent=1)); return 0
     if args.cmd == "inclusion":
-        r = inclusion_receipt(args.ledger, args.index, args.keyfile, args.tsa)
+        r = inclusion_receipt(args.ledger, args.index, args.keyfile, args.tsa, args.tsa_cert)
         if args.cose:
             write_output(args.cose, to_cose(r, args.keyfile))   # 0.20.3: whole, or exit 74
         emit(json.dumps(r, indent=1)); return 0

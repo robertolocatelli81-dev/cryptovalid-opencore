@@ -15,7 +15,8 @@ match says the issuing service is a qualified timestamp service NOW; whether it 
 `qtst_fingerprints_at(tl, genTime)`, which needs the token's genTime from the caller (not extracted here). Since 0.21.0 a
 QTST service whose ServiceHistoryInstance entries are out of order or share a StatusStartingTime is an error (ETSI TS 119
 615 PRO-4.3.4-03A): not counted, named (`qtst_status_at`, `load_qualified_status`), and a token from it is
-"indeterminate" (`qualification`), neither qualified nor not.
+"indeterminate" (`qualification`), neither qualified nor not. Since v0.6 of the spec (2026-11-13) the certificate looked up is
+the one that verified the token's signature (SPEC §11 step 6), not any certificate the token carries.
 
 Protocol/XML parsing is stdlib (urllib, xml.etree with the ETSI namespace for the LOTL and every list, UTF-8 only, DTDs refused); the TSA cert is pulled from the CMS
 token via `cryptography` (already a dependency). Results cache locally; network failures on a
@@ -296,14 +297,32 @@ def token_cert_fingerprints(token_der: bytes):
     certs = pkcs7.load_der_pkcs7_certificates(token_der)
     return {hashlib.sha256(c.public_bytes(Encoding.DER)).hexdigest() for c in certs}
 
-def is_qualified(token_der: bytes, qualified_fingerprints: set):
-    """True iff the token's TSA certificate is a qualified-timestamp service in the EU LOTL."""
-    return bool(token_cert_fingerprints(token_der) & qualified_fingerprints)
+def signer_fingerprints(token_der: bytes):
+    """{SHA-256 of the certificate that verified the token's signature} (SPEC §11 step 6), an empty set when the token is
+    not an RFC 3161 token or its signature does not verify, None when openssl is absent. Since v0.6 of the spec the
+    qualification looks at this certificate only: until then it looked at every certificate the token carried, so a CMS
+    blob signed with any key that carried a QTST certificate was "qualified" (measured 2026-11-13)."""
+    try:
+        import cryptovalid_tsa as tsa
+    except ImportError:   # imported as opencore.cryptovalid_lotl
+        from opencore import cryptovalid_tsa as tsa
+    state, fpr, _why = tsa.token_signer(token_der)
+    if state == "not_evaluated":
+        return None
+    return {fpr} if state == "valid" else set()
 
-def qualification(token_der: bytes, qualified_fingerprints: set, history_errors=None):
-    """("qualified", None), ("not_qualified", None) or ("indeterminate", reason): indeterminate when no certificate of the
-    token is qualified and one is a certificate of a QTST service whose history TS 119 615 PRO-4.3.4-03A makes an error."""
-    got = token_cert_fingerprints(token_der)
+def is_qualified(token_der: bytes, qualified_fingerprints: set):
+    """True iff the certificate that signed the token is a qualified-timestamp service in the EU LOTL."""
+    return qualification(token_der, qualified_fingerprints)[0] == "qualified"
+
+def qualification(token_der: bytes, qualified_fingerprints: set, history_errors=None, signer_sha256=None):
+    """("qualified", None), ("not_qualified", None) or ("indeterminate", reason), on the certificate that signed the token
+    (SPEC §11): `signer_sha256` when the caller has it from `cryptovalid_tsa.verify_token`, else `signer_fingerprints`.
+    Indeterminate when the signer is not a qualified certificate and is one of a QTST service whose history TS 119 615
+    PRO-4.3.4-03A makes an error, or when openssl is absent (the signer is not established)."""
+    got = {signer_sha256} if signer_sha256 else signer_fingerprints(token_der)
+    if got is None:
+        return "indeterminate", "openssl absent: the token's signer is not established"
     if got & qualified_fingerprints:
         return "qualified", None
     hit = sorted(f for f in got if f in (history_errors or {}))

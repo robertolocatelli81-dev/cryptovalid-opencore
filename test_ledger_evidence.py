@@ -495,8 +495,9 @@ class TestJWS(unittest.TestCase):
 @unittest.skipUnless(__import__("shutil").which("openssl"), "openssl absent: no local TSA")
 class TestEidasCountsBoundTokensOnly(unittest.TestCase):
     """0.20.2: tsa_token is outside the canonical form, so it can be added to a signed ledger without breaking a hash or a
-    signature; REQ-7.5-04-bis counted PRESENCE ("AAAA" on every entry turned NON_APPLICABILE into PARZIALE). It now counts
-    tokens that carry the entry's self_hash and whose CMS signature verifies."""
+    signature; REQ-7.5-04-bis counted PRESENCE ("AAAA" on every entry turned NON_APPLICABILE into PARZIALE). Since v0.6 of
+    the spec (2026-11-13) it counts the tokens SPEC §11 verifies against the pinned TSA certificate (until then: tokens
+    that carried the entry's self_hash anywhere and whose CMS signature verified with any certificate)."""
     def setUp(self):
         import subprocess
         self.d = d = tempfile.mkdtemp(); self.addCleanup(__import__("shutil").rmtree, d, True)
@@ -540,8 +541,9 @@ class TestEidasCountsBoundTokensOnly(unittest.TestCase):
             f.write("\n".join(json.dumps(e) for e in out) + "\n")
         return p
 
-    def _req(self, p):
-        r = [x for x in E.assess(p)["requisiti"] if x["req"] == "REQ-7.5-04-bis"][0]
+    def _req(self, p, pins="tsa"):
+        pins = [os.path.join(self.d, "tsa.crt")] if pins == "tsa" else pins
+        r = [x for x in E.assess(p, None, pins)["requisiti"] if x["req"] == "REQ-7.5-04-bis"][0]
         return r["stato"], r["misura"]["record_con_token_rfc3161"], r["misura"]["record_con_campo_tsa_token"]
 
     def test_only_tokens_that_bind_the_entry_count(self):
@@ -549,25 +551,54 @@ class TestEidasCountsBoundTokensOnly(unittest.TestCase):
         self.assertEqual(self._req(self._ledger(["AAAA", "AAAA", "AAAA"])), ("NON_APPLICABILE", 0, 3))
         self.assertEqual(self._req(self._ledger(["other", "!!", 7])), ("NON_APPLICABILE", 0, 3))
         self.assertEqual(self._req(self._ledger([None, None])), ("NON_APPLICABILE", 0, 0))
+        import base64
+        tok = bytearray(base64.b64decode(self._token("cd" * 32)))
+        tok[-1] ^= 1                                                     # a token whose CMS signature does not verify
+        p = self._ledger([base64.b64encode(bytes(tok)).decode()])
+        self.assertEqual(self._req(p), ("NON_APPLICABILE", 0, 1))
+        self.assertEqual(E.ledger_report(self._ledger(["real", "AAAA"]), [os.path.join(self.d, "tsa.crt")])
+                         ["record_con_marca_rfc3161"], 1)
+        self.assertEqual(E._tsa_tokens([{"self_hash": "", "tsa_token": "BAA="}]), (1, 0))   # an empty self_hash never binds
+        self.assertEqual(E._tsa_tokens([{"self_hash": "ab" * 32, "tsa_token": ""}]), (1, 0))   # present, empty
         import cryptovalid_tsa as T
-        orig = T.verify_cms_signature
-        T.verify_cms_signature = lambda der: False                       # a token whose CMS signature does not verify
+        orig = T.token_signer
+        T.token_signer = lambda der: ("not_evaluated", None, "openssl absent")   # openssl absent: not counted
         try:
             self.assertEqual(self._req(self._ledger(["real"])), ("NON_APPLICABILE", 0, 1))
         finally:
-            T.verify_cms_signature = orig
-        self.assertEqual(E.ledger_report(self._ledger(["real", "AAAA"]))["record_con_marca_rfc3161"], 1)
-        T.verify_cms_signature = lambda der: True                        # an empty self_hash never "binds" (04 00 = empty OCTET STRING)
-        try:
-            self.assertEqual(E._tsa_tokens([{"self_hash": "", "tsa_token": "BAA="}]), (1, 0))
-            self.assertEqual(E._tsa_tokens([{"self_hash": "ab" * 32, "tsa_token": ""}]), (1, 0))   # present, empty
-        finally:
-            T.verify_cms_signature = orig
-        T.verify_cms_signature = lambda der: None                        # openssl absent: signature unchecked, not counted
-        try:
-            self.assertEqual(self._req(self._ledger(["real"])), ("NON_APPLICABILE", 0, 1))
-        finally:
-            T.verify_cms_signature = orig
+            T.token_signer = orig
+
+    def test_signature_only_is_not_a_timestamp(self):
+        # SPEC §11 (v0.6): without a pinned TSA certificate a real token is signature_only — named, not counted. Until
+        # 0.22.0 it counted, and so did a CMS blob signed with a key made on the spot, content = 04 20 <self_hash>
+        p = self._ledger(["real", "real"])
+        r = [x for x in E.assess(p)["requisiti"] if x["req"] == "REQ-7.5-04-bis"][0]
+        self.assertEqual((r["stato"], r["misura"]["record_con_token_rfc3161"], r["misura"]["record_con_token_firma_senza_catena"]),
+                         ("NON_APPLICABILE", 0, 2))
+        self.assertIn("catena non stabilita", r["cosa_manca"])
+        import base64
+        import hashlib
+        import json
+        import subprocess
+        d = self.d
+        self.run_("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", os.path.join(d, "k.pem"),
+                  "-out", os.path.join(d, "c.pem"), "-subj", "/CN=nobody", "-days", "1")
+        e = {"idx": 0, "ts": "2026-11-13T00:00:00Z", "data": {"i": 0}, "prev_hash": "0" * 64}
+        e["self_hash"] = hashlib.sha256(json.dumps(e, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        with open(os.path.join(d, "content.bin"), "wb") as f:
+            f.write(b"\x04\x20" + bytes.fromhex(e["self_hash"]))
+        subprocess.run(["openssl", "cms", "-sign", "-binary", "-nodetach", "-in", os.path.join(d, "content.bin"), "-signer",
+                        os.path.join(d, "c.pem"), "-inkey", os.path.join(d, "k.pem"), "-outform", "DER", "-out",
+                        os.path.join(d, "f.der")], check=True, capture_output=True)
+        with open(os.path.join(d, "f.der"), "rb") as f:
+            e["tsa_token"] = base64.b64encode(f.read()).decode()
+        lp = os.path.join(d, "forged.jsonl")
+        with open(lp, "w") as f:
+            f.write(json.dumps(e) + "\n")
+        for pins in (None, [os.path.join(d, "tsa.crt")], [os.path.join(d, "c.pem")]):
+            r = [x for x in E.assess(lp, None, pins)["requisiti"] if x["req"] == "REQ-7.5-04-bis"][0]
+            self.assertEqual((r["stato"], r["misura"]["record_con_token_rfc3161"], r["misura"]["record_con_token_non_valido"]),
+                             ("NON_APPLICABILE", 0, 1), pins)
 
 
 if __name__ == "__main__":

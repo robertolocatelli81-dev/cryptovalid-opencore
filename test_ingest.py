@@ -296,21 +296,40 @@ import subprocess
 _OPENSSL = shutil.which("openssl")
 
 
+@unittest.skipUnless(_OPENSSL, "openssl absent: no local TSA, and no token counts without openssl (SPEC §11)")
 class TestAutoAnchorTSA(unittest.TestCase):
-    """Aggancio automatico TSA nel seal: fake TSA iniettata che firma CMS VERI
-    (chiave usa-e-getta openssl) — così passa il check di firma come un token reale.
-    Il protocollo RFC 3161 vero è coperto da test_tsa.py e dal live gated sotto."""
+    """Aggancio automatico TSA nel seal. Since v0.6 of the spec (2026-11-13) the injected TSA is a local openssl TSA that
+    answers real TimeStampResp/TSTInfo tokens (`_fake_tsa_ok`): until then it returned a CMS blob signed with a throwaway
+    key whose content was "FAKE-TSTINFO" + the digest's OCTET STRING, and the tests below counted that blob as a
+    timestamp, which was the defect (SPEC §6, v0.6). A token counts only against the pinned TSA certificate
+    (`tsa_certs=[cls.tsa_crt]`). Il protocollo RFC 3161 vero è coperto da test_tsa.py e dal live gated sotto."""
 
     @classmethod
     def setUpClass(cls):
-        cls.cms_dir = tempfile.mkdtemp()
-        if _OPENSSL:
-            # EC P-256 (non Ed25519: openssl cms -sign non lo supporta, "no default digest")
-            subprocess.run([_OPENSSL, "req", "-x509", "-newkey", "ec",
-                            "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
-                            "-keyout", f"{cls.cms_dir}/k.pem", "-out", f"{cls.cms_dir}/c.pem",
-                            "-days", "1", "-subj", "/CN=FakeTestTSA"],
-                           check=True, capture_output=True)
+        import hashlib
+        cls.cms_dir = d = tempfile.mkdtemp()
+        # EC P-256 (non Ed25519: openssl cms -sign non lo supporta, "no default digest")
+        subprocess.run([_OPENSSL, "req", "-x509", "-newkey", "ec",
+                        "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                        "-keyout", f"{d}/k.pem", "-out", f"{d}/c.pem",
+                        "-days", "1", "-subj", "/CN=FakeTestTSA"],
+                       check=True, capture_output=True)
+        with open(f"{d}/tsa.cnf", "w") as f:
+            f.write("[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=local test TSA\n[ext]\n"
+                    "extendedKeyUsage=critical,timeStamping\n[tsa]\ndefault_tsa=t1\n[t1]\n"
+                    f"serial={d}/serial\nsigner_cert={d}/tsa.crt\nsigner_key={d}/tsa.key\nsigner_digest=sha256\n"
+                    "default_policy=1.2.3.4.1\ndigests=sha256\ness_cert_id_alg=sha256\n")
+        with open(f"{d}/serial", "w") as f:
+            f.write("01\n")
+        subprocess.run([_OPENSSL, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                        "-keyout", f"{d}/tsa.key", "-out", f"{d}/tsa.crt", "-days", "2", "-config", f"{d}/tsa.cnf",
+                        "-extensions", "ext"], check=True, capture_output=True)
+        cls.tsa_crt = f"{d}/tsa.crt"
+        import base64
+        with open(cls.tsa_crt) as f:
+            der = base64.b64decode("".join(ln for ln in f.read().splitlines() if "-----" not in ln))
+        cls.tsa_sha256 = hashlib.sha256(der).hexdigest()
+        cls._lock = threading.Lock()
 
     def setUp(self):
         self.d = tempfile.mkdtemp()
@@ -333,8 +352,19 @@ class TestAutoAnchorTSA(unittest.TestCase):
 
     @classmethod
     def _fake_tsa_ok(cls, digest, url, timeout=30):
-        # token finto: CMS vero il cui contenuto porta il digest (04 20 || digest)
-        return True, cls._sign_cms(b"FAKE-TSTINFO" + b"\x04\x20" + digest + b"TAIL"), b""
+        # a real RFC 3161 token over `digest` from the local openssl TSA (a TSTInfo, its messageImprint = digest)
+        with cls._lock, tempfile.TemporaryDirectory(dir=cls.cms_dir) as t:
+            subprocess.run([_OPENSSL, "ts", "-query", "-digest", digest.hex(), "-sha256", "-cert", "-out", f"{t}/q.tsq"],
+                           check=True, capture_output=True)
+            subprocess.run([_OPENSSL, "ts", "-reply", "-config", f"{cls.cms_dir}/tsa.cnf", "-queryfile", f"{t}/q.tsq",
+                            "-out", f"{t}/t.der", "-token_out"], check=True, capture_output=True)
+            with open(f"{t}/t.der", "rb") as f:
+                return True, f.read(), b""
+
+    @classmethod
+    def _forged_tsa(cls, digest, url, timeout=30):
+        # the blob of the measurement of 2026-11-13: a CMS signed with a throwaway key, content = 04 20 || digest
+        return True, cls._sign_cms(b"\x04\x20" + digest), b""
 
     def test_seal_writes_token_and_verify_counts_it(self):
         w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
@@ -346,16 +376,48 @@ class TestAutoAnchorTSA(unittest.TestCase):
         self.assertTrue(os.path.exists(seg + ".sth.tsr"))
         meta = json.load(open(seg + ".sth.tsr.json"))
         self.assertTrue(meta["granted"] and meta["digest_bound"])
+        self.assertEqual(meta["token_status"], "signature_only")      # the seal pins nothing
+        self.assertRegex(meta["gen_time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertEqual(meta["sth_canonical_sha256"], ing._sth_canonical_hash(sth))
-        r = ing.verify_archive(self.d)
+        r = ing.verify_archive(self.d, tsa_certs=[self.tsa_crt])
         self.assertTrue(r["ok"])
         self.assertEqual(r["timestamped_segments"], 1)
-        self.assertFalse(any("no_rfc3161_anchor" in x for x in r["warnings"]))
+        self.assertEqual(r["tsa_tokens"][0]["status"], "verified")
+        self.assertEqual(r["tsa_tokens"][0]["gen_time"], meta["gen_time"])
+        self.assertFalse(any("no_rfc3161_anchor" in x or "tsa_" in x for x in r["warnings"]), r["warnings"])
+        # SPEC §11: without a pinned TSA the same token is signature_only — reported, not counted
+        r = ing.verify_archive(self.d)
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["timestamped_segments"], 0)
+        self.assertTrue(any(x.startswith("tsa_chain_not_established: 1 token(s): signature valid with the certificate "
+                                         "contained in the token, chain not established") for x in r["warnings"]), r["warnings"])
+        self.assertTrue(any("no_rfc3161_anchor" in x for x in r["warnings"]))
+        # pinned to another certificate: refused
+        r = ing.verify_archive(self.d, tsa_certs=[f"{self.cms_dir}/c.pem"])
+        self.assertFalse(r["ok"])
+        self.assertEqual([f["reason"] for f in r["failures"]], ["tsa_token_not_issued_by_pinned_tsa"])
+
+    def test_forged_cms_blob_carrying_the_digest_is_not_a_timestamp(self):
+        # measured 2026-11-13 on 0.22.0: ok True, timestamped_segments 1, no warning (the defect); SPEC §11: refused
+        w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
+        w._request_timestamp = self._forged_tsa
+        for i in range(10):
+            w.append({"i": i})
+        sth = w.seal(); w.close(seal=False)
+        meta = json.load(open(os.path.join(self.d, sth["segment"] + ".sth.tsr.json")))
+        self.assertFalse(meta["digest_bound"])
+        for pins in (None, [self.tsa_crt], [f"{self.cms_dir}/c.pem"]):
+            r = ing.verify_archive(self.d, tsa_certs=pins)
+            self.assertFalse(r["ok"], pins)
+            self.assertEqual(r["timestamped_segments"], 0)
+            self.assertEqual([f["reason"] for f in r["failures"]], ["tsa_token_cms_invalid"])
+            self.assertIn("malformed", r["failures"][0]["detail"])
 
     def test_token_not_bound_to_digest_fails_verify(self):
         w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
-        # CMS con firma VALIDA ma contenuto senza il digest -> deve cadere sul binding
-        w._request_timestamp = lambda d, u, timeout=30: (True, self._sign_cms(b"NO-DIGEST-HERE"), b"")
+        # a real token, valid signature, for ANOTHER digest -> deve cadere sul binding (until 0.22.0 this was a CMS blob
+        # whose content was "NO-DIGEST-HERE", which SPEC §11 refuses earlier, as not a token)
+        w._request_timestamp = lambda d, u, timeout=30: self._fake_tsa_ok(b"\x11" * 32, u)
         for i in range(10):
             w.append({"i": i})
         w.seal(); w.close(seal=False)
@@ -446,9 +508,8 @@ class TestAutoAnchorTSA(unittest.TestCase):
     def test_lotl_history_error_is_indeterminate_not_unqualified(self):
         # 0.21.0, ETSI TS 119 615 PRO-4.3.4-03A: a token from a QTST service whose history is an error is named apart
         import cryptovalid_lotl as lotl
-        orig_s, orig_f = lotl.load_qualified_status, lotl.token_cert_fingerprints
-        lotl.load_qualified_status = lambda ms, cache_path=None, **kw: (set(), [], {"ab" * 32: "history_duplicate_start https://tl"})
-        lotl.token_cert_fingerprints = lambda tok: {"ab" * 32}
+        orig_s = lotl.load_qualified_status
+        lotl.load_qualified_status = lambda ms, cache_path=None, **kw: (set(), [], {self.tsa_sha256: "history_duplicate_start https://tl"})
         try:
             w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
             w._request_timestamp = self._fake_tsa_ok
@@ -457,11 +518,33 @@ class TestAutoAnchorTSA(unittest.TestCase):
             w.seal(); w.close(seal=False)
             r = ing.verify_archive(self.d, lotl_check=True, lotl_member_states=["ES"])
         finally:
-            lotl.load_qualified_status, lotl.token_cert_fingerprints = orig_s, orig_f
+            lotl.load_qualified_status = orig_s
         self.assertEqual(r["eidas_qualified_segments"], 0)
         self.assertTrue(any(x.startswith("tsa_qualification_indeterminate: 1 ") and "history_duplicate_start" in x
                             for x in r["warnings"]), r["warnings"])
         self.assertFalse(any(x.startswith("tsa_not_qualified") for x in r["warnings"]), r["warnings"])
+
+    def test_lotl_counts_a_token_through_its_signer_only(self):
+        # SPEC §11 (v0.6): the trusted list anchors the certificate that SIGNED the token; until 0.22.0 any certificate the
+        # token carried was looked up (a blob signed with any key carrying a QTST certificate was "qualified")
+        import cryptovalid_lotl as lotl
+        orig = lotl.load_qualified_status
+        w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
+        w._request_timestamp = self._fake_tsa_ok
+        for i in range(10):
+            w.append({"i": i})
+        w.seal(); w.close(seal=False)
+        try:
+            lotl.load_qualified_status = lambda ms, cache_path=None, **kw: ({self.tsa_sha256}, [], {})
+            r = ing.verify_archive(self.d, lotl_check=True, lotl_member_states=["ES"])
+            self.assertEqual((r["ok"], r["eidas_qualified_segments"], r["timestamped_segments"]), (True, 1, 1))
+            self.assertFalse(any(x.startswith(("tsa_", "no_rfc3161")) for x in r["warnings"]), r["warnings"])
+            lotl.load_qualified_status = lambda ms, cache_path=None, **kw: ({"cd" * 32}, [], {})   # control: not the signer
+            r = ing.verify_archive(self.d, lotl_check=True, lotl_member_states=["ES"])
+            self.assertEqual((r["eidas_qualified_segments"], r["timestamped_segments"]), (0, 0))
+            self.assertTrue(any(x.startswith("tsa_not_qualified: 1 ") for x in r["warnings"]), r["warnings"])
+        finally:
+            lotl.load_qualified_status = orig
 
     def test_tsa_failure_never_blocks_ingestion(self):
         def boom(digest, url, timeout=30):
@@ -488,7 +571,7 @@ class TestAutoAnchorTSA(unittest.TestCase):
         for i in range(60):
             w.append({"i": i})
         w.close(seal=False)                         # 3 segmenti pieni già sigillati
-        r = ing.verify_archive(self.d)
+        r = ing.verify_archive(self.d, tsa_certs=[self.tsa_crt])
         self.assertTrue(r["ok"])
         self.assertEqual(r["timestamped_segments"], 3)
 
@@ -518,7 +601,7 @@ class TestAutoAnchorTSA(unittest.TestCase):
             anchor_release.set()
             filler.join()
         w.close()
-        r = ing.verify_archive(self.d)
+        r = ing.verify_archive(self.d, tsa_certs=[self.tsa_crt])
         self.assertTrue(r["ok"])
         self.assertGreaterEqual(r["timestamped_segments"], 1)
 

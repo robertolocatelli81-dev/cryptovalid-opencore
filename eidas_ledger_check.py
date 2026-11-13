@@ -63,15 +63,14 @@ FONTI = {
 }
 
 
-def _tsa_tokens(entries):
-    """(present, bound): entries carrying `tsa_token`, and those whose value is the base64 of an RFC 3161 token that
-    carries the entry's own `self_hash` as message imprint and whose CMS signature verifies (cryptovalid_tsa; without
-    openssl the signature is unchecked and the token is not counted). Since 0.20.2 `tsa_token` is outside the canonical
-    form (SPEC §3): anyone can add one to a signed ledger without breaking a hash or a signature, so presence is not a
-    timestamp (until then this check counted presence)."""
+def _tsa_outcomes(entries, tsa_certs=None):
+    """Counts of the entries' `tsa_token` by SPEC §11 (`cryptovalid_tsa.verify_token`, v0.6): {"present", "verified",
+    "signature_only", "not_evaluated", "invalid"}. A token is checked against the entry's own `self_hash` (32 bytes, the
+    algorithm the TSA was asked for is not fixed: the ledger's profile may be sha256 or sha3_256); `verified` needs
+    `tsa_certs`, the TSA certificates the caller pins. A value that is not strict base64 of a token is `invalid`."""
     import base64
     import binascii
-    present = bound = 0
+    n = {"present": 0, "verified": 0, "signature_only": 0, "not_evaluated": 0, "invalid": 0}
     try:
         import cryptovalid_tsa as T
     except Exception:  # noqa: BLE001
@@ -80,17 +79,33 @@ def _tsa_tokens(entries):
         t = e.get("tsa_token")
         if t is None:
             continue
-        present += 1
+        n["present"] += 1
         sh = e.get("self_hash")
-        if T is None or not isinstance(t, str) or not isinstance(sh, str):
+        if T is None:
+            n["not_evaluated"] += 1
             continue
         try:
+            if not isinstance(t, str) or not isinstance(sh, str):
+                raise ValueError("not a string")
             der, digest = base64.b64decode(t, validate=True), bytes.fromhex(sh)
+            if len(digest) != 32:
+                raise ValueError("self_hash is not 32 bytes")
         except (binascii.Error, ValueError):
+            n["invalid"] += 1
             continue
-        if len(digest) == 32 and T.token_contains_digest(der, digest) and T.verify_cms_signature(der) is True:
-            bound += 1
-    return present, bound
+        n[T.verify_token(der, digest, None, tsa_certs)["status"]] += 1
+    return n
+
+
+def _tsa_tokens(entries, tsa_certs=None):
+    """(present, bound): entries carrying `tsa_token`, and those whose token is `verified` by SPEC §11 against the pinned
+    `tsa_certs` (without them none is: a signature valid with the certificate the token carries does not establish the
+    TSA). Since 0.20.2 `tsa_token` is outside the canonical form (SPEC §3): anyone can add one to a signed ledger
+    without breaking a hash or a signature, so presence is not a timestamp (until then this check counted presence);
+    until 0.22.0 a CMS blob signed with any key, content = the OCTET STRING of `self_hash`, was "bound" (measured
+    2026-11-13: SPEC §6, v0.6)."""
+    n = _tsa_outcomes(entries, tsa_certs)
+    return n["present"], n["verified"]
 
 
 def _entries(path: str) -> List[Dict]:
@@ -98,7 +113,7 @@ def _entries(path: str) -> List[Dict]:
         return [json.loads(l) for l in f if l.strip()]
 
 
-def assess(ledger_path: str, deployment: Optional[Dict] = None) -> Dict:
+def assess(ledger_path: str, deployment: Optional[Dict] = None, tsa_certs=None) -> Dict:
     """`deployment` declares what the code cannot see: {"qualified_certificates": bool, "qtsp_timestamps": bool,
     "signing_device": "CC-EAL4"|"EUCC"|"FIPS140-3-L3"|"none"|"unknown", "provider_is_qtsp": bool}."""
     d = {"qualified_certificates": False, "qtsp_timestamps": False, "signing_device": "unknown", "provider_is_qtsp": False}
@@ -114,7 +129,8 @@ def assess(ledger_path: str, deployment: Optional[Dict] = None) -> Dict:
             firme_valide = SG.verify_ledger_signatures(entries)
         except Exception as ex:  # noqa: BLE001 — senza cryptography: firme presenti ma NON verificate qui
             firme_valide = {"verified": None, "note": f"non verificate: {type(ex).__name__}"}
-    present, stamped = _tsa_tokens(entries)
+    tok = _tsa_outcomes(entries, tsa_certs)
+    present, stamped = tok["present"], tok["verified"]
     algo = snap.get("algorithm_used")
     # the verifier's VERDICT, not hash+link alone: idx (SPEC §5 step 4) and the closed schema (§2.1) are part of the chain
     # rule (0.20.0 review: a ledger without idx, or with a key nobody defined, was FAIL in verifier.py and SODDISFATTO here)
@@ -151,11 +167,20 @@ def assess(ledger_path: str, deployment: Optional[Dict] = None) -> Dict:
         {"record_firmati_dal_produttore": signed, "formato": "Ed25519 su self_hash (+ JWS EdDSA via cryptovalid_jws, con x5c se fornito)"},
         None if d["qualified_certificates"] and signed == n else "firma per-utente su certificato qualificato in formato JAdES (x5c presente): cryptovalid_jws produce il contenitore JWS, il certificato qualificato lo porta l'utente")
     # REQ-7.5-04 alternative: qualified timestamps if time recording is used
+    manca_tsa = None
+    if stamped and not d["qtsp_timestamps"]:
+        manca_tsa = "i token RFC 3161 presenti provengono da una TSA non dichiarata qualificata"
+    elif tok["signature_only"] and not stamped:
+        manca_tsa = (f"{tok['signature_only']} token con firma valida col certificato contenuto nel token, catena non "
+                     "stabilita: fissare il certificato della TSA (--tsa-cert) per contarli")
     add("REQ-7.5-04-bis", "se l'ordine cronologico si affida al tempo registrato: marche temporali QUALIFICATE",
         "DICHIARATO_NON_VERIFICATO" if d["qtsp_timestamps"] and stamped else "PARZIALE" if stamped else "NON_APPLICABILE",
         {"record_con_token_rfc3161": stamped, "record_con_campo_tsa_token": present, "qtsp_dichiarato": d["qtsp_timestamps"],
-         "nota": "l'ordine qui è garantito dai link crittografici (REQ-7.5-04); il tempo è evidenza aggiuntiva"},
-        None if (d["qtsp_timestamps"] or not stamped) else "i token RFC 3161 presenti provengono da una TSA non dichiarata qualificata")
+         "record_con_token_firma_senza_catena": tok["signature_only"], "record_con_token_non_valutato": tok["not_evaluated"],
+         "record_con_token_non_valido": tok["invalid"], "certificato_tsa_fissato": bool(tsa_certs),
+         "nota": "l'ordine qui è garantito dai link crittografici (REQ-7.5-04); il tempo è evidenza aggiuntiva; un token conta "
+                 "solo se verificato contro il certificato della TSA fissato (--tsa-cert; SPEC §11)"},
+        manca_tsa)
     # REQ-7.5-06 device
     dev = d["signing_device"]
     add("REQ-7.5-06", "chiavi private di firma del fornitore in dispositivo crittografico sicuro certificato (CC EAL4+/EUCC; FIPS 140-3 L3 fino al 31.12.2030)",
@@ -179,7 +204,7 @@ def assess(ledger_path: str, deployment: Optional[Dict] = None) -> Dict:
             "confine": "mai un claim di qualificazione: lo stato qualificato lo danno un QTSP e un organismo di valutazione"}
 
 
-def ledger_report(ledger_path: str) -> Dict:
+def ledger_report(ledger_path: str, tsa_certs=None) -> Dict:
     """Annex §2: 'ledger report' = structured presentation of VERIFIABLE information, produced automatically."""
     snap = V.verify_ledger(ledger_path)
     entries = _entries(ledger_path)
@@ -190,14 +215,15 @@ def ledger_report(ledger_path: str) -> Dict:
             "primo_ts": min(ts) if ts else None, "ultimo_ts": max(ts) if ts else None,
             "algoritmo": snap.get("algorithm_used"), "catena_ok": snap.get("verdict") == "PASS",
             "idx_sequenziale": snap.get("idx_monotonic"), "ts_monotoni": snap.get("ts_monotonic"),
-            "record_firmati": sum(1 for e in entries if e.get("signature")), "record_con_marca_rfc3161": _tsa_tokens(entries)[1],
+            "record_firmati": sum(1 for e in entries if e.get("signature")), "record_con_marca_rfc3161": _tsa_tokens(entries, tsa_certs)[1],
             "tree_head": M.tree_head(leaves), "verdetto_verifier": snap.get("verdict"),
             "riproducibile": "stesso file → stesso report (tranne generato_il): un terzo lo ricalcola con verifier.py e cryptovalid_merkle"}
 
 
-def practice_statement(ledger_path: str, provider: str = "<provider>", deployment: Optional[Dict] = None) -> str:
+def practice_statement(ledger_path: str, provider: str = "<provider>", deployment: Optional[Dict] = None,
+                       tsa_certs=None) -> str:
     """REQ-6.1-12 skeleton, filled with the mechanisms actually measured. Markdown."""
-    a = assess(ledger_path, deployment)
+    a = assess(ledger_path, deployment, tsa_certs)
     r = ledger_report(ledger_path)
     d = {"qualified_certificates": False, "qtsp_timestamps": False, "signing_device": "unknown"}
     d.update(deployment or {})
@@ -244,13 +270,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = Parser(prog="eidas_ledger_check", description="self-assessment vs eIDAS 2.0 qualified electronic ledger rules (IR 2025/2531)")
     p.add_argument("ledger"); p.add_argument("--report", action="store_true"); p.add_argument("--practice-statement", action="store_true")
     p.add_argument("--provider", default="<provider>"); p.add_argument("--deployment", help="JSON: qualified_certificates, qtsp_timestamps, signing_device, provider_is_qtsp")
+    p.add_argument("--tsa-cert", action="append", default=None, metavar="PEM",
+                   help="pin the TSA certificate (or a CA above it), repeatable: a tsa_token counts only when verified "
+                        "against it (SPEC §11)")
     a = p.parse_args(argv)
     dep = json.loads(a.deployment) if a.deployment else None
     if a.report:
-        emit(json.dumps(ledger_report(a.ledger), indent=1)); return 0
+        emit(json.dumps(ledger_report(a.ledger, a.tsa_cert), indent=1)); return 0
     if a.practice_statement:
-        emit(practice_statement(a.ledger, a.provider, dep)); return 0
-    emit(json.dumps(assess(a.ledger, dep), indent=1, ensure_ascii=False)); return 0
+        emit(practice_statement(a.ledger, a.provider, dep, a.tsa_cert)); return 0
+    emit(json.dumps(assess(a.ledger, dep, a.tsa_cert), indent=1, ensure_ascii=False)); return 0
 
 
 if __name__ == "__main__":
