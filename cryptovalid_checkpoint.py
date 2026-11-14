@@ -402,7 +402,11 @@ def verify_note(note: bytes, vkeys: List[str]) -> Dict:
                 if len(body) != 8 + MLDSA44_SIG:
                     raise InvalidSignature()
                 ts = struct.unpack(">Q", body[:8])[0]
-                if not (1 <= ts <= 2 ** 63 - 1):
+                # tlog-cosignature, ML-DSA-44: "If `start` is zero, `timestamp` may be zero or the current time" (a log
+                # key signing its own checkpoint, or a subtree signed without freshness). 0.23.0 required ts >= 1 and
+                # refused valid notes (torchwood litewitness vector, 14/11/2026). A zero timestamp is reported as 0: it
+                # carries no freshness, and the witness still refuses to EMIT one (cryptovalid_witness).
+                if not (0 <= ts <= 2 ** 63 - 1):
                     raise InvalidSignature()
                 cp = parse_checkpoint(text)
                 m.MLDSA44PublicKey.from_public_bytes(pub).verify(body[8:], mldsa44_message(name, ts, cp["origin"], 0, cp["size"], cp["root"]))

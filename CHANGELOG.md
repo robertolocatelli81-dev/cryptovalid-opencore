@@ -7,6 +7,16 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
+## Unreleased
+
+- **ML-DSA-44 note signatures with timestamp 0 are verified** (`cryptovalid_checkpoint.verify_note`). c2sp.org/tlog-cosignature
+  lets an ML-DSA-44 signature over a subtree starting at 0 carry timestamp 0 ("may be zero or the current time"); 0.23.0
+  required a timestamp of at least 1 and returned NON_VALIDA for a valid note. Found on 2026-11-14 with the checkpoint of
+  FiloSottile/torchwood's litewitness ML-DSA-44 test (1c05157), which that witness accepts; the vector is now in
+  `testdata/interop/` (BSD-3-Clause, notice kept) and in `test_interop_mldsa_timestamp_zero_20261114.py`, with negative
+  controls (altered signature, timestamp 1, other tree size, timestamp 2^63). A zero timestamp is reported as 0, with no
+  freshness; the witness still never emits one. Ed25519 cosignature/v1 is unchanged.
+
 ## 0.23.0 (2026-11-13)
 
 - **One check of an RFC 3161 token, read closed** (SPEC v0.6, §11 new; not additive: counts change). Measured on 0.22.0
