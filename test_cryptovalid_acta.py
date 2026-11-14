@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """cryptovalid_acta — draft-farley-acta-signed-receipts-03: KATs from the primary sources, the reference implementation's
 receipts as positive control (every positive has its tampered twin), chain/§6.7/§6.8 rules, hostile inputs, the Cedar
 driver when cedarpy is present. CV_REQUIRE_CRYPTO=1 makes a missing `cryptography` a failure (CI)."""

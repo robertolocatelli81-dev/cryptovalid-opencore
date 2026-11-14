@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 CryptoValid · re-ancoraggio schedulato + ALERT di decadimento — annichila W4.
 

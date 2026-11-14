@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Fail-closed on pathological JSON nesting (2026-09-13).
 
 Before this fix the Python reference CRASHED with RecursionError on a ~5000-deep

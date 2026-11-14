@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 CryptoValid · ancoraggio ETEROGENEO — fault-independence VERA, non repliche same-chain.
 

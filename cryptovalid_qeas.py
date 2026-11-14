@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 cryptovalid_qeas — adapter verso un Qualified Electronic Archiving Service (eIDAS art. 45j).
 

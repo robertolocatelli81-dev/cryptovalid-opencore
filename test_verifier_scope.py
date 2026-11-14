@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Regressioni del red-team dell'11/09/2026 sul verifier del ledger NUDO.
 
 Cosa aveva trovato: un ledger VUOTO verificava PASS; un ledger troncato o con suffisso riscritto e

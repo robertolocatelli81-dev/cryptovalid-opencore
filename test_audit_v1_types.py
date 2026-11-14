@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """audit V1 #8-#11 (30/09/2026): integer and base64url fields read strictly.
 #8 SCITT and #9 COSE receipts: an inclusion proof's tree-size / leaf-index is a CBOR uint (RFC 9942); true/false is not.
 #10 JWS and #11 AP2 signature segments: strict BASE64URL (RFC 7515 §2) — no '=' padding, no standard alphabet, no whitespace,

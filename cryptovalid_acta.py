@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """cryptovalid-opencore — Signed Decision Receipts, draft-farley-acta-signed-receipts-03 (0.16.0, 2026-09-24).
 
 Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental

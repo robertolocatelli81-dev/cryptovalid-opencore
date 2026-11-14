@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Acceptance-profile edges found by the council on 16/09/2026 (round 5, Java verifier review): a boolean idx,
 a lone CR between entries, a U+00A0-only line, a signed \\u escape, a tip with duplicate keys / a float / a
 non-string log key, a bad --trusted-pubkey. Every case is FAIL in the Python reference (and in the oracle)."""

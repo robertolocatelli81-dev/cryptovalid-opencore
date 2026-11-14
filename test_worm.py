@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """WORM escrow adapter (W2) — banco ermetico che SA FALLIRE (tmpdir, niente produzione).
 
 Prova che i due obblighi in apparente conflitto COESISTONO: WORM (immutabilità write-once) + GDPR

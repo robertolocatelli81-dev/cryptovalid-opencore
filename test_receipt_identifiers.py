@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """verify_receipt / verify_sth on the JSON profile: the declared VDS and tree-head kind are CHECKED, not ignored.
 Found 2026-10-03 by a structural fuzz: a receipt with `vds` absent, null or naming another algorithm, and a tree head
 with another `kind`, verified as RFC9162_SHA256 / cryptovalid_sth/1 — while the COSE path already refused an unknown vds."""

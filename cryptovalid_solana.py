@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 cryptovalid_solana.py — NATIVE verification of a Solana public-chain anchor for CryptoValid.
 

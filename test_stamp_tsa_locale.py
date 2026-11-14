@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """evidence_pack._rfc3161_stamp() records anchored: True ONLY for a granted RFC 3161 token whose imprint is the requested digest
 (2026-10-03: any HTTP body — an error page, a rejection, a token for another digest — was recorded as anchored: True).
 A local TSA built with openssl answers over a local HTTP server; nothing leaves the machine."""

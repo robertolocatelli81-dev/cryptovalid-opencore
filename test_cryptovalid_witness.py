@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """C2SP checkpoints, signed notes, cosignatures and the witness (0.14.0, 2026-09-19).
 
 Every claim of the 0.14.0 section "Checkpoints, witnesses, split-view" (CHANGELOG.md) is measured here: the spec vector of c2sp.org/signed-note

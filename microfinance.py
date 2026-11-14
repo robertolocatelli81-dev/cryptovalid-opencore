@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """OMEGA-MICROFINANCE — evidenza verificabile per la trasparenza del MICROCREDITO (adattamento SDG 1/8/10).
 
 Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental

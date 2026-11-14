@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """cryptovalid-opencore — a transparency-log WITNESS for checkpoints (0.14.0, 2026-09-19).
 
 Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental

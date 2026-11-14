@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """OMEGA-FUNDCERT · cross-source check ("killer experiment" in the Popperian sense: one fund, one date, TWO real sources)
 
 Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental

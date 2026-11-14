@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Test MIRATI per uccidere i mutanti sopravvissuti del mutation runner su cryptovalid_solana:
 frontiera di rete (_rpc/_fetch_one, urlopen mockato), estrazione memo (inner/filtro programId), e i
 check di verify (64-hex su valido, nessun RPC reachable, display signer, contraddizione su err). Offline.

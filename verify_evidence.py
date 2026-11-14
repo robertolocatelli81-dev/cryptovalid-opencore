@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 verify_evidence.py — UN verificatore per TUTTA l'evidenza CryptoValid, offline, senza
 fidarsi dell'autore. Chiude il gap #1 (council OMEGA 2026-08-21): finora la verifica

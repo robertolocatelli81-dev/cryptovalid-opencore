@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Signed chain tip — pushes the tail limit of a snapshot hash chain (15/09/2026, Roberto: «allunga il limite
 della coda»).
 

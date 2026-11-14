@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Banco del verificatore unico: PRIMA dimostra di saper FALLIRE (ogni strato manomesso
 -> valid False), poi il positivo. Fixture reali costruite qui (evidence pack firmato,
 archivio ingest, ap2, cldma). Tutto in tempdir: nessun path di produzione toccato."""

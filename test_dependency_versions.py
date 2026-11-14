@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """The versions of the projects this one links to are written once, in pyproject.toml, and every other copy must say the
 same (2026-10-05). The `ap2` extra names ap2-evidence-pack with a range; the CI installs it twice (the range in the main
 job, the exact minimum in the floor job, so each run proves the minimum exists on the index and works); the README

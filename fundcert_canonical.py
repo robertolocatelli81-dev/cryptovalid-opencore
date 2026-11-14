@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 OMEGA-FUNDCERT · canonicalizzazione deterministica di artefatti di fund-servicing (PCF/holdings/NAV-basket).
 

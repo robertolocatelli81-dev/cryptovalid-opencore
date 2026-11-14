@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 CryptoValid · mutation runner SISTEMATICO (stdlib) — annichila W7.
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 CryptoValid · WORM escrow adapter — annichila W2 (tiene l'HASH, non il DATO).
 

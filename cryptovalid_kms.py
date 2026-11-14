@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """
 CryptoValid Open Core — KMS/HSM signing backends (the private key leaves the process).
 

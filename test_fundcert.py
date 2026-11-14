@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """OMEGA-FUNDCERT canonicalizzazione — banco che SA FALLIRE, su un fixture di dati SPY REALI.
 
 Il fixture sono posizioni reali di SPDR S&P 500 (SPY) as-of 2026-08-18 (holdings pubblici SSGA), scelte per

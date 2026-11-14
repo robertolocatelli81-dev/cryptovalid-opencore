@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Hermetic tests for the pruning/evidence-decay probe (no network — RPC is mocked).
 
 The probe MUST fail-loud on absence: a signature that no RPC returns → verdict 'decayed_or_absent'.

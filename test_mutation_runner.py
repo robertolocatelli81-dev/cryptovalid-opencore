@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Il mutation runner deve essere ONESTO: uccide i mutanti coperti dai test E dichiara i sopravvissuti
 (non è truccato a 'tutti uccisi'). Controllo su un TOY module+test in tempdir (ermetico, niente produzione).
 """

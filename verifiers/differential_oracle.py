@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Differential cross-oracle: feed an adversarial corpus to ALL FIVE verifiers
 # (Python reference + JS + Go + Rust + Swift) and FAIL on any verdict disagreement.
 # This turns "we believe they agree" into a machine-checked invariant (Mind 4's rec).

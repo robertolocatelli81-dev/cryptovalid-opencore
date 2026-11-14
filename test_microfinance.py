@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Banco per OMEGA-MICROFINANCE — che SA FALLIRE (controllo positivo + negativo prima delle misure)."""
 import copy
 import os

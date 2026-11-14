@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Hybrid Ed25519 + ML-DSA-65 (FIPS 204) signatures on entries, chain tip and evidence pack (0.12.0).
 
 Rules under test: the post-quantum layer is `pq_protected` True ONLY when verified against the trusted key;

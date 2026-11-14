@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Signed chain tip (15/09/2026): the tail limit of a snapshot chain moves. Every attack below is INVISIBLE to
 the bare verifier (positive control asserts PASS without the tip) and a named FAIL with the tip."""
 import hashlib, json, os, shutil, sys, tempfile, unittest

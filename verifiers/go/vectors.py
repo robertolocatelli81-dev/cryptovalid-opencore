@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Genera vectors.json: forma canonica e SHA-256 calcolati dal riferimento Python (stdlib json, ensure_ascii).
 Ogni altro linguaggio deve riprodurre gli stessi byte. Eseguire: python3 vectors.py > vectors.json"""
 import json, hashlib

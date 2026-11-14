@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """A receipt that is not written whole is exit 74 (sysexits EX_IOERR), never the verdict's code (0.20.3).
 
 Real processes, no mock of the write: each CLI runs with its stdout on /dev/full (ENOSPC), on a pipe whose read end is

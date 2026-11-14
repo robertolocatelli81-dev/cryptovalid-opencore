@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Test del verificatore nativo dell'ancora Solana (cryptovalid_solana).
 
 Il banco DEVE saper fallire (controlli negativi) prima di accettare il vero. La rete non è

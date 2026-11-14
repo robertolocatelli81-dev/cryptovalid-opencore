@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """ML-DSA-44 note signatures with timestamp 0 (14/11/2026).
 
 c2sp.org/tlog-cosignature, "ML-DSA-44": the signed CosignedSubtree carries `timestamp`, which is "the input timestamp for

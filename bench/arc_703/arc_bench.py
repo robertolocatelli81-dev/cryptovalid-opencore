@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tamper bench on the audit-log schema of Basekick-Labs/arc (issue #703), reproducible from this repository.
 
     python3 bench/arc_703/arc_bench.py          # needs: python3 + `cryptography`; node and go optional (extra sweeps)

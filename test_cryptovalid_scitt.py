@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """SCITT (RFC 9943) signed / transparent statements over a cryptovalid ledger, and the monitor's identity search
 (0.14.0, 2026-09-19). Every negative has its positive; pycose — an independent COSE implementation — is the oracle
 for the COSE_Sign1 structures when it is installed (CV_REQUIRE_PYCOSE=1 makes its absence an error, as CI does)."""

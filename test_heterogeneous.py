@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Ancoraggio eterogeneo (fault-independence vera) — banco ermetico che SA FALLIRE.
 
 Il caso decisivo: due attestazioni dello STESSO dominio contano UNA (repliche, non testimoni) → annichila
