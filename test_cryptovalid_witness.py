@@ -1205,7 +1205,9 @@ class TestTlogWitnessHTTP(unittest.TestCase):
         # wrong path → 404
         import urllib.request, urllib.error
         with self.assertRaises(urllib.error.HTTPError) as cm:
-            urllib.request.urlopen(urllib.request.Request(self.url + "/nope", data=b"x", method="POST"))
+            # the local stub directly, not through a proxy of the environment (it cannot reach this host's loopback)
+            urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
+                urllib.request.Request(self.url + "/nope", data=b"x", method="POST"), timeout=10)
         self.assertEqual(cm.exception.code, 404)
 
 

@@ -42,7 +42,6 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Dict, Optional
-from urllib.parse import urlparse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PROFILES = os.path.join(_HERE, "spec", "regulatory_profiles.json")
@@ -55,12 +54,15 @@ def _days_since(iso_date: str, now: datetime) -> int:
 
 
 def _reachable(url: str, timeout: int = 15) -> bool:
-    if urlparse(url).scheme not in ("http", "https"):   # no file:// etc.
-        return False
     import urllib.request
+    import cryptovalid_net as _net
+    try:
+        _net.check_url(url, _net.ALLOW_HTTP_OR_HTTPS)   # no file:// etc.
+    except ValueError:
+        return False
     try:
         req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "cryptovalid-reg/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310 - scheme validated http/https
+        with _net.open_url(req, timeout, _net.ALLOW_HTTP_OR_HTTPS) as r:
             return 200 <= r.status < 400
     except Exception:  # noqa: BLE001
         return False

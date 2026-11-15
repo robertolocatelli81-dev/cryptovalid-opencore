@@ -36,6 +36,8 @@ import json
 import time
 import urllib.request
 
+import cryptovalid_net as _net
+
 # a spread of public mainnet RPCs (distinct operators where possible)
 PROBE_RPCS = (
     "https://api.mainnet-beta.solana.com",
@@ -50,7 +52,7 @@ def _rpc(url, method, params, timeout):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
     req = urllib.request.Request(url, body,
                                  {"Content-Type": "application/json", "User-Agent": "cryptovalid-probe/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with _net.open_url(req, timeout, _net.ALLOW_HTTP_OR_HTTPS) as r:   # the rule of cryptovalid_solana._rpc
         return json.load(r)
 
 

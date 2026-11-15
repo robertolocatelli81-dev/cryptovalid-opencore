@@ -49,6 +49,8 @@ import re
 import urllib.request
 import urllib.parse
 
+import cryptovalid_net as _net
+
 # The one true Solana mainnet-beta genesis hash. A tx "confirmed" by an RPC that reports any
 # other genesis hash is on a different (possibly attacker-run) cluster → reject. (Verified live
 # 2026-08-18 from two independent RPCs.)
@@ -71,14 +73,13 @@ _SCOPE = ("A Solana anchor proves existence + timestamp + immutability of the di
 
 
 def _rpc(url, method, params, timeout):
-    """One JSON-RPC call. Only http/https (closes CWE-22 / B310). Returns result or raises."""
-    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
-        raise ValueError(f"scheme not allowed (http/https only): {url!r}")
+    """One JSON-RPC call. Only http/https (closes CWE-22 / B310; cryptovalid_net). Returns result or raises."""
+    _net.check_url(url, _net.ALLOW_HTTP_OR_HTTPS)
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
     req = urllib.request.Request(url, data=body,
                                  headers={"Content-Type": "application/json",
                                           "User-Agent": "cryptovalid-solana/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec - scheme validated above
+    with _net.open_url(req, timeout, _net.ALLOW_HTTP_OR_HTTPS) as r:
         d = json.loads(r.read().decode())
     if "error" in d:
         raise ValueError(f"rpc error: {str(d['error'])[:120]}")

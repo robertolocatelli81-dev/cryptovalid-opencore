@@ -37,7 +37,7 @@ import hashlib
 import json
 import os
 import re
-import urllib.request
+import cryptovalid_net as _net
 
 LOTL_URL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
 _TSL_NS = "http://uri.etsi.org/02231/v2#"   # ETSI TS 119 612 trusted list namespace
@@ -57,7 +57,9 @@ HISTORY_NOT_ORDERED = "history_not_ordered"           # PRO-4.3.4-03A a)
 HISTORY_DUPLICATE_START = "history_duplicate_start"   # PRO-4.3.4-03A b)
 
 def _get(url, timeout=45):
-    with urllib.request.urlopen(url, timeout=timeout) as r:
+    # http or https only (cryptovalid_net): a pointer of the list of lists is data, a `file:` or `ftp:` one is refused.
+    # Not https only: on 15/11/2026 one of the 31 national lists the EU LOTL points to was http-only (tl.nbu.gov.sk).
+    with _net.open_url(url, timeout, _net.ALLOW_HTTP_OR_HTTPS) as r:
         return r.read()
 
 _TSLX_NS = "http://uri.etsi.org/02231/v2/additionaltypes#"   # ETSI TS 119 612 additional types (MimeType)

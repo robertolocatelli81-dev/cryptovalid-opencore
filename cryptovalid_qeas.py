@@ -37,6 +37,8 @@ import json
 import os
 import time
 import urllib.request
+
+import cryptovalid_net as _net
 from typing import Dict, Optional
 
 QEAS_FORMAT = "cryptovalid-qeas-receipt/1.0"
@@ -100,8 +102,10 @@ class HttpQeasBackend:
     name = "http-qeas"
 
     def __init__(self, base_url: str, token_env: str = "QEAS_TOKEN", timeout: int = 30):
-        if not base_url.startswith("https://"):
-            raise ValueError("QEAS base_url must be https:// (legal evidence in transit)")
+        try:
+            _net.check_url(base_url, _net.ALLOW_HTTPS)
+        except ValueError:
+            raise ValueError("QEAS base_url must be https:// (legal evidence in transit)") from None
         self._url = base_url.rstrip("/")
         self._token = os.environ.get(token_env, "")
         if not self._token:
@@ -113,7 +117,7 @@ class HttpQeasBackend:
         req = urllib.request.Request(f"{self._url}/{path}", data=data, method=method,
                                      headers={"Authorization": f"Bearer {self._token}",
                                               "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=self._timeout) as r:  # nosec B310 - https enforced
+        with _net.open_url(req, self._timeout, _net.ALLOW_HTTPS) as r:
             return json.loads(r.read().decode())
 
     def deposit(self, digest_hex: str, subject: str, now: float) -> Dict:

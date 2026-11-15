@@ -146,9 +146,11 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15) -
 def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
     """Timestamp RFC 3161 OPZIONALE via openssl (graceful se assente). Non invalida mai il pack. openssl presente ma non
     avviabile qui, o nessun file temporaneo: CheckNotRun (exit 74, nessun pack scritto; 0.20.3)."""
-    from urllib.parse import urlparse
-    if urlparse(tsa_url).scheme not in ("http", "https"):
-        return {"anchored": False, "note": "TSA URL scheme not allowed (http/https only)"}   # no file:// etc.
+    import cryptovalid_net as _net
+    try:
+        _net.check_url(tsa_url, _net.ALLOW_HTTP_OR_HTTPS)   # no file:// etc.
+    except ValueError:
+        return {"anchored": False, "note": "TSA URL scheme not allowed (http/https only)"}
     exe = shutil.which("openssl")
     if not exe:
         return {"anchored": False, "note": "openssl absent (RFC 3161 optional)"}
@@ -166,7 +168,7 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
             req = f.read()
         http = urllib.request.Request(tsa_url, data=req, method="POST",
                                       headers={"Content-Type": "application/timestamp-query"})
-        with urllib.request.urlopen(http, timeout=timeout) as r:  # nosec B310 - schema validato http/https sopra
+        with _net.open_url(http, timeout, _net.ALLOW_HTTP_OR_HTTPS) as r:
             resp = r.read()
         tsr_b64 = base64.b64encode(resp).decode()
         # anchored only on a token whose imprint is THIS digest (2026-10-03: any HTTP body — an error page, a rejection, a token

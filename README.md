@@ -91,6 +91,7 @@ logs (SPEC §14); until that date they carried the same "no new scope" mark.
 | `cryptovalid_tip.py`, `ed25519_order.py` | signed chain tip (`cryptovalid_tip/1`); refusal of small- and mixed-order Ed25519 keys and R |
 | `signer.py`, `cryptovalid_kms.py` | per-entry Ed25519 (+ optional ML-DSA-65) signatures; keys in a PKCS#11 HSM, AWS KMS, Vault Transit or a Nitrokey NetHSM |
 | `cryptovalid_tsa.py` | RFC 3161 timestamp client and token check |
+| `cryptovalid_net.py` | the one rule every module follows when it opens a URL: schemes closed per caller (https; plain http only where the caller allows it), a loopback endpoint never asked through a proxy (since 2026-11-15) |
 | `cryptovalid_merkle.py` (SPEC §9, §14) | RFC 6962 inclusion and consistency proofs; the tiles of C2SP tiled logs (tlog-tiles, static-ct-api: hash tiles, partial tiles, data tiles, entry bundles) checked against a checkpoint (since 2026-11-15) |
 | `cryptovalid_checkpoint.py` (SPEC §13) | C2SP checkpoints and signed notes: Ed25519, ECDSA, Ed25519 and ML-DSA-44 cosignatures, and the RFC 6962 signatures of static CT logs (type 0x05, since 2026-11-15) |
 | `evidence_pack.py`, `verify_evidence.py` (`auto`, `pack`, `ledger`; `checkpoint`, `tiles`, `vkey-rfc6962` since 2026-11-15) | auditor bundle and the `cryptovalid-verify` front-end |

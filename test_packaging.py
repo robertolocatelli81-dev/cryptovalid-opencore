@@ -35,6 +35,9 @@ except ModuleNotFoundError:  # Python < 3.11
 
 # Kept open on purpose: the segment file of an append-only writer, closed on rollover and in close().
 LONG_LIVED = {("cryptovalid_ingest.py", "self._fh")}
+# Functions whose job is to hand the open response to their caller, who must use it in a `with` (15/11/2026): their own
+# `return <open call>` is not a leak; every call OF them is checked like open()/urlopen() below.
+RETURNS_HANDLE = {("cryptovalid_net.py", "_open"), ("cryptovalid_net.py", "open_url")}
 
 
 def shipped_files(pyproject_path: str) -> list:
@@ -111,7 +114,8 @@ def missing_from_wheel(pyproject_path: str) -> list:
 
 
 def unclosed_handles(path: str) -> list:
-    """open()/urlopen() calls that are not a `with` item and whose result is not kept as a long-lived handle."""
+    """open()/urlopen()/open_url() calls that are not a `with` item and whose result is not kept as a long-lived handle
+    nor returned by a function of RETURNS_HANDLE."""
     with open(os.path.join(HERE, path), encoding="utf-8") as f:
         tree = ast.parse(f.read())
     managed, kept = set(), set()
@@ -121,13 +125,15 @@ def unclosed_handles(path: str) -> list:
         if isinstance(n, ast.Assign) and len(n.targets) == 1 and \
                 (os.path.basename(path), ast.unparse(n.targets[0])) in LONG_LIVED:
             kept.add(id(n.value))
+        if isinstance(n, ast.FunctionDef) and (os.path.basename(path), n.name) in RETURNS_HANDLE:
+            kept |= {id(r.value) for r in ast.walk(n) if isinstance(r, ast.Return) and r.value is not None}
     out = []
     for n in ast.walk(tree):
         if isinstance(n, ast.Call) and id(n) not in managed and id(n) not in kept:
             f = n.func
             name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
             is_os = isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id == "os"
-            if name in ("open", "urlopen") and not is_os:
+            if name in ("open", "urlopen", "open_url", "_open") and not is_os:
                 out.append(f"{path}:{n.lineno}")
     return out
 

@@ -9,6 +9,23 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **One rule for every URL the modules open (`cryptovalid_net.py`, core).** Measured on 0.24.0 (15/11/2026): five call
+  sites passed any URL to `urlopen` (TSA client, NetHSM backend, EU trusted lists, Solana pruning probe, witness
+  client), so `file:///etc/hostname` given as a TSA or trusted-list URL was read from disk; the AWS KMS endpoint check
+  accepted `file://localhost/...`; and with `HTTP_PROXY` / `HTTPS_PROXY` in the environment every loopback endpoint (a
+  local Vault, NetHSM, KMS emulator, TSA, witness, RPC) was asked through the proxy, which cannot reach this host's
+  loopback and received the request (3 suites red behind a proxy). Now each caller names the schemes it accepts:
+  https only (QEAS), https or http to a loopback host (Vault, NetHSM, AWS KMS endpoint), http or https (RFC 3161 TSAs,
+  the trusted lists — on 15/11/2026 one of the 31 national lists the EU list of lists points to was http-only —, Solana
+  RPCs, regulatory sources, witnesses: answers checked by signature or public data). Any other scheme, a URL with white
+  space or a control character, without a host or with a bad port is refused with `url_not_allowed: <reason>` before
+  any I/O; schemes compare case-insensitively (RFC 3986 §3.1). A loopback host is reached directly; any other host goes
+  through the environment's proxy as urllib reads it, with an opener built per call. Redirects are followed only to a
+  URL the same rule accepts (urllib alone follows one to `ftp:`) and never from a remote host to a loopback one.
+  `test_net_rule_20261115.py`: 12 000 generated URLs against the rule written out independently, every call site
+  refusing `file:`/`ftp:`/`data:` without I/O, a fresh interpreter started behind a recording proxy (nine call sites
+  reach the loopback stub directly, a remote host still goes to the proxy; on 0.24.0 all nine went through the proxy),
+  redirects. bandit `-ll`: the five B310 findings are gone.
 - **Test children see the parent's packages.** `test_cli_c2sp_commands_20261115.py` and
   `test_cli_help_english_20261115.py` started their child interpreters with `-E -s` whatever the parent did: with
   `cryptography` installed by `pip install --user`, the parent found it and the children did not (3 failures, measured

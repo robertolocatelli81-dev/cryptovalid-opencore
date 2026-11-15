@@ -79,6 +79,8 @@ import urllib.parse
 import urllib.request
 from typing import Dict, Optional
 
+import cryptovalid_net as _net
+
 ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")  # RFC 8410 SPKI header
 
 
@@ -562,11 +564,13 @@ class AwsKmsHttpBackend:
             # loopback host. An http/remote override would leak the session token in the
             # SigV4 headers and let the signed requests (host pinned to kms.{region}) be
             # replayed against real AWS — the same guard VaultTransitBackend already has.
-            u = urllib.parse.urlsplit(endpoint)
-            if u.scheme != "https" and (u.hostname or "").lower() not in (
-                    "127.0.0.1", "localhost", "::1"):
-                raise ValueError("awskms-http endpoint must be https (or a loopback host "
-                                 "for testing)")
+            # 15/11/2026: through cryptovalid_net — until 0.24.0 `file://localhost/...` passed (scheme not https,
+            # host loopback), and a loopback endpoint was asked through the environment's proxy
+            try:
+                _net.check_url(endpoint, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP)
+            except ValueError as e:
+                raise ValueError("awskms-http endpoint must be https (or http to a loopback host "
+                                 f"for testing): {e}") from None
             self._endpoint = endpoint
         else:
             self._endpoint = f"https://{self._host}"
@@ -584,7 +588,7 @@ class AwsKmsHttpBackend:
                                      headers=headers, method="POST")
         op = target.rsplit(".", 1)[-1]
         try:   # 08/11/2026: HTTP/network/answer errors = one readable RuntimeError (no credentials in the text)
-            with urllib.request.urlopen(req, timeout=20) as r:  # nosec B310 - fixed AWS endpoint
+            with _net.open_url(req, 20, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP) as r:   # fixed AWS endpoint, or loopback
                 return json.load(r)
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"AWS KMS {op} HTTP {e.code} for {self._key_id}: {_http_error_text(e)}") from None
@@ -651,12 +655,13 @@ class VaultTransitBackend:
         token = os.environ.get(token_env, "")
         if not token:
             raise RuntimeError(f"Vault token env var {token_env!r} is empty/unset")
-        host = (urllib.parse.urlsplit(url).hostname or "").lower()
-        if url.startswith("http://") and host not in ("127.0.0.1", "localhost", "::1"):
-            raise RuntimeError("refusing plain http:// to a non-loopback Vault: "
-                               "the token would travel in cleartext (use https)")
-        if not url.startswith(("http://", "https://")):
-            raise ValueError("Vault url must start with https:// (or http:// to a loopback host)")
+        try:
+            _net.check_url(url, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP)
+        except ValueError as e:
+            if isinstance(url, str) and url[:5].lower() == "http:":
+                raise RuntimeError("refusing plain http:// to a non-loopback Vault: "
+                                   "the token would travel in cleartext (use https)") from None
+            raise ValueError(f"Vault url must start with https:// (or http:// to a loopback host): {e}") from None
         self._url, self._key, self._mount, self._token = url.rstrip("/"), key, mount, token
         self._timeout, self._version = timeout, None
 
@@ -666,7 +671,7 @@ class VaultTransitBackend:
                                      headers={"X-Vault-Token": self._token,
                                               "Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as r:  # nosec B310 - scheme checked in __init__
+            with _net.open_url(req, self._timeout, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP) as r:
                 raw = r.read()
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"Vault HTTP {e.code} on {method} {path}: {_http_error_text(e)}") from None
@@ -786,10 +791,13 @@ class NetHsmBackend:
         passphrase = os.environ.get(pass_env, "")
         if not passphrase:
             raise RuntimeError(f"NetHSM passphrase env var {pass_env!r} is empty/unset")
-        host = (urllib.parse.urlsplit(url).hostname or "").lower()
-        if url.startswith("http://") and host not in ("127.0.0.1", "localhost", "::1"):
-            raise RuntimeError("refusing plain http:// to a non-loopback NetHSM: "
-                               "credentials would travel in cleartext (use https)")
+        try:   # 15/11/2026: until 0.24.0 any other scheme (file:, ftp:) reached urlopen
+            _net.check_url(url, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP)
+        except ValueError as e:
+            if isinstance(url, str) and url[:5].lower() == "http:":
+                raise RuntimeError("refusing plain http:// to a non-loopback NetHSM: "
+                                   "credentials would travel in cleartext (use https)") from None
+            raise ValueError(f"NetHSM url must start with https:// (or http:// to a loopback host): {e}") from None
         self._url, self._key = url.rstrip("/"), key
         self._auth = base64.b64encode(f"{user}:{passphrase}".encode()).decode()
 
@@ -799,7 +807,7 @@ class NetHsmBackend:
                                      method=method,
                                      headers={"Authorization": f"Basic {self._auth}",
                                               "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with _net.open_url(req, 30, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP) as r:
             raw = r.read()
             return json.loads(raw.decode()) if raw else {}
 

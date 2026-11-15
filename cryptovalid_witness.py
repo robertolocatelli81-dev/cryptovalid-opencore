@@ -613,10 +613,12 @@ def serve(service: WitnessService, host: str = "127.0.0.1", port: int = 0, prefi
 def add_checkpoint(url: str, note: bytes, old_size: int, proof_b64: List[str], timeout: float = 30.0):
     """Client side: POST to <url>/add-checkpoint → (status, body bytes). No retry, no interpretation."""
     import urllib.request, urllib.error
+    import cryptovalid_net as _net
     req = urllib.request.Request(url.rstrip("/") + "/add-checkpoint", data=format_add_checkpoint_body(old_size, proof_b64, note),
                                  method="POST", headers={"Content-Type": "text/plain"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # http or https only (cryptovalid_net), a loopback witness never through a proxy; a refused URL is a ValueError: status 0
+        with _net.open_url(req, timeout, _net.ALLOW_HTTP_OR_HTTPS) as resp:
             return resp.status, resp.read(1 << 20)     # a hostile witness cannot make us read more than 1 MiB
     except urllib.error.HTTPError as e:
         return e.code, e.read(1 << 20)

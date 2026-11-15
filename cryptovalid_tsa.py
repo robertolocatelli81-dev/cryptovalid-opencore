@@ -28,6 +28,8 @@ if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecod
 import os
 import urllib.request
 
+import cryptovalid_net as _net
+
 # ── minimal DER ──
 def _der_len(n):
     if n < 0x80:
@@ -80,7 +82,8 @@ def request_timestamp(digest: bytes, tsa_url: str, timeout: int = 30):
     req_der = build_timestamp_request(digest)
     r = urllib.request.Request(tsa_url, data=req_der,
                                headers={"Content-Type": "application/timestamp-query"})
-    with urllib.request.urlopen(r, timeout=timeout) as resp:
+    # http or https only (RFC 3161 §3.4 is HTTP; the token is signed and checked): `file:`, `ftp:`, `data:` are refused
+    with _net.open_url(r, timeout, _net.ALLOW_HTTP_OR_HTTPS) as resp:
         raw = resp.read()
     # TimeStampResp ::= SEQUENCE { status PKIStatusInfo, timeStampToken OPTIONAL }
     _, respval, _ = _parse_seq_children(_parse_seq_children(raw)[0][2])[0], None, None  # noqa

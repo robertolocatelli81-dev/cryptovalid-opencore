@@ -50,8 +50,8 @@ def _urlopen_returning(payload: dict):
         def __exit__(self, *a):
             return False
 
-    return mock.patch.object(CS.urllib.request, "urlopen",
-                             return_value=_R(json.dumps(payload).encode()))
+    # the single I/O point of cryptovalid_net (15/11/2026): the scheme rule of open_url still runs before it
+    return mock.patch.object(CS._net, "_open", return_value=_R(json.dumps(payload).encode()))
 
 
 class TestRpcBoundary(unittest.TestCase):
