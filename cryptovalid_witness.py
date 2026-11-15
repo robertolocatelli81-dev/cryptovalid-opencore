@@ -130,7 +130,39 @@ _PROOFS_SEEN = 10000                          # pair keys remembered for dedupe 
 _MAX_PROOF = 63                                # tlog-witness: the client MUST NOT send more than 63 proof lines
 
 
-LOG_KEY_TYPES = (C.TYPE_ED25519, C.TYPE_ECDSA)   # log signatures this witness verifies: Ed25519 (ours) and ECDSA (Rekor v1)
+# SPEC §16 (v0.8): the role of a key is the list the caller puts it in, not its type — 0x06 (ML-DSA-44) can be the log
+# authenticating itself or a witness (c2sp.org/tlog-checkpoint). Log keys: Ed25519 (ours), ECDSA (Rekor v1), ML-DSA-44
+# (the Sigstore v2 logs, torchwood's litewitness test); witness keys: 0x04, 0x06; 0x01/0x02 can only be log keys.
+LOG_KEY_TYPES = (C.TYPE_ED25519, C.TYPE_ECDSA, C.TYPE_MLDSA44)
+WITNESS_KEY_TYPES = (C.TYPE_COSIG_V1, C.TYPE_MLDSA44)
+LOG_ONLY_TYPES = (C.TYPE_ED25519, C.TYPE_ECDSA)
+_LOG_KEY_ERR = "a log key must be an Ed25519 (0x01), ECDSA (0x02) or ML-DSA-44 (0x06) note key"
+_WITNESS_KEY_ERR = "witness vkeys must be cosigner keys (type 0x04 or 0x06): a log key is not a witness"
+
+
+def _log_key_list(log_vkey: Union[str, List[str]]) -> List[str]:
+    """The trusted log keys as a list, each of a log type (SPEC §16 rule 2), else NoteError."""
+    log_vkeys = [log_vkey] if isinstance(log_vkey, str) else list(log_vkey)
+    if not log_vkeys:
+        raise C.NoteError("at least one trusted log vkey is required")
+    if any(C.parse_vkey(k)[2] not in LOG_KEY_TYPES for k in log_vkeys):
+        raise C.NoteError(_LOG_KEY_ERR)
+    return log_vkeys
+
+
+def _one_role(log_vkeys: List[str], witness_keys) -> None:
+    """SPEC §16 rule 4: a key — a (name, key id) pair, which commits to the type and the public key — is a log key or a
+    witness key, never both. Only a 0x06 key can be in both lists; an Ed25519 key used as 0x01 and as 0x04 is two keys
+    (two key ids, two signed messages), as before. `witness_keys`: (name, key id) pairs."""
+    logs = {tuple(C.parse_vkey(k)[:2]) for k in log_vkeys}
+    both = sorted({n for n, kid in witness_keys if (n, kid) in logs})
+    if both:
+        raise C.NoteError(f"a key cannot be both a log key and a witness key: {', '.join(both)}")
+
+
+def _unsigned_extensions(log_verified: List[Dict], cp: Dict) -> bool:
+    """SPEC §16 rule 5: extension lines that no verified log signature covers (every one of them ML-DSA-44)."""
+    return bool(cp["extensions"]) and all(s["type"] == C.TYPE_MLDSA44 for s in log_verified)
 
 
 def witness_cosign(state_path: str, note: bytes, log_vkey: Union[str, List[str]], witness_name: str, witness_seed: bytes,
@@ -142,7 +174,9 @@ def witness_cosign(state_path: str, note: bytes, log_vkey: Union[str, List[str]]
      evidenza: {tipo, prova, precedente, presentato}|None, origin, size, http_status, stored_size}.
     Rules (c2sp.org/tlog-witness, HTTP status in brackets, checked in the spec's order): a malformed note [400]; the
     log signature MUST verify against `log_vkey` — one vkey or the list of keys trusted for this origin (key
-    rotation: the spec says "public key(s)") [403; 500 when this process has no Ed25519 implementation at all];
+    rotation: the spec says "public key(s)"), of type 0x01, 0x02 or 0x06 (SPEC §16; a log key equal to the witness's
+    own key is a NoteError) [403; 500 when this process has no Ed25519 implementation at all]; extension lines that
+    only ML-DSA-44 log signatures cover (i.e. none) are refused [400];
     the origin MUST be `expected_origin` — the origin the operator trusts those keys for; by default the key name,
     which the checkpoint spec says SHOULD match the origin, but production logs differ ("go.sum database tree" is
     signed by `sum.golang.org`) [400]; when the client states `old_size` it MUST NOT exceed the checkpoint size
@@ -171,18 +205,14 @@ def witness_cosign(state_path: str, note: bytes, log_vkey: Union[str, List[str]]
         C.split_note(note)
     except C.NoteError as e:
         out["motivo"] = f"malformed note: {e}"; return out
-    log_vkeys = [log_vkey] if isinstance(log_vkey, str) else list(log_vkey)
-    if not log_vkeys:
-        raise C.NoteError("at least one trusted log vkey is required")
-    if any(C.parse_vkey(k)[2] not in LOG_KEY_TYPES for k in log_vkeys):
-        raise C.NoteError("a log key must be an Ed25519 (0x01) or ECDSA (0x02) note key, not a cosigner key")
+    log_vkeys = _log_key_list(log_vkey)
     v = C.verify_note(note, log_vkeys)
     if v["stato"] != "OK":
         out.update(motivo=f"log signature: {v['stato']} ({v['motivo']})", http_status=403 if v["stato"] == "NON_VALIDA" else 500)
         return out
     log_names = {C.parse_vkey(k)[0] for k in log_vkeys}
     if not any(s["name"] in log_names and s["type"] in LOG_KEY_TYPES for s in v["verified"]):
-        out.update(motivo="no log signature (type 0x01/0x02) from a trusted log key", http_status=403); return out
+        out.update(motivo="no log signature from a trusted log key", http_status=403); return out
     if expected_origin is None and len(log_names) != 1:
         raise C.NoteError("trusted keys with different names for one origin need an explicit expected_origin")
     try:
@@ -190,6 +220,8 @@ def witness_cosign(state_path: str, note: bytes, log_vkey: Union[str, List[str]]
     except C.NoteError as e:
         out["motivo"] = f"checkpoint text: {e}"; return out
     out["origin"], out["size"] = cp["origin"], cp["size"]
+    if _unsigned_extensions(v["verified"], cp):   # our Ed25519 cosignature would sign lines the log did not sign
+        out["motivo"] = "extension lines not covered by the log's signature (ML-DSA-44 does not sign them)"; return out
     if cp["origin"] != (next(iter(log_names)) if expected_origin is None else expected_origin):
         out["motivo"] = "checkpoint origin is not the origin trusted for this log key"; return out
     proof = list(consistency_proof_b64 or [])
@@ -202,6 +234,7 @@ def witness_cosign(state_path: str, note: bytes, log_vkey: Union[str, List[str]]
     own_kids = {C.key_id(witness_name, C.TYPE_COSIG_V1, C.pubkey_from_seed(witness_seed))}
     if pq_seed is not None:
         own_kids.add(C.key_id(witness_name, C.TYPE_MLDSA44, C.mldsa44_pubkey_from_seed(pq_seed)))
+    _one_role(log_vkeys, [(witness_name, k) for k in own_kids])   # our own line must never be read as the log's
     kept = [l for l, (name, raw) in zip(lines, sigs) if not (name == witness_name and raw[:4] in own_kids)]
     if pq_seed is not None and len(cp["origin"].encode("utf-8")) > 255:
         out["motivo"] = "an ML-DSA-44 cosignature cannot cover an origin longer than 255 bytes (tlog-cosignature)"; return out
@@ -417,7 +450,9 @@ def _cosign_locked(state_path, cp, proof, witness_name, witness_seed, timestamp,
 def verify_witnessed(note: bytes, log_vkey: Union[str, List[str]], witness_vkeys: List[str], min_witnesses: int = 1,
                      max_age_s: Optional[int] = None, now: Optional[int] = None, clock_skew_s: int = 0,
                      expected_origin: Optional[str] = None) -> Dict:
-    """Relying-party check: log signature OK (one vkey or a list, for rotation), the checkpoint origin is
+    """Relying-party check (SPEC §16: a line is the log's or a witness's by the list its key is in, not by its type; a
+    key in both lists is refused; with only ML-DSA-44 log signatures, extension lines are refused): log signature OK
+    (one vkey or a list, for rotation; types 0x01, 0x02, 0x06), the checkpoint origin is
     `expected_origin` (default: the log key name — pass it explicitly for logs such as sum.golang.org whose origin
     differs), at least `min_witnesses` (≥ 1) DISTINCT trusted witnesses — distinct by NAME: two keys of one name are
     one witness (rotation) — cosigned this
@@ -432,40 +467,43 @@ def verify_witnessed(note: bytes, log_vkey: Union[str, List[str]], witness_vkeys
         raise C.NoteError("clock_skew_s must be a non-negative integer")
     out = {"stato": "NON_VALIDA", "witnesses": [], "fresh_witnesses": None, "future_witnesses": None, "freshness_s": None,
            "motivo": None, "checkpoint": None}
-    log_vkeys = [log_vkey] if isinstance(log_vkey, str) else list(log_vkey)
-    if not log_vkeys:
-        raise C.NoteError("at least one trusted log vkey is required")
+    log_vkeys = _log_key_list(log_vkey)
     log_names = {C.parse_vkey(k)[0] for k in log_vkeys}
-    if any(C.parse_vkey(k)[2] not in LOG_KEY_TYPES for k in log_vkeys):
-        raise C.NoteError("a log key must be an Ed25519 (0x01) or ECDSA (0x02) note key, not a cosigner key")
     if expected_origin is None and len(log_names) != 1:
         raise C.NoteError("trusted log keys with different names need an explicit expected_origin")
     origin = next(iter(log_names)) if expected_origin is None else expected_origin
     usable = []
     for wv in witness_vkeys:                 # Ed25519 (0x04) and ML-DSA-44 (0x06) cosigners are verified; other types
         typ = C.parse_vkey(wv, strict=False)[2]   # are ignored as verify_note does; a log key in the witness list is a caller error
-        if typ in LOG_KEY_TYPES:
-            raise C.NoteError("witness vkeys must be cosigner keys (type 0x04 or 0x06): a log key is not a witness")
-        if typ in (C.TYPE_COSIG_V1, C.TYPE_MLDSA44):
+        if typ in LOG_ONLY_TYPES:
+            raise C.NoteError(_WITNESS_KEY_ERR)
+        if typ in WITNESS_KEY_TYPES:
             usable.append(wv)
     witness_vkeys = usable
+    _one_role(log_vkeys, [tuple(C.parse_vkey(w)[:2]) for w in witness_vkeys])
     v = C.verify_note(note, log_vkeys + list(witness_vkeys))
     if v["stato"] == "NON_VERIFICATA":
         out.update(stato="NON_VERIFICATA", motivo=v["motivo"]); return out
     if v["stato"] != "OK":
         out["motivo"] = v["motivo"]; return out
-    if not any(s["name"] in log_names and s["type"] in LOG_KEY_TYPES for s in v["verified"]):
+    # SPEC §16 rule 1: the role of a line is the list of the key it verifies under, not its type (0x06 is both). Every
+    # line of a trusted key verified above, so each list alone verifies the same lines: one call per role.
+    v_log = C.verify_note(note, log_vkeys)
+    if v_log["stato"] != "OK":
         out["motivo"] = "no log signature from a trusted log key"; return out
+    v_wit = C.verify_note(note, witness_vkeys) if witness_vkeys else {"stato": "NON_VALIDA", "verified": []}
     try:
-        out["checkpoint"] = {k: (base64.b64encode(val).decode("ascii") if k == "root" else val) for k, val in C.parse_checkpoint(v["text"]).items()}
+        cp = C.parse_checkpoint(v["text"])
     except C.NoteError as e:
         out["motivo"] = f"checkpoint text: {e}"; return out
+    out["checkpoint"] = {k: (base64.b64encode(val).decode("ascii") if k == "root" else val) for k, val in cp.items()}
     if out["checkpoint"]["origin"] != origin:
         out["motivo"] = f"checkpoint origin {out['checkpoint']['origin']!r} is not the expected {origin!r}"; return out
+    if _unsigned_extensions(v_log["verified"], cp):
+        out["motivo"] = "extension lines not covered by the log's signature (ML-DSA-44 does not sign them)"; return out
     wits: Dict[str, int] = {}
-    for s_ in v["verified"]:                 # every line of a trusted witness key was verified: the newest per witness counts
-        if s_["type"] in (C.TYPE_COSIG_V1, C.TYPE_MLDSA44):
-            wits[s_["name"]] = max(wits.get(s_["name"], 0), s_["timestamp"])
+    for s_ in (v_wit["verified"] if v_wit["stato"] == "OK" else []):   # the newest verified line per witness counts
+        wits[s_["name"]] = max(wits.get(s_["name"], 0), s_["timestamp"])
     out["witnesses"] = sorted(wits)
     if len(wits) < min_witnesses:
         out["motivo"] = f"{len(wits)} trusted witness cosignature(s), {min_witnesses} required"; return out
@@ -530,11 +568,19 @@ class WitnessService:
         self.state_path, self.name, self.seed, self.pq_seed = state_path, name, seed, pq_seed
         self.logs: Dict[str, List[str]] = {}
 
+        own = []   # SPEC §16 rule 4: only our 0x06 key can also be a log key (a 0x04 key is never one)
+        if pq_seed is not None:
+            try:   # without `mldsa` the key is not derived here; witness_cosign checks again on every request
+                own = [(name, C.key_id(name, C.TYPE_MLDSA44, C.mldsa44_pubkey_from_seed(pq_seed)))]
+            except C.NoteError:
+                pass
+
         def _log_key(v):
-            name, _, typ, _ = C.parse_vkey(v)
+            name_, _, typ, _ = C.parse_vkey(v)
             if typ not in LOG_KEY_TYPES:
-                raise C.NoteError(f"{name}: a log key must be an Ed25519 (0x01) or ECDSA (0x02) note key, not a cosigner key")
-            return name
+                raise C.NoteError(f"{name_}: {_LOG_KEY_ERR}")
+            _one_role([v], own)
+            return name_
         for v in log_vkeys:
             self.logs.setdefault(_log_key(v), []).append(v)
         for origin, vs in (origins or {}).items():
@@ -634,12 +680,12 @@ def submit_checkpoint(url: str, note: bytes, leaves: List[bytes], witness_vkeys:
     → {stato: OK|NON_VALIDA, status, note, witnesses, motivo}."""
     out = {"stato": "NON_VALIDA", "status": None, "note": None, "witnesses": [], "motivo": None}
     for w in witness_vkeys:                  # validated BEFORE the network round trip (the witness would persist first)
-        if C.parse_vkey(w, strict=False)[2] in LOG_KEY_TYPES:
-            raise C.NoteError("witness vkeys must be cosigner keys (type 0x04 or 0x06): a log key is not a witness")
+        if C.parse_vkey(w, strict=False)[2] in LOG_ONLY_TYPES:
+            raise C.NoteError(_WITNESS_KEY_ERR)
     # the log key too, before the round trip: since 2026-11-15 parse_vkey accepts a 0x05 (static CT) key, which no
     # witness verifies here (LOG_KEY_TYPES); verify_witnessed would refuse it only after the witness had answered
-    if any(C.parse_vkey(k)[2] not in LOG_KEY_TYPES for k in ([log_vkey] if isinstance(log_vkey, str) else list(log_vkey))):
-        raise C.NoteError("a log key must be an Ed25519 (0x01) or ECDSA (0x02) note key, not a cosigner key")
+    log_vkeys = _log_key_list(log_vkey)
+    _one_role(log_vkeys, [tuple(C.parse_vkey(w)[:2]) for w in witness_vkeys if C.parse_vkey(w, strict=False)[2] in WITNESS_KEY_TYPES])
     status, body = add_checkpoint(url, note, 0, [])
     if status == 409:
         m = re.fullmatch(r"(0|[1-9][0-9]{0,19})\n", body.decode("ascii", "replace"))   # decimal (uint64) + newline, nothing else

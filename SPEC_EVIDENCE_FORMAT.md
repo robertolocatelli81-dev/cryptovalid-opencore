@@ -240,6 +240,12 @@ signature does not verify or that §11 refuses at steps 1–6 (without a pin suc
 valid, as before). §11's function and the other callers of it do not change.
 v0.8 also adds §15 (2026-11-15), the difference between the hybrid signature of this format and the composite ML-DSA of
 RFC 10073, with the rule that the keys of one are not used for the other. Additive: no verifier changes.
+v0.8 also adds §16 (2026-11-15), the roles of the keys of a witnessed checkpoint (`cryptovalid_witness.py`). Not
+additive for that module: a log key of type 0x06 (ML-DSA-44), refused until then before any signature was read, is a log
+key, and a log signature counts only for the log and a witness cosignature only for the witness, by the list the key
+is in (until then by the type of the key); a key given in both lists stays refused, now by rule 4 of §16; a checkpoint
+with extension lines whose only trusted log signature is ML-DSA-44 is refused, by the witness and by the relying party
+(no such checkpoint was accepted before: a 0x06 log key was refused).
 
 ## 7. Conformance (normative)
 
@@ -660,3 +666,52 @@ Not claimed: that anything in this repository implements RFC 10073. The test bui
 of its own; with the RFC's text given (`CV_RFC10073_TXT=<path to rfc10073.txt>`) it also checks that helper against the
 two signatures of Appendix E for `id-MLDSA65-Ed25519-SHA512` (they verified on 2026-11-15); the vector is not shipped
 here.
+
+## 16. Roles of the keys of a witnessed checkpoint (NORMATIVE since v0.8, 2026-11-15)
+
+`cryptovalid_witness.py` (experimental module) checks a checkpoint signed by a log and cosigned by witnesses: the witness
+side (`witness_cosign`, `WitnessService`, `serve`), the log side (`submit_checkpoint`, `submit`) and the relying party
+(`verify_witnessed`, `verify`). Sources, read on 2026-11-15 at C2SP/C2SP commit 09f3e519fe79 (main):
+
+- tlog-checkpoint, "ML-DSA-44 Checkpoint Cosignatures": "This signature type can be used either by the log to
+  authenticate itself, or by an arbitrary cosigner role. When the log is authenticating itself, the cosigner name
+  SHOULD be the log origin." and "Extension lines are ignored and not covered by the signature."
+- tlog-checkpoint, "Ed25519 Log Signatures": "This signature type only supports the log itself."
+- tlog-checkpoint, "Signatures": "ML-DSA-44 checkpoint cosignatures don't sign the extension lines, which SHOULD be
+  empty."
+- tlog-cosignature: "Clients are configured with tuples of (cosigner name, cosigner algorithm, public key), specifying
+  the particular key they accept for each supported cosigner."
+
+One signature type, 0x06, can therefore stand for the log or for a witness; the type of a key does not say its role.
+
+Rules (NORMATIVE since v0.8):
+
+1. **The role of a key is the list the caller puts it in**: the log keys (`log_vkey`, `--log-vkey`, `--log-origin`) or
+   the witness keys (`witness_vkeys`, `--witness-vkey`; for `witness_cosign` and `serve`, the witness's own keys). A
+   signature line counts as the log's only when it verifies under a log key, and as a witness's only when it verifies
+   under a witness key; the two are counted separately, so a log signature is never a witness cosignature and the
+   reverse.
+2. **Log keys**: type 0x01 (Ed25519 log signature), 0x02 (ECDSA, as Rekor v1 and transparency-dev/witness) or 0x06
+   (ML-DSA-44 cosignature/v1, the log authenticating itself). Any other type in the log list is refused (`NoteError`)
+   before any signature is read. Type 0x04 is not accepted as a log key (the "generalized" sentence of the Ed25519
+   cosignature section is not read here as admitting it; open).
+3. **Witness keys**: type 0x04 or 0x06. A 0x01 or 0x02 key in the witness list is refused (`NoteError`: it can only be
+   a log key); a key of another type is ignored, as `verify_note` ignores it.
+4. **One key, one role**: a key — a (name, key id) pair, which commits to the type byte and the public key — given in
+   both lists is refused (`NoteError`) before any signature is read; for the witness side, a trusted log key equal to
+   one of the witness's own keys is refused the same way (`WitnessService` at start-up, `witness_cosign` before it
+   cosigns or writes its state). Only a 0x06 key can be in both lists. An Ed25519 key used under one name as a 0x01 log
+   key and as a 0x04 witness key is two keys (two key ids, two signed messages): its 0x01 line counts only for the log
+   and its 0x04 line only for the witness, as before v0.8.
+5. **Extension lines must be signed by the log**: when every trusted log signature that verified is ML-DSA-44 (0x06),
+   no log signature covers the extension lines; a checkpoint with extension lines is then refused — by the witness,
+   which would otherwise sign them under its Ed25519 cosignature (HTTP 400), and by the relying party (`NON_VALIDA`).
+   FiloSottile/torchwood @ 1c05157 goes further: it refuses every ML-DSA-44 cosignature, signed or verified, on a
+   checkpoint with extension lines ("Unsigned extension lines are dangerous", `cosignature.go`); this rule refuses
+   only a checkpoint whose extension lines no log signature covers.
+
+Measured on 2026-11-15 (`test_witness_mldsa_log_20261115.py`): the litewitness vector of torchwood (an ML-DSA-44 log
+key, `testdata/interop/torchwood_mldsa44_log.*`) is cosigned; checkpoints of an ML-DSA-44 log with self-generated keys
+are accepted by `verify_witnessed`, the `verify` command, `witness_cosign` and `WitnessService.add_checkpoint`; a live checkpoint of the Sigstore staging log `pqc27-a1.us-east4.rekor.sigstage.dev` (ML-DSA-44 log key
+from its TUF `trusted_root.json`, three ML-DSA-44 witnesses; read at 2026-11-15T22:24:41Z) verifies with `min_witnesses`
+3 and not 4 when given (`CV_SIGSTAGE_DIR`; not shipped here).

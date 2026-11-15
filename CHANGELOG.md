@@ -9,6 +9,26 @@ run by the same author, not by a third party.
 
 ## 0.25.0 (2026-11-15)
 
+- **The witness module accepts a log that signs with ML-DSA-44, and tells the log from a witness by the list a key is
+  in** (SPEC v0.8 §16). c2sp.org/tlog-checkpoint (C2SP/C2SP @ 09f3e519fe79, read on 15/11/2026): an ML-DSA-44 signature
+  "can be used either by the log to authenticate itself, or by an arbitrary cosigner role". `cryptovalid_witness` took
+  the type of a key for its role. `verify_witnessed` and the `verify` command (exit 2), `witness_cosign`,
+  `WitnessService` and `submit_checkpoint` refused a 0x06 log key ("a log key must be an Ed25519 (0x01) or ECDSA (0x02)
+  note key") before reading any signature: measured on 15/11/2026 with a live checkpoint of the Sigstore staging log
+  `pqc27-a1.us-east4.rekor.sigstage.dev` (its log key from the TUF `trusted_root.json` of tuf.v2.sigstage.dev, three
+  ML-DSA-44 witnesses), which `cryptovalid-verify checkpoint` verifies, and with torchwood's litewitness vector
+  (`testdata/interop/torchwood_mldsa44_log.*`), which that witness cosigns. And `verify_witnessed` counted every
+  verified 0x04 or 0x06 line as a witness, so a 0x06 log line would have counted as one more. Now log keys are 0x01,
+  0x02 or 0x06 and witness keys 0x04 or 0x06; a line counts for the role of the list its key is in; a key (name and
+  key id) in both lists, or a trusted log key equal to the witness's own ML-DSA-44 key, is refused (`NoteError`); a
+  checkpoint with extension lines whose only trusted log signatures are ML-DSA-44 (which do not sign them) is refused
+  by the witness (400) and by the relying party (`NON_VALIDA`). Unchanged: a 0x01 or 0x02 key in the witness list is
+  refused, and an Ed25519 key used under one name as a 0x01 log key and as a 0x04 witness key counts once in each role.
+  The Sigstore checkpoint now verifies with `min_witnesses` 3 and not with 4. `test_witness_mldsa_log_20261115.py`:
+  12 tests, one of them only with `CV_SIGSTAGE_DIR` (the Sigstore checkpoint is not shipped), including 600 generated
+  cases (keys of five types in both lists, repeated and in any order: 100 OK, 413 NON_VALIDA, 87 refused) checked
+  against an oracle written from §16; the 12 fail on the code before this change, and the 17 hand mutants of the
+  changed lines are killed by this file and `test_cryptovalid_witness.py`.
 - **SPEC §15: the hybrid signature of this format is not the composite ML-DSA of RFC 10073.** Half a page with the
   sections of RFC 10073 it rests on (§2.1, §2.2, §3.1–§3.3, §4.1, §4.3, §5.3, §9.3, read in full on 15/11/2026): what
   both algorithms sign, the ML-DSA context, one value or two fields, "both or nothing" or per layer; the keys of a
