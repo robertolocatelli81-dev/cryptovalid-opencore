@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Code owners (GitHub requests their review on a pull request that touches a matching path; the last match wins).
+# This project has one maintainer (GOVERNANCE.md): the file names who must look at a change, it is not a second
+# review. The explicit rows are the places where a change reaches other implementations, stored evidence or the
+# release pipeline; a reviewer for an area is added on its row.
+
+*                           @robertolocatelli81-dev
+
+# the release pipeline, CI and this file
+/.github/                   @robertolocatelli81-dev
+/pyproject.toml             @robertolocatelli81-dev
+
+# the evidence format and what other implementations must match
+/SPEC_EVIDENCE_FORMAT.md    @robertolocatelli81-dev
+/spec/vectors/              @robertolocatelli81-dev
+/verifier.py                @robertolocatelli81-dev
+/verifiers/                 @robertolocatelli81-dev
+
+# the declared API
+/API.md                     @robertolocatelli81-dev
+/cryptovalid/               @robertolocatelli81-dev
+
+# the rules of the project and the contributor agreement
+/GOVERNANCE.md              @robertolocatelli81-dev
+/CONTRIBUTING.md            @robertolocatelli81-dev
+/SECURITY.md                @robertolocatelli81-dev
+/DCO                        @robertolocatelli81-dev
+/LICENSE                    @robertolocatelli81-dev

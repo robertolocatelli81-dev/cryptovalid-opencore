@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The rules of CONTRIBUTING.md and API.md, checked on every pull request with what is in the repository:
+# no external service, no secret, read-only token.
+name: governance
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    # OSPS Baseline LE-01.01: every commit asserts the right to contribute it (Signed-off-by, file DCO)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Every commit of the pull request is signed off by its author
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        # Dependabot signs off with another address than its author address: exempt by author, by name
+        run: python3 tools/check_dco.py --exempt-author '49699333+dependabot[bot]@users.noreply.github.com' "$BASE..$HEAD"
+
+  api:
+    # the declared package agrees with its stub on the floor and on a current Python (the suites run in verify.yml)
+    runs-on: ${{ matrix.python-version == '3.9' && 'ubuntu-24.04' || 'ubuntu-latest' }}
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Build tools pinned by hash (setuptools >= 77 builds the wheel the declared-API test inspects)
+        run: python3 -m pip install --require-hashes --no-deps -r .github/build-requirements.txt
+      - name: Stub against runtime (names, signatures, __all__)
+        run: python3 tools/check_stub.py . cryptovalid
+      - name: Declared API, receipts and the tools themselves
+        run: |
+          python3 test_declared_api.py
+          python3 test_governance_tools.py
+      - name: Type checker pinned by hash (mypy 2.4.1 installs on Python >= 3.10 only)
+        if: matrix.python-version == '3.13'
+        run: python3 -m pip install --require-hashes --no-deps -r tools/requirements-types.txt
+      - name: mypy --strict on the package (target 3.10, the oldest mypy 2.4 accepts) and stubtest against the runtime
+        if: matrix.python-version == '3.13'
+        run: |
+          python3 -m mypy --strict --python-version 3.10 cryptovalid
+          python3 -m mypy.stubtest cryptovalid

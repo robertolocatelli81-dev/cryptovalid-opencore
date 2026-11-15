@@ -48,5 +48,5 @@ vetting pluriennale, SLA e responsabilità legale. Questo documento non lo nasco
   pubblici; con quella leva: il modello Mojaloop diventa un percorso reale (lungo, ma reale).
 
 ## 6. Invito
-Contributi, revisioni indipendenti e pilot non commerciali con operatori reali (senza compenso né contratto di servizio) sono benvenuti — specialmente **dati di un
+Segnalazioni, revisioni indipendenti e pilot non commerciali con operatori reali (senza compenso né contratto di servizio) sono benvenuti — specialmente **dati di un
 operatore MFI** per passare dalla validazione sintetica a quella reale (l'unico gap di validazione dichiarato).

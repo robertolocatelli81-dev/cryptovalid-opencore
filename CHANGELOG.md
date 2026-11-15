@@ -9,6 +9,20 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **A declared, typed API: the package `cryptovalid`** (`API.md`). `import cryptovalid` gives 15 names of the core
+  (`verify_ledger`, `verify_pack`, `verify_note`, `verify_tiles`, …) with a stub (`__init__.pyi`), `py.typed` (PEP 561)
+  and `LedgerReceipt`, the receipt of `verify_ledger` declared key by key; the flat modules stay as they are and are
+  not declared API. Checked in CI (`governance.yml`, job `api`): `mypy --strict` (mypy 2.4.1, pinned by hash; target
+  3.10, the oldest it accepts), `python -m mypy.stubtest` and `tools/check_stub.py`, and `test_declared_api.py`, which
+  also builds the wheel and finds the stub and the marker inside it. stubtest found that the stub of `TokenError`
+  lacked its constructor (`reason`, `detail`); fixed. SemVer and the deprecation period for the 0.y line, and the
+  conditions for 1.0, are written in `API.md`. Proposed by Athena's review of 15/11/2026.
+- **Governance files.** `CONTRIBUTING.md` (reports and interoperability results welcome; code contributions not
+  accepted at present; the maintainer's commits carry a DCO 1.1 sign-off since 15/11/2026, checked on pull requests
+  by `tools/check_dco.py`), `GOVERNANCE.md` (one maintainer; no second reviewer), `SUPPORT.md` (the latest release only;
+  no paid support), `.github/CODEOWNERS`, `DCO` (the text of developercertificate.org). No contributor licence
+  agreement: no commercial licence is offered and no external code is accepted.
+
 - **The sdist is complete and reproducible.** The 0.24.0 sdist held 56 files: no test, specification, vector or
   CHANGELOG, so nobody could run the suite from it; and two builds of one commit with the same `SOURCE_DATE_EPOCH`
   gave different sdists (build time in the tar members and the gzip header; measured 15/11/2026, the wheels were
