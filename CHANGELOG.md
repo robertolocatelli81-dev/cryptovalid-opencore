@@ -7,7 +7,7 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
-## Unreleased
+## 0.25.0 (2026-11-15)
 
 - **SPEC §15: the hybrid signature of this format is not the composite ML-DSA of RFC 10073.** Half a page with the
   sections of RFC 10073 it rests on (§2.1, §2.2, §3.1–§3.3, §4.1, §4.3, §5.3, §9.3, read in full on 15/11/2026): what
