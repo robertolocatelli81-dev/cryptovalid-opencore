@@ -46,6 +46,22 @@ def italian(text: str) -> list:
     return sorted(set(_ACCENTED.findall(text)) | {m.lower() for m in _WORDS.findall(text)})
 
 
+def _child_flags() -> list:
+    """Flags of a child interpreter that sees the packages this one sees (15/11/2026): `-E` / `-s` only when this process
+    runs with them. Until 0.24.0 the children ran with `-E -s` whatever the parent did: with `cryptography` installed by
+    `pip install --user`, the parent found it and the children did not (3 failures in test_cli_c2sp_commands_20261115.py)."""
+    return (["-E"] if sys.flags.ignore_environment else []) + (["-s"] if sys.flags.no_user_site else [])
+
+
+def _child_env(env: dict) -> dict:
+    """`env` plus this interpreter's user base, so that a child given another HOME looks for user packages where this
+    interpreter found them."""
+    import site
+    if site.ENABLE_USER_SITE and not sys.flags.ignore_environment:
+        env = dict(env, PYTHONUSERBASE=site.getuserbase())
+    return env
+
+
 def _modules() -> list:
     files = subprocess.run(["git", "-C", HERE, "ls-files", "*.py"], capture_output=True, text=True, check=True).stdout.split()
     out = []
@@ -64,10 +80,10 @@ class TestCliHelpEnglish(unittest.TestCase):
     def setUpClass(cls):
         cls.home = tempfile.mkdtemp()
         cls.env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")}
-        cls.env.update(HOME=cls.home, LC_ALL="C.UTF-8", PYTHONIOENCODING="utf-8")
+        cls.env = _child_env(dict(cls.env, HOME=cls.home, LC_ALL="C.UTF-8", PYTHONIOENCODING="utf-8"))
 
     def _help(self, argv):
-        r = subprocess.run([sys.executable, "-E", "-s", *argv, "--help"], cwd=HERE, env=self.env,
+        r = subprocess.run([sys.executable, *_child_flags(), *argv, "--help"], cwd=HERE, env=self.env,
                            capture_output=True, text=True, timeout=120)
         return r.returncode, r.stdout + r.stderr
 

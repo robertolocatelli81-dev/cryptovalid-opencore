@@ -9,6 +9,11 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **Test children see the parent's packages.** `test_cli_c2sp_commands_20261115.py` and
+  `test_cli_help_english_20261115.py` started their child interpreters with `-E -s` whatever the parent did: with
+  `cryptography` installed by `pip install --user`, the parent found it and the children did not (3 failures, measured
+  15/11/2026). The children now take `-E` / `-s` only when the parent runs with them, and the parent's user base when
+  they get another HOME; a test checks that parent and child agree on `cryptography` (it fails with the old flags).
 - **Every suite green without `cryptography`.** Without the `sign` extra 20 of the 66 suites broke instead of skipping
   (5 at import, 14 with errors, 1 with a failure; the same 20 on Python 3.9.25 and 3.11.2, measured 15/11/2026), and two
   suites (`test_ingest.py`, `test_tip.py`) decided that the library was present from `import signer`, which succeeds

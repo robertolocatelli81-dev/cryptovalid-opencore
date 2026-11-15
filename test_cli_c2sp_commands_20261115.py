@@ -44,10 +44,26 @@ if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:
     raise SystemExit("CV_REQUIRE_CRYPTO=1 and `cryptography` is missing")
 
 
+def _child_flags() -> list:
+    """Flags of a child interpreter that sees the packages this one sees (15/11/2026): `-E` / `-s` only when this process
+    runs with them. Until 0.24.0 the children ran with `-E -s` whatever the parent did: with `cryptography` installed by
+    `pip install --user`, the parent found it and the children did not (3 failures in test_cli_c2sp_commands_20261115.py)."""
+    return (["-E"] if sys.flags.ignore_environment else []) + (["-s"] if sys.flags.no_user_site else [])
+
+
+def _child_env(env: dict) -> dict:
+    """`env` plus this interpreter's user base, so that a child given another HOME looks for user packages where this
+    interpreter found them."""
+    import site
+    if site.ENABLE_USER_SITE and not sys.flags.ignore_environment:
+        env = dict(env, PYTHONUSERBASE=site.getuserbase())
+    return env
+
+
 def _run(script, args, cwd=HERE):
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")}
     env.update(LC_ALL="C.UTF-8", PYTHONIOENCODING="utf-8")
-    r = subprocess.run([sys.executable, "-E", "-s", os.path.join(HERE, script), *args], cwd=cwd, env=env,
+    r = subprocess.run([sys.executable, *_child_flags(), os.path.join(HERE, script), *args], cwd=cwd, env=_child_env(env),
                        capture_output=True, text=True, timeout=300)
     return r.returncode, r.stdout, r.stderr
 
@@ -103,6 +119,18 @@ def _kind(r: dict) -> str:
     if r["kind"] != "auto":
         return r["kind"]
     return "ambiguous" if r["layers"][0]["detail"].startswith("format not recognised: ambiguous") else "refused"
+
+
+class TestChildrenSeeTheParentsPackages(unittest.TestCase):
+    """The children of this suite import what the parent imports (15/11/2026): `cryptography` found by one and not by the
+    other turned verdicts into failures. Checked here for `cryptography` and for the module directory itself."""
+    def test_same_packages(self):
+        code = "import importlib.util as u; print(u.find_spec('cryptography') is not None)"
+        with tempfile.TemporaryDirectory() as home:
+            env = _child_env(dict(os.environ, HOME=home))
+            r = subprocess.run([sys.executable, *_child_flags(), "-c", code], cwd=home, env=env, capture_output=True,
+                               text=True, timeout=120)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, str(HAVE_CRYPTO)), r.stderr[-400:])
 
 
 class TestInstalledCommands(unittest.TestCase):
@@ -287,7 +315,8 @@ class TestAutoNamesTheCommand(unittest.TestCase):
         os.symlink(HERE, os.path.join(self.d, "opencore"))           # verify_auto itself puts the module directory on the path
         code = ("from opencore import verify_evidence as V; r = V.verify_auto(%r); print(r['kind'], r['layers'][0]['status'])"
                 % ROME)
-        r = subprocess.run([sys.executable, "-E", "-s", "-c", code], cwd=self.d, capture_output=True, text=True, timeout=120)
+        r = subprocess.run([sys.executable, *_child_flags(), "-c", code], cwd=self.d, env=_child_env(dict(os.environ)),
+                           capture_output=True, text=True, timeout=120)
         self.assertEqual((r.returncode, r.stdout), (0, "checkpoint SKIP\n"), r.stderr[-400:])
 
     def test_tile_directories(self):
