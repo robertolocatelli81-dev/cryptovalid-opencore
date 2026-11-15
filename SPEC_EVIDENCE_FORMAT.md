@@ -321,7 +321,10 @@ its state is the state of the element of highest rank: `contradicted` > `not_eva
 **A pinned TSA (v0.8).** `verify_pack(..., tsa_certs=[...])` and `evidence_pack.py verify DIR --tsa-cert PEM` (repeatable:
 the TSA certificate or a CA above it, as in §11) check the token with §11, `verify_token(token, manifest digest, "sha256",
 tsa_certs)`, after the checks of the row above and only when they leave `tsa_not_checked`; every other outcome of the
-row stays as it is. The outcome of §11 maps to the state as ETSI EN 319 102-1 V1.4.1 (2024-06) §5.1.3, Table 6, maps a
+row stays as it is. Each pinned item, a PEM block or DER bytes, MUST have the shape of an X.509 certificate (RFC 5280
+§4.1: a SEQUENCE of two SEQUENCEs and a BIT STRING, filling the item); a path that is not a readable regular file, or an
+item of another shape, is refused before the pack is read (`ValueError`; exit 2 for `--tsa-cert`): a pin the
+verifier cannot load would otherwise make every token look broken. The outcome of §11 maps to the state as ETSI EN 319 102-1 V1.4.1 (2024-06) §5.1.3, Table 6, maps a
 signature validation: a token whose cryptographic checks fail or that cannot be processed (TOTAL-FAILED: SIG_CRYPTO_FAILURE,
 HASH_FAILURE, FORMAT_FAILURE) is `contradicted`, as a token over another digest already is (§11, "What a refusal shows");
 a token for which no chain to the pinned certificates is found

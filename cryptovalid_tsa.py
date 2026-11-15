@@ -339,8 +339,40 @@ def _run_openssl(cmd, **kw):
 SIGNATURE_ONLY_NOTE = "signature valid with the certificate contained in the token, chain not established"
 
 
+def _der_tlv(b: bytes, i: int) -> "tuple | None":
+    """(tag, start of content, end of content) of the DER element at `i`, or None if it does not fit in `b`."""
+    if i + 2 > len(b):
+        return None
+    tag, n, j = b[i], b[i + 1], i + 2
+    if n & 0x80:
+        k = n & 0x7f
+        if k == 0 or k > 4 or j + k > len(b):
+            return None
+        n, j = int.from_bytes(b[j:j + k], "big"), j + k
+    return (tag, j, j + n) if j + n <= len(b) else None
+
+
+def _is_certificate_der(der: bytes) -> bool:
+    """RFC 5280 §4.1 shape: Certificate ::= SEQUENCE { tbsCertificate SEQUENCE, signatureAlgorithm SEQUENCE,
+    signatureValue BIT STRING }, exactly filling the bytes. A shape check only: openssl reads the certificate itself.
+    Since 2026-11-15 (NEMESIS review): a pinned file that only began with 0x30 was accepted as a certificate, and openssl,
+    unable to load it, refused the token's signature (a valid token of the pinned TSA became `contradicted`)."""
+    top = _der_tlv(der, 0)
+    if top is None or top[0] != 0x30 or top[2] != len(der):
+        return False
+    i, tags = top[1], []
+    while i < top[2]:
+        el = _der_tlv(der, i)
+        if el is None:
+            return False
+        tags.append(el[0])
+        i = el[2]
+    return i == top[2] and tags == [0x30, 0x30, 0x03]
+
+
 def _pem_certs(items) -> bytes:
-    """The pinned certificates as one PEM file: each item a path or bytes, PEM or DER. Anything else is a ValueError."""
+    """The pinned certificates as one PEM file: each item a path or bytes, PEM or DER. Anything else is a ValueError,
+    a PEM block or DER item that is not shaped as an X.509 certificate (RFC 5280 §4.1) included."""
     import base64
     out = []
     import stat
@@ -358,11 +390,11 @@ def _pem_certs(items) -> bytes:
         it = bytes(it)
         if b"-----BEGIN CERTIFICATE-----" in it:
             blocks = it.split(b"-----BEGIN CERTIFICATE-----")[1:]
-            if not all(b"-----END CERTIFICATE-----" in bl and (_first_pem_der(b"-----BEGIN CERTIFICATE-----" + bl) or b"")[:1]
-                       == b"\x30" for bl in blocks):
+            if not all(b"-----END CERTIFICATE-----" in bl and _is_certificate_der(_first_pem_der(b"-----BEGIN CERTIFICATE-----" + bl)
+                                                                               or b"") for bl in blocks):
                 raise ValueError("tsa_certs: a PEM block is not a certificate")
             out.append(it if it.endswith(b"\n") else it + b"\n")
-        elif it[:1] == b"\x30":
+        elif _is_certificate_der(it):
             b64 = base64.encodebytes(it).replace(b"\n", b"")
             out.append(b"-----BEGIN CERTIFICATE-----\n" + b"\n".join(b64[i:i + 64] for i in range(0, len(b64), 64))
                        + b"\n-----END CERTIFICATE-----\n")

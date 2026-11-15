@@ -243,8 +243,8 @@ pip install 'cryptovalid-opencore[sign]'
 
 AP2 dispute evidence (experimental) needs the `ap2` extra (`'cryptovalid-opencore[ap2]'`), which installs
 ap2-evidence-pack >= 1.6.0, < 2 from PyPI; without it `cryptovalid-verify ap2` is a refusal that names the extra
-(exit 1). PyPI carries the wheel and sdist attached to each GitHub Release (the same bytes, listed in its
-`SHA256SUMS`). An index that links only those release files, with `#sha256=` fragments that pip verifies, is at
+(exit 1). From 0.23.0, PyPI carries the wheel and sdist attached to the GitHub Release of the same version (the same bytes,
+listed in its `SHA256SUMS`; earlier releases are on GitHub and the index below only). An index that links only those release files, with `#sha256=` fragments that pip verifies, is at
 `https://robertolocatelli81-dev.github.io/pypi/` (`pip install --index-url … cryptovalid-opencore`). All documented `python3 <file>.py` commands also work from a clone.
 
 ## Licence, contact, citation

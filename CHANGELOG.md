@@ -18,6 +18,13 @@ run by the same author, not by a third party.
   same message: neither crossing verifies, both direct checks do; its composite helper is a test helper, checked
   against the two signatures of the RFC's Appendix E for `id-MLDSA65-Ed25519-SHA512` when the RFC's text is given
   (`CV_RFC10073_TXT`; they verified on 15/11/2026). Proposed by Athena's review of 15/11/2026.
+- **A pinned TSA certificate must be shaped as a certificate** (SPEC v0.8 §10, found by the NEMESIS review of
+  15/11/2026). `tsa_certs` / `--tsa-cert` accepted any item whose first byte was 0x30; openssl could not load such a pin
+  and refused the token's signature, so the real DigiCert token of `spec/vectors/rfc3161`, pinned with its own
+  certificate plus such a file, was `tsa_unresolved`, and pinned with the file alone `contradicted / token_invalid` (the
+  pack not valid). Each PEM block or DER item must now be a SEQUENCE of two SEQUENCEs and a BIT STRING (RFC 5280 §4.1),
+  checked before the pack is read: otherwise `ValueError`, exit 2 for `--tsa-cert` (also for the ingest, the receipt
+  and `eidas_ledger_check.py`, which share the check). `test_tsa_pin_shape_20261115.py`.
 - **The evidence pack's verify checks the RFC 3161 token against a TSA the caller pins** (SPEC v0.8, §10–§11):
   `evidence_pack.py verify DIR --tsa-cert PEM` (repeatable) and `verify_pack(..., tsa_certs=[...])`. Until now the
   pack's token was read for its status and imprint only, `time_anchor` was never `verified`, and a token whose signature
@@ -44,8 +51,9 @@ run by the same author, not by a third party.
   reserved instead of "indefinite form". One outcome changes: in `cryptovalid_cedulon`, a record whose COSE bytes end
   inside a head was refused at stage `malformed` (the `IndexError` reached the catch-all); it is now refused at
   `record-header`, the stage that reads the record. Proposed by Athena's review of 15/11/2026.
-- **A declared, typed API: the package `cryptovalid`** (`API.md`). `import cryptovalid` gives 15 names of the core
-  (`verify_ledger`, `verify_pack`, `verify_note`, `verify_tiles`, …) with a stub (`__init__.pyi`), `py.typed` (PEP 561)
+- **A declared, typed API: the package `cryptovalid`** (`API.md`). `import cryptovalid` exports the 18 names of its `__all__`:
+  11 functions of the core (`verify_ledger`, `verify_pack`, `verify_note`, `verify_tiles`, …), `LedgerReceipt`, four
+  exception classes, the deprecation warning class and `__version__`, with a stub (`__init__.pyi`), `py.typed` (PEP 561)
   and `LedgerReceipt`, the receipt of `verify_ledger` declared key by key; the flat modules stay as they are and are
   not declared API. Checked in CI (`governance.yml`, job `api`): `mypy --strict` (mypy 2.4.1, pinned by hash; target
   3.10, the oldest it accepts), `python -m mypy.stubtest` and `tools/check_stub.py`, and `test_declared_api.py`, which
@@ -58,7 +66,7 @@ run by the same author, not by a third party.
   no paid support), `.github/CODEOWNERS`, `DCO` (the text of developercertificate.org). No contributor licence
   agreement: no commercial licence is offered and no external code is accepted.
 
-- **The sdist is complete and reproducible.** The 0.24.0 sdist held 56 files: no test, specification, vector or
+- **The sdist is complete and reproducible.** The 0.24.0 sdist held 56 entries (54 files): no test, specification, vector or
   CHANGELOG, so nobody could run the suite from it; and two builds of one commit with the same `SOURCE_DATE_EPOCH`
   gave different sdists (build time in the tar members and the gzip header; measured 15/11/2026, the wheels were
   identical). `MANIFEST.in` now puts every tracked file in it (on this branch: the same list as `git ls-files`), and
