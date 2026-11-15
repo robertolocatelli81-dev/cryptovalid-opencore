@@ -53,24 +53,20 @@ class TestVersion(unittest.TestCase):
     def test_outside_a_checkout_the_metadata_or_unknown(self):
         """verifier.py copied alone (no pyproject.toml next to it), and next to a pyproject.toml of another project:
         the installed distribution's version if there is one, otherwise "unknown" — never the other project's."""
-        try:
-            from importlib.metadata import PackageNotFoundError, version
-            try:
-                installed = version("cryptovalid-opencore")
-            except PackageNotFoundError:
-                installed = None
-        except ImportError:  # pragma: no cover
-            installed = None
         for other in (None, '[project]\nname = "someone-else"\nversion = "9.9.9"\n'):
             with tempfile.TemporaryDirectory() as d:
                 shutil.copy(os.path.join(HERE, "verifier.py"), d)
                 if other:
                     with open(os.path.join(d, "pyproject.toml"), "w") as f:
                         f.write(other)
-                r = _run(["-c", "import verifier; print(verifier.package_version())"], cwd=d)
+                # the installed version is read in the same child (an egg-info next to the parent's files, as in an
+                # unpacked sdist, is a distribution for the parent and not for the child)
+                r = _run(["-c", "import verifier, importlib.metadata as m\n"
+                                "try:\n    v = m.version('cryptovalid-opencore')\nexcept m.PackageNotFoundError:\n    v = ''\n"
+                                "print(verifier.package_version()); print(v)"], cwd=d)
             with self.subTest(other=bool(other)):
                 self.assertEqual(r.returncode, 0, r.stderr)
-                got = r.stdout.strip()
+                got, installed = (r.stdout.split("\n") + ["", ""])[:2]
                 if installed:
                     self.assertEqual(got, installed)
                 else:

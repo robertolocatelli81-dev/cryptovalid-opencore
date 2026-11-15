@@ -9,6 +9,15 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **The sdist is complete and reproducible.** The 0.24.0 sdist held 56 files: no test, specification, vector or
+  CHANGELOG, so nobody could run the suite from it; and two builds of one commit with the same `SOURCE_DATE_EPOCH`
+  gave different sdists (build time in the tar members and the gzip header; measured 15/11/2026, the wheels were
+  identical). `MANIFEST.in` now puts every tracked file in it (on this branch: the same list as `git ls-files`), and
+  `.github/reproducible_sdist.py` rewrites it with sorted members, the commit's date, owner 0 and normalised modes;
+  `release-build.yml` sets `SOURCE_DATE_EPOCH` from the commit, rewrites the sdist and checks that it carries every
+  test file. Two builds from two copies: wheel and sdist byte-identical. The suite runs from the unpacked sdist (no git
+  metadata): `test_spdx_headers.py` and `test_cli_help_english_20261115.py` list the files of an unpacked sdist
+  (PKG-INFO at the top) when there is no git checkout, and still fail anywhere else.
 - **Go verifier: what Go < 1.27 does, measured and written down.** `go.mod` declares Go 1.24 while ML-DSA-65 needs
   `crypto/mldsa` (Go 1.27); the declaration stays (the hash chain, the Ed25519 tip and the writer build from 1.24) and
   `verifiers/go/README.md` now says what happens below 1.27, measured on 15/11/2026 with go1.24.13 and go1.27.0:
