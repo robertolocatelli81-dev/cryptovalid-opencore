@@ -9,6 +9,11 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **Seven tests on behaviours of `verifier.py` no suite observed** (`test_verifier_gaps_20261115.py`, proposed by
+  Athena's review of 15/11/2026): brackets inside strings and after escapes, `\n` before hex digits, the receipt's
+  `hash_recompute_passed` / `link_passed`, an untrusted or unreadable tip, a PQ key without a log key, the input of
+  `receipt_sha256`. Each of 13 mutants that survived 26 suites in that review fails at least one of them
+  (`--controls`: 13 of 13 killed, null control green); the reference is unchanged by them.
 - **`verify_ledger` leaves the host's recursion limit as it found it.** Used as a library it raised the interpreter
   limit for its decoder and left it raised (1000 → 1796 after one call, measured 15/11/2026). The headroom now covers
   the whole call and the caller's limit is restored when it returns, on PASS, FAIL or an exception, from a 600-frame
