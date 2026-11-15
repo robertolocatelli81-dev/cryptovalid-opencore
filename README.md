@@ -6,6 +6,7 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22539578.svg)](https://doi.org/10.5281/zenodo.22539578)
 [![verify-evidence](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml/badge.svg)](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/actions/workflows/verify.yml)
 [![PyPI](https://img.shields.io/pypi/v/cryptovalid-opencore)](https://pypi.org/project/cryptovalid-opencore/)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)](LICENSE)
 
 **Evidence files that a third party verifies offline, years later, without trusting whoever wrote them:**
 hash-chained JSONL ledgers, Ed25519 (optionally + ML-DSA-65) signatures, a signed chain tip, RFC 3161 timestamps,
