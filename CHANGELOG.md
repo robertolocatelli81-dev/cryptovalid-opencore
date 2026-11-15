@@ -7,7 +7,7 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
-## 0.25.0 (2026-11-15)
+## 0.25.0 (2026-11-16)
 
 - **The witness module accepts a log that signs with ML-DSA-44, and tells the log from a witness by the list a key is
   in** (SPEC v0.8 §16). c2sp.org/tlog-checkpoint (C2SP/C2SP @ 09f3e519fe79, read on 15/11/2026): an ML-DSA-44 signature
