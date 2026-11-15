@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           v=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
+          if [ "${GITHUB_REF_TYPE:-}" = tag ]; then
             [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::pyproject.toml is $v, tag is $GITHUB_REF_NAME"; exit 1; }
           fi
           # reproducible: every date in the files is the commit's date (wheel: setuptools reads SOURCE_DATE_EPOCH; sdist:
@@ -41,8 +41,9 @@ jobs:
           ls dist
           [ "$(ls dist | wc -l)" = 2 ] || { echo "::error::expected one wheel and one sdist"; exit 1; }
           # the sdist runs the suite on its own (no git metadata): a test file missing from it turns this step red
-          mkdir "$RUNNER_TEMP/from-sdist" && tar -xzf dist/*.tar.gz -C "$RUNNER_TEMP/from-sdist"
-          d=$(echo "$RUNNER_TEMP"/from-sdist/*/)
+          t="${RUNNER_TEMP:-$(mktemp -d)}/from-sdist"   # RUNNER_TEMP is GitHub's; a local run has none
+          mkdir "$t" && tar -xzf dist/*.tar.gz -C "$t"
+          d=$(echo "$t"/*/)
           [ "$(cd "$d" && ls test_*.py | wc -l)" = "$(ls test_*.py | wc -l)" ] || { echo "::error::the sdist lacks test files"; exit 1; }
           (cd dist && sha256sum *) | tee dist-sha256.txt
       - id: attest

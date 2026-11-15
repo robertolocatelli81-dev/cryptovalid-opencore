@@ -15,7 +15,8 @@ run by the same author, not by a third party.
   identical). `MANIFEST.in` now puts every tracked file in it (on this branch: the same list as `git ls-files`), and
   `.github/reproducible_sdist.py` rewrites it with sorted members, the commit's date, owner 0 and normalised modes;
   `release-build.yml` sets `SOURCE_DATE_EPOCH` from the commit, rewrites the sdist and checks that it carries every
-  test file. Two builds from two copies: wheel and sdist byte-identical. The suite runs from the unpacked sdist (no git
+  test file. Its build step no longer dies on an unset `GITHUB_REF_TYPE` / `RUNNER_TEMP` when run outside
+  GitHub (`set -u`; found by the local CI bench). Two builds from two copies: wheel and sdist byte-identical. The suite runs from the unpacked sdist (no git
   metadata): `test_spdx_headers.py` and `test_cli_help_english_20261115.py` list the files of an unpacked sdist
   (PKG-INFO at the top) when there is no git checkout, and still fail anywhere else.
 - **Go verifier: what Go < 1.27 does, measured and written down.** `go.mod` declares Go 1.24 while ML-DSA-65 needs
