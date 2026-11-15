@@ -19,6 +19,10 @@ Usage:
   cryptovalid-verify ledger   <file.jsonl>     # hash chain only (as verifier.py)
   cryptovalid-verify ap2      <evidence.json>  # SD-JWT agent mandates (AP2)
   cryptovalid-verify cldma    <attest.json>    # CLDMA attestation (committed ratio)
+  cryptovalid-verify checkpoint <note> --vkey <vkey>   # C2SP checkpoint / signed note (SPEC §13)
+  cryptovalid-verify tiles <dir> --vkey <vkey> --profile static-ct-api|tlog-tiles   # C2SP tiles (SPEC §14)
+  cryptovalid-verify vkey-rfc6962 --name <origin> --key-b64 <DER>   # vkey (0x05) of a static CT log
+  (the last three are the commands of cryptovalid_checkpoint.py, run by the same code; since 2026-11-15)
 
 Status: `auto`, `pack` and `ledger` are the maintained core; `archive`, `ap2` and `cldma` are EXPERIMENTAL
 (README, "Core and experimental modules"): kept and tested, no new scope is added to them.
@@ -292,7 +296,10 @@ def verify_cldma(path: str) -> dict:
 _AUTO_JSON_LIMIT = 64 * 1024 * 1024   # SPEC §12: the two JSON documents are read whole up to this size
 _RECOGNISED = ("evidence pack directory (MANIFEST.json), ingest archive directory (*.head.json or *-*.jsonl), "
                "AP2 evidence (one JSON object, evidence_format ap2-evidence*), CLDMA attestation (one JSON object with "
-               "root_hash and metric_id), ledger (JSONL whose first line is an object with prev_hash and self_hash)")
+               "root_hash and metric_id), ledger (JSONL whose first line is an object with prev_hash and self_hash), "
+               "C2SP checkpoint (a signed note of at most 1 MiB whose text is a checkpoint), C2SP tiled log directory "
+               "(a directory tile)")
+_NOTE_LIMIT = 1 << 20   # SPEC §12: a file is read as a signed note up to the limit of a note file on the command line
 
 
 class _NotRecognised(Exception):
@@ -324,12 +331,29 @@ def _utf8(raw: bytes, what: str) -> str:
 _NO_JSON = object()
 
 
-def _file_format(path: str) -> str:
-    """'ap2', 'cldma' or 'ledger' for a regular file (SPEC §12), else _NotRecognised with the reason"""
+def _checkpoint_note(raw: bytes):
+    """SPEC §12, row C2SP checkpoint: the parsed checkpoint when the bytes are a signed note whose text is a checkpoint,
+    read by the code of `cryptovalid-verify checkpoint`; else None"""
+    _need_opencore()
+    import cryptovalid_checkpoint as C
+    try:
+        text, _sigs = C.split_note(raw)
+        return C.parse_checkpoint(text)
+    except C.NoteError:
+        return None
+
+
+def _file_format(path: str, found: dict = None) -> str:
+    """'ap2', 'cldma', 'ledger' or 'checkpoint' for a regular file (SPEC §12), else _NotRecognised with the reason;
+    `found` receives the parsed checkpoint"""
     with open(path, "rb") as fh:
         raw = fh.read(_AUTO_JSON_LIMIT + 1)
     whole_read = len(raw) <= _AUTO_JSON_LIMIT
     rows, whole, doc = [], _NO_JSON, None
+    if whole_read and len(raw) <= _NOTE_LIMIT and not raw.startswith(b"\xef\xbb\xbf"):
+        cp = _checkpoint_note(raw)
+    else:
+        cp = None
     if whole_read:
         try:
             doc = _utf8(raw, "the file")
@@ -370,6 +394,10 @@ def _file_format(path: str) -> str:
                               k for k in ("prev_hash", "self_hash") if k not in entry))
     if isinstance(entry, dict) and "prev_hash" in entry and "self_hash" in entry:
         rows.append("ledger")
+    if cp is not None:
+        rows.append("checkpoint")
+        if found is not None:
+            found["checkpoint"] = cp
     if len(rows) > 1:
         raise _NotRecognised("ambiguous: the file matches " + " and ".join(rows) + "; name the verifier")
     if rows:
@@ -407,17 +435,49 @@ def verify_auto(path: str) -> dict:
         import glob
         if glob.glob(os.path.join(glob.escape(path), "*.head.json")) or glob.glob(os.path.join(glob.escape(path), "*-*.jsonl")):
             return verify_archive(path)
+        try:
+            tile_dir = stat.S_ISDIR(os.lstat(os.path.join(path, "tile")).st_mode)
+        except OSError:
+            tile_dir = False
+        if tile_dir:
+            return _c2sp_tiles(path)
         return _not_recognised("a directory with neither MANIFEST.json (evidence pack) nor *.head.json / *-*.jsonl "
-                               "(ingest archive)")
+                               "(ingest archive) nor a directory tile (C2SP tiled log)")
     if not stat.S_ISREG(mode):
         return _not_recognised("neither a directory nor a regular file (for a pipe use `cryptovalid-verify ledger`)")
+    found = {}
     try:
-        fmt = _file_format(path)
+        fmt = _file_format(path, found)
     except _NotRecognised as e:
         return _not_recognised(str(e))
     except OSError as e:
         return _not_recognised(f"cannot read the file ({type(e).__name__}: {e.strerror or e})")
+    if fmt == "checkpoint":
+        cp = found["checkpoint"]
+        return _rollup("checkpoint", [_layer("checkpoint", "SKIP", (
+            f"C2SP checkpoint (origin {json.dumps(cp['origin'], ensure_ascii=False)}, size {cp['size']}): auto holds no "
+            f"trusted key and verifies nothing; run: cryptovalid-verify checkpoint {_quote(path)} --vkey <vkey of the log>"))])
     return {"ap2": verify_ap2, "cldma": verify_cldma, "ledger": verify_ledger}[fmt](path)
+
+
+def _quote(path: str) -> str:
+    import shlex
+    return shlex.quote(path)
+
+
+def _c2sp_tiles(path: str) -> dict:
+    """SPEC §12, row C2SP tiled log: the command that verifies it, which needs a trusted key and the profile"""
+    import stat
+    cp = os.path.join(path, "checkpoint")
+    try:
+        has_cp = stat.S_ISREG(os.stat(cp).st_mode)
+    except OSError:
+        has_cp = False
+    cmd = f"cryptovalid-verify tiles {_quote(path)} --vkey <vkey of the log> --profile <static-ct-api or tlog-tiles>"
+    if not has_cp:
+        cmd += " --checkpoint <checkpoint file>"
+    return _rollup("tiles", [_layer("tiles", "SKIP", "C2SP tiled log (directory tile): auto holds no trusted key and "
+                                                       f"verifies nothing; run: {cmd}")])
 
 
 def _rollup(kind: str, layers: list) -> dict:
@@ -431,14 +491,19 @@ def _rollup(kind: str, layers: list) -> dict:
 
 _COMMANDS = {
     "auto": "recognise the path by the closed list of SPEC §12 and verify it with the command below\n"
-            "           that fits; anything else is refused as 'format not recognised', with the reason",
+            "               that fits; anything else is refused as 'format not recognised', with the reason",
     "pack": "evidence pack directory (evidence_pack.py)",
     "archive": "ingest archive directory: segments, Merkle STH, signed HEAD (experimental)",
     "ledger": "hash chain of a .jsonl ledger only",
     "ap2": "AP2 SD-JWT mandate evidence, through ap2-evidence-pack (experimental)",
     "cldma": "CLDMA committed attestation (experimental)",
+    "checkpoint": "C2SP checkpoint or signed note, verified against trusted vkeys (SPEC §13; options: --help)",
+    "tiles": "C2SP tiles of a log directory, with its checkpoint (SPEC §14; options: --help)",
+    "vkey-rfc6962": "print the vkey (type 0x05) of a static CT log from its public key (SPEC §13)",
 }
-_COMMANDS_HELP = ("commands:\n" + "".join(f"  {k:<8} {v}\n" for k, v in _COMMANDS.items())
+# SPEC §13-§14: the commands of cryptovalid_checkpoint.py, run by its own code (cryptovalid-verify name -> its command)
+_C2SP_COMMANDS = {"checkpoint": "verify", "tiles": "tiles", "vkey-rfc6962": "vkey-rfc6962"}
+_COMMANDS_HELP = ("commands:\n" + "".join(f"  {k:<12} {v}\n" for k, v in _COMMANDS.items())
                   + "\nexit status: 0 the evidence is valid for what could be checked here, 1 it is not, 2 usage error,\n"
                     "74 the receipt was not written whole to stdout (whatever the verdict).")
 
@@ -450,6 +515,11 @@ def main(argv=None) -> int:
 
 
 def _main(argv=None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in _C2SP_COMMANDS:   # SPEC §13-§14, their own arguments and --help
+        _need_opencore()
+        import cryptovalid_checkpoint as C
+        return C.main([_C2SP_COMMANDS[args[0]]] + args[1:], prog="verify_evidence", cmd_name=args[0])
     from verifier import Parser, receipt_not_written, write_stdout   # 0.20.3: the same write rule as verifier.py
     p = Parser(prog="verify_evidence", formatter_class=argparse.RawDescriptionHelpFormatter,
                description="One offline verifier for every kind of CryptoValid evidence.",

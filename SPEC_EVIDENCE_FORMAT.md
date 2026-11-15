@@ -227,6 +227,10 @@ key"); it is OK when the signature verifies, NON_VALIDA with the reason when it 
 canonical ECDSA P-256 key is refused as the caller's error.
 v0.7 also adds §14 (2026-11-15), reading the tiles of C2SP tiled logs, when `cryptovalid_merkle.py` moved to the core.
 Additive: nothing read tiles before.
+v0.7 also adds to §12 (2026-11-15) the two C2SP rows, a checkpoint file and a directory of tiles: `auto` answered "format
+not recognised" for both; it now names the command that verifies them (`cryptovalid-verify checkpoint`, `tiles`), which
+it cannot run itself without a trusted key. `cryptovalid-verify` gains the commands `checkpoint`, `tiles` and
+`vkey-rfc6962` of §13 and §14 (until then only in `cryptovalid_checkpoint.py`, which has no installed command).
 
 ## 7. Conformance (normative)
 
@@ -419,6 +423,8 @@ starts `format not recognised:` and names the reason; exit 1).
 | regular file whose whole content is one JSON object with a string `evidence_format` that starts with `ap2-evidence` | AP2 evidence | `ap2` |
 | regular file whose whole content is one JSON object holding the members `root_hash` and `metric_id` | CLDMA attestation | `cldma` |
 | regular file whose first non-blank line is one JSON object holding the members `prev_hash` and `self_hash` (§2) | ledger | `ledger` (§5) |
+| regular file of at most 1 MiB whose whole content is a signed note (c2sp.org/signed-note: text, a blank line, signature lines) whose text is a checkpoint (c2sp.org/tlog-checkpoint: an origin line, the size in ASCII decimal without leading zeroes, the root as the canonical base64 of 32 bytes, then any extension lines), read as `cryptovalid-verify checkpoint` reads it: UTF-8 without control characters other than newline, ending with a newline, text and signatures split at the last blank line, each signature line `— <name> <base64>` of 5 to 8192 bytes, at most 100 lines | C2SP checkpoint | none in `auto`: a checkpoint is verified against a trusted key, which `auto` has not got; the receipt names the command, `cryptovalid-verify checkpoint <path> --vkey <vkey>` (since v0.7, 2026-11-15) |
+| directory holding a directory (not a link) named `tile`, when neither row of a directory above matches | C2SP tiled log | none in `auto` (a trusted key and the profile are needed); the receipt names the command, `cryptovalid-verify tiles <dir> --vkey <vkey> --profile <static-ct-api or tlog-tiles>`, with `--checkpoint <file>` when the directory holds no regular file `checkpoint` (since v0.7, 2026-11-15) |
 
 Read as follows. A file is read whole, as UTF-8 without a byte order mark, up to 64 MiB for the two JSON documents; a larger
 file can only be a ledger, and its first line is read up to 64 MiB. "Blank" is a line of spaces, tabs and a carriage
@@ -430,7 +436,12 @@ ledger are judged by `ledger`, which names them); a JSON value other than those 
 string, an object with other members); a first line that is not a JSON object (a document written over several lines,
 binary data); JSON nested deeper than the parser allows.
 
-Recognised is not valid: the row's verifier then gives the verdict, as when it is named directly. A ledger whose first
+The rows of a directory are tried in the order of the table (an evidence pack first). A file is read as a signed note
+only when it was read whole and holds at most 1 MiB, the limit of a note file on the command line (§13).
+
+Recognised is not valid: the row's verifier then gives the verdict, as when it is named directly. For the two C2SP rows
+`auto` verifies nothing: the receipt has `kind` `checkpoint` or `tiles`, `valid` false and one layer with status SKIP
+whose detail names the command to run (exit 1); the checkpoint's origin and size are named, read from untrusted text. A ledger whose first
 line is damaged so that it no longer holds `prev_hash` and `self_hash` is not recognised; `cryptovalid-verify ledger`
 names the failure of each line.
 
@@ -460,8 +471,9 @@ The rule of this implementation:
    SHA-256 of the DER (RFC 6962 §3.2). Refused as the caller's error, with the reason: an ID that is not SHA-256(name ||
    0x0A || 0x05 || LogID)[:4]; material that is not a DER SubjectPublicKeyInfo; a key that is not ECDSA P-256 (RSA, which
    RFC 6962 allows, is not implemented; other curves are outside RFC 6962); a DER that is not the canonical encoding of the
-   key (trailing bytes, another encoding). `cryptovalid_checkpoint.py vkey-rfc6962 --name <origin> --key-b64 <DER>` prints
-   the vkey from the `key` of a CT log list entry.
+   key (trailing bytes, another encoding). `cryptovalid-verify vkey-rfc6962 --name <origin> --key-b64 <DER>` (or `cryptovalid_checkpoint.py
+   vkey-rfc6962`) prints the vkey from the `key` of a CT log list entry; `cryptovalid-verify checkpoint <note> --vkey
+   <vkey>` (or `cryptovalid_checkpoint.py verify`) verifies a note.
 2. **Signature body**, after the 4-byte key ID, read in this order, each length checked before the bytes it covers are
    read: 8 bytes `timestamp` (milliseconds, any uint64); 1 byte hash algorithm; 1 byte signature algorithm; 2 bytes length
    `L` (big-endian); exactly `L` bytes of signature and nothing after them. A body of fewer than 12 bytes, a length that
@@ -486,8 +498,8 @@ github.com/transparency-dev/formats (`verifiers/note_oracle`).
 ## 14. Tiles of C2SP tiled logs (NORMATIVE since v0.7, 2026-11-15)
 
 `cryptovalid_merkle.verify_tiles` reads, from a directory laid out as the log serves it (`<dir>/tile/...`), the tiles of a
-tree of a given size, and checks them against the root of a checkpoint; `cryptovalid_checkpoint.py tiles <dir> --vkey
-... --profile static-ct-api|tlog-tiles` first verifies the checkpoint (`<dir>/checkpoint`, §13 for static CT logs) and
+tree of a given size, and checks them against the root of a checkpoint; `cryptovalid-verify tiles <dir> --vkey ... --profile
+static-ct-api|tlog-tiles` (or `cryptovalid_checkpoint.py tiles`) first verifies the checkpoint (`<dir>/checkpoint`, §13 for static CT logs) and
 then its tiles. Sources, read on 2026-11-15: c2sp.org/tlog-tiles at commit b2dd989233 (2026-10-07) and
 c2sp.org/static-ct-api at commit 7e91dadf3c (2026-10-01) of github.com/C2SP/C2SP, unchanged on `main` that day; RFC 6962
 §2.1 and §3.4. The rules they set:

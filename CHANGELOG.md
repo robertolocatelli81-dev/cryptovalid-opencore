@@ -9,6 +9,16 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **`cryptovalid-verify checkpoint`, `tiles` and `vkey-rfc6962`; `auto` names them** (SPEC v0.7, §12 two rows added
+  before the code). The commands of SPEC §13-§14 were only in `cryptovalid_checkpoint.py`, which has no installed
+  command, and `cryptovalid-verify auto` answered "format not recognised" on a checkpoint and on a directory of tiles. The
+  installed command now runs them with the code of `cryptovalid_checkpoint.py` (`checkpoint` is its `verify`; same
+  output and exit status, compared argument by argument in the test), each with its own English `--help`. `auto`
+  recognises a regular file of at most 1 MiB that is a signed note whose text is a checkpoint, and a directory holding a
+  directory `tile` (after the pack and archive rows): it verifies nothing, since it has no trusted key, and its receipt
+  (`kind` `checkpoint` or `tiles`, one SKIP layer, `valid` false, exit 1) names the command to run with the path.
+  A note whose origin line is also a ledger's first line is refused as ambiguous. `test_cli_c2sp_commands_20261115.py`.
+
 - **Tiles of C2SP tiled logs are read and checked; `cryptovalid_merkle.py` is core** (SPEC v0.7, §14 new; additive).
   `cryptovalid_merkle.verify_tiles` reads, from a directory laid out as the log serves it, the hash tiles of a tree
   (full and partial, a partial absent read from the full tile as both specifications allow), and the data tiles of a

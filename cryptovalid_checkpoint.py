@@ -583,21 +583,27 @@ except ImportError:   # python3 -m opencore.<module> from the parent directory
 
 
 @receipt_cli
-def main(argv=None) -> int:
-    import argparse
-    ap = Parser(description="C2SP checkpoints / signed notes for a cryptovalid ledger")
+def main(argv=None, prog=None, cmd_name=None) -> int:
+    """the command line; `cryptovalid-verify checkpoint|tiles|vkey-rfc6962` runs it with prog="verify_evidence" and
+    cmd_name, the name its user typed, shown in the usage and help of that command (`checkpoint` is `verify` here)"""
+    ap = Parser(prog=prog, description="C2SP checkpoints / signed notes for a cryptovalid ledger")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    own = {"prog": f"{ap.prog} {cmd_name}"} if cmd_name else {}   # its usage: "<prog> <the name typed>"
     s = sub.add_parser("sign", help="write the signed checkpoint note of a ledger")
     s.add_argument("ledger"); s.add_argument("--origin", required=True); s.add_argument("--key", required=True, help="hex seed file (signer.py keygen)")
     s.add_argument("--out", required=True); s.add_argument("--name", help="signer key name when it differs from the origin (default: the origin)")
-    v = sub.add_parser("verify", help="verify a note against vkeys"); v.add_argument("note"); v.add_argument("--vkey", action="append", required=True)
+    v = sub.add_parser("verify", help="verify a note against vkeys", **own)
+    v.add_argument("note", help="the signed note (a regular file of at most 1 MiB), e.g. a log's checkpoint")
+    v.add_argument("--vkey", action="append", required=True,
+                   help="a trusted verifier key <name>+<hex id>+<base64> (repeatable; vkey-rfc6962 prints a static CT log's)")
     k = sub.add_parser("vkey", help="print the vkey of a key file"); k.add_argument("--key", required=True); k.add_argument("--name", required=True)
     k.add_argument("--cosigner", action="store_true", help="type 0x04 (cosignature/v1) instead of 0x01")
     k.add_argument("--mldsa44", action="store_true", help="type 0x06 (ML-DSA-44 cosignature/v1) from the same 32-byte seed file")
-    r = sub.add_parser("vkey-rfc6962", help="print the vkey (type 0x05) of a static CT log from its public key")
+    r = sub.add_parser("vkey-rfc6962", help="print the vkey (type 0x05) of a static CT log from its public key", **own)
     r.add_argument("--name", required=True, help="the checkpoint origin: submission prefix without scheme and trailing slashes")
     r.add_argument("--key-b64", required=True, help="base64 DER SubjectPublicKeyInfo (the `key` of a CT log list entry)")
-    t = sub.add_parser("tiles", help="verify a checkpoint and the C2SP tiles of its tree, from a directory laid out as the log serves it")
+    t = sub.add_parser("tiles", help="verify a checkpoint and the C2SP tiles of its tree, from a directory laid out as the log serves it",
+                       **own)
     t.add_argument("directory", help="holds tile/... (and checkpoint, unless --checkpoint names another file)")
     t.add_argument("--vkey", action="append", required=True, help="a trusted key of the checkpoint (repeatable)")
     t.add_argument("--profile", required=True, choices=("static-ct-api", "tlog-tiles"))

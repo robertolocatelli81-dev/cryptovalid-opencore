@@ -91,7 +91,7 @@ logs (SPEC §14); until that date they carried the same "no new scope" mark.
 | `cryptovalid_tsa.py` | RFC 3161 timestamp client and token check |
 | `cryptovalid_merkle.py` (SPEC §9, §14) | RFC 6962 inclusion and consistency proofs; the tiles of C2SP tiled logs (tlog-tiles, static-ct-api: hash tiles, partial tiles, data tiles, entry bundles) checked against a checkpoint (since 2026-11-15) |
 | `cryptovalid_checkpoint.py` (SPEC §13) | C2SP checkpoints and signed notes: Ed25519, ECDSA, Ed25519 and ML-DSA-44 cosignatures, and the RFC 6962 signatures of static CT logs (type 0x05, since 2026-11-15) |
-| `evidence_pack.py`, `verify_evidence.py` (`auto`, `pack`, `ledger`) | auditor bundle and the `cryptovalid-verify` front-end |
+| `evidence_pack.py`, `verify_evidence.py` (`auto`, `pack`, `ledger`; `checkpoint`, `tiles`, `vkey-rfc6962` since 2026-11-15) | auditor bundle and the `cryptovalid-verify` front-end |
 | `conformance.py`, `spec/vectors/`, `verifiers/` | conformance vectors and the JS, Go, Java, Rust and Swift verifiers |
 
 | Experimental | Modules |
@@ -179,6 +179,17 @@ if every digest matches, the manifest is self-consistent, every ledger passes it
 claimed RFC 3161 token is not refuted; with `--sign-key` the manifest is authenticated (`manifest_authenticated`) and
 a truncated ledger fails. The receipt states per subject what was checked and how it came out (`admission`,
 `states`: SPEC §10), so a refused manifest is told apart from tampering.
+
+## Checkpoints and tiles of transparency logs
+
+```bash
+cryptovalid-verify vkey-rfc6962 --name <origin> --key-b64 <key of the CT log list entry>   # vkey of a static CT log
+cryptovalid-verify checkpoint checkpoint.txt --vkey <vkey>                                 # SPEC §13
+cryptovalid-verify tiles log_dir/ --vkey <vkey> --profile static-ct-api                    # SPEC §14 (or tlog-tiles)
+```
+
+The same commands as `python3 cryptovalid_checkpoint.py verify|tiles|vkey-rfc6962`, run by the same code. `auto` on a
+checkpoint file or on a directory holding `tile/` names the command to run: it has no trusted key to verify them with.
 
 ## Guarantees and assumptions
 

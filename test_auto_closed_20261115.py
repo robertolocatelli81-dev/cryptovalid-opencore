@@ -235,7 +235,9 @@ class TestAutoPaths(unittest.TestCase):
         self.assertTrue(d.endswith(
             "; recognised: evidence pack directory (MANIFEST.json), ingest archive directory (*.head.json or *-*.jsonl), "
             "AP2 evidence (one JSON object, evidence_format ap2-evidence*), CLDMA attestation (one JSON object with "
-            "root_hash and metric_id), ledger (JSONL whose first line is an object with prev_hash and self_hash)"), d)
+            "root_hash and metric_id), ledger (JSONL whose first line is an object with prev_hash and self_hash), "
+            "C2SP checkpoint (a signed note of at most 1 MiB whose text is a checkpoint), C2SP tiled log directory "
+            "(a directory tile)"), d)
 
     def test_empty_directory(self):
         self._refused(self.d, "a directory with neither MANIFEST.json")
