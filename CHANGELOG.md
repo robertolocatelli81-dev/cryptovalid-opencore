@@ -9,6 +9,20 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **Checkpoints of static CT logs verify (signature type 0x05); `cryptovalid_checkpoint.py` is core** (SPEC v0.7, §13
+  new; not additive for `verify_note`). Until now a 0x05 vkey (the RFC 6962 key of a Sunlight or TesseraCT log) was
+  ignored as an unknown key, so the checkpoint of such a log was NON_VALIDA, "no signature from a known key" — measured on
+  2026-11-14 with the checkpoint of sunlight's test log rome2026h1 (5eed85d). Now the vkey (`0x05 || DER SPKI`, key ID
+  over the RFC 6962 LogID, as c2sp.org/static-ct-api defines it) is read, the line's body (timestamp, hash and signature
+  algorithms, length, signature) is read with each length checked first, and the ECDSA P-256 signature over the RFC 6962
+  TreeHeadSignature is verified; a line that fails gives the reason (body shorter than 12 bytes, length field, algorithm,
+  extension lines, origin other than the key name, signature). A 0x05 vkey whose key is not a canonical ECDSA P-256 key is
+  refused (exit 2 on the command line). `cryptovalid_checkpoint.py vkey-rfc6962 --name <origin> --key-b64 <DER>` prints
+  the vkey from a CT log list entry. The module leaves the experimental list (README). Vector: the rome2026h1 checkpoint and
+  log list entry in `testdata/interop/` (ISC, notice kept); `test_c2sp_static_ct_20261115.py` checks every body length,
+  every bit of the real body, unknown types, refused vkeys and 300 notes signed with keys made in the test, and asks
+  github.com/transparency-dev/formats (`verifiers/note_oracle`, which now opens 0x05 keys) on the same notes.
+
 - **ML-DSA-44 note signatures with timestamp 0 are verified** (`cryptovalid_checkpoint.verify_note`). c2sp.org/tlog-cosignature
   lets an ML-DSA-44 signature over a subtree starting at 0 carry timestamp 0 ("may be zero or the current time"); 0.23.0
   required a timestamp of at least 1 and returned NON_VALIDA for a valid note. Found on 2026-11-14 with the checkpoint of

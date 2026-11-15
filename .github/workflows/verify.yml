@@ -186,6 +186,7 @@ jobs:
         run: |
           go build -C verifiers/note_oracle -o "$RUNNER_TEMP/cvnote-oracle" .
           CV_REQUIRE_GO_ORACLE=1 python3 test_cryptovalid_witness.py
+          CV_REQUIRE_GO_ORACLE=1 python3 test_c2sp_static_ct_20261115.py
 
   swift-verifier:
     runs-on: macos-latest

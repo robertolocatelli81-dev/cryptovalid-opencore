@@ -220,6 +220,11 @@ v0.7 (unreleased) adds §12, the closed list of what `cryptovalid-verify auto` r
 v0.6 every file that was not an AP2 pack or a CLDMA attestation was verified as a ledger, so a JSON document of another
 kind (measured on 2026-11-14 with the `cra_pack.json` of omega-cra-evol 0.10.0) was answered with the ledger's line-by-line
 `json_decode` errors instead of "not recognised". The ledger format (§2–§5), its hashes and its vectors do not change.
+v0.7 also adds §13 (2026-11-15), the checkpoint signatures of static CT logs (signature type 0x05), when
+`cryptovalid_checkpoint.py` moved to the core. Not additive for `verify_note`: until then a 0x05 vkey was ignored as an
+unknown key, so the checkpoint of a static CT log signed only by its log key was NON_VALIDA ("no signature from a known
+key"); it is OK when the signature verifies, NON_VALIDA with the reason when it does not, and a 0x05 vkey whose key is not a
+canonical ECDSA P-256 key is refused as the caller's error.
 
 ## 7. Conformance (normative)
 
@@ -426,3 +431,53 @@ binary data); JSON nested deeper than the parser allows.
 Recognised is not valid: the row's verifier then gives the verdict, as when it is named directly. A ledger whose first
 line is damaged so that it no longer holds `prev_hash` and `self_hash` is not recognised; `cryptovalid-verify ledger`
 names the failure of each line.
+
+## 13. Checkpoint signatures of static CT logs, type 0x05 (NORMATIVE since v0.7, 2026-11-15)
+
+`cryptovalid_checkpoint.verify_note` verifies the note signature of a static CT log. Sources, read on 2026-11-15:
+c2sp.org/static-ct-api at commit 7e91dadf3c (2026-10-01), c2sp.org/signed-note and c2sp.org/tlog-checkpoint at commit
+b2dd989233 (2026-10-07) of github.com/C2SP/C2SP, unchanged on `main` that day; RFC 6962. The rules they set:
+
+- signed-note, signature types: "`0x05` — RFC 6962 `TreeHeadSignature`s, as specified by [c2sp.org/static-ct-api]".
+- static-ct-api, Checkpoints: "The key name of the signature line MUST match the checkpoint origin line. The key ID MUST
+  be the first four bytes (interpreted in big-endian order) of the SHA-256 hash of the following sequence: the key name, a
+  newline character (`0x0A`), the signature type identifier byte `0x05`, and the 32-byte RFC 6962 `LogID`."
+- static-ct-api: "The signature body MUST be an encoding of the following structure. `struct { uint64 timestamp;
+  TreeHeadSignature signature; } RFC6962NoteSignature;`" — "“signature” is the `TreeHeadSignature` digitally-signed
+  value", and "A checkpoint signed with this algorithm MUST NOT include any extension lines."
+- RFC 6962 §3.5: `digitally-signed struct { Version version; SignatureType signature_type = tree_hash; uint64 timestamp;
+  uint64 tree_size; opaque sha256_root_hash[32]; } TreeHeadSignature;` (version v1 = 0, tree_hash = 1); §2.1.4: "A log
+  MUST use either elliptic curve signatures using the NIST P-256 curve [...] or RSA signatures".
+- signed-note: "Verifiers MUST ignore signatures from unknown keys, even if they share a name or ID (but not both) with a
+  known key. If the key name and ID match a known key, verifiers MUST verify the signature."
+
+The rule of this implementation:
+
+1. **vkey.** `<name>+<8 hex digits>+base64(0x05 || DER SubjectPublicKeyInfo)` — the form of
+   github.com/transparency-dev/formats `RFC6962VerifierString` (signed-note gives no vkey form for 0x05). `LogID` =
+   SHA-256 of the DER (RFC 6962 §3.2). Refused as the caller's error, with the reason: an ID that is not SHA-256(name ||
+   0x0A || 0x05 || LogID)[:4]; material that is not a DER SubjectPublicKeyInfo; a key that is not ECDSA P-256 (RSA, which
+   RFC 6962 allows, is not implemented; other curves are outside RFC 6962); a DER that is not the canonical encoding of the
+   key (trailing bytes, another encoding). `cryptovalid_checkpoint.py vkey-rfc6962 --name <origin> --key-b64 <DER>` prints
+   the vkey from the `key` of a CT log list entry.
+2. **Signature body**, after the 4-byte key ID, read in this order, each length checked before the bytes it covers are
+   read: 8 bytes `timestamp` (milliseconds, any uint64); 1 byte hash algorithm; 1 byte signature algorithm; 2 bytes length
+   `L` (big-endian); exactly `L` bytes of signature and nothing after them. A body of fewer than 12 bytes, a length that
+   differs from the bytes that follow, a hash algorithm other than 4 (SHA-256) or a signature algorithm other than 3
+   (ECDSA) makes the line fail, with the reason.
+3. **Text.** The note text must be a checkpoint as `parse_checkpoint` reads it (three lines; size in ASCII decimal without
+   leading zeroes, at most 2^64-1; root as the canonical base64 of 32 bytes), with no extension line, and its origin line
+   must equal the key name; otherwise the line fails, with the reason.
+4. **Signature.** ECDSA P-256 with SHA-256 over `00 01 || timestamp || tree_size || root` (RFC 6962 §3.5), the signature
+   ASN.1 DER: a BER encoding (a long-form length, an integer with a leading zero byte) does not verify; a high S verifies
+   (RFC 6962 sets no low-S rule).
+5. A line whose (name, key ID) matches a trusted 0x05 key and fails any of 2–4 makes the whole note NON_VALIDA; the
+   `motivo` is `signature from known key <name> does not verify: <reason>`. A line that verifies is reported as
+   `{"name", "type": 5, "timestamp_ms"}`. Lines of unknown keys are ignored and counted (`ignored`), as for every type.
+   Without `cryptography` the note is NON_VERIFICATA, as for the other types.
+
+Vectors: `testdata/interop/` — the checkpoint of the test log `rome2026h1.example.org` of FiloSottile/sunlight (size 300)
+with its log list entry; `test_c2sp_static_ct_20261115.py` checks it, its altered forms, every body length from 0 to the
+real one plus 64, and notes signed with keys made in the test, against the rule above and, where Go is installed, against
+github.com/transparency-dev/formats (`verifiers/note_oracle`).
+

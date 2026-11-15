@@ -3,7 +3,8 @@
 // It contains no cryptovalid code: the note is opened with golang.org/x/mod/sumdb/note (the Go module
 // checksum database / Sigstore implementation of c2sp.org/signed-note, Ed25519 type 0x01) and the witness
 // cosignatures with github.com/transparency-dev/formats/note (c2sp.org/tlog-cosignature, Ed25519 cosignature/v1).
-// Log keys may be Ed25519 (x/mod) or ECDSA (formats, the type Rekor v1 uses); cosigners Ed25519 or ML-DSA-44 (formats).
+// Log keys may be Ed25519 (x/mod), ECDSA (formats, the type Rekor v1 uses) or RFC 6962 (formats, static CT logs); cosigners
+// Ed25519 or ML-DSA-44 (formats).
 // If this program says VERIFIED, the note produced by cryptovalid_checkpoint.py / cryptovalid_witness.py is a
 // standard checkpoint that the transparency ecosystem's own libraries accept — that is the whole point of it.
 //
@@ -35,10 +36,14 @@ func keyType(vkey string) byte {
 	return b[0]
 }
 
-// logVerifier: Ed25519 (0x01) through golang.org/x/mod/sumdb/note, ECDSA (0x02, Rekor v1) through transparency-dev/formats.
+// logVerifier: Ed25519 (0x01) through golang.org/x/mod/sumdb/note, ECDSA (0x02, Rekor v1) and RFC 6962 TreeHeadSignatures
+// of static CT logs (0x05, c2sp.org/static-ct-api) through transparency-dev/formats.
 func logVerifier(vkey string) (note.Verifier, error) {
-	if keyType(vkey) == 0x02 {
+	switch keyType(vkey) {
+	case 0x02:
 		return tdnote.NewECDSAVerifier(vkey)
+	case 0x05:
+		return tdnote.NewRFC6962Verifier(vkey)
 	}
 	return note.NewVerifier(vkey)
 }

@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """cryptovalid-opencore — transparency-log CHECKPOINTS and SIGNED NOTES (0.14.0, 2026-09-19).
 
-Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
-modules"): kept, installed and tested, no new scope is added here.
+Status: CORE since 2026-11-15 (README, "Core and experimental modules"; SPEC §13). Until that date this module was
+experimental, with no new scope; it was moved to the core to verify the checkpoints of static CT logs (type 0x05).
 
 Implements, byte for byte, three public specifications used by the transparency ecosystem (Sigstore, Go sum DB, the
 transparency-dev witnesses; editor's copies downloaded 2026-09-19 from github.com/C2SP/C2SP):
@@ -26,8 +26,10 @@ timestamped cosignature gives a relying party freshness — see cryptovalid_witn
 Honest scope: signing needs `cryptography` (Ed25519); without it a well-formed note is NON_VERIFICATA, never OK or
 NON_VALIDA on its signatures (a structurally malformed note is NON_VALIDA on structure alone, with or without it).
 Verified: Ed25519 log signatures (0x01), ECDSA log signatures (0x02, P-256/384/521 — Rekor v1), Ed25519 cosignature/v1
-(0x04) and ML-DSA-44 cosignature/v1 (0x06, `cryptography` with the `mldsa` module — measured with 49.0.0). Emitted: 0x01,
-0x04, 0x06. RFC 6962 THS keys (0x05) and unassigned types are UNKNOWN keys here and are ignored as the spec allows.
+(0x04), RFC 6962 TreeHeadSignatures of static CT logs (0x05, ECDSA P-256 — c2sp.org/static-ct-api, SPEC §13, since
+2026-11-15) and ML-DSA-44 cosignature/v1 (0x06, `cryptography` with the `mldsa` module — measured with 49.0.0). Emitted:
+0x01, 0x04, 0x06. Unassigned types are UNKNOWN keys here and are ignored as the spec allows (signed-note: "Verifiers MUST
+ignore signatures from unknown keys"); until 2026-11-15 a 0x05 vkey was ignored the same way.
 """
 from __future__ import annotations
 import sys as _sys_0203
@@ -54,9 +56,13 @@ TYPE_ED25519 = 0x01
 TYPE_ECDSA = 0x02        # ECDSA (P-256/384/521, SHA-256 digest, ASN.1 signature) as transparency-dev/witness implements it:
                          # key id = SHA-256(DER SPKI)[:4]; the type of Rekor v1's log key. Verified here, never emitted.
 TYPE_COSIG_V1 = 0x04
+TYPE_RFC6962 = 0x05      # RFC 6962 TreeHeadSignature of a static CT log (c2sp.org/static-ct-api §Checkpoints, SPEC §13):
+                         # vkey material = 0x05 || DER SPKI of an ECDSA P-256 key; key id = SHA-256(name || 0x0A || 0x05 ||
+                         # LogID)[:4], LogID = SHA-256(DER SPKI) (RFC 6962 §3.2). Verified, never emitted.
 TYPE_MLDSA44 = 0x06      # ML-DSA-44 cosignature/v1 (FIPS 204, empty context): key id = SHA-256(name || 0x0A || 0x06 || pub)[:4]
 MLDSA44_PUB, MLDSA44_SIG = 1312, 2420
-SUPPORTED_TYPES = (TYPE_ED25519, TYPE_ECDSA, TYPE_COSIG_V1, TYPE_MLDSA44)
+SUPPORTED_TYPES = (TYPE_ED25519, TYPE_ECDSA, TYPE_COSIG_V1, TYPE_RFC6962, TYPE_MLDSA44)
+_RFC6962_HEAD = 12       # body of a 0x05 line: uint64 timestamp, hash algorithm, signature algorithm, uint16 length (SPEC §13)
 EM_DASH = "—"
 _NAME_OK = re.compile(r"[^\s+\x00-\x1f]+")       # signed-note: key names have no Unicode spaces and no '+'; fullmatch
 # origins: any non-empty line without control characters, on emission and on parsing alike — the schema-less-URL form
@@ -124,6 +130,78 @@ def vkey_ecdsa(name: str, der_spki: bytes) -> str:
     return f"{name}+{kid.hex()}+{base64.b64encode(bytes([TYPE_ECDSA]) + der_spki).decode('ascii')}"
 
 
+def rfc6962_key_id(name: str, der_spki: bytes) -> bytes:
+    """static-ct-api §Checkpoints: SHA-256(key name || 0x0A || 0x05 || LogID)[:4], LogID = SHA-256(DER SPKI)."""
+    return hashlib.sha256(name.encode("utf-8") + b"\n" + bytes([TYPE_RFC6962]) + hashlib.sha256(der_spki).digest()).digest()[:4]
+
+
+def vkey_rfc6962(name: str, der_spki: bytes) -> str:
+    """Verifier key of a static CT log (type 0x05) from its DER SPKI (the base64 `key` of a CT log list entry); the name
+    is the checkpoint origin, the submission prefix without scheme and trailing slashes (static-ct-api). The same string
+    as transparency-dev/formats RFC6962VerifierString for that name and key."""
+    if not _NAME_OK.fullmatch(name or ""):
+        raise NoteError("key name must be non-empty, without spaces, '+' or control characters")
+    if not isinstance(der_spki, (bytes, bytearray)) or not der_spki:
+        raise NoteError("RFC 6962 vkey needs the DER SubjectPublicKeyInfo of the log key")
+    der_spki = bytes(der_spki)
+    return f"{name}+{rfc6962_key_id(name, der_spki).hex()}+{base64.b64encode(bytes([TYPE_RFC6962]) + der_spki).decode('ascii')}"
+
+
+def _rfc6962_key(der_spki: bytes):
+    """The ECDSA P-256 key of a 0x05 vkey, or NoteError with the reason (SPEC §13: RFC 6962 §2.1.4 allows P-256 or RSA;
+    the static CT logs sign with P-256 and RSA is not implemented here — refused, never ignored). The DER must be the
+    canonical encoding of the key: re-encoding it gives the same bytes (no trailing data, no BER)."""
+    from cryptography.hazmat.primitives import serialization as ser
+    from cryptography.hazmat.primitives.asymmetric import ec
+    try:
+        k = ser.load_der_public_key(der_spki)
+    except Exception:                    # noqa: BLE001 — not DER, unknown algorithm: the caller's vkey is unusable
+        raise NoteError("RFC 6962 vkey: the key material is not a DER SubjectPublicKeyInfo") from None
+    if not isinstance(k, ec.EllipticCurvePublicKey) or k.curve.name != "secp256r1":
+        raise NoteError("RFC 6962 vkey: only ECDSA P-256 log keys are supported (SPEC §13)")
+    if k.public_bytes(ser.Encoding.DER, ser.PublicFormat.SubjectPublicKeyInfo) != der_spki:
+        raise NoteError("RFC 6962 vkey: the DER SubjectPublicKeyInfo is not in canonical form")
+    return k
+
+
+class _Refused(Exception):
+    """A signature line of a known key that does not verify, with the reason (SPEC §13)."""
+
+
+def _verify_rfc6962(name: str, key, body: bytes, text: str) -> int:
+    """→ the timestamp (milliseconds) of a 0x05 line that verifies; _Refused with the reason otherwise. Every length is
+    checked before the bytes it covers are read (SPEC §13)."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    if len(body) < _RFC6962_HEAD:
+        raise _Refused(f"RFC 6962 signature body of {len(body)} bytes, shorter than the {_RFC6962_HEAD} bytes of "
+                       "timestamp, algorithms and length")
+    ts = struct.unpack(">Q", body[:8])[0]
+    h_alg, s_alg = body[8], body[9]
+    sig_len = struct.unpack(">H", body[10:12])[0]
+    if len(body) - _RFC6962_HEAD != sig_len:
+        raise _Refused(f"RFC 6962 signature length field says {sig_len} bytes, {len(body) - _RFC6962_HEAD} follow")
+    if h_alg != 4:
+        raise _Refused(f"RFC 6962 hash algorithm {h_alg} is not SHA-256 (4)")
+    if s_alg != 3:
+        raise _Refused(f"RFC 6962 signature algorithm {s_alg} is not ECDSA (3)")
+    try:
+        cp = parse_checkpoint(text)
+    except NoteError as e:
+        raise _Refused(f"note text is not a checkpoint: {e}") from None
+    if cp["extensions"]:
+        raise _Refused("a checkpoint signed with an RFC 6962 key has extension lines (static-ct-api: MUST NOT)")
+    if cp["origin"] != name:
+        raise _Refused("the key name differs from the checkpoint origin line (static-ct-api: MUST match)")
+    ths = b"\x00\x01" + struct.pack(">QQ", ts, cp["size"]) + cp["root"]   # RFC 6962 §3.5 TreeHeadSignature, v1, tree_hash
+    try:
+        key.verify(body[_RFC6962_HEAD:], ths, ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature:
+        raise _Refused("the ECDSA signature over the TreeHeadSignature does not verify") from None
+    return ts
+
+
 def parse_vkey(s: str, strict: bool = True) -> Tuple[str, bytes, int, bytes]:
     """→ (name, key id, type, public key). The key id MUST match the recomputed one (a mistyped vkey is refused).
     strict=False returns a well-formed vkey of a type this implementation cannot verify (RFC 6962 THS 0x05, unassigned
@@ -146,9 +224,13 @@ def parse_vkey(s: str, strict: bool = True) -> Tuple[str, bytes, int, bytes]:
         if hashlib.sha256(pub).digest()[:4] != kid:
             raise NoteError("ECDSA vkey key id does not match the DER key")
         return parts[0], kid, typ, pub
+    if typ == TYPE_RFC6962:               # id = SHA-256(name || 0x0A || 0x05 || SHA-256(DER SPKI))[:4] (SPEC §13)
+        if rfc6962_key_id(parts[0], pub) != kid:
+            raise NoteError("RFC 6962 vkey key id does not match name/LogID")
+        return parts[0], kid, typ, pub
     if typ not in SUPPORTED_TYPES:
-        # RFC 6962 THS (0x05) hashes a hash of the SPKI, unassigned types are unknown: their ids are not ours to
-        # recompute; the vkey is returned as-is for the caller to IGNORE (round 4: a real Rekor v1 vkey raised here)
+        # unassigned types are unknown: their ids are not ours to recompute; the vkey is returned as-is for the caller to
+        # IGNORE (round 4: a real Rekor v1 vkey raised here)
         if strict:
             raise NoteError(f"unsupported vkey type 0x{typ:02x}")
         return parts[0], kid, typ, pub
@@ -345,13 +427,14 @@ def cosign_v1_mldsa44(note: bytes, name: str, seed: bytes, timestamp: int) -> by
 
 def verify_note(note: bytes, vkeys: List[str]) -> Dict:
     """Verify a note against known vkeys (signed-note §Signatures): signatures from unknown (name, id) pairs are
-    ignored — including vkeys of types this implementation cannot verify (0x05, unassigned: `ignored_vkeys`); a
+    ignored — including vkeys of types this implementation cannot verify (unassigned: `ignored_vkeys`); a 0x05 vkey
+    whose key is not a canonical DER ECDSA P-256 key raises NoteError (SPEC §13); a 0x05 line reports `timestamp_ms`; a
     known key that fails → the whole note is NON_VALIDA; no known key verifying → NON_VALIDA. EVERY line whose
     (name, id) matches a known key is verified — the spec's MUST; golang.org/x/mod/sumdb/note verifies the first
     line per key and drops repeats, so a note with a bogus repeat opens there and is NON_VALIDA here (declared
     divergence, in the fail-closed direction); byte-identical repeated lines count once. Two DIFFERENT trusted keys
     with the same (name, id) are an error (ambiguous, as in Go); at most 100 lines.
-    Returns {stato: OK | NON_VALIDA | NON_VERIFICATA, text, verified: [{name, type, timestamp?}] (one entry per
+    Returns {stato: OK | NON_VALIDA | NON_VERIFICATA, text, verified: [{name, type, timestamp? | timestamp_ms?}] (one entry per
     distinct verified line, so a witness may appear twice with two timestamps), ignored: n, ignored_vkeys: n, motivo}."""
     out = {"stato": "NON_VALIDA", "text": None, "verified": [], "ignored": 0, "ignored_vkeys": 0, "motivo": None}
     known = {}
@@ -370,6 +453,7 @@ def verify_note(note: bytes, vkeys: List[str]) -> Dict:
     _, EdPub, InvalidSignature = _ed()
     if EdPub is None:
         out.update(stato="NON_VERIFICATA", motivo="no Ed25519 implementation (`cryptography` missing)"); return out
+    rfc6962_keys = {nk: _rfc6962_key(tp[1]) for nk, tp in known.items() if tp[0] == TYPE_RFC6962}   # unusable key: NoteError
     seen = set(); unverifiable = 0
     for name, raw in sigs:
         kid, body = raw[:4], raw[4:]
@@ -396,6 +480,13 @@ def verify_note(note: bytes, vkeys: List[str]) -> Dict:
                     raise InvalidSignature()
                 k.verify(body, text.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
                 out["verified"].append({"name": name, "type": typ})
+            elif typ == TYPE_RFC6962:    # static CT log: timestamp + TreeHeadSignature (SPEC §13), the reason kept
+                try:
+                    ts = _verify_rfc6962(name, rfc6962_keys[(name, kid)], body, text)
+                except _Refused as e:
+                    out.update(stato="NON_VALIDA", verified=[], motivo=f"signature from known key {name} does not verify: {e}")
+                    return out
+                out["verified"].append({"name": name, "type": typ, "timestamp_ms": ts})
             elif typ == TYPE_MLDSA44:    # cosignature/v1 over the spec's cosigned_message (origin, size, root; not the extensions)
                 m = _mldsa()
                 if m is None:
@@ -483,7 +574,22 @@ def main(argv=None) -> int:
     k = sub.add_parser("vkey", help="print the vkey of a key file"); k.add_argument("--key", required=True); k.add_argument("--name", required=True)
     k.add_argument("--cosigner", action="store_true", help="type 0x04 (cosignature/v1) instead of 0x01")
     k.add_argument("--mldsa44", action="store_true", help="type 0x06 (ML-DSA-44 cosignature/v1) from the same 32-byte seed file")
+    r = sub.add_parser("vkey-rfc6962", help="print the vkey (type 0x05) of a static CT log from its public key")
+    r.add_argument("--name", required=True, help="the checkpoint origin: submission prefix without scheme and trailing slashes")
+    r.add_argument("--key-b64", required=True, help="base64 DER SubjectPublicKeyInfo (the `key` of a CT log list entry)")
     a = ap.parse_args(argv)
+    if a.cmd == "vkey-rfc6962":
+        try:
+            der = b64decode_strict(a.key_b64)
+        except ValueError:
+            emit(json.dumps({"stato": "ERRORE", "motivo": "--key-b64 is not standard base64"}, ensure_ascii=False)); return 2
+        try:
+            v = vkey_rfc6962(a.name, der)
+            if _ed()[0] is not None:
+                _rfc6962_key(der)          # the same check verify_note makes: a key it would refuse is not printed
+        except NoteError as e:
+            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+        emit(v); return 0
     if a.cmd == "sign":
         try:
             text, _ = ledger_checkpoint(a.ledger, a.origin)

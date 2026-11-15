@@ -78,15 +78,17 @@ reader gone), whatever the verdict.
 The maintained core is the evidence format and what omega-cra-evol relies on. Every other module at the top of the
 repository stays in the repository and in the wheel, is still run by the same CI (every `test_*.py`;
 `fundcert_crosssource.py` has no test of its own), and is marked **experimental** in its module docstring: no new
-scope is added to it.
+scope is added to it. On 2026-11-15 `cryptovalid_checkpoint.py` moved from the experimental modules to the core, so that it
+verifies the checkpoints of static CT logs (SPEC §13); until that date it carried the same "no new scope" mark.
 
 | Core | What it is |
 |---|---|
-| `SPEC_EVIDENCE_FORMAT.md` §1-7, §10 | ledger container, closed entry schema, canonical JSON and hashing, evidence payload conventions, verification algorithm, versioning, conformance, evidence-pack receipt |
+| `SPEC_EVIDENCE_FORMAT.md` §1-7, §10, §13 | ledger container, closed entry schema, canonical JSON and hashing, evidence payload conventions, verification algorithm, versioning, conformance, evidence-pack receipt, checkpoint signatures of static CT logs |
 | `verifier.py` | stdlib-only reference verifier (SHA-256 / SHA3-256 chains, strict JSON profile, signed tip check) |
 | `cryptovalid_tip.py`, `ed25519_order.py` | signed chain tip (`cryptovalid_tip/1`); refusal of small- and mixed-order Ed25519 keys and R |
 | `signer.py`, `cryptovalid_kms.py` | per-entry Ed25519 (+ optional ML-DSA-65) signatures; keys in a PKCS#11 HSM, AWS KMS, Vault Transit or a Nitrokey NetHSM |
 | `cryptovalid_tsa.py` | RFC 3161 timestamp client and token check |
+| `cryptovalid_checkpoint.py` (SPEC §13) | C2SP checkpoints and signed notes: Ed25519, ECDSA, Ed25519 and ML-DSA-44 cosignatures, and the RFC 6962 signatures of static CT logs (type 0x05, since 2026-11-15) |
 | `evidence_pack.py`, `verify_evidence.py` (`auto`, `pack`, `ledger`) | auditor bundle and the `cryptovalid-verify` front-end |
 | `conformance.py`, `spec/vectors/`, `verifiers/` | conformance vectors and the JS, Go, Java, Rust and Swift verifiers |
 
@@ -94,7 +96,7 @@ scope is added to it.
 |---|---|
 | AP2 / SD-JWT dispute evidence (front-end to ap2-evidence-pack) | `verify_evidence.py ap2`, MCP tool `verify_ap2_evidence` |
 | MCP server | `cryptovalid_mcp.py` |
-| Receipts, monitor, checkpoints, witnesses, SCITT, COSE receipts, JWS | `cryptovalid_receipt.py`, `cryptovalid_monitor.py`, `cryptovalid_checkpoint.py`, `cryptovalid_witness.py`, `cryptovalid_scitt.py`, `cryptovalid_cose_receipts.py`, `cryptovalid_jws.py` |
+| Receipts, monitor, witnesses, SCITT, COSE receipts, JWS | `cryptovalid_receipt.py`, `cryptovalid_monitor.py`, `cryptovalid_witness.py`, `cryptovalid_scitt.py`, `cryptovalid_cose_receipts.py`, `cryptovalid_jws.py` |
 | Merkle proofs (RFC 6962, SPEC §9) and high-frequency ingestion | `cryptovalid_merkle.py`, `cryptovalid_ingest.py`, `verify_evidence.py archive` |
 | eIDAS: EU trusted list (LOTL), qualified-ledger self-assessment, QEAA | `cryptovalid_lotl.py`, `eidas_ledger_check.py`, `cryptovalid_qeas.py` |
 | Anchoring and retention: Solana, OpenTimestamps, heterogeneous anchors, re-anchor, WORM, pruning probe | `cryptovalid_solana.py`, `committed_attestation.py`, `cryptovalid_heterogeneous.py`, `cryptovalid_reanchor.py`, `cryptovalid_worm.py`, `cryptovalid_pruning_probe.py` |
@@ -105,7 +107,7 @@ scope is added to it.
 | Regulatory profiles (SPEC §8) | `refresh_regulatory.py`, `spec/regulatory_profiles.json` |
 | Development tooling | `mutation_runner.py` |
 
-Each experimental module documents its use in its docstring; 21 of the 33 also print their usage with `--help`. The
+Each experimental module documents its use in its docstring; 20 of the 32 also print their usage with `--help`. The
 release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ### What omega-cra-evol relies on

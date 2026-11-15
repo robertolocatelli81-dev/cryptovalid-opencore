@@ -247,11 +247,15 @@ class TestSignCosign(unittest.TestCase):
         self.assertEqual((name, kid.hex(), typ), ("rekor.sigstore.dev", "c0d23d6a", 0x02))
         r = C.verify_note(note, [REKOR_VKEY, self.LV]); self.assertEqual((r["stato"], r["ignored_vkeys"]), ("OK", 0))
         self.assertEqual(C.verify_note(note, [REKOR_VKEY])["stato"], "NON_VALIDA")
-        # a vkey of a type nobody here verifies (RFC 6962 THS, 0x05): ignored, not an exception
+        # a vkey of an unassigned type (0x07): ignored, not an exception. Until 2026-11-15 this case used 0x05 (RFC 6962
+        # THS), then unverified here; since SPEC §13 a 0x05 vkey is verified, and one whose id does not match is refused
+        unk = f"ct.example/log+00000000+{base64.b64encode(bytes([7]) + bytes(65)).decode()}"
+        r = C.verify_note(note, [unk, self.LV]); self.assertEqual((r["stato"], r["ignored_vkeys"]), ("OK", 1))
+        with self.assertRaisesRegex(C.NoteError, "unsupported vkey type 0x07"):
+            C.parse_vkey(unk)
         ths = f"ct.example/log+00000000+{base64.b64encode(bytes([5]) + bytes(65)).decode()}"
-        r = C.verify_note(note, [ths, self.LV]); self.assertEqual((r["stato"], r["ignored_vkeys"]), ("OK", 1))
-        with self.assertRaisesRegex(C.NoteError, "unsupported vkey type 0x05"):
-            C.parse_vkey(ths)
+        with self.assertRaisesRegex(C.NoteError, "RFC 6962 vkey key id does not match"):
+            C.verify_note(note, [ths, self.LV])
         with self.assertRaises(C.NoteError):                   # a cosigner key is never a log key
             W.witness_cosign(os.path.join(self.tmp, "x.json"), note, [self.WV], "w", self.ws, None, T0)
         # a vkey whose declared id does not match its key is refused as a vkey
