@@ -9,6 +9,11 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **`verify_ledger` leaves the host's recursion limit as it found it.** Used as a library it raised the interpreter
+  limit for its decoder and left it raised (1000 → 1796 after one call, measured 15/11/2026). The headroom now covers
+  the whole call and the caller's limit is restored when it returns, on PASS, FAIL or an exception, from a 600-frame
+  caller and from 8 threads at once; a higher limit the host set itself is kept. `test_verifier_host_process_20261115.py`
+  (5 tests; on 0.24.0 four of them fail).
 - **One rule for every URL the modules open (`cryptovalid_net.py`, core).** Measured on 0.24.0 (15/11/2026): five call
   sites passed any URL to `urlopen` (TSA client, NetHSM backend, EU trusted lists, Solana pruning probe, witness
   client), so `file:///etc/hostname` given as a TSA or trusted-list URL was read from disk; the AWS KMS endpoint check

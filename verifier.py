@@ -53,6 +53,7 @@ import json
 import os
 import re
 import sys
+import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -546,22 +547,49 @@ MAX_INPUT_BYTES = 256 * 1024 * 1024  # a ledger/pack larger than this is refused
 _RECURSION_HEADROOM = 3 * MAX_JSON_DEPTH + 256  # frames the C decoder + object_pairs_hook may need per line
 
 
-def _ensure_recursion_headroom() -> None:
+_HEADROOM_LOCK = threading.Lock()
+_HEADROOM = {"users": 0, "saved": None, "set": None}
+
+
+class _RecursionHeadroom:
     """The PASS side of the bound must not depend on how deep the CALLER's stack already is (an MCP
     server or a report generator invoking verify_ledger from many frames down). Raise the interpreter
     recursion limit so that an in-profile line (<= MAX_JSON_DEPTH) can always be decoded (2026-09-13).
     Limits (declared in spec/CONFORMANCE.md): this raises the interpreter limit, not the thread's C stack;
     on CPython >= 3.12 the C decoder keeps its own counter, so the positive control for this guard was
-    reproduced on 3.11. The raised limit is left in place on purpose (lowering it back under a still-deep
-    caller would be the real hazard)."""
-    depth = 0
-    f = sys._getframe()
-    while f is not None:
-        depth += 1
-        f = f.f_back
-    need = depth + _RECURSION_HEADROOM
-    if sys.getrecursionlimit() < need:
-        sys.setrecursionlimit(need)
+    reproduced on 3.11.
+    Since 15/11/2026 the limit is put back when the decode ends (also on an exception): until 0.24.0 a library caller
+    was left with the raised limit for the rest of its process (1000 -> 1796, measured). The interpreter limit is one
+    per process, so the first decode that raises it saves the caller's value and the last one to finish, in any thread,
+    restores it; if someone else changed the limit meanwhile, their value is kept. Restoring is safe: the caller ran at
+    its own depth under its own limit before the call."""
+
+    def __enter__(self):
+        depth = 0
+        f = sys._getframe()
+        while f is not None:
+            depth += 1
+            f = f.f_back
+        need = depth + _RECURSION_HEADROOM
+        with _HEADROOM_LOCK:
+            h = _HEADROOM
+            if h["users"] == 0:
+                h["saved"], h["set"] = sys.getrecursionlimit(), None
+            h["users"] += 1
+            if sys.getrecursionlimit() < need:
+                sys.setrecursionlimit(need)
+                h["set"] = need
+        return self
+
+    def __exit__(self, *exc):
+        with _HEADROOM_LOCK:
+            h = _HEADROOM
+            h["users"] -= 1
+            if h["users"] == 0:
+                if h["set"] is not None and sys.getrecursionlimit() == h["set"]:
+                    sys.setrecursionlimit(h["saved"])
+                h["saved"] = h["set"] = None
+        return False
 
 
 def input_too_large(path: str) -> bool:
@@ -651,9 +679,9 @@ def _loads_strict(text):
         raise ValueError("not_utf8: the line holds bytes that are not UTF-8 (SPEC §3)")
     if has_lone_surrogate(text):
         raise ValueError("lone_surrogate: unpaired UTF-16 surrogate escape is outside the acceptance profile")
-    _ensure_recursion_headroom()
-    return json.loads(text, object_pairs_hook=_reject_dup, parse_float=_no_float, parse_int=_bounded_int,
-                      parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f"JSON constant {c}")))
+    with _RecursionHeadroom():
+        return json.loads(text, object_pairs_hook=_reject_dup, parse_float=_no_float, parse_int=_bounded_int,
+                          parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f"JSON constant {c}")))
 
 def canonical_payload(entry: Dict) -> bytes:
     """Stringa canonica dell'entry per ricomputare self_hash. Esclude self_hash E le attestazioni
@@ -696,7 +724,16 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
     `tip`: path of a signed chain tip (cryptovalid_tip.py); None = use `<path>.tip.json` when it exists. With a
     tip the tail limit moves: truncation, suffix rewrite and unsealed appends become named FAILs (the chain
     alone cannot see them). `require_tip`: a missing tip is a FAIL. `trusted_pubkey_hex`: the log key the
-    relying party trusts (without it the tip's own key is used and the receipt says so: NOT trusted)."""
+    relying party trusts (without it the tip's own key is used and the receipt says so: NOT trusted).
+    The recursion headroom covers the whole verification (the entries decoded at the bound are hashed again), and the
+    caller's recursion limit is back when this returns (15/11/2026)."""
+    with _RecursionHeadroom():
+        return _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_before, expect_ledger_id,
+                              trusted_pq_pubkey_b64)
+
+
+def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_before, expect_ledger_id,
+                   trusted_pq_pubkey_b64) -> Dict:
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     errors: List[Dict] = []
 

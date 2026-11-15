@@ -255,7 +255,9 @@ in Swift alone, declared).
   Python+JS+Go+Rust: 0/16 disagreements.
 - The PASS side is guarded too: the reference raises its own recursion headroom before decoding, so an
   in-profile line is accepted even when `verify_ledger` is called from a deep caller stack (test with a
-  700-frame caller; RED without the headroom). Inputs larger than **`MAX_INPUT_BYTES` = 256 MiB** are refused
+  700-frame caller; RED without the headroom). Since 15/11/2026 the caller's recursion limit is restored when
+  `verify_ledger` returns, also after an exception and with concurrent calls (until 0.24.0 it stayed raised, 1000 →
+  1796 measured; `test_verifier_host_process_20261115.py`). Inputs larger than **`MAX_INPUT_BYTES` = 256 MiB** are refused
   fail-closed (`input_too_large`) before being read.
 - Declared platform limits (council review, not measured here): the recursion headroom raises the interpreter
   limit, it cannot enlarge the thread's C stack — on a thread with a very small stack the C decoder could still
