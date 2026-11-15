@@ -9,6 +9,15 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **SPEC §15: the hybrid signature of this format is not the composite ML-DSA of RFC 10073.** Half a page with the
+  sections of RFC 10073 it rests on (§2.1, §2.2, §3.1–§3.3, §4.1, §4.3, §5.3, §9.3, read in full on 15/11/2026): what
+  both algorithms sign, the ML-DSA context, one value or two fields, "both or nothing" or per layer; the keys of a
+  hybrid ledger are standalone keys and are not republished as a composite key (RFC 10073 §5.3: "Component keys of a
+  composite MUST NOT be used in any other type of key or as a standalone key"). No verifier changes.
+  `test_hybrid_is_not_composite_20261115.py` measures the difference in both directions with the same two keys over the
+  same message: neither crossing verifies, both direct checks do; its composite helper is a test helper, checked
+  against the two signatures of the RFC's Appendix E for `id-MLDSA65-Ed25519-SHA512` when the RFC's text is given
+  (`CV_RFC10073_TXT`; they verified on 15/11/2026). Proposed by Athena's review of 15/11/2026.
 - **The evidence pack's verify checks the RFC 3161 token against a TSA the caller pins** (SPEC v0.8, §10–§11):
   `evidence_pack.py verify DIR --tsa-cert PEM` (repeatable) and `verify_pack(..., tsa_certs=[...])`. Until now the
   pack's token was read for its status and imprint only, `time_anchor` was never `verified`, and a token whose signature

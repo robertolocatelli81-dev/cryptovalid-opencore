@@ -238,6 +238,8 @@ receipt names `cryptovalid-evidence-pack/states-2`, and `time_anchor` can be `ve
 tsa_unresolved` (a token valid but not established under the pinned certificates), or `contradicted` for a token whose
 signature does not verify or that §11 refuses at steps 1–6 (without a pin such a token is `tsa_not_checked` and the pack
 valid, as before). §11's function and the other callers of it do not change.
+v0.8 also adds §15 (2026-11-15), the difference between the hybrid signature of this format and the composite ML-DSA of
+RFC 10073, with the rule that the keys of one are not used for the other. Additive: no verifier changes.
 
 ## 7. Conformance (normative)
 
@@ -612,3 +614,46 @@ generated in the test (both profiles, sizes around every tile and level boundary
 every truncation and altered byte of the entries, against the rule above and, where Go is installed, against
 golang.org/x/mod/sumdb/tlog, filippo.io/sunlight and filippo.io/torchwood (`verifiers/tile_oracle`).
 
+
+## 15. The hybrid signature of this format is not a composite signature (since v0.8, 2026-11-15)
+
+A hybrid ledger entry (§2: `signature` with `signer`, `signature_pq` with `signer_pq`) and a hybrid log tip
+(`cryptovalid_tip.py`) carry two independent signatures over the same bytes: Ed25519, and ML-DSA-65 (FIPS 204, pure, with
+the empty context string), each over the UTF-8 bytes of the `self_hash` string (the tip: over its payload), each in its own
+field and under its own key.
+
+RFC 10073 (Composite ML-DSA for Use in X.509 Public Key Infrastructure, Standards Track, November 2026; §2.1, §2.2,
+§3.1–§3.3, §4.1, §4.3, §5.3, §9.3 and its entry for `id-MLDSA65-Ed25519-SHA512` in §6 read in full on 2026-11-15 from
+https://www.rfc-editor.org/rfc/rfc10073.txt) defines, for the same two algorithms, `id-MLDSA65-Ed25519-SHA512`
+(OID 1.3.6.1.5.5.7.6.48). It is another construction, and the two are not interchangeable:
+
+| | this format | RFC 10073 `id-MLDSA65-Ed25519-SHA512` |
+|---|---|---|
+| bytes both algorithms sign | the message itself | `M' := Prefix \|\| Label \|\| len(ctx) \|\| ctx \|\| PH( M )` (§2.1, §3.2): Prefix the ASCII string `CompositeAlgorithmSignatures2025`, Label `COMPSIG-MLDSA65-Ed25519-SHA512`, `len(ctx)` "a single unsigned byte", PH SHA512 |
+| ML-DSA context string | empty | the Label: "the per-algorithm Label is used as the ctx for the underlying ML-DSA primitive" (§3.2) |
+| signature | two fields | one value, `mldsaSig \|\| tradSig` (§4.3): 3309 + 64 bytes |
+| public key | two fields | one value, `mldsaPK \|\| tradPK` (§4.1): 1952 + 32 bytes |
+| valid when | per layer: the post-quantum layer may be absent, and is required only when the caller pins it or a pack's manifest claims it (§5, §10) | "if and only if all component signatures were successfully validated" (§3.3) |
+
+Rules of this format (NORMATIVE since v0.8):
+
+1. The two signatures of an entry, concatenated, are not a composite signature, and a composite signature value is not a
+   `signature` or a `signature_pq`: a verifier of this format refuses it (its length alone is not 64 or 3309 bytes, and
+   its halves sign `M'`, not the message). Measured on 2026-11-15 with the same two keys over the same message: neither
+   crossing verifies, both direct checks do (`test_hybrid_is_not_composite_20261115.py`).
+2. This format does not call its hybrid "composite", and an implementation MUST NOT label these fields with the OID of
+   a composite algorithm.
+3. Keys do not move between the two. RFC 10073 §5.3: "Component keys of a composite MUST NOT be used in any other type
+   of key or as a standalone key"; §3.1: key generation "MUST NOT reuse existing key material"; §9.3: "key reuse MUST be
+   avoided to prevent the introduction of EUF-CMA vulnerabilities". The keys of this format are standalone keys: a
+   `signer` / `signer_pq` pair MUST NOT be published as a composite public key, and composite signatures need keys
+   generated for them.
+4. What the composite has and this format does not: the two signatures bound to each other. An entry whose
+   `signature_pq` is removed still carries a valid Ed25519 signature; what refuses it is the verifier's pin
+   (`expected_pq_pubkey_b64`, `require_pq`: the stripped layer is then `pq_missing`, §5), not the signature itself. A
+   reader who needs "both or nothing" inside one signature value needs the composite, not this format.
+
+Not claimed: that anything in this repository implements RFC 10073. The test builds composite signatures with a helper
+of its own; with the RFC's text given (`CV_RFC10073_TXT=<path to rfc10073.txt>`) it also checks that helper against the
+two signatures of Appendix E for `id-MLDSA65-Ed25519-SHA512` (they verified on 2026-11-15); the vector is not shipped
+here.
