@@ -42,7 +42,8 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Build tools pinned by hash (setuptools >= 77 builds the wheel the declared-API test inspects)
+      - name: Build tools pinned by hash (setuptools >= 77 builds the wheel the declared-API test inspects; build 1.6.1 and setuptools 84.2.1 need Python >= 3.10, so on 3.9 that test skips and names why)
+        if: matrix.python-version == '3.13'
         run: python3 -m pip install --require-hashes --no-deps -r .github/build-requirements.txt
       - name: Stub against runtime (names, signatures, __all__)
         run: python3 tools/check_stub.py . cryptovalid
