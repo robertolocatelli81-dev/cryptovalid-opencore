@@ -329,12 +329,13 @@ def _file_format(path: str) -> str:
     with open(path, "rb") as fh:
         raw = fh.read(_AUTO_JSON_LIMIT + 1)
     whole_read = len(raw) <= _AUTO_JSON_LIMIT
-    rows, whole = [], _NO_JSON
+    rows, whole, doc = [], _NO_JSON, None
     if whole_read:
         try:
-            whole = _json_value(_utf8(raw, "the file"), "the file")
+            doc = _utf8(raw, "the file")
+            whole = _json_value(doc, "the file")
         except _NotRecognised:
-            pass   # not one JSON document (whole stays _NO_JSON): it can still be a ledger
+            doc = None   # not one JSON document (whole stays _NO_JSON): it can still be a ledger; free the decoded copy
         if isinstance(whole, dict):
             fmt = whole.get("evidence_format")
             if isinstance(fmt, str) and fmt.startswith("ap2-evidence"):
@@ -355,7 +356,12 @@ def _file_format(path: str) -> str:
     if first is None:
         raise _NotRecognised("the file is empty or blank" if whole_read else "no non-blank line in the first 64 MiB")
     try:
-        entry = _json_value(first, "the first non-blank line")
+        if whole is not _NO_JSON and doc.strip(" \t\r\n") == first.strip(" \t\r"):
+            # the document is this one line: parse it once (measured 15/11/2026: a 60 MiB one-line JSON array of empty
+            # objects was parsed twice, 3 GB peak instead of 1.5 GB)
+            entry = whole
+        else:
+            entry = _json_value(first, "the first non-blank line")
     except _NotRecognised as e:
         entry, why_not_ledger = _NO_JSON, str(e)
     else:
@@ -392,6 +398,10 @@ def verify_auto(path: str) -> dict:
     except OSError as e:
         return _not_recognised(f"cannot read the path ({type(e).__name__}: {e.strerror or e})")
     if stat.S_ISDIR(mode):
+        try:
+            os.listdir(path)
+        except OSError as e:   # SPEC §12: a path that cannot be read; without this an unreadable pack "has no MANIFEST.json"
+            return _not_recognised(f"cannot read the directory ({type(e).__name__}: {e.strerror or e})")
         if os.path.exists(os.path.join(path, "MANIFEST.json")):
             return verify_pack(path)
         import glob

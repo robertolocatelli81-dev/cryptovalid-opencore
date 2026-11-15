@@ -15,7 +15,10 @@ run by the same author, not by a third party.
   FiloSottile/torchwood's litewitness ML-DSA-44 test (1c05157), which that witness accepts; the vector is now in
   `testdata/interop/` (BSD-3-Clause, notice kept) and in `test_interop_mldsa_timestamp_zero_20261114.py`, with negative
   controls (altered signature, timestamp 1, other tree size, timestamp 2^63). A zero timestamp is reported as 0, with no
-  freshness; the witness still never emits one. Ed25519 cosignature/v1 is unchanged.
+  freshness; the witness still never emits one. Ed25519 cosignature/v1 is unchanged. In
+  `cryptovalid_witness.verify_witnessed` an ML-DSA-44 witness line with timestamp 0 (a subtree cosignature over
+  [0, size): it states consistency, not age) now counts toward `min_witnesses`, where 0.23.0 answered NON_VALIDA; with
+  `max_age_s` it is never fresh.
 
 - **Command line help in English.** `cryptovalid-verify --help` (and the same help after each of its commands) said
   "Un verificatore per TUTTA l'evidenza CryptoValid, offline" and listed the commands without saying what they take; it
@@ -33,11 +36,13 @@ run by the same author, not by a third party.
   UnicodeDecodeError traceback (exit 1); an AP2 or CLDMA document was recognised by a substring in its first 2048
   bytes. Now a directory is a pack (MANIFEST.json) or an ingest archive; a regular file is AP2 evidence or a CLDMA
   attestation when its whole content is one JSON object with their members, a ledger when its first non-blank line is a
-  JSON object with `prev_hash` and `self_hash`; anything else, a pipe, a file that matches two rows, bytes that are not
-  UTF-8 or a byte order mark is `kind: "auto"`, `format not recognised: <reason>`, exit 1. The ledger in the same release
-  is still a ledger and passes. `test_auto_closed_20261115.py`: the release files (SHA-256 pinned, in
+  JSON object with `prev_hash` and `self_hash`; anything else, a pipe, an unreadable directory, a file that matches two
+  rows, bytes that are not UTF-8 up to the first non-blank line or a byte order mark is `kind: "auto"`, `format not
+  recognised: <reason>`, exit 1 (a later line of a ledger that is not UTF-8 is named by the ledger verifier). A document
+  on one line is parsed once (a 60 MiB one-line JSON array was parsed twice: 3 GB peak, 1.6 GB now). The ledger in the
+  same release is still a ledger and passes. `test_auto_closed_20261115.py`: the release files (SHA-256 pinned, in
   `testdata/interop/`), and 1500 generated inputs of every shape against an oracle written from SPEC §12; on the code
-  before, 10 of its 13 tests that do not use a pipe fail (the pipe test blocks there).
+  before, 13 of its 16 tests that do not use a pipe fail (the pipe test blocks there).
 
 - **`cryptovalid_tsa.verify_with_openssl` states what it checks** (registry item 21; behaviour unchanged). Measured on
   2026-11-15 with OpenSSL 3.0.22: it reads a whole TimeStampResp (a bare token is always False), hashes the data it is

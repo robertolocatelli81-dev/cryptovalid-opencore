@@ -254,6 +254,46 @@ class TestAutoPaths(unittest.TestCase):
             fh.write("")
         self.assertEqual(VE.verify_auto(d)["kind"], "archive")
 
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any directory")
+    def test_unreadable_directory(self):
+        d = os.path.join(self.d, "pack")
+        os.mkdir(d)
+        with open(os.path.join(d, "MANIFEST.json"), "w") as fh:
+            fh.write("{}")
+        os.chmod(d, 0)
+        try:
+            self._refused(d, "cannot read the directory (PermissionError: Permission denied);")
+        finally:
+            os.chmod(d, 0o700)
+
+    def test_non_utf8_after_the_first_line_is_the_ledger_verifiers(self):
+        # SPEC §12: only the lines up to the first non-blank one decide; a later line of a ledger is judged by `ledger`
+        with open(os.path.join(HERE, "examples", "sample_ledger.jsonl"), "rb") as fh:
+            raw = fh.read()
+        r = VE.verify_auto(self._write(raw + b"\xe9\n"))
+        self.assertEqual((r["kind"], r["valid"]), ("ledger", False))
+        self.assertIn("not_utf8", r["layers"][0]["detail"])
+
+    def test_a_one_line_document_is_parsed_once(self):
+        from unittest import mock
+        calls = []
+        real = VE._json_value
+        def counting(text, what):
+            calls.append(what)
+            return real(text, what)
+        p = self._write(b"\n" + json.dumps({"prev_hash": "0" * 64, "self_hash": "a" * 64}).encode() + b"\r\n \n")
+        with mock.patch.object(VE, "_json_value", counting):
+            self.assertEqual(VE._file_format(p), "ledger")
+        self.assertEqual(calls, ["the file"])
+        calls.clear()
+        p = self._write(b'{"prev_hash": "0", "self_hash": "1"}\n{"x": 1}\n')   # two lines: the first is parsed alone
+        with mock.patch.object(VE, "_json_value", counting):
+            self.assertEqual(VE._file_format(p), "ledger")
+        self.assertEqual(calls, ["the file", "the first non-blank line"])
+
+    def test_the_limit_is_the_specs(self):   # SPEC §12 names 64 MiB; the test below swaps the limit for 500
+        self.assertEqual(VE._AUTO_JSON_LIMIT, 64 * 1024 * 1024)
+
     def test_larger_than_the_limit(self):
         old = VE._AUTO_JSON_LIMIT
         VE._AUTO_JSON_LIMIT = 500

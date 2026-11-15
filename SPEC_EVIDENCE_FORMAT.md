@@ -408,7 +408,7 @@ starts `format not recognised:` and names the reason; exit 1).
 | Path | Recognised as | Verifier |
 |---|---|---|
 | directory holding `MANIFEST.json` | evidence pack | `pack` (§10) |
-| directory holding a `*.head.json` or a `*-*.jsonl` file | ingest archive | `archive` |
+| directory holding an entry whose name matches `*.head.json` or `*-*.jsonl` (shell-style match: a name that starts with a dot does not count) | ingest archive | `archive` |
 | regular file whose whole content is one JSON object with a string `evidence_format` that starts with `ap2-evidence` | AP2 evidence | `ap2` |
 | regular file whose whole content is one JSON object holding the members `root_hash` and `metric_id` | CLDMA attestation | `cldma` |
 | regular file whose first non-blank line is one JSON object holding the members `prev_hash` and `self_hash` (§2) | ledger | `ledger` (§5) |
@@ -418,7 +418,8 @@ file can only be a ledger, and its first line is read up to 64 MiB. "Blank" is a
 return only. A file that matches two rows (an object that is a one-line ledger and also an AP2 or CLDMA document) is
 refused as ambiguous, with the rows named: the caller then names the verifier. Refused, each with its reason: a path that
 does not exist or cannot be read; anything that is neither a directory nor a regular file (a pipe, a device: `ledger`
-reads a pipe); an empty or blank file; bytes that are not UTF-8; a JSON value other than those of the table (an array, a
+reads a pipe); an empty or blank file; bytes that are not UTF-8 in a line up to the first non-blank one (later lines of a
+ledger are judged by `ledger`, which names them); a JSON value other than those of the table (an array, a
 string, an object with other members); a first line that is not a JSON object (a document written over several lines,
 binary data); JSON nested deeper than the parser allows.
 

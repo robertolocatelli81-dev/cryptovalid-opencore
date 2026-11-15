@@ -62,5 +62,30 @@ class TorchwoodMLDSA44(unittest.TestCase):
         self.assertEqual(C.verify_note(note_with(top), [self.vk])["stato"], "NON_VALIDA")
 
 
+@unittest.skipIf(C._mldsa() is None, "cryptography without the mldsa module")
+class WitnessLineTimestampZero(unittest.TestCase):
+    """A witness's ML-DSA-44 line with timestamp 0 is a subtree cosignature over [0, size): tlog-cosignature, "a statement
+    that the subtree with the specified hash is consistent with all other historical views ... No statement is made about
+    the age". verify_witnessed counts it as a witness (0.23.0: NON_VALIDA), never as a fresh one."""
+    def test_counts_without_max_age_never_fresh(self):
+        import hashlib
+        import cryptovalid_witness as W
+        m = C._mldsa()
+        seed_log, seed_w = b"\x01" * 32, b"\x02" * 32
+        text = C.checkpoint_text("example.com/log", 5, hashlib.sha256(b"r").digest())
+        note = C.sign_note(text, "example.com/log", seed_log)
+        lvk = C.vkey("example.com/log", C.TYPE_ED25519, C.pubkey_from_seed(seed_log))
+        wpub = C.mldsa44_pubkey_from_seed(seed_w)
+        wvk = C.vkey("w.example", C.TYPE_MLDSA44, wpub)
+        cp = C.parse_checkpoint(text)
+        sig = m.MLDSA44PrivateKey.from_seed_bytes(seed_w).sign(
+            C.mldsa44_message("w.example", 0, cp["origin"], 0, cp["size"], cp["root"]))
+        line = C._sig_line("w.example", C.key_id("w.example", C.TYPE_MLDSA44, wpub), struct.pack(">Q", 0) + sig)
+        r = W.verify_witnessed(note + line.encode(), lvk, [wvk], min_witnesses=1)
+        self.assertEqual((r["stato"], r["witnesses"]), ("OK", ["w.example"]), r)
+        r = W.verify_witnessed(note + line.encode(), lvk, [wvk], min_witnesses=1, max_age_s=3600, now=10 ** 9)
+        self.assertEqual((r["stato"], r["fresh_witnesses"]), ("NON_VALIDA", []), r)
+
+
 if __name__ == "__main__":
     unittest.main()
