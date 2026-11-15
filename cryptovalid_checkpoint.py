@@ -49,6 +49,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import struct
 import sys
 from typing import Dict, List, Optional, Tuple
@@ -201,6 +202,24 @@ def _verify_rfc6962(name: str, key, body: bytes, text: str) -> int:
     except InvalidSignature:
         raise _Refused("the ECDSA signature over the TreeHeadSignature does not verify") from None
     return ts
+
+
+MAX_NOTE_FILE = 1 << 20   # bytes of a note file read by the command line (100 lines of ML-DSA-44 cosignatures are ~330 KB)
+
+
+def read_note_file(path: str, limit: int = MAX_NOTE_FILE) -> bytes:
+    """The bytes of a note file for the command line: a regular file (a FIFO or a device is refused before it is opened,
+    so it can neither block nor stream without end) of at most `limit` bytes; NoteError otherwise (exit 2)."""
+    st = os.stat(path)
+    if not stat.S_ISREG(st.st_mode):
+        raise NoteError(f"{path}: not a regular file")
+    if st.st_size > limit:
+        raise NoteError(f"{path}: {st.st_size} bytes, more than the {limit} of a note file")
+    with open(path, "rb") as f:
+        b = f.read(limit + 1)
+    if len(b) > limit:
+        raise NoteError(f"{path}: more than the {limit} bytes of a note file")
+    return b
 
 
 def parse_vkey(s: str, strict: bool = True) -> Tuple[str, bytes, int, bytes]:
@@ -590,8 +609,7 @@ def main(argv=None) -> int:
     if a.cmd == "tiles":
         import cryptovalid_merkle as M
         try:
-            with open(a.checkpoint or os.path.join(a.directory, "checkpoint"), "rb") as f:
-                note = f.read()
+            note = read_note_file(a.checkpoint or os.path.join(a.directory, "checkpoint"))
             r = verify_note(note, a.vkey)
         except (NoteError, OSError) as e:
             emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
@@ -628,8 +646,7 @@ def main(argv=None) -> int:
         emit(note.decode("utf-8"), end=""); return 0
     if a.cmd == "verify":
         try:
-            with open(a.note, "rb") as f:
-                note = f.read()
+            note = read_note_file(a.note)
             r = verify_note(note, a.vkey)
         except (NoteError, OSError) as e:   # a malformed vkey or an unreadable file is the caller's error: JSON, exit 2
             emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2

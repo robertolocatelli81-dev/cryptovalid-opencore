@@ -634,7 +634,10 @@ def submit_checkpoint(url: str, note: bytes, leaves: List[bytes], witness_vkeys:
     for w in witness_vkeys:                  # validated BEFORE the network round trip (the witness would persist first)
         if C.parse_vkey(w, strict=False)[2] in LOG_KEY_TYPES:
             raise C.NoteError("witness vkeys must be cosigner keys (type 0x04 or 0x06): a log key is not a witness")
-    C.parse_vkey(log_vkey) if isinstance(log_vkey, str) else [C.parse_vkey(k) for k in log_vkey]
+    # the log key too, before the round trip: since 2026-11-15 parse_vkey accepts a 0x05 (static CT) key, which no
+    # witness verifies here (LOG_KEY_TYPES); verify_witnessed would refuse it only after the witness had answered
+    if any(C.parse_vkey(k)[2] not in LOG_KEY_TYPES for k in ([log_vkey] if isinstance(log_vkey, str) else list(log_vkey))):
+        raise C.NoteError("a log key must be an Ed25519 (0x01) or ECDSA (0x02) note key, not a cosigner key")
     status, body = add_checkpoint(url, note, 0, [])
     if status == 409:
         m = re.fullmatch(r"(0|[1-9][0-9]{0,19})\n", body.decode("ascii", "replace"))   # decimal (uint64) + newline, nothing else

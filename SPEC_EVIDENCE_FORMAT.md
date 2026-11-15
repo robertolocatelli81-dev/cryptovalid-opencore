@@ -520,7 +520,8 @@ The rule of this implementation:
    of `floor(s / 256^l) mod 256` hashes when that is not 0; the levels are those where `floor(s / 256^l) > 0`. A tree that
    needs a level above the profile's (5 for static-ct-api, 63 for tlog-tiles) is refused. Size 0 has no tiles and the
    root of the empty tree.
-2. **Reading.** A path is a regular file (a link or anything else is refused) of at most 64 MiB. A partial tile that is
+2. **Reading.** A path is a regular file of at most 64 MiB, reached through real directories under `<dir>`: a link,
+   at the file or at any directory under `<dir>` (`tile/`, the level, `x###`, `.p`), or anything else is refused. A partial tile that is
    absent is read as the first `W` hashes (or entries) of the full tile, and counted (`partial_from_full`); when both
    files are present, the partial hash tile must equal the prefix of the full one.
 3. **Hash tiles** are exactly 32 × width bytes. Every level-0 tile is required. The root is the RFC 6962 Merkle Tree Hash
@@ -542,7 +543,10 @@ The rule of this implementation:
 5. **Encoding** of data tiles and entry bundles on disk: `gzip` (exactly one gzip member, nothing after it, at most 64 MiB
    once decompressed), `identity`, or `auto` (the default: gzip when the file starts with the bytes 1f 8b). A wrong guess
    cannot pass: the leaf hashes decide.
-6. **Limits** of this implementation, stated: at most 2^24 leaves (every leaf hash is held in memory).
+6. **Limits** of this implementation, stated: at most 2^24 leaves (every leaf hash is held in memory; measured on
+   2026-11-15 with level-0 tiles only, Python 3.11: 0.4 GB resident at 2^22 leaves). The whole tree is read
+   from leaf 0: a log pruned as tlog-tiles §Pruning allows (tiles and entry bundles below its minimum index no longer
+   served) cannot be checked here, and the first missing level-0 tile or entry file is the reason given.
 7. Result: `{"stato": "OK" | "NON_VALIDA", "motivo", "size", "root", "tiles_read", "partial_from_full", "upper_missing",
    "entries", "entries_checked"}`; the first rule that fails gives the reason. The command exits 0 when the checkpoint and
    the tiles are OK, 1 when either is not, 2 when a vkey or the checkpoint file cannot be used.

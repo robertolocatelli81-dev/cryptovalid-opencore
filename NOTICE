@@ -15,6 +15,16 @@ its author on 2026-08-08. Everything OUTSIDE this directory remains under the
 Business Source License 1.1 (source-available; see the repository root).
 
 -------------------------------------------------------------------------------
+THIRD-PARTY FILES
+-------------------------------------------------------------------------------
+testdata/interop/ also holds test vectors of other projects, under their own
+licenses and not under the AGPL: files of FiloSottile/sunlight (ISC, full text
+in testdata/interop/LICENSE.sunlight) and of FiloSottile/torchwood (BSD-3-Clause,
+full text in testdata/interop/LICENSE.torchwood). testdata/interop/README.md
+lists each file, its source commit and its license. The sole-copyright statement
+above covers everything else in this repository.
+
+-------------------------------------------------------------------------------
 ATTRIBUTION REQUIREMENT (AGPL-3.0 §5, §7, §13)
 -------------------------------------------------------------------------------
 If you copy, modify or redistribute this software you MUST:

@@ -397,7 +397,19 @@ def verify_tiles(directory: str, size: int, root=None, profile: str = "tlog-tile
         def fetch(level, n, width, required):
             """The bytes of tile (level, n) of `width` entries: the partial file, else the prefix of the full one."""
             def at(w):
-                return _read_file(os.path.join(directory, *tile_path(level, n, w).split("/")))
+                parts = tile_path(level, n, w).split("/")
+                cur = directory
+                for part in parts[:-1]:      # tile/, the level, x### and .p: real directories, never links (SPEC §14)
+                    cur = os.path.join(cur, part)
+                    try:
+                        st = os.lstat(cur)
+                    except FileNotFoundError:
+                        return None
+                    except OSError as e:
+                        raise TileError(f"{'/'.join(parts)}: {cur}: {e.strerror}") from None
+                    if not stat.S_ISDIR(st.st_mode):
+                        raise TileError(f"{'/'.join(parts)}: {cur} is not a directory (links are not followed)")
+                return _read_file(os.path.join(cur, parts[-1]))
             hashes_level = level not in ("data", "entries")
             b = at(width)
             if width < TILE_WIDTH:

@@ -15,14 +15,20 @@ run by the same author, not by a third party.
   static CT log (c2sp.org/static-ct-api, TileLeaf with its leaf_index) or the entry bundles of a tlog-tiles log; every
   length is checked before the bytes it covers, the root from the level-0 tiles must be the checkpoint's, every upper
   tile present must agree with level 0, every entry must hash to its leaf. Refused with the reason: a missing level-0 tile
-  or entry file, a tile of the wrong length, an unknown entry type or extension type, a duplicate or wrong leaf_index,
+  or entry file, a link at a tile or at any directory under the given one, a tile of the wrong length, an unknown entry type or extension type, a duplicate or wrong leaf_index,
   bytes after the entries, more than one gzip member. `cryptovalid_checkpoint.py tiles <dir> --vkey ... --profile
   static-ct-api|tlog-tiles` verifies the checkpoint, then its tiles. The pre_certificate and certificate_chain of a data
   tile are outside every leaf hash and are read for their structure only (stated in SPEC §14). Vectors from
   FiloSottile/sunlight (ISC) in `testdata/interop/`: the skylight mirror (root of a tree of 300 from its tiles = the
   cosigned checkpoint) and the navigli2025h2 tiles (10 real precertificates). `test_c2sp_tiles_20261115.py`; with Go,
   `verifiers/tile_oracle` (golang.org/x/mod/sumdb/tlog, filippo.io/sunlight, filippo.io/torchwood) reads the same
-  generated and altered directories. The module leaves the experimental list (README).
+  generated and altered directories. The module leaves the experimental list (README). A log pruned as tlog-tiles
+  §Pruning allows cannot be checked: the whole tree is read from leaf 0 (SPEC §14, rule 6).
+  `cryptovalid_witness.submit_checkpoint` refuses a log key that no witness verifies here (0x05 included) before the
+  network round trip, as `verify_witnessed` does; with a 0x05 log key it reached the witness first.
+  `cryptovalid_checkpoint.py verify` and `tiles` read the note from a regular file of at most 1 MiB, otherwise exit 2
+  with the reason: a FIFO given as the note blocked the command, and `/dev/zero` was read until memory ran out (a
+  MemoryError traceback and exit 1 under a 1.5 GB limit).
 
 - **A final newline no longer passes two whole-string patterns.** In Python `re`, `$` also matches just before a newline
   that ends the string. `cryptovalid_kms.VaultTransitBackend.sign` matched Vault's answer with `^vault:v(\d+):(.+)$`
@@ -42,7 +48,9 @@ run by the same author, not by a third party.
   TreeHeadSignature is verified; a line that fails gives the reason (body shorter than 12 bytes, length field, algorithm,
   extension lines, origin other than the key name, signature). A 0x05 vkey whose key is not a canonical ECDSA P-256 key is
   refused (exit 2 on the command line). `cryptovalid_checkpoint.py vkey-rfc6962 --name <origin> --key-b64 <DER>` prints
-  the vkey from a CT log list entry. The module leaves the experimental list (README). Vector: the rome2026h1 checkpoint and
+  the vkey from a CT log list entry. `parse_vkey` now returns a 0x05 vkey whose key ID matches (with `strict=True` it
+  raised "unsupported vkey type 0x05") and refuses one whose key ID does not (with `strict=False` it returned it
+  unchecked). The module leaves the experimental list (README). Vector: the rome2026h1 checkpoint and
   log list entry in `testdata/interop/` (ISC, notice kept); `test_c2sp_static_ct_20261115.py` checks every body length,
   every bit of the real body, unknown types, refused vkeys and 300 notes signed with keys made in the test, and asks
   github.com/transparency-dev/formats (`verifiers/note_oracle`, which now opens 0x05 keys) on the same notes.

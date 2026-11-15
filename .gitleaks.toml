@@ -1,0 +1,10 @@
+# gitleaks: the default rules, plus one allowlist (2026-11-15).
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Log keys of third-party test logs in testdata/interop: base64 DER SubjectPublicKeyInfo of an ECDSA P-256 public key (published, not a secret)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)testdata/interop/[^/]+\.json$''']
+regexes = ['''^MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE[A-Za-z0-9+/]{86}==$''']

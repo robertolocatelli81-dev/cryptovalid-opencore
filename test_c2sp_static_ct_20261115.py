@@ -144,6 +144,13 @@ class Vector(unittest.TestCase):
                 continue
             self.assertIn("note text is not a checkpoint", r["motivo"], text)
 
+    def test_key_id_over_utf8_name(self):
+        """The key ID hashes the key name as UTF-8 bytes (signed-note), checked here on a non-ASCII name."""
+        name = "caf\u00e9.example/log"
+        want = hashlib.sha256(name.encode("utf-8") + b"\n\x05" + hashlib.sha256(DER).digest()).digest()[:4]
+        self.assertEqual(C.rfc6962_key_id(name, DER), want)
+        self.assertEqual(C.parse_vkey(C.vkey_rfc6962(name, DER))[1], want)
+
     def test_vkey_rfc6962_arguments(self):
         for name in ("", "a b", "a+b", "a\x01"):
             with self.assertRaises(C.NoteError):
@@ -315,8 +322,8 @@ class Generated(unittest.TestCase):
 @unittest.skipUnless(HAVE_CRYPTO, "cryptography")
 class GoOracle(unittest.TestCase):
     """github.com/transparency-dev/formats opens the same notes (verifiers/note_oracle). Skipped without Go unless
-    CV_REQUIRE_GO_ORACLE=1. The rule of SPEC §13 decides; the oracle is asked on bodies of at least 12 bytes over
-    canonical checkpoint texts, where its answer is defined by the same structure."""
+    CV_REQUIRE_GO_ORACLE=1. The rule of SPEC §13 decides; the oracle is asked on the notes below: the real one with every
+    bit of its body flipped, notes signed in the test, and the length and algorithm fields of the real body."""
 
     @classmethod
     def setUpClass(cls):

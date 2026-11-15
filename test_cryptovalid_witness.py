@@ -1189,6 +1189,19 @@ class TestTlogWitnessHTTP(unittest.TestCase):
             W.submit_checkpoint(self.url, n8, l8, [self.LV], self.LV)
         with open(self.svc.state_path + ".cosigned.jsonl") as f:
             self.assertEqual(len(f.readlines()), n_before)
+        # a static CT log key (0x05, accepted by parse_vkey since 2026-11-15) as the log key: no witness verifies it here,
+        # so it is refused before the round trip too, alone or in a list (until this check it reached the witness first)
+        from cryptography.hazmat.primitives import serialization as _ser
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+        der = _ec.generate_private_key(_ec.SECP256R1()).public_key().public_bytes(
+            _ser.Encoding.DER, _ser.PublicFormat.SubjectPublicKeyInfo)
+        ct = C.vkey_rfc6962(LOG, der)
+        with mock.patch.object(W, "add_checkpoint", side_effect=AssertionError("network round trip")):
+            for lv in (ct, [self.LV, ct]):
+                with self.assertRaisesRegex(C.NoteError, "a log key must be an Ed25519"):
+                    W.submit_checkpoint(self.url, n8, l8, [self.WV], lv)
+        with open(self.svc.state_path + ".cosigned.jsonl") as f:
+            self.assertEqual(len(f.readlines()), n_before)
         # wrong path → 404
         import urllib.request, urllib.error
         with self.assertRaises(urllib.error.HTTPError) as cm:

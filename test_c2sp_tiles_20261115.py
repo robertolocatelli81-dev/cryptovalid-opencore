@@ -207,6 +207,24 @@ class Vectors(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             rc = C.main(["tiles", os.path.join(D, "nowhere"), "--vkey", MIRROR_VKEY, "--profile", "tlog-tiles"])
         self.assertEqual((rc, json.loads(out.getvalue())["stato"]), (2, "ERRORE"))
+        tmp = tempfile.mkdtemp()                                       # a checkpoint that is not a regular file of at
+        try:                                                           # most 1 MiB: refused before it is read, exit 2
+            fifo = os.path.join(tmp, "fifo"); os.mkfifo(fifo)
+            big = os.path.join(tmp, "big")
+            with open(big, "wb") as f:
+                f.truncate(C.MAX_NOTE_FILE + 1)
+            for cp in (fifo, big, tmp, "/dev/zero"):
+                for argv in (["tiles", MIRROR, "--vkey", MIRROR_VKEY, "--profile", "tlog-tiles", "--checkpoint", cp],
+                             ["verify", cp, "--vkey", MIRROR_VKEY]):
+                    if cp == "/dev/zero" and not os.path.exists(cp):
+                        continue
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        rc = C.main(argv)
+                    self.assertEqual((rc, json.loads(out.getvalue())["stato"]), (2, "ERRORE"), (cp, argv[0]))
+            self.assertEqual(C.read_note_file(os.path.join(MIRROR, "checkpoint")), _read("sunlight_mirror/checkpoint"))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
         for bad in (["--vkey", MIRROR_VKEY, "--profile", "other"], ["--vkey", MIRROR_VKEY, "--entries-encoding", "zstd",
                     "--profile", "tlog-tiles"], ["--vkey", MIRROR_VKEY], ["--profile", "tlog-tiles"]):
             with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(io.StringIO()):
@@ -340,6 +358,16 @@ class Generated(unittest.TestCase):
         open(p, "wb").write(bytes(b))
         r = M.verify_tiles(d, 70000, root, "tlog-tiles", entries=False)
         self.assertEqual(r["motivo"], "tile/1/000: hash 7 is not the root of the 256 hashes of level 0 below it")
+        # a missing upper tile does not end its level: the next one is still read and checked, and counted when absent
+        os.replace(p, p + ".bad")
+        q = os.path.join(d, "tile", "1", "001.p", "17")
+        b = bytearray(open(q, "rb").read()); b[0] ^= 1
+        open(q, "wb").write(bytes(b))
+        r = M.verify_tiles(d, 70000, root, "tlog-tiles", entries=False)
+        self.assertEqual(r["motivo"], "tile/1/001.p/17: hash 0 is not the root of the 256 hashes of level 0 below it")
+        os.remove(q)
+        r = M.verify_tiles(d, 70000, root, "tlog-tiles", entries=False)
+        self.assertEqual((r["stato"], r["upper_missing"]), ("OK", 3))
 
     def test_every_alteration_of_a_small_tree(self):
         rnd = random.Random(14)
@@ -498,6 +526,31 @@ class Generated(unittest.TestCase):
                                       (256 ** 64, "tlog-tiles", "needs level 64; tlog-tiles allows 0..63")):
             self.assertIn(reason, M.verify_tiles(d, size, None, profile, entries=False, max_size=huge)["motivo"], size)
         self.assertEqual(M.tile_path(63, 0), "tile/63/000")
+
+    def test_directories_on_the_path_are_not_links(self):
+        """SPEC §14 rule 2: no link is followed, at the file or at any directory under <dir> (tile/, the level, x###, .p);
+        <dir> itself may be a link. Before this rule a link at tile/ or tile/0 was followed and the tree was OK."""
+        rnd = random.Random(21)
+        for profile, size in (("tlog-tiles", 300), ("static-ct-api", 300), ("tlog-tiles", 256 * 1000 + 3)):
+            d = self.d("links-%s-%d" % (profile, size))
+            leaves, _ = write_tree(d, size, profile, rnd, keep_partials=True) if size == 300 else write_tree(d, size, profile, rnd)
+            root = mth(leaves)
+            self.assertEqual(M.verify_tiles(d, size, root, profile, entries=(size == 300))["stato"], "OK")
+            dirs = sorted({os.path.relpath(a, d) for a, _, fs in os.walk(d)} - {"."})
+            self.assertIn(os.path.join("tile", "0"), dirs)
+            if size != 300:
+                self.assertIn(os.path.join("tile", "0", "x001"), dirs)
+            for rel in dirs:
+                if size != 300 and rel.startswith(os.path.join("tile", "entries")):
+                    continue                                          # entries are not read in this case
+                p = os.path.join(d, rel)
+                os.rename(p, p + ".real"); os.symlink(os.path.basename(p) + ".real", p)
+                r = M.verify_tiles(d, size, root, profile, entries=(size == 300))
+                self.assertEqual(r["stato"], "NON_VALIDA", rel)
+                self.assertIn("is not a directory (links are not followed)", r["motivo"], rel)
+                os.remove(p); os.rename(p + ".real", p)
+            link = os.path.join(self.tmp, "link-to-" + os.path.basename(d)); os.symlink(d, link)
+            self.assertEqual(M.verify_tiles(link, size, root, profile, entries=(size == 300))["stato"], "OK")
 
     def test_files_that_cannot_be_read(self):
         d = self.d("f")
