@@ -319,7 +319,9 @@ none (or a cut one) means the write failed. openssl absent is `instrument_failur
 before v0.5: an absent tool is not a failed run). An openssl that exits with a code and no signal has answered: a token
 it does not accept is `token_invalid`. The token check of §11 (v0.6) follows the same rule: a tool ended by a signal is a
 check not run. The older functions `cryptovalid_tsa.verify_cms_signature` and `verify_with_openssl`, kept for callers
-outside this repository, keep their rule of 0.21.0: a tool ended by a signal there is a token not verified.
+outside this repository, keep their rule of 0.21.0: a tool ended by a signal there is a token not verified. `verify_with_openssl` reads a TimeStampResp, not a
+token, and validates the chain against the system CA store at the time of the call, not at genTime (its docstring
+states the rule since v0.7): its answer for the same reply changes when a certificate expires or the store changes.
 
 **What no state can say.** The RFC 3161 block and the manifest signature lie outside the manifest digest: a copy with the
 block removed has the states of a pack that never had one (`time_anchor: not_present`), and a copy with the manifest

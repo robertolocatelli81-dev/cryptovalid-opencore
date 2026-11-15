@@ -512,7 +512,19 @@ def verify_cms_signature(token_der: bytes):
 def verify_with_openssl(token_der: bytes, digest_data: bytes):
     """`openssl ts -verify -data` against the system CA store (/etc/ssl/certs), if openssl is installed (None if not).
     openssl present but not startable, or no temporary file: CheckNotRun (0.20.3). No caller in this repository uses it
-    since v0.6 of the spec (`verify_token`, SPEC §11); kept for callers outside it."""
+    since v0.6 of the spec (`verify_token`, SPEC §11); kept for callers outside it.
+
+    What it checks, as written (measured 2026-11-15 with OpenSSL 3.0.22 and the tokens of spec/vectors/rfc3161):
+    - `token_der` is read as a DER TimeStampResp (the TSA's whole reply): no `-token_in` is passed, so a bare
+      TimeStampToken is always False (digicert, sectigo, globalsign: reply True, the token taken out of it False).
+    - `digest_data` is the timestamped DATA, which openssl hashes with the token's algorithm; it is not a digest.
+    - Time: the chain is validated at the time of the call, not at the token's genTime (no `-attime`): a token that
+      verifies today is False once the TSA certificate or a CA above it has expired or the system store has dropped the
+      root (the same three replies are False with `-attime` 2100-01-01; their signer certificates end in 2037), and
+      True or False can differ between machines with different stores. Revocation is not checked.
+    - Trust: any CA in /etc/ssl/certs, not a pinned TSA (freetsa.org's reply is False: its root is not in that store).
+    None of SPEC §11's closed structure checks are made. For a verdict that does not depend on the day or the machine,
+    use `verify_token` with pinned `tsa_certs`."""
     import shutil
     if not shutil.which("openssl"):
         return None

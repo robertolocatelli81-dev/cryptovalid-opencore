@@ -39,6 +39,12 @@ run by the same author, not by a third party.
   `testdata/interop/`), and 1500 generated inputs of every shape against an oracle written from SPEC §12; on the code
   before, 10 of its 13 tests that do not use a pipe fail (the pipe test blocks there).
 
+- **`cryptovalid_tsa.verify_with_openssl` states what it checks** (registry item 21; behaviour unchanged). Measured on
+  2026-11-15 with OpenSSL 3.0.22: it reads a whole TimeStampResp (a bare token is always False), hashes the data it is
+  given, and validates the chain against /etc/ssl/certs at the time of the call, not at genTime: the replies of
+  spec/vectors/rfc3161 that verify today fail with `-attime` 2100-01-01. Its docstring and SPEC §11 now say so;
+  `test_tsa_verify_with_openssl_rule_20261115.py` pins the command line and the bare-token case.
+
 ## 0.23.0 (2026-11-13)
 
 - **One check of an RFC 3161 token, read closed** (SPEC v0.6, §11 new; not additive: counts change). Measured on 0.22.0
