@@ -10,6 +10,9 @@ on:
   schedule:
     - cron: "17 5 * * 1"   # weekly: the newest ap2-evidence-pack 1.x from the index against every suite, untouched or not
 
+# Read-only token for every job (OpenSSF Scorecard Token-Permissions; no job writes to the repository)
+permissions:
+  contents: read
 jobs:
   verify:
     runs-on: ${{ matrix.python-version == '3.9' && 'ubuntu-24.04' || 'ubuntu-latest' }}   # 3.9 has no build for ubuntu-26.04 (ubuntu-latest from 2026-10-19)
@@ -17,9 +20,9 @@ jobs:
       matrix:
         python-version: ["3.9", "3.11"]   # pyproject declares >=3.9: the reference must hold on the floor too (review of 15/09)
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -116,8 +119,8 @@ jobs:
     # extra) -- each run proves the minimum exists on the index and works; test_dependency_versions.py keeps these in step
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.11"
       - run: pip install "cryptography==48.0.0" 'ap2-evidence-pack==1.6.0' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
@@ -130,11 +133,11 @@ jobs:
   independent-verifiers:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "22"
       - name: Python 'cryptography' — so the signed-tip cases are MEASURED by the oracle, not skipped
@@ -147,7 +150,7 @@ jobs:
           if cargo run -q --release --manifest-path verifiers/rust/Cargo.toml -- examples/sample_ledger_tampered.jsonl; then
             echo "::error::rust verifier accepted a tampered ledger"; exit 1; fi
           cargo run -q --release --manifest-path verifiers/rust/Cargo.toml -- examples/sample_ledger.jsonl > /dev/null
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: "1.27"   # crypto/mldsa (ML-DSA-65 hybrid tip) is stdlib since Go 1.27; older toolchains build the compat file (pq_unverifiable)
       - name: Go verifier + writer — race tests, shared vectors, rejects the tampered ledger
@@ -157,7 +160,7 @@ jobs:
           if "$RUNNER_TEMP/cvverify-go" examples/sample_ledger_tampered.jsonl > /dev/null; then
             echo "::error::go verifier accepted a tampered ledger"; exit 1; fi
           "$RUNNER_TEMP/cvverify-go" examples/sample_ledger.jsonl > /dev/null
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6
         with:
           distribution: "oracle"   # JDK 27 GA (15/09/2026): ML-DSA-65 (JDK 24+) with the profile's EMPTY context; Ed25519 since 15
           java-version: "27"
@@ -193,7 +196,7 @@ jobs:
   swift-verifier:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Swift verifier — unit tests + rejects the tampered ledger
         working-directory: verifiers/swift
         run: |

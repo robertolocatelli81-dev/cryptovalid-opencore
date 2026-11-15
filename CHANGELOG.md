@@ -7,6 +7,22 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
+## Unreleased
+
+- **Supply chain of the release, measurable by third parties.** `release-build.yml` builds the wheel and the sdist on a
+  GitHub-hosted runner from the tag, with the build front-end and setuptools pinned by hash
+  (`.github/build-requirements.txt`, `pip install --require-hashes`, `python -m build --no-isolation`), and signs SLSA
+  build provenance for both files (`actions/attest`, Sigstore; SLSA v1.0 Build Level 2 per GitHub's documentation); the
+  bundle is kept as `build-provenance.sigstore.json`. `gh attestation verify <file> --repo <owner>/<repo>` checks it.
+- **CI hygiene.** Every `uses:` of the workflows is pinned to a commit SHA (the tag in a comment); the CI workflow runs
+  with a read-only token (`permissions: contents: read`); `scorecard.yml` publishes the OpenSSF Scorecard result;
+  `.github/dependabot.yml` proposes weekly updates of the pinned actions and the Python dependencies.
+- **Licence metadata (PEP 639).** `license = "AGPL-3.0-or-later"` as an SPDX expression and `license-files` in
+  `pyproject.toml` (setuptools ≥ 77); the wheel's METADATA carries `License-Expression` and the licence files.
+- **Install from PyPI.** The README installs from PyPI; the index that links only the release files is named as an
+  alternative. Private vulnerability reporting, which SECURITY.md names, is enabled on the repository (15/11/2026; it
+  was off).
+
 ## 0.24.0 (2026-11-15)
 
 - **`cryptovalid-verify checkpoint`, `tiles` and `vkey-rfc6962`; `auto` names them** (SPEC v0.7, §12 two rows added

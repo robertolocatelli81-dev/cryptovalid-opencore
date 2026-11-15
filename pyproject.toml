@@ -1,12 +1,13 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]   # 77: PEP 639 license expression and license-files
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "cryptovalid-opencore"
 version = "0.24.0"
 description = "Verifiable compliance evidence: hash-chained ledgers + standalone offline verifier (flat-layout modules, unchanged declared commands)"
-license = {text = "AGPL-3.0-or-later"}
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.9"
 authors = [{name = "Roberto Locatelli"}]
 readme = "README.md"

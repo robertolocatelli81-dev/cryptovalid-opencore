@@ -224,7 +224,7 @@ The detailed threat analysis of each release is in [CHANGELOG.md](CHANGELOG.md);
 ## Install (pip)
 
 ```bash
-pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ cryptovalid-opencore
+pip install cryptovalid-opencore
 ```
 
 The hash-chain verifier needs only the standard library. Signing and signature verification (Ed25519, ECDSA,
@@ -232,13 +232,14 @@ ML-DSA-65, COSE, JWS, AP2) need `cryptography` (≥ 48: the floor where ML-DSA-6
 50.0.x), installed with the `sign` extra:
 
 ```bash
-pip install --extra-index-url https://robertolocatelli81-dev.github.io/pypi/ 'cryptovalid-opencore[sign]'
+pip install 'cryptovalid-opencore[sign]'
 ```
 
 AP2 dispute evidence (experimental) needs the `ap2` extra (`'cryptovalid-opencore[ap2]'`), which installs
-ap2-evidence-pack >= 1.6.0, < 2 from the same index; without it `cryptovalid-verify ap2` is a refusal that names the
-extra (exit 1). Release artifacts are attached to GitHub Releases; the index links carry `#sha256=` fragments that
-pip verifies. All documented `python3 <file>.py` commands also work from a clone.
+ap2-evidence-pack >= 1.6.0, < 2 from PyPI; without it `cryptovalid-verify ap2` is a refusal that names the extra
+(exit 1). PyPI carries the wheel and sdist attached to each GitHub Release (the same bytes, listed in its
+`SHA256SUMS`). An index that links only those release files, with `#sha256=` fragments that pip verifies, is at
+`https://robertolocatelli81-dev.github.io/pypi/` (`pip install --index-url … cryptovalid-opencore`). All documented `python3 <file>.py` commands also work from a clone.
 
 ## Licence, contact, citation
 
