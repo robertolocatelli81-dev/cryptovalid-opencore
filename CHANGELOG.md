@@ -7,7 +7,7 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
-## Unreleased
+## 0.24.0 (2026-11-15)
 
 - **`cryptovalid-verify checkpoint`, `tiles` and `vkey-rfc6962`; `auto` names them** (SPEC v0.7, §12 two rows added
   before the code). The commands of SPEC §13-§14 were only in `cryptovalid_checkpoint.py`, which has no installed

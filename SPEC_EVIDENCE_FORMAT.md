@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.7 (unreleased; v0.6 2026-11-13, v0.5 2026-10-19)
+# CryptoValid Evidence Format — candidate standard v0.7 (2026-11-15; v0.6 2026-11-13, v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -216,7 +216,7 @@ CMS blob signed with a key made on the spot, whose content is only that OCTET ST
 (`timestamped_segments`, `record_con_token_rfc3161`); and the LOTL called a token qualified when any certificate it
 carried was a QTST certificate, signer or not. From v0.6 such tokens are refused or not counted (§11). §3 corrects the
 sentence on RFC 8785. The ledger format (§2–§5), its hashes and its vectors do not change.
-v0.7 (unreleased) adds §12, the closed list of what `cryptovalid-verify auto` recognises. Not additive for that command: until
+v0.7 (2026-11-15, cryptovalid-opencore 0.24.0) adds §12, the closed list of what `cryptovalid-verify auto` recognises. Not additive for that command: until
 v0.6 every file that was not an AP2 pack or a CLDMA attestation was verified as a ledger, so a JSON document of another
 kind (measured on 2026-11-14 with the `cra_pack.json` of omega-cra-evol 0.10.0) was answered with the ledger's line-by-line
 `json_decode` errors instead of "not recognised". The ledger format (§2–§5), its hashes and its vectors do not change.
