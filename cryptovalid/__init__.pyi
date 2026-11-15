@@ -59,6 +59,7 @@ def verify_pack(
     pq_pubkey_b64: Optional[str] = None,
     signer_pubkey_hex: Optional[str] = None,
     manifest_signer_hex: Optional[str] = None,
+    tsa_certs: Optional[Sequence[Union[str, bytes]]] = None,
 ) -> Dict[str, Any]: ...
 def verify_ledger_signatures(
     entries: List[Dict[str, Any]],

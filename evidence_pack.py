@@ -23,11 +23,12 @@ Honest scope: proves what was recorded, when, in which order, and who signed —
 not altered afterwards. NOT the truth of the recorded facts. RFC 3161 is optional (needs openssl
 + a TSA); its absence never invalidates the pack (signatures + hash chain already stand); a claim without a token, or a
 token that openssl reads here as not granted or bound to another digest, does (0.22.0, SPEC §10; the TSA's signature is
-not checked, and without openssl the token is not read: `time_anchor: instrument_failure`).
+checked only when the caller pins the TSA's certificate, `--tsa-cert`, SPEC v0.8; without openssl the token is not read:
+`time_anchor: instrument_failure`).
 
 Usage:
   python3 evidence_pack.py build  out_dir/  ledger1.jsonl [ledger2.jsonl ...] [--subject "..."] [--tsa URL]
-  python3 evidence_pack.py verify out_dir/
+  python3 evidence_pack.py verify out_dir/ [--tsa-cert PEM ...]
 """
 from __future__ import annotations
 
@@ -299,6 +300,9 @@ def _manifest_unknown_fields(man: Dict) -> List[str]:
 
 
 STATES_VOCABULARY = "cryptovalid-evidence-pack/states-1"   # 0.22.0 — SPEC §10: immutable; a change of meaning is a new identifier
+# SPEC v0.8 §10: a receipt computed with pinned TSA certificates (`tsa_certs`): states-1 plus `verified` and `tsa_unresolved`
+# on time_anchor and the wider `token_invalid`. A receipt without a pin keeps states-1.
+STATES_VOCABULARY_PINNED_TSA = "cryptovalid-evidence-pack/states-2"
 PACK_FORMAT = "cryptovalid-evidence-pack/1.1"                 # the one format this verifier admits (SPEC §10: 1.0 is refused)
 _SIG_FIELDS = ("signature", "signer", "signature_pq", "signer_pq")   # SPEC §5 step 5: any of them opens the layer
 
@@ -443,8 +447,51 @@ def _time_anchor_element(ts, rfc: Dict) -> tuple:
                                                                      else "no imprint read")))
 
 
+def _pinned_time_anchor(tsr_b64: str, digest_hex: str, tsa_certs) -> tuple:
+    """SPEC v0.8 §10, a pinned TSA: the token's element by §11 (cryptovalid_tsa.verify_token), and the `tsa_check` the
+    receipt reports. Called only when the checks of §10 left `tsa_not_checked`. ETSI EN 319 102-1 V1.4.1 §5.1.3: a token
+    not established under the pinned certificates (§11 step 7) is INDETERMINATE (`tsa_unresolved`), a token that fails
+    its own checks (steps 1-6) is a contradiction. Proposed by Athena's review of 15/11/2026."""
+    import cryptovalid_tsa as _T
+    v = _T.verify_token(base64.b64decode(tsr_b64), bytes.fromhex(digest_hex), "sha256", tsa_certs)
+    check = {"status": v["status"], "reason": v["reason"], "detail": v["detail"],
+             "gen_time": (v["tst_info"] or {}).get("gen_time"), "signer_sha256": v["signer_sha256"]}
+    if v["status"] == "verified" and v["counts_as_timestamp"] is True:
+        return ("verified", None), check
+    if v["status"] == "not_evaluated":   # openssl absent: the signature was not checked here
+        return ("not_evaluated", "instrument_failure", f"TSA pinned, token not checked: {v['reason']}"), check
+    if v["status"] == "invalid" and v["reason"] == "not_issued_by_pinned_tsa":
+        return ("not_evaluated", "tsa_unresolved", f"not established under the pinned TSA certificates: {v['detail']}"), check
+    if v["status"] == "invalid" and v["reason"] == "imprint_mismatch":
+        return ("contradicted", "binding_mismatch", "the token's imprint is another digest"), check
+    if v["status"] == "invalid":
+        return ("contradicted", "token_invalid", f"{v['reason']}: {v['detail']}"), check
+    raise ValueError(f"verify_token with pinned certificates gave status {v['status']!r}")   # signature_only: impossible
+
+
 def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubkey_hex: Optional[str] = None,
-                manifest_signer_hex: Optional[str] = None) -> Dict:
+                manifest_signer_hex: Optional[str] = None, tsa_certs: Optional[List] = None) -> Dict:
+    """The evidence pack's verify (SPEC §10). `tsa_certs` (SPEC v0.8): the TSA certificates the caller pins (paths or bytes,
+    PEM or DER: the TSA certificate or a CA above it, as SPEC §11); then a token that binds the manifest digest is checked
+    by §11, `time_anchor` can be `verified`, and the receipt names `states_vocabulary` states-2. None: as before v0.8."""
+    if tsa_certs is not None:
+        import cryptovalid_tsa as _T
+        if isinstance(tsa_certs, (str, bytes, bytearray)) or not isinstance(tsa_certs, (list, tuple)) or not tsa_certs:
+            raise ValueError("tsa_certs: a non-empty list of certificate files or bytes, or None for no pin")
+        _T._pem_certs(tsa_certs)   # a path that is not a readable file of certificates: ValueError naming it
+    try:
+        r = _verify_pack(pack_dir, pq_pubkey_b64, signer_pubkey_hex, manifest_signer_hex, tsa_certs)
+    except CheckNotRun as e:
+        if tsa_certs is not None and isinstance(getattr(e, "receipt", None), dict):
+            e.receipt["states_vocabulary"] = STATES_VOCABULARY_PINNED_TSA
+        raise
+    if tsa_certs is not None:
+        r["states_vocabulary"] = STATES_VOCABULARY_PINNED_TSA
+    return r
+
+
+def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex: Optional[str],
+                 manifest_signer_hex: Optional[str], tsa_certs) -> Dict:
     """Verifica INDIPENDENTE dell'intero pack (l'auditor non usa alcun vendor): digest dei file ==
     manifest, manifest auto-consistente, ogni ledger passa hash + firme. Fail-closed.
     Post-quantum (council 16/09 round 2 — no circular pin): the layer is confirmed ONLY against keys the caller
@@ -603,6 +650,12 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
             not_run = e
             rfc = {"claimed": True, "verified": None, "note": f"check not run here: {e}"}
     anchor = _time_anchor_element(ts, rfc)
+    if tsa_certs is not None and anchor == ("not_evaluated", "tsa_not_checked"):   # SPEC v0.8 §10: a pinned TSA
+        try:
+            anchor, rfc["tsa_check"] = _pinned_time_anchor(ts["tsr_b64"], man.get("manifest_digest_sha256", ""), tsa_certs)
+        except CheckNotRun as e:
+            not_run = e
+            anchor = ("not_evaluated", "instrument_failure", f"check not run here: {e}")
     rfc.pop("imprint_read", None)
 
     # una firma manifest PRESENTE ma ROTTA = manomissione → invalida; assente = onesto non-autenticato
@@ -636,6 +689,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     b.add_argument("--subject", default="compliance evidence"); b.add_argument("--tsa")
     b.add_argument("--sign-key", help="Ed25519 keyfile to AUTHENTICATE the manifest (recommended)")
     v = sub.add_parser("verify"); v.add_argument("dir")
+    import cryptovalid_tsa as _T
+    v.add_argument("--tsa-cert", action="append", default=None, metavar="PEM", type=_T.tsa_cert_arg,
+                   help="pin a TSA certificate (or a CA above it) and check the RFC 3161 token with it (SPEC §10-§11, "
+                        "v0.8; repeat for several)")
     a = p.parse_args(argv)
     if a.cmd == "build":
         emit(json.dumps(build_pack(a.ledgers, a.out_dir, subject=a.subject, tsa_url=a.tsa,
@@ -643,7 +700,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if a.cmd == "verify":
         try:
-            r = verify_pack(a.dir)
+            r = verify_pack(a.dir, tsa_certs=a.tsa_cert)
         except CheckNotRun as e:   # 0.22.0 — SPEC §10: the complete receipt, then 74 (without one: receipt_cli, 74)
             if e.receipt is None:
                 raise

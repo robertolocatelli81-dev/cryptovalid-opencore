@@ -9,6 +9,22 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **The evidence pack's verify checks the RFC 3161 token against a TSA the caller pins** (SPEC v0.8, §10–§11):
+  `evidence_pack.py verify DIR --tsa-cert PEM` (repeatable) and `verify_pack(..., tsa_certs=[...])`. Until now the
+  pack's token was read for its status and imprint only, `time_anchor` was never `verified`, and a token whose signature
+  was broken left the pack valid (`tsa_not_checked`). With a pin the token goes through SPEC §11 (`verify_token`):
+  `verified` (the receipt's `rfc3161.tsa_check` carries `gen_time` and the signer's SHA-256); a token valid but not
+  established under the pinned certificates, such as one of another TSA, is `not_evaluated / tsa_unresolved` and leaves
+  the pack valid, as `key_unresolved` does for a producer key (ETSI EN 319 102-1 V1.4.1 §5.1.3: INDETERMINATE,
+  NO_CERTIFICATE_CHAIN_FOUND); a token whose signature does not verify, or that §11 refuses at steps 1–6, is
+  `contradicted / token_invalid` and the pack is not valid. A receipt computed with a pin names
+  `states_vocabulary: cryptovalid-evidence-pack/states-2`; without a pin nothing changes: on 5 191 packs of the
+  generative bench (`verifiers/pack_states_bench.py`: its base packs, every mutation, each also re-digested) the
+  receipts of this code and of the code before are equal, and with a pin the only change is `tsa_not_checked` →
+  `verified` on the 156 packs whose token binds. The SPEC §11 now says which refusals show a token false (steps 1–4
+  and 6) and which leave it unestablished (step 7); the ingest's verify and `eidas_ledger_check.py` keep reading step 7
+  as before (named in §11). The real tokens of `spec/vectors/rfc3161` are checked under all 31 sets of the five pins;
+  `test_pack_time_anchor_pin_20261115.py`. Proposed by Athena's review of 15/11/2026.
 - **The stage `MALFORMED_STATEMENT` of the COSE receipts has a test, and the CBOR decoder names a cut-short input.**
   `test_scitt_malformed_statement_20261115.py` runs the 94 examples of RFC 8949 Appendix F.1 (CBOR data items that are
   not well-formed; compared byte for byte with the text of the RFC on 15/11/2026) in five positions each against
