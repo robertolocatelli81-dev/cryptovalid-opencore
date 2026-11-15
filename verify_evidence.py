@@ -510,6 +510,10 @@ _COMMANDS_HELP = ("commands:\n" + "".join(f"  {k:<12} {v}\n" for k, v in _COMMAN
                     "74 the receipt was not written whole to stdout (whatever the verdict).")
 
 
+# the name of the installed command (pyproject [project.scripts]); until 0.24.0 its help said "verify_evidence"
+PROG = "cryptovalid-verify"
+
+
 def main(argv=None) -> int:
     _need_opencore()
     from verifier import receipt_cli
@@ -521,13 +525,14 @@ def _main(argv=None) -> int:
     if args and args[0] in _C2SP_COMMANDS:   # SPEC §13-§14, their own arguments and --help
         _need_opencore()
         import cryptovalid_checkpoint as C
-        return C.main([_C2SP_COMMANDS[args[0]]] + args[1:], prog="verify_evidence", cmd_name=args[0])
-    from verifier import Parser, receipt_not_written, write_stdout   # 0.20.3: the same write rule as verifier.py
-    p = Parser(prog="verify_evidence", formatter_class=argparse.RawDescriptionHelpFormatter,
+        return C.main([_C2SP_COMMANDS[args[0]]] + args[1:], prog=PROG, cmd_name=args[0])
+    from verifier import Parser, VersionAction, receipt_not_written, write_stdout   # 0.20.3: the write rule of verifier.py
+    p = Parser(prog=PROG, formatter_class=argparse.RawDescriptionHelpFormatter,
                description="One offline verifier for every kind of CryptoValid evidence.",
                epilog=_COMMANDS_HELP)
     p.add_argument("cmd", choices=list(_COMMANDS), help="what the path holds (see the commands below)")
     p.add_argument("path", help="file or directory to verify")
+    p.add_argument("--version", action=VersionAction)
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     if a.cmd in _C2SP_COMMANDS:   # reached only when it is not the first argument (e.g. after "--"): a usage error, not a traceback
         p.error(f"{a.cmd} takes its own options and must come first: cryptovalid-verify {a.cmd} --help")

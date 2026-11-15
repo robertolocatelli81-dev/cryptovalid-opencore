@@ -9,6 +9,12 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **`--version`, and `cryptovalid-verify` calls itself by its name.** Neither front-end had a `--version`, and the
+  help of the installed command introduced itself as `verify_evidence` (measured 15/11/2026 on an installed wheel).
+  `cryptovalid-verify --version` and `verifier.py --version` print the version on stdout (written whole or exit 74, like
+  every output of these commands): from a source checkout the version in its pyproject.toml, said as such; otherwise
+  the installed distribution's metadata; otherwise "unknown". `verifier.py`'s usage line no longer says
+  `opencore/verifier.py`. `test_cli_version_20261115.py` (4 tests; all four fail on 0.24.0).
 - **Seven tests on behaviours of `verifier.py` no suite observed** (`test_verifier_gaps_20261115.py`, proposed by
   Athena's review of 15/11/2026): brackets inside strings and after escapes, `\n` before hex digits, the receipt's
   `hash_recompute_passed` / `link_passed`, an untrusted or unreadable tip, a PQ key without a log key, the input of

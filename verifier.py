@@ -961,13 +961,59 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
     return receipt
 
 
+DIST_NAME = "cryptovalid-opencore"
+
+
+def package_version() -> str:
+    """The version these modules belong to, for `--version` (15/11/2026). From a source checkout (a pyproject.toml of
+    this distribution next to this file) the version written there, said as such: an installed copy of another version
+    must not answer for the files that actually run. Otherwise the installed distribution's metadata; "unknown" when
+    neither exists (a module copied on its own)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        with open(os.path.join(here, "pyproject.toml"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    if re.search(r'^name\s*=\s*"%s"\s*$' % re.escape(DIST_NAME), text, re.M):
+        m = re.search(r'^version\s*=\s*"([^"\n]+)"\s*$', text, re.M)
+        if m:
+            return f"{m.group(1)} (source checkout, from pyproject.toml)"
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+        try:
+            return version(DIST_NAME)
+        except PackageNotFoundError:
+            pass
+    except ImportError:  # pragma: no cover — importlib.metadata exists from Python 3.8
+        pass
+    return "unknown (neither a source checkout nor an installed distribution)"
+
+
+class VersionAction(argparse.Action):
+    """`--version`: "<prog> <package_version()>" on STDOUT, written whole or exit 74 (argparse's own action prints
+    through _print_message, which the Parser above sends to stderr)."""
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS, help=None):
+        super().__init__(option_strings=option_strings, dest=dest, default=default, nargs=0,
+                         help=help or "print the version of this distribution and exit")
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        try:
+            write_all(f"{parser.prog} {package_version()}\n")
+        except ReceiptNotWritten as e:
+            raise SystemExit(receipt_lost(str(e)))
+        raise SystemExit(0)
+
+
 @receipt_cli
 def main(argv: Optional[List[str]] = None) -> int:
     parser = Parser(allow_abbrev=False, 
-        prog="opencore/verifier.py",
+        prog="verifier.py",
         description="Independent verification of an OMEGA .jsonl ledger (auditor-grade, stdlib-only).",
     )
     parser.add_argument("ledger_path", help="path of the .jsonl file to verify")
+    parser.add_argument("--version", action=VersionAction)
     parser.add_argument(
         "--algo", choices=SUPPORTED_ALGOS, default=None, help="force the hash algorithm (default: the one that matches the first entry, sha256 if neither does)"
     )

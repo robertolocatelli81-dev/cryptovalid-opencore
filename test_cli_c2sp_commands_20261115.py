@@ -141,7 +141,7 @@ class TestInstalledCommands(unittest.TestCase):
             self.assertRegex(out, rf"(?m)^  {cmd} +\S")
             rc, sub, err = _run("verify_evidence.py", [cmd, "--help"])
             self.assertEqual((rc, err), (0, ""))
-            self.assertTrue(sub.startswith(f"usage: verify_evidence {cmd} [-h]"), sub[:200])
+            self.assertTrue(sub.startswith(f"usage: cryptovalid-verify {cmd} [-h]"), sub[:200])
             self.assertNotEqual(sub, out)
         self.assertIn("--vkey VKEY", _run("verify_evidence.py", ["checkpoint", "--help"])[1])
         self.assertIn("--profile {static-ct-api,tlog-tiles}", _run("verify_evidence.py", ["tiles", "--help"])[1])
@@ -156,11 +156,11 @@ class TestInstalledCommands(unittest.TestCase):
     def test_usage_errors_name_the_command(self):
         rc, out, err = _run("verify_evidence.py", ["tiles"])
         self.assertEqual((rc, out), (2, ""))
-        self.assertIn("verify_evidence tiles: error: the following arguments are required: directory, --vkey, --profile",
+        self.assertIn("cryptovalid-verify tiles: error: the following arguments are required: directory, --vkey, --profile",
                       err)
         rc, out, err = _run("verify_evidence.py", ["checkpoint", ROME])
         self.assertEqual((rc, out), (2, ""))
-        self.assertIn("verify_evidence checkpoint: error: the following arguments are required: --vkey", err)
+        self.assertIn("cryptovalid-verify checkpoint: error: the following arguments are required: --vkey", err)
 
     def test_a_c2sp_command_after_double_dash_is_a_usage_error(self):   # was a KeyError traceback, exit 1
         for cmd in ("checkpoint", "tiles", "vkey-rfc6962"):

@@ -584,7 +584,7 @@ except ImportError:   # python3 -m opencore.<module> from the parent directory
 
 @receipt_cli
 def main(argv=None, prog=None, cmd_name=None) -> int:
-    """the command line; `cryptovalid-verify checkpoint|tiles|vkey-rfc6962` runs it with prog="verify_evidence" and
+    """the command line; `cryptovalid-verify checkpoint|tiles|vkey-rfc6962` runs it with prog="cryptovalid-verify" and
     cmd_name, the name its user typed, shown in the usage and help of that command (`checkpoint` is `verify` here)"""
     ap = Parser(prog=prog, description="C2SP checkpoints / signed notes for a cryptovalid ledger")
     sub = ap.add_subparsers(dest="cmd", required=True)
