@@ -461,8 +461,10 @@ def verify_auto(path: str) -> dict:
 
 
 def _quote(path: str) -> str:
+    """the path as the named command reads it: shell-quoted, and "./" before a relative path that starts with "-" (the
+    command's parser would take it for an option)"""
     import shlex
-    return shlex.quote(path)
+    return shlex.quote(os.path.join(".", path) if path.startswith("-") else path)
 
 
 def _c2sp_tiles(path: str) -> dict:
@@ -527,6 +529,8 @@ def _main(argv=None) -> int:
     p.add_argument("cmd", choices=list(_COMMANDS), help="what the path holds (see the commands below)")
     p.add_argument("path", help="file or directory to verify")
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
+    if a.cmd in _C2SP_COMMANDS:   # reached only when it is not the first argument (e.g. after "--"): a usage error, not a traceback
+        p.error(f"{a.cmd} takes its own options and must come first: cryptovalid-verify {a.cmd} --help")
     fn = {"auto": verify_auto, "pack": verify_pack, "archive": verify_archive,
           "ledger": verify_ledger, "ap2": verify_ap2, "cldma": verify_cldma}[a.cmd]
     from verifier import CheckNotRun, check_not_run_exit

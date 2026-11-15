@@ -17,7 +17,9 @@ run by the same author, not by a third party.
   recognises a regular file of at most 1 MiB that is a signed note whose text is a checkpoint, and a directory holding a
   directory `tile` (after the pack and archive rows): it verifies nothing, since it has no trusted key, and its receipt
   (`kind` `checkpoint` or `tiles`, one SKIP layer, `valid` false, exit 1) names the command to run with the path.
-  A note whose origin line is also a ledger's first line is refused as ambiguous. `test_cli_c2sp_commands_20261115.py`.
+  A note whose origin line is also a ledger's first line is refused as ambiguous. The command is named so that it runs as
+  written: the path shell-quoted, and `./` before a relative path that starts with `-`. §12 names the control characters a note may not hold as c2sp.org/signed-note does: those below U+0020 other than newline (it said "control characters", while DEL and the C1 controls were, and are, accepted, as in golang.org/x/mod/sumdb/note). One of the three commands after
+  `--` (`cryptovalid-verify -- checkpoint …`) is a usage error, exit 2. `test_cli_c2sp_commands_20261115.py`.
 
 - **Tiles of C2SP tiled logs are read and checked; `cryptovalid_merkle.py` is core** (SPEC v0.7, §14 new; additive).
   `cryptovalid_merkle.verify_tiles` reads, from a directory laid out as the log serves it, the hash tiles of a tree

@@ -134,6 +134,13 @@ class TestInstalledCommands(unittest.TestCase):
         self.assertEqual((rc, out), (2, ""))
         self.assertIn("verify_evidence checkpoint: error: the following arguments are required: --vkey", err)
 
+    def test_a_c2sp_command_after_double_dash_is_a_usage_error(self):   # was a KeyError traceback, exit 1
+        for cmd in ("checkpoint", "tiles", "vkey-rfc6962"):
+            rc, out, err = _run("verify_evidence.py", ["--", cmd, ROME])
+            self.assertEqual((rc, out), (2, ""), err)
+            self.assertIn(f"{cmd} takes its own options and must come first", err)
+            self.assertNotIn("Traceback", err)
+
     def test_the_vkey_of_the_log_list_entry(self):
         with open(ROME_LOG, encoding="utf-8") as fh:
             key = json.load(fh)["key"]
@@ -233,11 +240,55 @@ class TestAutoNamesTheCommand(unittest.TestCase):
         p = self._write("e", "\u00e9.example".encode() + note[note.index(b"\n"):])
         self.assertIn('C2SP checkpoint (origin "\u00e9.example", size 300)', self._skip(VE.verify_auto(p), "checkpoint"))
 
+    def test_control_characters_are_those_below_u0020(self):   # SPEC §12 as c2sp.org/signed-note defines them
+        with open(ROME, "rb") as fh:
+            note = fh.read()
+        for ch in ("\x7f", "\x85", "\u202e"):   # DEL, a C1 control, a format character: a checkpoint (origin as written)
+            p = self._write("c", ("a" + ch + "b").encode() + note[note.index(b"\n"):])
+            self.assertIn('origin "a' + ch + 'b"', self._skip(VE.verify_auto(p), "checkpoint"))
+        for ch in ("\x00", "\x1f", "\t", "\r"):
+            p = self._write("c", ("a" + ch + "b").encode() + note[note.index(b"\n"):])
+            self.assertEqual(VE.verify_auto(p)["kind"], "auto", repr(ch))
+
     def test_paths_are_quoted(self):
         with open(ROME, "rb") as fh:
             p = self._write("a b'c", fh.read())
         detail = self._skip(VE.verify_auto(p), "checkpoint")
         self.assertIn("run: cryptovalid-verify checkpoint '" + self.d + "/a b'\"'\"'c' --vkey", detail)
+
+    def test_a_path_starting_with_a_dash(self):   # the command named in the receipt must run as written
+        with open(ROME, "rb") as fh:
+            self._write("-cp", fh.read())
+        os.makedirs(os.path.join(self.d, "-log", "tile"))
+        old = os.getcwd()
+        os.chdir(self.d)
+        try:
+            detail = self._skip(VE.verify_auto("-cp"), "checkpoint")
+            tiles = self._skip(VE.verify_auto("-log"), "tiles")
+        finally:
+            os.chdir(old)
+        self.assertIn("run: cryptovalid-verify checkpoint ./-cp --vkey", detail)
+        self.assertIn("run: cryptovalid-verify tiles ./-log --vkey", tiles)
+        with open(ROME_LOG, encoding="utf-8") as fh:
+            key = json.load(fh)["key"]
+        _, vkey, _ = _run("verify_evidence.py", ["vkey-rfc6962", "--name", "rome2026h1.example.org", "--key-b64", key])
+        rc, out, err = _run("verify_evidence.py", ["checkpoint", "./-cp", "--vkey", vkey.strip()], cwd=self.d)
+        # the path is read as the note, not as an option (exit 2 "required: note" before the fix), with or without
+        # cryptography; the signature itself verifies only where cryptography is installed
+        self.assertNotEqual(rc, 2, err)
+        self.assertNotIn("required", err)
+        if HAVE_CRYPTO:
+            self.assertEqual(rc, 0, err)
+        else:     # the note was read and only the signature is left unchecked, for the reason that cryptography is missing
+            self.assertEqual(rc, 1, err)
+            self.assertIn("`cryptography` missing", json.loads(out)["motivo"])
+
+    def test_a_library_call_from_the_parent_directory(self):   # `from opencore import verify_evidence` (namespace package):
+        os.symlink(HERE, os.path.join(self.d, "opencore"))           # verify_auto itself puts the module directory on the path
+        code = ("from opencore import verify_evidence as V; r = V.verify_auto(%r); print(r['kind'], r['layers'][0]['status'])"
+                % ROME)
+        r = subprocess.run([sys.executable, "-E", "-s", "-c", code], cwd=self.d, capture_output=True, text=True, timeout=120)
+        self.assertEqual((r.returncode, r.stdout), (0, "checkpoint SKIP\n"), r.stderr[-400:])
 
     def test_tile_directories(self):
         detail = self._skip(VE.verify_auto(NAVIGLI), "tiles")
