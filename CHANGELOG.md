@@ -9,6 +9,10 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **Go verifier: what Go < 1.27 does, measured and written down.** `go.mod` declares Go 1.24 while ML-DSA-65 needs
+  `crypto/mldsa` (Go 1.27); the declaration stays (the hash chain, the Ed25519 tip and the writer build from 1.24) and
+  `verifiers/go/README.md` now says what happens below 1.27, measured on 15/11/2026 with go1.24.13 and go1.27.0:
+  tests pass on both; with a trusted ML-DSA-65 key a hybrid tip is FAIL (`pq_unverifiable`) on 1.24 and PASS on 1.27.
 - **What the differential oracle guarantees, said as it is.** A comment of `verify.yml` said "a pack accepted by one
   is accepted by all, or the build fails" and the README "fails on any disagreement"; the oracle itself declares
   divergences by name and exact pattern (7 on a local run of 15/11/2026 with Python, JS and Go: e.g. `sig-broken`

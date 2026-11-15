@@ -34,6 +34,15 @@ enumerated tampers of that ledger `cvverify`, `verifier.py` and `cvverify.mjs` g
 are identical in the three languages: float, duplicate key, |int| > 2^53-1, nesting > 512, lone surrogate,
 invalid UTF-8.
 
+**Go version.** `go.mod` declares Go 1.24 on purpose: the verifier and the writer build and pass their tests from
+1.24; the ML-DSA-65 (FIPS 204) layer needs `crypto/mldsa`, in the standard library from Go 1.27, so it is compiled
+only with 1.27 or later (`//go:build go1.27`: `tip_pq.go`, `mldsa_entry.go`; below that, `tip_pq_compat.go` and
+`mldsa_entry_compat.go`). Measured on 15/11/2026 with go1.24.13 and go1.27.0 (`GOTOOLCHAIN=local`): `go test ./...`
+passes on both; on a ledger with a hybrid tip, `cvverify -trusted-pubkey <hex> -trusted-pq-pubkey <b64>` is **FAIL**
+with 1.24 (`pq_unverifiable: this verifier was built with Go < 1.27 ...`, `pq_protected: false`: a required layer
+that cannot be checked is not a pass) and PASS with 1.27 (`pq_protected: true`); without `-trusted-pq-pubkey` both
+give PASS, with the post-quantum layer reported as unchecked. CI builds with 1.27.
+
 **Declared limits.** No signature verification here (use `signer.py` / receipts). `flock` is advisory and
 per process: threads of one process need their own mutex; on non-Unix builds there is no lock at all.
 Go's `json.Marshal` turns a whole-number `float64` into an integer and replaces non-UTF-8 bytes in Go
