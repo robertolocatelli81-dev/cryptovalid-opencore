@@ -177,6 +177,7 @@ key custody).
 ```bash
 python3 evidence_pack.py build  pack_dir/  ledger.signed.jsonl  --subject "audit CUST-001" --sign-key signer.key
 python3 evidence_pack.py verify pack_dir/          # or: cryptovalid-verify pack pack_dir/
+python3 evidence_pack.py verify pack_dir/ --tsa-cert tsa.pem   # also check the RFC 3161 token against a TSA you trust
 ```
 
 The pack holds the ledgers, a MANIFEST with per-file SHA-256, per-ledger hash and signature verdicts, signer keys,
@@ -212,9 +213,10 @@ What a PASS means, and what it does not:
   non-exportable key does not stop a compromised host from asking the HSM to sign; KMS policy, rotation and
   revocation are part of the perimeter.
 - **Time:** entry timestamps come from the writer's clock. An RFC 3161 token proves the data existed at the TSA's
-  time; the evidence pack checks the token's status and its binding to the manifest, not the TSA's signature
-  (`time_anchor: tsa_not_checked`). Between an event and its anchor, a root-level attacker on the writer can re-write
-  and re-seal.
+  time; the evidence pack checks the token's status and its binding to the manifest, and the TSA's signature only
+  against a TSA certificate you pin (`evidence_pack.py verify DIR --tsa-cert PEM`: `time_anchor: verified`; without a
+  pin `tsa_not_checked`; a token of another TSA is `tsa_unresolved`, not a failure). Revocation of the TSA certificate
+  is not checked. Between an event and its anchor, a root-level attacker on the writer can re-write and re-seal.
 - **Completeness:** an append-only log proves what it contains, never that everything that should have been recorded
   was.
 - **Post-quantum:** Ed25519 and the RSA/ECDSA signatures of TSA tokens do not survive a quantum adversary; the
