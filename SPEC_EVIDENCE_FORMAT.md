@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.7 (2026-11-15; v0.6 2026-11-13, v0.5 2026-10-19)
+# CryptoValid Evidence Format — candidate standard v0.8 (2026-11-15; v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -231,6 +231,13 @@ v0.7 also adds to §12 (2026-11-15) the two C2SP rows, a checkpoint file and a d
 not recognised" for both; it now names the command that verifies them (`cryptovalid-verify checkpoint`, `tiles`), which
 it cannot run itself without a trusted key. `cryptovalid-verify` gains the commands `checkpoint`, `tiles` and
 `vkey-rfc6962` of §13 and §14 (until then only in `cryptovalid_checkpoint.py`, which has no installed command).
+v0.8 (2026-11-15) lets the caller of the evidence pack's verify pin TSA certificates (§10, `tsa_certs`, `--tsa-cert`), and
+writes in §11 which refusals of the token check show the token false and which only leave it unestablished. Additive
+for a pack verified without a pin: the receipt is the receipt of v0.7, `states_vocabulary` included. With a pin the
+receipt names `cryptovalid-evidence-pack/states-2`, and `time_anchor` can be `verified` (it was never), `not_evaluated /
+tsa_unresolved` (a token valid but not established under the pinned certificates), or `contradicted` for a token whose
+signature does not verify or that §11 refuses at steps 1–6 (without a pin such a token is `tsa_not_checked` and the pack
+valid, as before). §11's function and the other callers of it do not change.
 
 ## 7. Conformance (normative)
 
@@ -307,7 +314,23 @@ its state is the state of the element of highest rank: `contradicted` > `not_eva
 |---|---|---|---|---|
 | `sealed_content` | each name of `file_digests_sha256`; the manifest's own digest; for each `ledgers[i]`: the file inside the pack, its hash chain (§5 steps 1–4), its entry count and head equal to the manifest's | every element holds | `digest_mismatch` (a file absent, outside the pack or of another digest; the manifest digest; no file listed at all), `artifact_invalid` (a ledger that is not a file inside the pack, or whose chain fails), `binding_mismatch` (entry count or head differ from the manifest: truncation or extension) | — |
 | `producer_signature` | the manifest signature; then, for each ledger whose entries carry a signature field (any entry, §5 step 5), its signature layer, then its post-quantum layer when the manifest claims one (`pq_protected: true`) | every element verifies under a key the CALLER pinned (`manifest_signer_hex`; `signer_pubkey_hex` and, for the post-quantum layer, `pq_pubkey_b64`) | `signature_invalid` (a signature that was checked and fails: broken, malformed, a key or R of small or mixed order, an entry of a signed ledger unsigned; a post-quantum layer the manifest claims and the file does not carry, carries partly, or carries broken) | `not_present` (no manifest signature, no signed ledger), `self_asserted` (it verifies under the key it carries; nobody pinned one: draft-krausz §5.4.2(a)), `key_unresolved` (a pin was given and the signer is another key), `backend_missing` (`cryptography`, or ML-DSA-65 in it, is not available here) |
-| `time_anchor` | the `rfc3161_timestamp` block | never: this verifier does not check the TSA's signature (a self-issued token binds as well as a real one) | `token_missing` (`anchored: true` and no `tsr_b64`), `binding_mismatch` (an imprint was read and is another digest), `token_invalid` (otherwise: not a TimeStampResp, status not granted, no imprint read) | `not_present` (no block, or `anchored: false`), `tsa_not_checked` (status granted, imprint = the manifest digest), `instrument_failure` (openssl absent; openssl that cannot be started, gives no answer in time, is ended by a signal, or no temporary file: exit 74, below) |
+| `time_anchor` | the `rfc3161_timestamp` block | only when the caller pins TSA certificates (v0.8, below): §11 gives `verified` for the token, the manifest digest and the pinned certificates. Without a pin never: this verifier does not check the TSA's signature (a self-issued token binds as well as a real one) | `token_missing` (`anchored: true` and no `tsr_b64`), `binding_mismatch` (an imprint was read and is another digest; with a pin also §11's `imprint_mismatch`), `token_invalid` (otherwise: not a TimeStampResp, status not granted, no imprint read; with a pin, any other refusal of §11 steps 1–6, its reason in `detail`: a signature that does not verify, a token that is not DER as §11 reads it, a hash algorithm outside §11's list) | `not_present` (no block, or `anchored: false`), `tsa_not_checked` (no pin; status granted, imprint = the manifest digest), `tsa_unresolved` (a pin was given; §11 steps 1–6 pass and step 7 refuses: the token is not established under the pinned certificates), `instrument_failure` (openssl absent, with or without a pin; openssl that cannot be started, gives no answer in time, is ended by a signal, or no temporary file: exit 74, below) |
+
+**A pinned TSA (v0.8).** `verify_pack(..., tsa_certs=[...])` and `evidence_pack.py verify DIR --tsa-cert PEM` (repeatable:
+the TSA certificate or a CA above it, as in §11) check the token with §11, `verify_token(token, manifest digest, "sha256",
+tsa_certs)`, after the checks of the row above and only when they leave `tsa_not_checked`; every other outcome of the
+row stays as it is. The outcome of §11 maps to the state as ETSI EN 319 102-1 V1.4.1 (2024-06) §5.1.3, Table 6, maps a
+signature validation: a token whose cryptographic checks fail or that cannot be processed (TOTAL-FAILED: SIG_CRYPTO_FAILURE,
+HASH_FAILURE, FORMAT_FAILURE) is `contradicted`, as a token over another digest already is (§11, "What a refusal shows");
+a token for which no chain to the pinned certificates is found
+(INDETERMINATE: NO_CERTIFICATE_CHAIN_FOUND, "no certificate chain has been found for the identified signing
+certificate") is `not_evaluated / tsa_unresolved`, as `key_unresolved` for the producer: a pin for another TSA does not
+make the pack false. The receipt's `rfc3161` object gains `tsa_check` = `{status, reason, detail, gen_time,
+signer_sha256}` of §11 whenever §11 ran; a receipt computed with a pin names `states_vocabulary:
+"cryptovalid-evidence-pack/states-2"` (states-1 with `verified` and `tsa_unresolved` reachable on `time_anchor` and the
+wider `token_invalid` above); a receipt without a pin keeps `states-1` and does not change. ap2-evidence-pack 1.7.x
+(`states-1` of its §6.9) answers `not_evaluated / tsa_invalid` for "the TSA signature does not verify under the
+certificate given", one token for the two cases that ETSI separates and this format separates: a deliberate divergence.
 
 **Disposition.** `valid` is computed as before v0.5 plus the changes listed in §6 (v0.5); it is not derived from
 `states`. Two rules hold between them (proved on the generative bench of 0.22.0, receipt fields only): a `valid` pack is
@@ -342,7 +365,8 @@ signature removed those of an unsigned pack. Only a pinned manifest signer or a 
 
 One function checks a token's structure, imprint, signature and anchor in this repository:
 `cryptovalid_tsa.verify_token(token_der, digest, hash_alg=None, tsa_certs=None)`. `evidence_pack.py verify` reads a
-pack's token for its status and imprint only (§10, `tsa_not_checked`); the pack's report (`cryptovalid_report.py`) shows
+pack's token for its status and imprint only (§10, `tsa_not_checked`), and with this function when its caller pins TSA
+certificates (§10, v0.8); the pack's report (`cryptovalid_report.py`) shows
 the outcome of this function for that token, with no TSA pinned. Its input is a TimeStampToken (a CMS ContentInfo, RFC 3161 §2.4.2) or a whole TimeStampResp, whose
 status MUST then be granted (0) or grantedWithMods (1) and whose token is the one checked. The steps, in order; the
 first that fails gives the outcome:
@@ -393,6 +417,23 @@ Outcome `status`, a closed set:
 openssl present that cannot start, does not answer in time or is ended by a signal is a check not run here
 (`CheckNotRun`, exit 74 in a command), as in §10. The outcome carries the parsed `tst_info` (policy, hash algorithm,
 hashed message, serial number, `gen_time` as ISO 8601 UTC, nonce) whenever steps 1–4 pass.
+
+**What a refusal shows (v0.8).** ETSI EN 319 102-1 V1.4.1 (2024-06) validates a time-stamp token as a signature (§5.4)
+and names the outcomes in §5.1.3, Table 6. A refusal at steps 1–4 or 6 shows that the token is not a valid signed
+timestamp: TOTAL-FAILED (FORMAT_FAILURE for a token that cannot be processed; SIG_CRYPTO_FAILURE for the signature;
+HASH_FAILURE for the messageDigest attribute). A refusal at step 5 shows that the token is not a timestamp of the digest
+the caller expects; ETSI answers a content time-stamp over other data INDETERMINATE / SIG_CONSTRAINTS_FAILURE
+(§5.2.8.4.2.5), and the callers of this repository that hold a claim of that digest (the pack's `binding_mismatch`, §10,
+since v0.5) treat it as a contradiction of the claim: a deliberate difference. A refusal at step 7,
+`not_issued_by_pinned_tsa`, shows neither: the token was not established under the certificates pinned. The case step 7
+exists for, a token of another TSA, is INDETERMINATE / NO_CERTIFICATE_CHAIN_FOUND ("no certificate chain has been found
+for the identified signing certificate"). Step 7 gives one refusal for all its checks and does not tell that case from
+the others (a certificate without the timeStamping usage, outside its validity at genTime, a signing-certificate
+attribute that does not match); this format reads them all as not established, none as false. The status stays `invalid` for all of them, as since v0.6: it answers "does this
+count as a timestamp here", and none counts. A caller that reports what the evidence shows
+reads the reason: the evidence pack (§10) reports step 7 as `not_evaluated / tsa_unresolved`. Not aligned in v0.8, and
+named here: the ingest's verify still reports step 7 as a failure (`tsa_token_not_issued_by_pinned_tsa`) and
+`eidas_ledger_check.py` counts it among the invalid tokens.
 
 **LOTL.** A token is qualified only through its signer: `cryptovalid_lotl.qualification` takes the certificate that
 verified the signature (step 6) and looks up that one certificate in the trusted lists; a certificate the token merely
