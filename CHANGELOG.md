@@ -9,6 +9,15 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **A final newline no longer passes two whole-string patterns.** In Python `re`, `$` also matches just before a newline
+  that ends the string. `cryptovalid_kms.VaultTransitBackend.sign` matched Vault's answer with `^vault:v(\d+):(.+)$`
+  and `.match`, so `"vault:v1:<base64>\n"` was accepted (measured with a stubbed answer); it now uses `fullmatch` and
+  `\Z`, and such an answer is "unexpected Vault signature format". `cryptovalid_solana._HEX64` had the same form; there
+  the digest is stripped of whitespace first, so a final newline never reached the check, and the pattern is changed the
+  same way. An audit of every string with `$` in the modules found no other pattern used with `match`/`search`;
+  the JS and Go verifiers match `$` at the end only and the Java timestamp pattern is applied with `matches()`.
+  `test_regex_final_newline_20261115.py`; on the code before, 2 of its 3 tests fail.
+
 - **Checkpoints of static CT logs verify (signature type 0x05); `cryptovalid_checkpoint.py` is core** (SPEC v0.7, §13
   new; not additive for `verify_note`). Until now a 0x05 vkey (the RFC 6962 key of a Sunlight or TesseraCT log) was
   ignored as an unknown key, so the checkpoint of such a log was NON_VALIDA, "no signature from a known key" — measured on

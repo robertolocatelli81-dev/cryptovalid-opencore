@@ -644,7 +644,7 @@ class VaultTransitBackend:
     public key and signing no longer signs with a key other than the declared one (measured with a real Vault 1.20)."""
 
     name = "vault"
-    _SIG_RE = re.compile(r"^vault:v(\d+):(.+)$")
+    _SIG_RE = re.compile(r"vault:v(\d+):(.+)\Z")   # \Z with fullmatch: `$` accepted a final newline (15/11/2026)
 
     def __init__(self, url: str, key: str, mount: str = "transit",
                  token_env: str = "VAULT_TOKEN", timeout: float = 30.0):
@@ -699,7 +699,7 @@ class VaultTransitBackend:
         d = self._req("POST", f"{self._mount}/sign/{self._key}",
                       {"input": base64.b64encode(message).decode(), "key_version": self._version})
         try:
-            m = self._SIG_RE.match(d["data"]["signature"])
+            m = self._SIG_RE.fullmatch(d["data"]["signature"])
         except (KeyError, TypeError):
             m = None
         if not m:

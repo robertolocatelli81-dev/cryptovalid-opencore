@@ -61,7 +61,7 @@ DEFAULT_RPCS = (
     "https://api.mainnet-beta.solana.com",
     "https://solana-rpc.publicnode.com",
 )
-_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_HEX64 = re.compile(r"[0-9a-f]{64}\Z")   # \Z, not $: `$` also matches before a final newline (15/11/2026)
 
 _SCOPE = ("A Solana anchor proves existence + timestamp + immutability of the digest on a public "
           "finalized chain — NOT that the upstream evidence is true nor (without expected_signer) "
@@ -163,7 +163,7 @@ def verify_solana_anchor(signature, expected_sha3_hex, rpcs=DEFAULT_RPCS, timeou
         return ok
 
     exp = (expected_sha3_hex or "").strip().lower()
-    if not _HEX64.match(exp):
+    if not _HEX64.fullmatch(exp):
         add("expected digest is 64-hex sha3-256", False, f"got {expected_sha3_hex!r}")
         return {"ok": False, "checks": checks, "onchain": None, "honest_scope": _SCOPE}
     add("expected digest is 64-hex sha3-256", True)
