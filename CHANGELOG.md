@@ -25,10 +25,12 @@ run by the same author, not by a third party.
   by the witness (400) and by the relying party (`NON_VALIDA`). Unchanged: a 0x01 or 0x02 key in the witness list is
   refused, and an Ed25519 key used under one name as a 0x01 log key and as a 0x04 witness key counts once in each role.
   The Sigstore checkpoint now verifies with `min_witnesses` 3 and not with 4. `test_witness_mldsa_log_20261115.py`:
-  12 tests, one of them only with `CV_SIGSTAGE_DIR` (the Sigstore checkpoint is not shipped), including 600 generated
+  14 tests, one of them only with `CV_SIGSTAGE_DIR` (the Sigstore checkpoint is not shipped), including 600 generated
   cases (keys of five types in both lists, repeated and in any order: 100 OK, 413 NON_VALIDA, 87 refused) checked
-  against an oracle written from §16; the 12 fail on the code before this change, and the 17 hand mutants of the
-  changed lines are killed by this file and `test_cryptovalid_witness.py`.
+  against an oracle written from §16; the 14 fail on the code before this change, and 19 hand mutants of the changed
+  lines are killed by this file and `test_cryptovalid_witness.py` (two of them found in review: the rule on extension
+  lines read over the witnesses' lines as well as the log's, and a witness key of an unassigned type refused by
+  `submit_checkpoint` instead of ignored).
 - **SPEC §15: the hybrid signature of this format is not the composite ML-DSA of RFC 10073.** Half a page with the
   sections of RFC 10073 it rests on (§2.1, §2.2, §3.1–§3.3, §4.1, §4.3, §5.3, §9.3, read in full on 15/11/2026): what
   both algorithms sign, the ML-DSA context, one value or two fields, "both or nothing" or per layer; the keys of a

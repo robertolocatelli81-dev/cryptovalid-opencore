@@ -696,7 +696,8 @@ Rules (NORMATIVE since v0.8):
    before any signature is read. Type 0x04 is not accepted as a log key (the "generalized" sentence of the Ed25519
    cosignature section is not read here as admitting it; open).
 3. **Witness keys**: type 0x04 or 0x06. A 0x01 or 0x02 key in the witness list is refused (`NoteError`: it can only be
-   a log key); a key of another type is ignored, as `verify_note` ignores it.
+   a log key); a key of another type is ignored: an unassigned type, as `verify_note` ignores it, and a 0x05 (static CT)
+   key, which `verify_note` would verify but which signs only as a log.
 4. **One key, one role**: a key — a (name, key id) pair, which commits to the type byte and the public key — given in
    both lists is refused (`NoteError`) before any signature is read; for the witness side, a trusted log key equal to
    one of the witness's own keys is refused the same way (`WitnessService` at start-up, `witness_cosign` before it

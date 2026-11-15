@@ -14,6 +14,7 @@ log signature covers) are refused.
 CV_SIGSTAGE_DIR=<dir with `checkpoint` and `vkeys.json` {"log": vkey, "witnesses": [vkeys]}> also checks a live
 checkpoint of the Sigstore staging log (not shipped here).
 """
+import base64
 import hashlib
 import json
 import os
@@ -154,6 +155,30 @@ class MLDSALogRelyingParty(unittest.TestCase):
         self.assertEqual(W.verify_witnessed(n1, ed_lv, self.wv, 1)["stato"], "OK")
         both = _note(ext, [_ed_log_line(ext, ORIGIN, _seed(3)), _mldsa_line(ext, ORIGIN, _seed(1), 0)] + lines)
         self.assertEqual(W.verify_witnessed(both, [ed_lv, self.lv], self.wv, 1)["stato"], "OK")   # rotation, 0x01 covers
+
+    def test_extension_lines_an_ed25519_witness_line_does_not_cover_for_the_log(self):
+        # SPEC §16 rule 5 looks at the LOG's signatures only: a 0x04 witness line signs the extension lines, but it is
+        # not the log's signature (a check over every verified line, witnesses included, would accept them)
+        ext = C.checkpoint_text(ORIGIN, 5, ROOT, ["ext line"])
+        ed_w = C.vkey("e.example/w", C.TYPE_COSIG_V1, C.pubkey_from_seed(_seed(30)))
+        n = _note(ext, [_mldsa_line(ext, ORIGIN, _seed(1), 0), _ed_cosig_line(ext, "e.example/w", _seed(30), T0)])
+        r = W.verify_witnessed(n, self.lv, [ed_w], 1)
+        self.assertEqual(r["stato"], "NON_VALIDA", r); self.assertIn("extension lines", r["motivo"])
+        plain = _note(self.text, [_mldsa_line(self.text, ORIGIN, _seed(1), 0), _ed_cosig_line(self.text, "e.example/w", _seed(30), T0)])
+        self.assertEqual(W.verify_witnessed(plain, self.lv, [ed_w], 1)["stato"], "OK")   # control: no extension lines
+
+    def test_submit_ignores_a_witness_key_of_an_unknown_type(self):
+        # as verify_witnessed and as 0.24.0: a witness vkey of an unassigned type is ignored, not refused, before the
+        # round trip (rule 3); the round trip is replaced here, so no network is used
+        unknown = "u.example/w+01020304+" + base64.b64encode(bytes([0x7F]) + bytes(32)).decode()
+        calls = []
+        real = W.add_checkpoint
+        W.add_checkpoint = lambda *a, **k: (calls.append(a), (503, b"unavailable\n"))[1]
+        try:
+            r = W.submit_checkpoint("http://127.0.0.1:9/", self.note, [b"x"], [unknown] + self.wv, self.lv)
+        finally:
+            W.add_checkpoint = real
+        self.assertEqual((r["stato"], r["status"], len(calls)), ("NON_VALIDA", 503, 1), r)
 
     def test_cli_verify(self):
         d = tempfile.mkdtemp()
