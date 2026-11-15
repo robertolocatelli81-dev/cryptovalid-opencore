@@ -928,16 +928,16 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
 def main(argv: Optional[List[str]] = None) -> int:
     parser = Parser(allow_abbrev=False, 
         prog="opencore/verifier.py",
-        description="Verifica indipendente di un OMEGA ledger .jsonl (auditor-grade, stdlib-only).",
+        description="Independent verification of an OMEGA .jsonl ledger (auditor-grade, stdlib-only).",
     )
-    parser.add_argument("ledger_path", help="Path del file .jsonl da verificare")
+    parser.add_argument("ledger_path", help="path of the .jsonl file to verify")
     parser.add_argument(
-        "--algo", choices=SUPPORTED_ALGOS, default=None, help="Forza algoritmo (default: auto-detect)"
+        "--algo", choices=SUPPORTED_ALGOS, default=None, help="force the hash algorithm (default: the one that matches the first entry, sha256 if neither does)"
     )
     parser.add_argument(
-        "--quiet", action="store_true", help="Stampa solo il verdetto sintetico (PASS/FAIL + exit code)"
+        "--quiet", action="store_true", help="print only the verdict (PASS/FAIL, and the exit code)"
     )
-    parser.add_argument("--out", default=None, help="Scrivi receipt JSON anche su file")
+    parser.add_argument("--out", default=None, help="also write the JSON receipt to this file")
     parser.add_argument("--tip", default=None, help="signed chain tip to check (default: <ledger>.tip.json if present)")
     parser.add_argument("--trusted-pubkey", default=None, help="log key (hex) the tip must be signed with")
     parser.add_argument("--trusted-pq-pubkey", default=None,

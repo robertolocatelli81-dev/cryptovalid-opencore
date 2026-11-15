@@ -131,9 +131,9 @@ def main(argv=None):
     import argparse
     import sys
     p = Parser(prog="cryptovalid-heterogeneous",
-                                description="Verifica un'ancora ETEROGENEA (>=N domini di fiducia indipendenti).")
+                                description="Verify a HETEROGENEOUS anchor (at least N independent trust domains).")
     p.add_argument("digest_sha3_hex")
-    p.add_argument("attestations_json", help="file JSON: lista di attestazioni [{\"domain\": ...}, ...]")
+    p.add_argument("attestations_json", help="JSON file: list of attestations [{\"domain\": ...}, ...]")
     p.add_argument("--min-domains", type=int, default=2)
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     with open(a.attestations_json, encoding="utf-8") as f:

@@ -17,6 +17,15 @@ run by the same author, not by a third party.
   controls (altered signature, timestamp 1, other tree size, timestamp 2^63). A zero timestamp is reported as 0, with no
   freshness; the witness still never emits one. Ed25519 cosignature/v1 is unchanged.
 
+- **Command line help in English.** `cryptovalid-verify --help` (and the same help after each of its commands) said
+  "Un verificatore per TUTTA l'evidenza CryptoValid, offline" and listed the commands without saying what they take; it
+  now describes each command and the exit status. The --help of `verifier.py`, `cryptovalid_heterogeneous.py`,
+  `cryptovalid_reanchor.py` and `cryptovalid_worm.py` had Italian descriptions or option help, now English.
+  `test_cli_help_english_20261115.py` runs --help of every top-level module that builds a parser, and of each command its
+  usage lists, and refuses Italian letters and words (the detector is checked on the old texts first). The layer names
+  and notes inside the JSON receipt of `cryptovalid-verify` are unchanged (still partly Italian): they are output that
+  callers may match, and changing them is a separate, announced change.
+
 ## 0.23.0 (2026-11-13)
 
 - **One check of an RFC 3161 token, read closed** (SPEC v0.6, §11 new; not additive: counts change). Measured on 0.22.0

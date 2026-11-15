@@ -147,7 +147,7 @@ def main(argv=None):
     import argparse
     import sys
     p = Parser(prog="cryptovalid-worm",
-                                description="WORM escrow store — retention immutabile del dato (SEC 17a-4).")
+                                description="WORM escrow store: immutable retention of the data (SEC 17a-4).")
     sub = p.add_subparsers(dest="cmd")
     pp = sub.add_parser("put")
     pp.add_argument("store"); pp.add_argument("key"); pp.add_argument("file")

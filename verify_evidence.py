@@ -2,33 +2,29 @@
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """
-verify_evidence.py — UN verificatore per TUTTA l'evidenza CryptoValid, offline, senza
-fidarsi dell'autore. Chiude il gap #1 (council OMEGA 2026-08-21): finora la verifica
-pubblica copriva solo la hash-chain del ledger; ogni altro strato viveva in un modulo
-separato. Questo è l'ENTRY-POINT UNICO.
+verify_evidence.py — ONE verifier for ALL CryptoValid evidence, offline, without trusting the author. It closes gap #1
+of the 2026-08-21 review: until then the public verification covered only the ledger hash chain and every other layer
+lived in a separate module. This is the single entry point (`cryptovalid-verify`).
 
-SCELTA DI RIGORE (dichiarata, non nascosta): questo file NON reimplementa la
-crittografia. ORCHESTRA i verificatori di RIFERIMENTO in `opencore/` — gli stessi,
-testati, che il prodotto usa. Reimplementarli qui creerebbe DIVERGENZA: un verificatore
-"standalone" che diverge da quello reale darebbe un falso-verde. Riusarli garantisce che
-ciò che verifichi TU è esattamente ciò che verifica il sistema. Serve il repo clonato
-(che un auditor open-source ha comunque) + stdlib; `cryptography` per le firme Ed25519 e
-`openssl` per RFC 3161 sono dichiarati per-strato: se mancano, lo strato risulta
-"non verificato" (onesto), MAI un verde finto.
+Design choice (declared): this file does NOT reimplement the cryptography. It ORCHESTRATES the reference verifiers of
+this repository (verifier.py, evidence_pack.py, ...), the same tested code the product uses: a "standalone" verifier
+that diverged from the real one would give a false green. Needs the repository (or the installed package) and the
+standard library; `cryptography` for Ed25519 signatures and `openssl` for RFC 3161 are declared per layer: when one is
+missing that layer is "not verified" (SKIP), never a false green.
 
-Uso:
-  python3 verify_evidence.py auto     <path>         # rileva il tipo e verifica tutto
-  python3 verify_evidence.py pack     <pack_dir>     # evidence pack (evidence_pack.py)
-  python3 verify_evidence.py archive  <dir>          # archivio ingest: STH+HEAD+firma
-  python3 verify_evidence.py ledger   <file.jsonl>   # sola hash-chain (come verify_ledger)
-  python3 verify_evidence.py ap2      <evidence.json># mandati agentici SD-JWT (AP2)
-  python3 verify_evidence.py cldma    <attest.json>  # attestazione CLDMA (ratio impegnato)
+Usage:
+  cryptovalid-verify auto     <path>           # detect the type and verify everything
+  cryptovalid-verify pack     <pack_dir>       # evidence pack (evidence_pack.py)
+  cryptovalid-verify archive  <dir>            # ingest archive: STH + HEAD + signature
+  cryptovalid-verify ledger   <file.jsonl>     # hash chain only (as verifier.py)
+  cryptovalid-verify ap2      <evidence.json>  # SD-JWT agent mandates (AP2)
+  cryptovalid-verify cldma    <attest.json>    # CLDMA attestation (committed ratio)
 
 Status: `auto`, `pack` and `ledger` are the maintained core; `archive`, `ap2` and `cldma` are EXPERIMENTAL
 (README, "Core and experimental modules"): kept and tested, no new scope is added to them.
 
-Esce 0 se l'evidenza è valida per ciò che era verificabile, 1 altrimenti; 74 se la ricevuta non è stata scritta per
-intero su stdout (pieno, chiuso, lettore assente), qualunque sia il verdetto (0.20.3).
+Exits 0 if the evidence is valid for what could be verified, 1 otherwise; 74 if the receipt was not written whole to
+stdout (full, closed, no reader), whatever the verdict (0.20.3).
 """
 from __future__ import annotations
 
@@ -344,6 +340,19 @@ def _rollup(kind: str, layers: list) -> dict:
                      % (len(checked), len(layers) - len(checked)))}
 
 
+_COMMANDS = {
+    "auto": "detect what the path is and verify it with the command below that fits",
+    "pack": "evidence pack directory (evidence_pack.py)",
+    "archive": "ingest archive directory: segments, Merkle STH, signed HEAD (experimental)",
+    "ledger": "hash chain of a .jsonl ledger only",
+    "ap2": "AP2 SD-JWT mandate evidence, through ap2-evidence-pack (experimental)",
+    "cldma": "CLDMA committed attestation (experimental)",
+}
+_COMMANDS_HELP = ("commands:\n" + "".join(f"  {k:<8} {v}\n" for k, v in _COMMANDS.items())
+                  + "\nexit status: 0 the evidence is valid for what could be checked here, 1 it is not, 2 usage error,\n"
+                    "74 the receipt was not written whole to stdout (whatever the verdict).")
+
+
 def main(argv=None) -> int:
     _need_opencore()
     from verifier import receipt_cli
@@ -352,10 +361,11 @@ def main(argv=None) -> int:
 
 def _main(argv=None) -> int:
     from verifier import Parser, receipt_not_written, write_stdout   # 0.20.3: the same write rule as verifier.py
-    p = Parser(prog="verify_evidence",
-                                description="Un verificatore per TUTTA l'evidenza CryptoValid, offline")
-    p.add_argument("cmd", choices=["auto", "pack", "archive", "ledger", "ap2", "cldma"])
-    p.add_argument("path")
+    p = Parser(prog="verify_evidence", formatter_class=argparse.RawDescriptionHelpFormatter,
+               description="One offline verifier for every kind of CryptoValid evidence.",
+               epilog=_COMMANDS_HELP)
+    p.add_argument("cmd", choices=list(_COMMANDS), help="what the path holds (see the commands below)")
+    p.add_argument("path", help="file or directory to verify")
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     fn = {"auto": verify_auto, "pack": verify_pack, "archive": verify_archive,
           "ledger": verify_ledger, "ap2": verify_ap2, "cldma": verify_cldma}[a.cmd]

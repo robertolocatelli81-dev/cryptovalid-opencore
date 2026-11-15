@@ -92,8 +92,8 @@ def main(argv=None):
     import argparse
     import sys
     p = Parser(prog="cryptovalid-reanchor",
-                                description="Valuta il decadimento di un'ancora e segnala se ri-ancorare.")
-    p.add_argument("retention_json", help="file JSON con almeno {\"witnesses_with_tx\": N}")
+                                description="Assess the decay of an anchor and say whether to re-anchor it.")
+    p.add_argument("retention_json", help="JSON file with at least {\"witnesses_with_tx\": N}")
     p.add_argument("--age-days", type=float, required=True)
     p.add_argument("--min-witnesses", type=int, default=2)
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
