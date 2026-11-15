@@ -47,6 +47,7 @@ if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecod
 import base64
 import hashlib
 import json
+import os
 import re
 import struct
 import sys
@@ -577,7 +578,32 @@ def main(argv=None) -> int:
     r = sub.add_parser("vkey-rfc6962", help="print the vkey (type 0x05) of a static CT log from its public key")
     r.add_argument("--name", required=True, help="the checkpoint origin: submission prefix without scheme and trailing slashes")
     r.add_argument("--key-b64", required=True, help="base64 DER SubjectPublicKeyInfo (the `key` of a CT log list entry)")
+    t = sub.add_parser("tiles", help="verify a checkpoint and the C2SP tiles of its tree, from a directory laid out as the log serves it")
+    t.add_argument("directory", help="holds tile/... (and checkpoint, unless --checkpoint names another file)")
+    t.add_argument("--vkey", action="append", required=True, help="a trusted key of the checkpoint (repeatable)")
+    t.add_argument("--profile", required=True, choices=("static-ct-api", "tlog-tiles"))
+    t.add_argument("--checkpoint", help="the checkpoint note (default: <directory>/checkpoint)")
+    t.add_argument("--no-entries", action="store_true", help="check the hash tiles only, not the data tiles / entry bundles")
+    t.add_argument("--entries-encoding", choices=("auto", "gzip", "identity"), default="auto",
+                   help="data tiles / entry bundles on disk: auto = gzip when they start with 1f 8b (default)")
     a = ap.parse_args(argv)
+    if a.cmd == "tiles":
+        import cryptovalid_merkle as M
+        try:
+            with open(a.checkpoint or os.path.join(a.directory, "checkpoint"), "rb") as f:
+                note = f.read()
+            r = verify_note(note, a.vkey)
+        except (NoteError, OSError) as e:
+            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+        out = {"stato": r["stato"], "checkpoint": {k: v for k, v in r.items() if k not in ("text", "stato")}, "tiles": None}
+        if r["stato"] == "OK":
+            cp = parse_checkpoint(r["text"])
+            tr = M.verify_tiles(a.directory, cp["size"], cp["root"], a.profile, entries=not a.no_entries,
+                                encoding=a.entries_encoding)
+            out["tiles"] = tr
+            out["stato"] = tr["stato"]
+        emit(json.dumps(out, ensure_ascii=False))
+        return 0 if out["stato"] == "OK" else 1
     if a.cmd == "vkey-rfc6962":
         try:
             der = b64decode_strict(a.key_b64)

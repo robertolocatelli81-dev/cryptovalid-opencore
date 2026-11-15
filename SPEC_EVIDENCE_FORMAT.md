@@ -225,6 +225,8 @@ v0.7 also adds §13 (2026-11-15), the checkpoint signatures of static CT logs (s
 unknown key, so the checkpoint of a static CT log signed only by its log key was NON_VALIDA ("no signature from a known
 key"); it is OK when the signature verifies, NON_VALIDA with the reason when it does not, and a 0x05 vkey whose key is not a
 canonical ECDSA P-256 key is refused as the caller's error.
+v0.7 also adds §14 (2026-11-15), reading the tiles of C2SP tiled logs, when `cryptovalid_merkle.py` moved to the core.
+Additive: nothing read tiles before.
 
 ## 7. Conformance (normative)
 
@@ -480,4 +482,76 @@ Vectors: `testdata/interop/` — the checkpoint of the test log `rome2026h1.exam
 with its log list entry; `test_c2sp_static_ct_20261115.py` checks it, its altered forms, every body length from 0 to the
 real one plus 64, and notes signed with keys made in the test, against the rule above and, where Go is installed, against
 github.com/transparency-dev/formats (`verifiers/note_oracle`).
+
+## 14. Tiles of C2SP tiled logs (NORMATIVE since v0.7, 2026-11-15)
+
+`cryptovalid_merkle.verify_tiles` reads, from a directory laid out as the log serves it (`<dir>/tile/...`), the tiles of a
+tree of a given size, and checks them against the root of a checkpoint; `cryptovalid_checkpoint.py tiles <dir> --vkey
+... --profile static-ct-api|tlog-tiles` first verifies the checkpoint (`<dir>/checkpoint`, §13 for static CT logs) and
+then its tiles. Sources, read on 2026-11-15: c2sp.org/tlog-tiles at commit b2dd989233 (2026-10-07) and
+c2sp.org/static-ct-api at commit 7e91dadf3c (2026-10-01) of github.com/C2SP/C2SP, unchanged on `main` that day; RFC 6962
+§2.1 and §3.4. The rules they set:
+
+- tlog-tiles: "Tiles are served at `<prefix>/tile/<L>/<N>[.p/<W>]`"; "`<L>` is the “level” of the tile, and MUST be a
+  decimal ASCII integer between 0 and 63" (static-ct-api: "between 0 and 5"); "`<N>` [...] MUST be a non-negative integer
+  encoded into zero-padded 3-digit path elements. All but the last path element MUST begin with an `x`"; "`<W>` is the
+  width of the tile, a decimal ASCII integer between 1 and 255".
+- "Full tiles MUST be exactly 256 hashes wide, or 8,192 bytes. At “level 0” tiles contain leaf hashes. At “level 1” and
+  above, each hash in a tile is the Merkle Tree Hash of a *full* tile at the level below."
+- "The partial tile at level *l* for a tree of size *s* has `floor(s / 256**l) mod 256` entries"; logs "MAY delete any
+  partial tile once the corresponding full tile is available" and clients "MAY fetch the full tile in parallel as a
+  fallback".
+- tlog-tiles: "Entry bundles are sequences of big-endian uint16 length-prefixed log entries. Each entry in a bundle hashes
+  to the corresponding entry in the corresponding “level 0” Merkle Tree tile", at `<prefix>/tile/entries/<N>[.p/<W>]`.
+- static-ct-api: data tiles at `<monitoring prefix>/tile/data/<N>[.p/<W>]` "are sequences of the following structure, one
+  per entry": `TileLeaf { TimestampedEntry timestamped_entry; select (entry_type) { case x509_entry: Empty; case
+  precert_entry: ASN.1Cert pre_certificate; }; Fingerprint certificate_chain<0..2^16-1>; }`, `opaque Fingerprint[32]`;
+  "Static API logs MUST include a `leaf_index` extension" whose data "MUST be a `LeafIndex` value, which is a big-endian
+  unsigned 40-bit integer specifying the 0-based index of the included entry in the log"; "Duplicate extensions with the
+  same `CExtensionType` MUST NOT be included". RFC 6962 §3.4: the leaf is `MerkleTreeLeaf` = version v1 (0), leaf_type
+  timestamped_entry (0), `TimestampedEntry { uint64 timestamp; LogEntryType entry_type; select(entry_type) { case
+  x509_entry: ASN.1Cert; case precert_entry: PreCert; } signed_entry; CtExtensions extensions; }`.
+- Both: "Clients MUST support `Content-Encoding: gzip`" (static-ct-api) for data tiles; entry bundles "SHOULD be
+  compressed at the HTTP layer".
+
+The rule of this implementation:
+
+1. **Which tiles.** For a tree of `s` leaves, level `l` has `floor(s / 256^l)` hashes, in full tiles and one partial tile
+   of `floor(s / 256^l) mod 256` hashes when that is not 0; the levels are those where `floor(s / 256^l) > 0`. A tree that
+   needs a level above the profile's (5 for static-ct-api, 63 for tlog-tiles) is refused. Size 0 has no tiles and the
+   root of the empty tree.
+2. **Reading.** A path is a regular file (a link or anything else is refused) of at most 64 MiB. A partial tile that is
+   absent is read as the first `W` hashes (or entries) of the full tile, and counted (`partial_from_full`); when both
+   files are present, the partial hash tile must equal the prefix of the full one.
+3. **Hash tiles** are exactly 32 × width bytes. Every level-0 tile is required. The root is the RFC 6962 Merkle Tree Hash
+   of the level-0 hashes and must equal the checkpoint's. Every upper-level tile that is present must hold, for each of
+   its hashes, the root of the 256 hashes below it computed from level 0; an upper-level tile that is absent is counted
+   (`upper_missing`), never silently passed over.
+4. **Entries** (unless `--no-entries`): every data tile (static-ct-api) or entry bundle (tlog-tiles) is required and holds
+   exactly its width of entries and nothing after them, each length read before the bytes it covers. Entry bundle: uint16
+   length, entry; leaf hash SHA-256(0x00 || entry). Data tile: timestamp (8), entry_type (2: 0 x509_entry, 1
+   precert_entry, anything else refused), the certificate (uint24 length, at least 1 byte) or issuer_key_hash (32) and
+   TBSCertificate (uint24, at least 1), extensions (uint16), for a precertificate the pre_certificate (uint24, at least
+   1), certificate_chain (uint16, a multiple of 32); leaf hash SHA-256(0x00 || 00 00 || TimestampedEntry). The extensions
+   are a list of (uint8 type, uint16-length data); a type twice, a type other than leaf_index, a leaf_index that is not 5
+   bytes, no leaf_index, or a leaf_index other than the entry's index is refused (static-ct-api says nothing of other
+   types: this implementation knows only leaf_index and refuses the rest). Each leaf hash must equal its level-0 hash.
+   The pre_certificate and certificate_chain of a data tile are read for their structure only: they are outside the
+   TimestampedEntry, no leaf hash covers them, and a change of their content is not detected (measured on the real data
+   tile); the issuers they name are not fetched.
+5. **Encoding** of data tiles and entry bundles on disk: `gzip` (exactly one gzip member, nothing after it, at most 64 MiB
+   once decompressed), `identity`, or `auto` (the default: gzip when the file starts with the bytes 1f 8b). A wrong guess
+   cannot pass: the leaf hashes decide.
+6. **Limits** of this implementation, stated: at most 2^24 leaves (every leaf hash is held in memory).
+7. Result: `{"stato": "OK" | "NON_VALIDA", "motivo", "size", "root", "tiles_read", "partial_from_full", "upper_missing",
+   "entries", "entries_checked"}`; the first rule that fails gives the reason. The command exits 0 when the checkpoint and
+   the tiles are OK, 1 when either is not, 2 when a vkey or the checkpoint file cannot be used.
+
+Vectors: `testdata/interop/sunlight_mirror/` — a checkpoint of size 300 cosigned by a mirror (Ed25519 cosignature/v1)
+and its three hash tiles, whose root is the checkpoint's, with two placeholder entry bundles that do not hash to the
+leaves (a negative); `testdata/interop/sunlight_navigli2025h2/` — four level-0 tiles and a partial one of a real static CT
+log and the partial data tile of its 10 entries (precertificates). `test_c2sp_tiles_20261115.py` checks them and trees
+generated in the test (both profiles, sizes around every tile and level boundary, partial tiles absent or present, gzip),
+every truncation and altered byte of the entries, against the rule above and, where Go is installed, against
+golang.org/x/mod/sumdb/tlog, filippo.io/sunlight and filippo.io/torchwood (`verifiers/tile_oracle`).
 

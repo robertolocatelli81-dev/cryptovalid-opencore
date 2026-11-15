@@ -9,6 +9,21 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **Tiles of C2SP tiled logs are read and checked; `cryptovalid_merkle.py` is core** (SPEC v0.7, §14 new; additive).
+  `cryptovalid_merkle.verify_tiles` reads, from a directory laid out as the log serves it, the hash tiles of a tree
+  (full and partial, a partial absent read from the full tile as both specifications allow), and the data tiles of a
+  static CT log (c2sp.org/static-ct-api, TileLeaf with its leaf_index) or the entry bundles of a tlog-tiles log; every
+  length is checked before the bytes it covers, the root from the level-0 tiles must be the checkpoint's, every upper
+  tile present must agree with level 0, every entry must hash to its leaf. Refused with the reason: a missing level-0 tile
+  or entry file, a tile of the wrong length, an unknown entry type or extension type, a duplicate or wrong leaf_index,
+  bytes after the entries, more than one gzip member. `cryptovalid_checkpoint.py tiles <dir> --vkey ... --profile
+  static-ct-api|tlog-tiles` verifies the checkpoint, then its tiles. The pre_certificate and certificate_chain of a data
+  tile are outside every leaf hash and are read for their structure only (stated in SPEC §14). Vectors from
+  FiloSottile/sunlight (ISC) in `testdata/interop/`: the skylight mirror (root of a tree of 300 from its tiles = the
+  cosigned checkpoint) and the navigli2025h2 tiles (10 real precertificates). `test_c2sp_tiles_20261115.py`; with Go,
+  `verifiers/tile_oracle` (golang.org/x/mod/sumdb/tlog, filippo.io/sunlight, filippo.io/torchwood) reads the same
+  generated and altered directories. The module leaves the experimental list (README).
+
 - **A final newline no longer passes two whole-string patterns.** In Python `re`, `$` also matches just before a newline
   that ends the string. `cryptovalid_kms.VaultTransitBackend.sign` matched Vault's answer with `^vault:v(\d+):(.+)$`
   and `.match`, so `"vault:v1:<base64>\n"` was accepted (measured with a stubbed answer); it now uses `fullmatch` and

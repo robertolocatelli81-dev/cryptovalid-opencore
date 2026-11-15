@@ -1,0 +1,12 @@
+filippo.io/sunlight v0.10.3-0.20261112180100-5eed85d78c10 h1:BbBrfCPRi+RT+zNf++GG7G4GCHqN+xvaqL+A7QH1+DM=
+filippo.io/sunlight v0.10.3-0.20261112180100-5eed85d78c10/go.mod h1:Juw61pWYxd0KWRERlnoIf7O7D2XUzndTmQxauqPkHhU=
+filippo.io/torchwood v0.10.1-0.20261024135344-1c05157b1fd2 h1:jvnFpZovtSQykQNSPLtlEmP5SClXCWn+1zCHU8jz6cY=
+filippo.io/torchwood v0.10.1-0.20261024135344-1c05157b1fd2/go.mod h1:hZt8lhTBBCK77TmuK+q0D7mNcnt2ovQkJs+zdonDRog=
+github.com/google/certificate-transparency-go v1.3.3 h1:hq/rSxztSkXN2tx/3jQqF6Xc0O565UQPdHrOWvZwybo=
+github.com/google/certificate-transparency-go v1.3.3/go.mod h1:iR17ZgSaXRzSa5qvjFl8TnVD5h8ky2JMVio+dzoKMgA=
+golang.org/x/crypto v0.57.0 h1:3ZVCjf8Ggz7zneR/EHRVx68Ctf+2pmIMP2UFhh9cC6M=
+golang.org/x/crypto v0.57.0/go.mod h1:Fdz0i5U6CoizGwLda9DttjSk6qlZo25zYNtR+ycvuZA=
+golang.org/x/mod v0.41.0 h1:qJmnOUb4YB+FsEuM3HcWucdZASCPGhsX6uljO6pog0c=
+golang.org/x/mod v0.41.0/go.mod h1:Ek9pY8RKWXwsWvd3rQiHYtMqkjSUV+s1Rj7j4H5Ur6o=
+golang.org/x/sync v0.23.0 h1:KameEIfc1IkluZyXWLn39Wd4tURc6GbCiISGiZm2bQk=
+golang.org/x/sync v0.23.0/go.mod h1:sUUOizhqBxiL6pEWpqNLUiaJn1ShEbZ6BBqskPbjZm0=
