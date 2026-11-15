@@ -9,6 +9,16 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **The stage `MALFORMED_STATEMENT` of the COSE receipts has a test, and the CBOR decoder names a cut-short input.**
+  `test_scitt_malformed_statement_20261115.py` runs the 94 examples of RFC 8949 Appendix F.1 (CBOR data items that are
+  not well-formed; compared byte for byte with the text of the RFC on 15/11/2026) in five positions each against
+  `cryptovalid_cose_receipts.verify_statement`: 470 inputs, all `MALFORMED_STATEMENT`, none raises (as before: the
+  stage was right, only untested). `cryptovalid_receipt.cbor_decode` raises only `ValueError` on bytes: a head cut short
+  raised `IndexError` (16 of the 94 examples), and a head or a string cut short was reported as "byte in eccesso" (bytes
+  in excess, the opposite of what happened); now "input ends inside …", and additional information 28–30 is named
+  reserved instead of "indefinite form". One outcome changes: in `cryptovalid_cedulon`, a record whose COSE bytes end
+  inside a head was refused at stage `malformed` (the `IndexError` reached the catch-all); it is now refused at
+  `record-header`, the stage that reads the record. Proposed by Athena's review of 15/11/2026.
 - **A declared, typed API: the package `cryptovalid`** (`API.md`). `import cryptovalid` gives 15 names of the core
   (`verify_ledger`, `verify_pack`, `verify_note`, `verify_tiles`, …) with a stub (`__init__.pyi`), `py.typed` (PEP 561)
   and `LedgerReceipt`, the receipt of `verify_ledger` declared key by key; the flat modules stay as they are and are

@@ -98,9 +98,20 @@ CBOR_MAX_DEPTH = 64
 
 
 def cbor_decode(b: bytes) -> Any:
+    """One CBOR data item, the subset this module writes (definite lengths; ints, bytes, text, arrays, maps, false, true,
+    null). Anything else, and any input that is not exactly one well-formed item, raises ValueError naming why
+    (RFC 8949 Appendix F: too little data, too much data, a reserved or unsupported encoding). Since 2026-11-15, on
+    bytes, ValueError is the only exception: a head cut short raised IndexError, and a head or a string cut short was
+    called "byte in eccesso" (bytes in excess, the opposite of what happened); proposed by Athena's review of
+    15/11/2026."""
+    def need(i: int, k: int, what: str) -> None:
+        if i + k > len(b):
+            raise ValueError(f"CBOR: input ends inside {what} at byte {i} ({k} byte(s) needed, {len(b) - i} left)")
+
     def rd(i: int, depth: int = 0):
         if depth > CBOR_MAX_DEPTH:
             raise ValueError("CBOR: annidamento oltre il limite")
+        need(i, 1, "a data item")
         ib = b[i]
         major, info = ib >> 5, ib & 0x1f
         i += 1
@@ -108,16 +119,16 @@ def cbor_decode(b: bytes) -> Any:
             return {20: False, 21: True, 22: None}[info], i
         if info < 24:
             n = info
-        elif info == 24:
-            n = b[i]; i += 1
-        elif info == 25:
-            n = int.from_bytes(b[i:i + 2], "big"); i += 2
-        elif info == 26:
-            n = int.from_bytes(b[i:i + 4], "big"); i += 4
-        elif info == 27:
-            n = int.from_bytes(b[i:i + 8], "big"); i += 8
-        else:
+        elif info <= 27:
+            k = 1 << (info - 24)                          # 1, 2, 4 or 8 bytes of argument (RFC 8949 §3)
+            need(i, k, "the head of an item")
+            n = int.from_bytes(b[i:i + k], "big"); i += k
+        elif info == 31:
             raise ValueError("CBOR: forma indefinita non supportata")
+        else:                                             # 28, 29, 30: reserved (RFC 8949 §3), not well-formed
+            raise ValueError(f"CBOR: additional information {info} is reserved (RFC 8949 §3)")
+        if major in (2, 3):
+            need(i, n, "a byte string" if major == 2 else "a text string")
         if major == 0:
             return n, i
         if major == 1:
