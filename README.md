@@ -243,8 +243,8 @@ ap2-evidence-pack >= 1.6.0, < 2 from PyPI; without it `cryptovalid-verify ap2` i
 
 ## Licence, contact, citation
 
-- **Licence:** AGPL-3.0-or-later, see [LICENSE](LICENSE). A commercial licence of the same code is available from the
-  author.
+- **Licence:** AGPL-3.0-or-later, see [LICENSE](LICENSE). No commercial licence, paid pilot or support contract is
+  offered at present: the project is free and open-source software, provided without warranty as the licence states.
 - **Contact:** issues and [Discussions](https://github.com/robertolocatelli81-dev/cryptovalid-opencore/discussions)
   of this repository (interoperability reports and divergences found by your own verifier are welcome);
   roberto.locatelli.81@gmail.com. Security reports: [SECURITY.md](SECURITY.md).

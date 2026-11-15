@@ -9,6 +9,10 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **No commercial offer.** The README offered "a commercial licence of the same code", while SECURITY.md declares the
+  project non-commercial open source; it now states that no commercial licence, paid pilot or support contract is
+  offered at present (free and open-source software, without warranty as the licence states). ECOSYSTEM_FIT.md welcomes
+  pilots with real operators as non-commercial ones (no fee, no service contract).
 - **Supply chain of the release, measurable by third parties.** `release-build.yml` builds the wheel and the sdist on a
   GitHub-hosted runner from the tag, with the build front-end and setuptools pinned by hash
   (`.github/build-requirements.txt`, `pip install --require-hashes`, `python -m build --no-isolation`), and signs SLSA
