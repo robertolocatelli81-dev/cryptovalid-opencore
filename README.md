@@ -65,7 +65,10 @@ reader gone), whatever the verdict.
   (`verifiers/js`), Go (`verifiers/go`, which also writes ledgers), Java (`verifiers/java/CvVerify.java`, JDK
   standard library only), Rust (`verifiers/rust`, no external crates for the hash chain) and Swift (`verifiers/swift`,
   reduced scope: no chain tip, no ML-DSA). The differential oracle (`verifiers/differential_oracle.py`) runs Python,
-  JS, Go, Rust and Java on the same hostile inputs in CI and fails on any disagreement.
+  JS, Go, Rust and Java on the same hostile inputs in CI and fails on any disagreement it does not declare by name and
+  exact pattern (`DECLARED_DIVERGENCE`: layers a verifier does not check, such as entry signatures without a pinned key,
+  counted as not checked by Python and Rust and FAIL in the others, or the ML-DSA-65 layer of a tip, unchecked by JS,
+  Rust and Swift).
 - **Conformance vectors:** `spec/vectors/` holds 11 normative ledger vectors with their expected receipts;
   `python3 conformance.py` exits 0 only if the reference reproduces all 11 (`"conformant": true, "vectors": 11`).
   Signature vectors are in `spec/vectors/signatures/`. Implementing the format elsewhere means matching these.

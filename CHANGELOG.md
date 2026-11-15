@@ -9,6 +9,11 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **What the differential oracle guarantees, said as it is.** A comment of `verify.yml` said "a pack accepted by one
+  is accepted by all, or the build fails" and the README "fails on any disagreement"; the oracle itself declares
+  divergences by name and exact pattern (7 on a local run of 15/11/2026 with Python, JS and Go: e.g. `sig-broken`
+  PASS for Python, FAIL for JS and Go; `hybrid-tip-bad-pq` FAIL for Python and Go, PASS for JS). Both texts now say
+  that the build fails on any disagreement outside those declared cases, and name what they are.
 - **`--version`, and `cryptovalid-verify` calls itself by its name.** Neither front-end had a `--version`, and the
   help of the installed command introduced itself as `verify_evidence` (measured 15/11/2026 on an installed wheel).
   `cryptovalid-verify --version` and `verifier.py --version` print the version on stdout (written whole or exit 74, like

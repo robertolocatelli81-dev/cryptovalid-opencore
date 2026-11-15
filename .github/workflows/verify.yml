@@ -121,9 +121,12 @@ jobs:
           python3 verifier.py "$RUNNER_TEMP/hsm_signed.jsonl"            # hash chain PASS (stdlib-only)
           python3 signer.py verify "$RUNNER_TEMP/hsm_signed.jsonl"       # HSM signatures PASS
 
-  # Independent verifiers of the same spec. The differential oracle asserts ZERO disagreements
-  # across Python, JS, Go, Rust and Java on hostile inputs (Swift has its own macOS job) — "a pack
-  # accepted by one is accepted by all, or the build fails" is only true because this job exists
+  # Independent verifiers of the same spec. The differential oracle runs Python, JS, Go, Rust and Java on hostile inputs
+  # (Swift has its own macOS job) and fails the build on any disagreement except the divergences it declares by name and
+  # exact pattern (DECLARED_DIVERGENCE: layers a verifier does not check — e.g. a broken entry signature without a pinned
+  # key is PASS for Python and Rust, which count signatures as not checked, and FAIL for JS, Go and Java; a tampered
+  # ML-DSA-65 tip is FAIL for Python, Go and Java and PASS for JS). So the same verdict everywhere holds for every input
+  # outside those declared cases, and only because this job exists
   # (added 2026-09-11 with Python/JS/Rust; Go, Java and the note oracle joined in later releases).
   floor:
     # the declared minimums, installed exactly: cryptography 48.0.0 (the sign extra) and ap2-evidence-pack 1.6.0 (the ap2
