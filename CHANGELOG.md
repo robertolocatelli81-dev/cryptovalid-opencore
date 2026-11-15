@@ -26,6 +26,19 @@ run by the same author, not by a third party.
   and notes inside the JSON receipt of `cryptovalid-verify` are unchanged (still partly Italian): they are output that
   callers may match, and changing them is a separate, announced change.
 
+- **`cryptovalid-verify auto` recognises by a closed list, or says "format not recognised"** (SPEC v0.7, §12 new; not
+  additive for `auto`). Measured on 0.23.0 on 2026-11-14 with the release files of omega-cra-evol 0.10.0: on
+  `cra_pack.json`, `sbom.cdx.json`, `cra_pack.json.sig.json` and `trust.json` (JSON documents of other kinds) `auto`
+  answered `kind: "ledger"`, FAIL, with `json_decode` errors on its lines; on a binary file it ended with a
+  UnicodeDecodeError traceback (exit 1); an AP2 or CLDMA document was recognised by a substring in its first 2048
+  bytes. Now a directory is a pack (MANIFEST.json) or an ingest archive; a regular file is AP2 evidence or a CLDMA
+  attestation when its whole content is one JSON object with their members, a ledger when its first non-blank line is a
+  JSON object with `prev_hash` and `self_hash`; anything else, a pipe, a file that matches two rows, bytes that are not
+  UTF-8 or a byte order mark is `kind: "auto"`, `format not recognised: <reason>`, exit 1. The ledger in the same release
+  is still a ledger and passes. `test_auto_closed_20261115.py`: the release files (SHA-256 pinned, in
+  `testdata/interop/`), and 1500 generated inputs of every shape against an oracle written from SPEC §12; on the code
+  before, 10 of its 13 tests that do not use a pipe fail (the pipe test blocks there).
+
 ## 0.23.0 (2026-11-13)
 
 - **One check of an RFC 3161 token, read closed** (SPEC v0.6, §11 new; not additive: counts change). Measured on 0.22.0

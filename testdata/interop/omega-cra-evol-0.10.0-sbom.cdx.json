@@ -1,0 +1,63 @@
+{
+ "bomFormat": "CycloneDX",
+ "specVersion": "1.6",
+ "serialNumber": "urn:uuid:4a6a0576-c527-4756-a451-b567d436d0a5",
+ "version": 1,
+ "metadata": {
+  "timestamp": "2026-11-13T21:41:21+00:00",
+  "tools": {
+   "components": [
+    {
+     "type": "application",
+     "name": "omega-cra-evol",
+     "version": "0.10.0"
+    }
+   ]
+  },
+  "component": {
+   "type": "application",
+   "bom-ref": "omega-cra-evol@0.10.0",
+   "name": "omega-cra-evol",
+   "version": "0.10.0"
+  },
+  "properties": [
+   {
+    "name": "cra-evidence:profile",
+    "value": "cra-evidence-min (depth: top-level-only)"
+   },
+   {
+    "name": "cra-evidence:depth_note",
+    "value": "'top-level-only' is the literal Annex I floor; most vulnerabilities live in transitive dependencies \u2014 prefer a transitive SBOM from a full generator when available"
+   },
+   {
+    "name": "cra-evidence:sbom_sha3",
+    "value": "d885559e7a1c597056542958394edec4baecac9cd97858187b415607447228d7"
+   }
+  ]
+ },
+ "components": [
+  {
+   "type": "library",
+   "bom-ref": "pkg:github/robertolocatelli81-dev/omega-cra-evol@v0.10.0",
+   "name": "omega-cra-evol",
+   "version": "0.10.0",
+   "supplier": {
+    "name": "Roberto Locatelli"
+   },
+   "purl": "pkg:github/robertolocatelli81-dev/omega-cra-evol@v0.10.0",
+   "hashes": [
+    {
+     "alg": "SHA-256",
+     "content": "e9395cb4c59907474adfb51ebaaa8de383a871b778b006b7616c84c2921af11f"
+    }
+   ],
+   "licenses": [
+    {
+     "license": {
+      "id": "AGPL-3.0-or-later"
+     }
+    }
+   ]
+  }
+ ]
+}

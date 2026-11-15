@@ -289,46 +289,125 @@ def verify_cldma(path: str) -> dict:
 
 # ─────────────────────────────────────────────────── auto-detect
 
+_AUTO_JSON_LIMIT = 64 * 1024 * 1024   # SPEC §12: the two JSON documents are read whole up to this size
+_RECOGNISED = ("evidence pack directory (MANIFEST.json), ingest archive directory (*.head.json or *-*.jsonl), "
+               "AP2 evidence (one JSON object, evidence_format ap2-evidence*), CLDMA attestation (one JSON object with "
+               "root_hash and metric_id), ledger (JSONL whose first line is an object with prev_hash and self_hash)")
+
+
+class _NotRecognised(Exception):
+    """SPEC §12: the path is none of the recognised formats; the message is the reason"""
+
+
+def _not_recognised(why: str) -> dict:
+    return _rollup("auto", [_layer("auto-detect", "FAIL", f"format not recognised: {why}; recognised: {_RECOGNISED}")])
+
+
+def _json_value(text: str, what: str):
+    try:
+        return json.loads(text)
+    except RecursionError:
+        raise _NotRecognised(f"{what}: JSON nested deeper than the parser allows") from None
+    except ValueError as e:
+        raise _NotRecognised(f"{what} is not JSON ({e})") from None
+
+
+def _utf8(raw: bytes, what: str) -> str:
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raise _NotRecognised(f"{what} starts with a UTF-8 byte order mark")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise _NotRecognised(f"{what} is not UTF-8 text (byte {e.start}: {raw[e.start:e.start + 1].hex()})") from None
+
+
+_NO_JSON = object()
+
+
+def _file_format(path: str) -> str:
+    """'ap2', 'cldma' or 'ledger' for a regular file (SPEC §12), else _NotRecognised with the reason"""
+    with open(path, "rb") as fh:
+        raw = fh.read(_AUTO_JSON_LIMIT + 1)
+    whole_read = len(raw) <= _AUTO_JSON_LIMIT
+    rows, whole = [], _NO_JSON
+    if whole_read:
+        try:
+            whole = _json_value(_utf8(raw, "the file"), "the file")
+        except _NotRecognised:
+            pass   # not one JSON document (whole stays _NO_JSON): it can still be a ledger
+        if isinstance(whole, dict):
+            fmt = whole.get("evidence_format")
+            if isinstance(fmt, str) and fmt.startswith("ap2-evidence"):
+                rows.append("ap2")
+            if "root_hash" in whole and "metric_id" in whole:
+                rows.append("cldma")
+    lines = raw.split(b"\n")
+    if not whole_read:
+        if len(lines) == 1:
+            raise _NotRecognised("the file is larger than 64 MiB and its first line longer than 64 MiB")
+        lines = lines[:-1]   # the last piece read may be a cut line
+    first = None
+    for i, line in enumerate(lines):
+        text = _utf8(line, f"line {i + 1}")
+        if text.strip(" \t\r"):
+            first = text
+            break
+    if first is None:
+        raise _NotRecognised("the file is empty or blank" if whole_read else "no non-blank line in the first 64 MiB")
+    try:
+        entry = _json_value(first, "the first non-blank line")
+    except _NotRecognised as e:
+        entry, why_not_ledger = _NO_JSON, str(e)
+    else:
+        why_not_ledger = ("the first non-blank line is " + _json_kind(entry) if not isinstance(entry, dict) else
+                          "the first non-blank line is a JSON object without " + " and ".join(
+                              k for k in ("prev_hash", "self_hash") if k not in entry))
+    if isinstance(entry, dict) and "prev_hash" in entry and "self_hash" in entry:
+        rows.append("ledger")
+    if len(rows) > 1:
+        raise _NotRecognised("ambiguous: the file matches " + " and ".join(rows) + "; name the verifier")
+    if rows:
+        return rows[0]
+    if isinstance(whole, dict):
+        keys = sorted(whole)
+        shown = ", ".join(json.dumps(k, ensure_ascii=True) for k in keys[:8]) + (", ..." if len(keys) > 8 else "")
+        raise _NotRecognised(f"the file is a JSON object of another kind (members: {shown or 'none'})")
+    if whole is not _NO_JSON:
+        raise _NotRecognised("the file is " + _json_kind(whole))
+    raise _NotRecognised(why_not_ledger)
+
+
+def _json_kind(v) -> str:
+    return {list: "a JSON array", str: "a JSON string", bool: "a JSON boolean", type(None): "JSON null",
+            int: "a JSON number", float: "a JSON number", dict: "a JSON object"}.get(type(v), "a JSON value")
+
+
 def verify_auto(path: str) -> dict:
-    """Rileva il tipo dell'artefatto e instrada al verificatore giusto."""
-    if os.path.isdir(path):
+    """Route the artefact to its verifier by the closed list of SPEC §12, or refuse it with the reason (v0.7: until
+    then every file that was not AP2 or CLDMA went to the ledger verifier, and a JSON document of another kind was
+    answered with json_decode errors per line)."""
+    import stat
+    try:
+        mode = os.stat(path).st_mode
+    except OSError as e:
+        return _not_recognised(f"cannot read the path ({type(e).__name__}: {e.strerror or e})")
+    if stat.S_ISDIR(mode):
         if os.path.exists(os.path.join(path, "MANIFEST.json")):
             return verify_pack(path)
-        # archivio ingest: cerca un HEAD o segmenti
         import glob
-        if glob.glob(os.path.join(path, "*.head.json")) or glob.glob(os.path.join(path, "*-*.jsonl")):
+        if glob.glob(os.path.join(glob.escape(path), "*.head.json")) or glob.glob(os.path.join(glob.escape(path), "*-*.jsonl")):
             return verify_archive(path)
-        return _rollup("auto", [_layer("auto-detect", "FAIL",
-                                       "directory non riconosciuta (né pack né archivio)")])
-    # file: sniff del contenuto
+        return _not_recognised("a directory with neither MANIFEST.json (evidence pack) nor *.head.json / *-*.jsonl "
+                               "(ingest archive)")
+    if not stat.S_ISREG(mode):
+        return _not_recognised("neither a directory nor a regular file (for a pipe use `cryptovalid-verify ledger`)")
     try:
-        with open(path, encoding="utf-8") as f:
-            head = f.read(2048)
+        fmt = _file_format(path)
+    except _NotRecognised as e:
+        return _not_recognised(str(e))
     except OSError as e:
-        return _rollup("auto", [_layer("auto-detect", "FAIL", str(e))])
-    if '"evidence_format"' in head and "ap2-evidence" in head:
-        return verify_ap2(path)
-    if '"root_hash"' in head and ('"metric_id"' in head or "CLDMA" in head):
-        return verify_cldma(path)
-    if head.lstrip().startswith("{") and _top_level_evidence_format(path).startswith("ap2-evidence"):
-        # 0.18.0: an AP2 pack is one JSON object whose keys are sorted, so `artifacts` comes first and `evidence_format`
-        # can sit past the 2048-byte sniff (measured 2026-10-05: 2 artifacts built by `ap2-evidence build` put it at
-        # byte 3506; `auto` then verified the file as a ledger and said FAIL on a valid pack).
-        return verify_ap2(path)
-    return verify_ledger(path)
-
-
-def _top_level_evidence_format(path: str, limit: int = 64 * 1024 * 1024) -> str:
-    """The `evidence_format` of a single JSON object file, "" when the file is not one (or is larger than `limit`)."""
-    try:
-        if os.path.getsize(path) > limit:
-            return ""
-        with open(path, encoding="utf-8") as f:
-            obj = json.load(f)
-    except (OSError, ValueError, RecursionError):
-        return ""
-    fmt = obj.get("evidence_format") if isinstance(obj, dict) else None
-    return fmt if isinstance(fmt, str) else ""
+        return _not_recognised(f"cannot read the file ({type(e).__name__}: {e.strerror or e})")
+    return {"ap2": verify_ap2, "cldma": verify_cldma, "ledger": verify_ledger}[fmt](path)
 
 
 def _rollup(kind: str, layers: list) -> dict:
@@ -341,7 +420,8 @@ def _rollup(kind: str, layers: list) -> dict:
 
 
 _COMMANDS = {
-    "auto": "detect what the path is and verify it with the command below that fits",
+    "auto": "recognise the path by the closed list of SPEC §12 and verify it with the command below\n"
+            "           that fits; anything else is refused as 'format not recognised', with the reason",
     "pack": "evidence pack directory (evidence_pack.py)",
     "archive": "ingest archive directory: segments, Merkle STH, signed HEAD (experimental)",
     "ledger": "hash chain of a .jsonl ledger only",

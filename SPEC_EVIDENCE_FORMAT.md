@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.6 (2026-11-13; v0.5 2026-10-19)
+# CryptoValid Evidence Format — candidate standard v0.7 (unreleased; v0.6 2026-11-13, v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -208,7 +208,7 @@ exits 74 and writes no pack (until 0.21.0 it wrote the pack unanchored). The led
 change. The JSON tree head (`cryptovalid_sth/1`) and the COSE receipts of `cryptovalid_receipt.py` refuse keys of small or
 mixed order and R of small order by the same rule (until 0.21.0 the neutral point with R neutral and S = 0 was
 `signature_valid: true` for any tree head).
-v0.6 (2026-11-13, unreleased) adds §11, the profile for checking an RFC 3161 token, used by the ingest's verify, the
+v0.6 (2026-11-13, cryptovalid-opencore 0.23.0) adds §11, the profile for checking an RFC 3161 token, used by the ingest's verify, the
 ingest's seal, `eidas_ledger_check.py`, the inclusion receipt of `cryptovalid_receipt.py`, the rfc3161 domain of
 `cryptovalid_heterogeneous.py` and the LOTL qualification. Not additive: until v0.5 a token "bound" a digest when the
 bytes `04 20 <digest>` appeared anywhere in it and a CMS signature verified with any certificate the blob carried, so a
@@ -216,6 +216,10 @@ CMS blob signed with a key made on the spot, whose content is only that OCTET ST
 (`timestamped_segments`, `record_con_token_rfc3161`); and the LOTL called a token qualified when any certificate it
 carried was a QTST certificate, signer or not. From v0.6 such tokens are refused or not counted (§11). §3 corrects the
 sentence on RFC 8785. The ledger format (§2–§5), its hashes and its vectors do not change.
+v0.7 (unreleased) adds §12, the closed list of what `cryptovalid-verify auto` recognises. Not additive for that command: until
+v0.6 every file that was not an AP2 pack or a CLDMA attestation was verified as a ledger, so a JSON document of another
+kind (measured on 2026-11-14 with the `cra_pack.json` of omega-cra-evol 0.10.0) was answered with the ledger's line-by-line
+`json_decode` errors instead of "not recognised". The ledger format (§2–§5), its hashes and its vectors do not change.
 
 ## 7. Conformance (normative)
 
@@ -392,3 +396,30 @@ signing-certificate attribute, the extended key usage, the `tsa` field and the c
 Vectors: `spec/vectors/rfc3161/` — tokens of public TSAs requested on 2026-11-13 over one digest, with their source and
 time, and negative tokens (a CMS blob whose content is the digest's OCTET STRING, a token for another digest, a token whose
 content is not a TSTInfo, a token with its signature altered); `manifest.json` gives the expected outcome of each.
+
+## 12. What `cryptovalid-verify auto` recognises (NORMATIVE since v0.7)
+
+`auto` routes a path to one verifier of the list below, or refuses it with the reason; it never guesses. The list is
+closed: anything else is "format not recognised" (`kind: "auto"`, one `auto-detect` layer with status FAIL whose detail
+starts `format not recognised:` and names the reason; exit 1).
+
+| Path | Recognised as | Verifier |
+|---|---|---|
+| directory holding `MANIFEST.json` | evidence pack | `pack` (§10) |
+| directory holding a `*.head.json` or a `*-*.jsonl` file | ingest archive | `archive` |
+| regular file whose whole content is one JSON object with a string `evidence_format` that starts with `ap2-evidence` | AP2 evidence | `ap2` |
+| regular file whose whole content is one JSON object holding the members `root_hash` and `metric_id` | CLDMA attestation | `cldma` |
+| regular file whose first non-blank line is one JSON object holding the members `prev_hash` and `self_hash` (§2) | ledger | `ledger` (§5) |
+
+Read as follows. A file is read whole, as UTF-8 without a byte order mark, up to 64 MiB for the two JSON documents; a larger
+file can only be a ledger, and its first line is read up to 64 MiB. "Blank" is a line of spaces, tabs and a carriage
+return only. A file that matches two rows (an object that is a one-line ledger and also an AP2 or CLDMA document) is
+refused as ambiguous, with the rows named: the caller then names the verifier. Refused, each with its reason: a path that
+does not exist or cannot be read; anything that is neither a directory nor a regular file (a pipe, a device: `ledger`
+reads a pipe); an empty or blank file; bytes that are not UTF-8; a JSON value other than those of the table (an array, a
+string, an object with other members); a first line that is not a JSON object (a document written over several lines,
+binary data); JSON nested deeper than the parser allows.
+
+Recognised is not valid: the row's verifier then gives the verdict, as when it is named directly. A ledger whose first
+line is damaged so that it no longer holds `prev_hash` and `self_hash` is not recognised; `cryptovalid-verify ledger`
+names the failure of each line.

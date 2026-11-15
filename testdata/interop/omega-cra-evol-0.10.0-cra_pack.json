@@ -1,0 +1,27 @@
+{
+ "generated_utc": "2026-11-13T21:41:21+00:00",
+ "honest_scope": "firm-side evidence locker: proves that these records existed, in this order, unchanged since (hash chain, offline-verifiable); it is NOT a conformity assessment, NOT CE marking, NOT the official CSIRT/ENISA channel (the SRP is a human portal), NOT an objective time anchor unless an RFC 3161 / OTS token is attached",
+ "kind": "cra_evidence_pack/1",
+ "ledger_entries": 1,
+ "ledger_file": "omega-cra-evol-0.10.0-cra.ledger.jsonl",
+ "ledger_last_self_hash": "8fc8166335418e2b31df5d27d55147797b02b40199bd19b2aa1aa5b40508a973",
+ "legal_basis": "Reg. (EU) 2024/2847 (Cyber Resilience Act): Annex I Part II(1) SBOM; Art. 14(2) actively exploited vulnerability (early warning 24 h, notification 72 h, final report 14 days after a corrective or mitigating measure is available); Art. 14(4) severe incident (24 h, 72 h, final report one month after the submission of the incident notification) \u2014 reporting obligations applying from 11 September 2026 (Art. 71); technical documentation and EU declaration of conformity kept at least 10 years after placing on the market or for the support period, whichever is longer (Art. 13(13))",
+ "pack_sha3": "2ebe0ed72e7c7c06e3fe1cd05dc273aa71f7012ad7932a8587c7c4f8f1982f50",
+ "product_id": "omega-cra-evol",
+ "product_version": "0.10.0",
+ "record_counts": {
+  "cra_sbom": 1
+ },
+ "retention": {
+  "minimum_years": 10,
+  "rule": "10 years after placing on the market or the support period, whichever is longer (Art. 13(13))",
+  "support_period_end_utc": null
+ },
+ "retention_years": 10,
+ "verification": {
+  "chain_ok": true,
+  "entries": 1,
+  "record_digests_bound": true,
+  "records_checked": 1
+ }
+}
