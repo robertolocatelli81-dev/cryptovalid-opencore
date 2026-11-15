@@ -28,6 +28,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import cryptovalid_tsa as T  # noqa: E402
 
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an error
+    import cryptography  # noqa: F401
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+
 V = os.path.join(HERE, "spec", "vectors", "rfc3161")
 OPENSSL = shutil.which("openssl")
 CLOSED = {"malformed", "not_signed_data", "response_not_granted", "econtent_type_not_tstinfo", "tstinfo_unknown_element",
@@ -183,6 +192,7 @@ class TestTheDefectOf0220(unittest.TestCase):
         r = T.verify_token(self.forged, DIGEST, "sha256", [os.path.join(V, "digicert.signer.pem")])
         self.assertEqual((r["status"], r["reason"], r["counts_as_timestamp"]), ("invalid", "malformed", False))
 
+    @NEEDS_CRYPTO
     def test_lotl_reads_the_signer_not_the_carried_certificates(self):
         import cryptovalid_lotl as L
         pem = _read("digicert.signer.pem").decode()

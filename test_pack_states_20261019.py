@@ -36,6 +36,9 @@ def _crypto():
         return False
 
 
+NEEDS_CRYPTO = unittest.skipUnless(_crypto(), "needs `cryptography` (the `sign` extra)")
+
+
 def _mldsa():
     try:
         from cryptography.hazmat.primitives.asymmetric import mldsa  # noqa: F401
@@ -439,6 +442,7 @@ class TestIngestSmallOrder(unittest.TestCase):
             shutil.rmtree(d, True)
 
 
+@NEEDS_CRYPTO
 class TestIngestTreeHeadTypes(unittest.TestCase):
     def test_a_tree_head_signer_of_any_json_type_is_named_never_a_traceback(self):
         # NEMESIS 19/10/2026: an STH `signer` that is a list or an object was a TypeError traceback (0.21.0 and the 0.22.0
@@ -486,6 +490,7 @@ def _mixed_key(a, t_enc):
     return encode(add(scalar_mul(a, decode(bytes.fromhex("58" + "66" * 31))), decode(t_enc)))
 
 
+@NEEDS_CRYPTO
 class TestReceiptSmallOrder(unittest.TestCase):
     """NEMESIS 19/10/2026: cryptovalid_receipt (JSON `cryptovalid_sth/1` and the COSE receipts, formats of this project)
     verified Ed25519 with the library's rule: the neutral point with R neutral and S = 0 was `signature_valid: true` for
@@ -543,6 +548,7 @@ class TestReceiptSmallOrder(unittest.TestCase):
             shutil.rmtree(d, True)
 
 
+@NEEDS_CRYPTO
 class TestIngestSignatureRead(unittest.TestCase):
     def test_tree_head_signature_checked_and_signer_read_strictly(self):
         # NEMESIS 19/10/2026: a genuine signature passes; the same signer in capitals, or one byte of S changed, is

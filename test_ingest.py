@@ -18,11 +18,15 @@ import cryptovalid_ingest as ing  # noqa: E402
 import cryptovalid_merkle as merkle  # noqa: E402
 import verifier  # noqa: E402
 
-try:
+try:   # the library itself: `import signer` succeeds without it (signer imports cryptography lazily), so it is no proxy
+    import cryptography  # noqa: F401
     import signer
     _HAVE_CRYPTO = True
-except (ImportError, RuntimeError):  # pragma: no cover
+except ImportError:  # pragma: no cover
     _HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not _HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(_HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
 
 
 class TestIngestBasic(unittest.TestCase):
@@ -208,6 +212,7 @@ class TestCrashRecovery(unittest.TestCase):
                 ing.Ingestor(segment_with(extra, tamper=True), batch_size=5)
 
 
+@NEEDS_CRYPTO
 @unittest.skipUnless(_HAVE_CRYPTO, "requires 'cryptography'")
 class TestSignedSth(unittest.TestCase):
     def setUp(self):
@@ -658,6 +663,7 @@ class TestConcurrencyAndThroughput(unittest.TestCase):
         self.assertGreater(eps, 1000, "floor conservativo: sotto 1000 ev/s c'è un problema reale")
 
 
+@NEEDS_CRYPTO
 class TestIngestSignedTip(unittest.TestCase):
     """The production writer maintains the signed chain tip (council 15/09/2026): after every flush the active
     segment's `<segment>.tip.json` matches the file; the snapshot verifier sees a truncated tail; the tip is

@@ -15,6 +15,15 @@ sys.path.insert(0, _HERE)
 import signer  # noqa: E402
 import verifier  # noqa: E402
 
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an error
+    import cryptography  # noqa: F401
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+
 
 def _make_ledger(path):
     import hashlib
@@ -35,6 +44,7 @@ def _make_ledger(path):
             f.write(json.dumps(e) + "\n")
 
 
+@NEEDS_CRYPTO
 class TestSigner(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()

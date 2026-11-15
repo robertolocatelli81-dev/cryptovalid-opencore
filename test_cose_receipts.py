@@ -13,10 +13,17 @@ import cryptovalid_merkle as M  # noqa: E402
 import cryptovalid_receipt as R  # noqa: E402
 from cryptovalid_scitt import TAG_COSE_SIGN1, _sig1  # noqa: E402
 
-from cryptography.hazmat.primitives import hashes, serialization as ser  # noqa: E402
-from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
-from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature  # noqa: E402
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an import error
+    from cryptography.hazmat.primitives import hashes, serialization as ser
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
 
 PAYLOAD = b'{"artifact":"x","v":1}'
 
@@ -70,6 +77,7 @@ def _ccf_receipt(sk, alg, entry, flip_side=False, extra_proof=None, detached=Tru
                  {396: {-1: proofs}}, h, detached)
 
 
+@NEEDS_CRYPTO
 class Base(unittest.TestCase):
     def setUp(self):
         self.isk, self.lsk = _key(C.ALG_ES256), _key(C.ALG_ES384)

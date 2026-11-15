@@ -51,10 +51,21 @@ jobs:
       - name: Conformance — the reference verifier MUST match every test vector
         run: python3 conformance.py
 
-      - name: "Without cryptography (this Python) — parsing and NON_VERIFICATA paths of the witness suite in a clean venv"
+      - name: "Without cryptography (this Python) — every suite green in a clean venv, the cases that need it skipped with the reason"
         run: |
           python3 -m venv --without-pip "$RUNNER_TEMP/nocrypto"
           if "$RUNNER_TEMP/nocrypto/bin/python" -c "import cryptography" 2>/dev/null; then echo "::error::venv has cryptography"; exit 1; fi
+          ran=0; skipped=0
+          for t in test_*.py; do
+            if ! "$RUNNER_TEMP/nocrypto/bin/python" "$t" > "$RUNNER_TEMP/nc_one.txt" 2>&1; then
+              cat "$RUNNER_TEMP/nc_one.txt"; echo "::error::$t is red without cryptography (it must skip what needs it)"; exit 1
+            fi
+            r=$(grep -oE '^Ran [0-9]+' "$RUNNER_TEMP/nc_one.txt" | tail -1 | grep -oE '[0-9]+' || echo 0)
+            s=$(grep -oE 'skipped=[0-9]+' "$RUNNER_TEMP/nc_one.txt" | tail -1 | grep -oE '[0-9]+' || echo 0)
+            ran=$((ran + r)); skipped=$((skipped + s))
+          done
+          echo "without cryptography: $ran tests, $skipped skipped, $((ran - skipped)) executed"
+          test $((ran - skipped)) -gt 0
           "$RUNNER_TEMP/nocrypto/bin/python" test_cryptovalid_witness.py 2>&1 | tee "$RUNNER_TEMP/nocrypto.txt"
           python3 -c "import re,sys; t=open('$RUNNER_TEMP/nocrypto.txt').read(); ran=re.search(r'^Ran (\d+) tests', t, re.M); sk=re.search(r'skipped=(\d+)', t); ok=re.search(r'^OK', t, re.M); sys.exit(0 if ran and ok and int(ran.group(1)) > int(sk.group(1) if sk else 0) else 1)" || { echo "::error::no test actually ran without cryptography"; exit 1; }
 

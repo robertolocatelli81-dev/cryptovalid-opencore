@@ -87,6 +87,9 @@ def _crypto():
         return False
 
 
+NEEDS_CRYPTO = unittest.skipUnless(_crypto(), "needs `cryptography` (the `sign` extra)")
+
+
 class _Tmp(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp(prefix="cv-review-")
@@ -423,6 +426,7 @@ class TestWriter(_Tmp):
         os.close(w)
         return r, p
 
+    @NEEDS_CRYPTO
     def test_waits_in_the_kernel_not_spinning(self):
         big = big_unsigned(self.d)
         r, p = self._nonblocking([os.path.join(HERE, "signer.py"), "verify", big])
@@ -458,6 +462,7 @@ class TestWriter(_Tmp):
         self.assertLess(spent, 0.1, "the writer spent CPU while waiting for a full pipe (a loop instead of a wait)")
         self.assertTrue(json.loads(data))
 
+    @NEEDS_CRYPTO
     def test_last_flush_waited_for(self):
         big = big_unsigned(self.d)
         for _ in range(3):

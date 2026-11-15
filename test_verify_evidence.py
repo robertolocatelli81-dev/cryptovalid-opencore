@@ -13,8 +13,19 @@ import unittest
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 import verify_evidence as VE  # noqa: E402
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an import error
+    from cryptography.hazmat.primitives import hashes as _hashes
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature as _dds
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
 
 
+@NEEDS_CRYPTO
 class TestPackLayer(unittest.TestCase):
     def setUp(self):
         import evidence_pack
@@ -73,9 +84,6 @@ except ImportError:
 # They were in test_ap2_evidence.py until 0.17.2; that file went to ap2-evidence-pack with the module it tested.
 import base64 as _b64
 import hashlib as _hl
-from cryptography.hazmat.primitives import hashes as _hashes
-from cryptography.hazmat.primitives.asymmetric import ec as _ec
-from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature as _dds
 
 
 def _b64u(b: bytes) -> str:

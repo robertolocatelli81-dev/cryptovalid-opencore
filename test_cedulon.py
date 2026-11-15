@@ -14,8 +14,15 @@ import cryptovalid_cedulon as V  # noqa: E402
 import cryptovalid_receipt as R  # noqa: E402
 from cryptovalid_acta import jcs  # noqa: E402
 
-from cryptography.hazmat.primitives import serialization as ser  # noqa: E402
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an import error
+    from cryptography.hazmat.primitives import serialization as ser
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
 
 H = lambda s: hashlib.sha256(s.encode()).hexdigest()  # noqa: E731
 
@@ -98,6 +105,7 @@ class Ledger:
         return V.verify_ledger(*self.render(**kw), _pem(self.rk), _pem(self.xk), _pem(self.ck), clock_skew_ms=clock_skew_ms)
 
 
+@NEEDS_CRYPTO
 class TestCedulon(unittest.TestCase):
     def setUp(self):
         self.L = Ledger()
@@ -368,6 +376,7 @@ class VeraxLedger:
                                inputs_text=inp, index_text=idx, operator_credentials=creds)
 
 
+@NEEDS_CRYPTO
 class TestVeraxStages(unittest.TestCase):
     def setUp(self):
         self.L = VeraxLedger()

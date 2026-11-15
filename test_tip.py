@@ -6,11 +6,14 @@ import hashlib, json, os, shutil, sys, tempfile, unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import verifier as V
 import cryptovalid_tip as T
-try:
+try:   # the library itself: `import signer` succeeds without it (signer imports cryptography lazily), so it is no proxy
+    import cryptography  # noqa: F401
     import signer
     HAVE_CRYPTO = True
-except Exception:  # noqa: BLE001
+except ImportError:
     HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
 
 
 def _canon(e):
@@ -31,7 +34,7 @@ def _write(path, entries):
             f.write(json.dumps(e) + "\n")
 
 
-@unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
+@unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
 class TestTip(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(); self.led = os.path.join(self.tmp, "l.jsonl")

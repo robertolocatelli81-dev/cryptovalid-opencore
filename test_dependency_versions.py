@@ -64,7 +64,7 @@ class TestDependencyVersions(unittest.TestCase):
     def test_readme_states_the_same_range(self):
         lo, hi = bounds(extra("ap2"), "ap2-evidence-pack")
         text = " ".join(_read("README.md").split())
-        self.assertIn(f"installs ap2-evidence-pack >= {lo}, < {hi} from the same index", text)
+        self.assertIn(f"installs ap2-evidence-pack >= {lo}, < {hi} from PyPI", text)
 
     def test_cryptography_floor_is_the_same_everywhere(self):
         lo, _ = bounds(extra("sign"), "cryptography")

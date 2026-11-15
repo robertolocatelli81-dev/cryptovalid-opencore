@@ -10,10 +10,20 @@ import unittest
 import cryptovalid_receipt as R
 import signer
 
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an error
+    import cryptography  # noqa: F401
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+
 SAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "examples", "sample_ledger.jsonl")
 MISSING = object()
 
 
+@NEEDS_CRYPTO
 class TestDeclaredIdentifiers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -11,8 +11,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cryptovalid_aps as A  # noqa: E402
 from cryptovalid_acta import jcs  # noqa: E402
 
-from cryptography.hazmat.primitives import serialization as ser  # noqa: E402
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an import error
+    from cryptography.hazmat.primitives import serialization as ser
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
 
 NATIVE = {"agentId": "did:aps:zA", "actionType": "doc.sign", "scopeRequired": ["repo:write", "admin"], "timestamp": "2026-07-10T00:00:00Z"}
 PAYLOAD = {"amount": "10", "to": "x"}
@@ -84,6 +91,7 @@ class TestActionRefs(unittest.TestCase):
                     A.external_action_ref(b)
 
 
+@NEEDS_CRYPTO
 class TestAccountabilityRecord(unittest.TestCase):
     def setUp(self):
         self.sk = Ed25519PrivateKey.generate()

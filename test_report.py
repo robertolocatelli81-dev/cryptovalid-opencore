@@ -18,6 +18,15 @@ import evidence_pack  # noqa: E402
 import signer  # noqa: E402
 from test_evidence_pack import _make_ledger  # noqa: E402  (same fixture, no duplication)
 
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an error
+    import cryptography  # noqa: F401
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+
 try:
     import weasyprint  # noqa: F401
     _HAVE_WEASY = True
@@ -46,6 +55,7 @@ class _Base(unittest.TestCase):
                 f.write(json.dumps(x) + "\n")
 
 
+@NEEDS_CRYPTO
 class TestBenchCanFail(_Base):
     """Controllo positivo del banco: PRIMA dimostriamo che una manomissione produce ROSSO."""
 
@@ -64,6 +74,7 @@ class TestBenchCanFail(_Base):
 
 
 class TestReportPositive(_Base):
+    @NEEDS_CRYPTO
     def test_valid_pack_yields_green_report(self):
         r = report.generate_report(self.pack, html_only=True)
         self.assertTrue(r["valid"])
@@ -79,10 +90,12 @@ class TestReportPositive(_Base):
         self.assertIn("NOT CHECKED", doc)                     # LOTL non chiesto -> nessun verde finto
         self.assertEqual(len(r["report_sha256"]), 64)
 
+    @NEEDS_CRYPTO
     def test_lotl_not_run_by_default(self):
         r = report.generate_report(self.pack, html_only=True)
         self.assertFalse(r["eidas"]["checked"])               # rete solo opt-in
 
+    @NEEDS_CRYPTO
     def test_lotl_history_error_is_inconclusive(self):
         # 0.21.0, ETSI TS 119 615 PRO-4.3.4-03A: neither QUALIFIED nor NOT QUALIFIED
         import base64 as _b64
@@ -107,6 +120,7 @@ class TestReportPositive(_Base):
         with open(r["pdf"], "rb") as f:
             self.assertEqual(f.read(5), b"%PDF-")
 
+    @NEEDS_CRYPTO
     def test_html_injection_escaped(self):
         mp = os.path.join(self.pack, "MANIFEST.json")
         man = json.load(open(mp))
@@ -118,6 +132,7 @@ class TestReportPositive(_Base):
         self.assertFalse(r["valid"])                           # e il pack manomesso resta ROSSO
 
 
+@NEEDS_CRYPTO
 class TestReviewFollowups(_Base):
     """Rifiniture della review avversariale pre-publish (17/08): injection su pack
     VERDE, degrade pulito su manifest assente/corrotto."""
@@ -155,6 +170,7 @@ class TestReviewFollowups(_Base):
         self.assertIn("MANIFEST.json unreadable", r.get("error", ""))
 
 
+@NEEDS_CRYPTO
 class TestNoRendererVerdict(_Base):
     """Invariante: il renderer non possiede un verdetto suo — riflette verify_pack()."""
 

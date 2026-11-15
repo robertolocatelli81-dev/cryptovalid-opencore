@@ -24,11 +24,21 @@ except ImportError:
     ap2_evidence = None
 import signer  # noqa: E402
 
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an error
+    import cryptography  # noqa: F401
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+
 
 def _flip(b):
     return b[:-1] + bytes([b[-1] ^ 1])
 
 
+@NEEDS_CRYPTO
 class TestCoseAndScittProofIntegers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -76,6 +86,7 @@ class TestCoseAndScittProofIntegers(unittest.TestCase):
 
 
 class TestStrictBase64url(unittest.TestCase):
+    @NEEDS_CRYPTO
     def test_jws_signature_segment(self):
         d = tempfile.mkdtemp()
         key = os.path.join(d, "k.key"); signer.keygen(key)

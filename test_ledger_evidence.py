@@ -29,6 +29,9 @@ try:
     HAVE_CRYPTO = True
 except ImportError:
     HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
 
 
 def _entries(path):
@@ -410,6 +413,7 @@ class TestCallersFollowTheVerdict(unittest.TestCase):
         self.assertTrue(MON.run(p, os.path.join(d, "state.json"))["ok"])
 
 
+@NEEDS_CRYPTO
 class TestJWS(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="jws_")

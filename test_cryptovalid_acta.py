@@ -15,6 +15,7 @@ except ImportError:
     HAVE_CRYPTO = False
     if os.environ.get("CV_REQUIRE_CRYPTO"):
         raise SystemExit("CV_REQUIRE_CRYPTO=1 but cryptography is missing")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
 SEED = "0000000000000000000000000000000000000000000000000000000000000001"
 PUB_HEX = "4cb5abf6ad79fbf5abbccafcc269d85cd2651ed4b885b5869f241aedf0a5ba29"       # fixtures/keys/README.md of the vectors repo
 KID = "sb:issuer:6ASf5EcmmEHT"                                                     # base58 2.1.1 gives the same 12 characters
@@ -309,11 +310,13 @@ class KeyValidityWindow(unittest.TestCase):
                                                   "sig": sk.sign(A.jcs(body)).hex()}}
         return receipt, kid, pk
 
+    @NEEDS_CRYPTO
     def test_inside_the_window_is_accepted(self):
         r, kid, pk = self._signed("2026-03-15T12:00:00Z")
         keys = {kid: {"key": pk, "valid_from": "2026-01-01T00:00:00Z", "valid_until": "2026-06-01T00:00:00Z"}}
         self.assertTrue(A.verify_receipt(r, keys)["ok"])
 
+    @NEEDS_CRYPTO
     def test_after_the_window_is_refused(self):
         r, kid, pk = self._signed("2026-07-15T12:00:00Z")
         keys = {kid: {"key": pk, "valid_from": "2026-01-01T00:00:00Z", "valid_until": "2026-06-01T00:00:00Z"}}
@@ -321,11 +324,13 @@ class KeyValidityWindow(unittest.TestCase):
         self.assertFalse(out["ok"])
         self.assertIn("§9.2", out["why"])
 
+    @NEEDS_CRYPTO
     def test_before_the_window_is_refused(self):
         r, kid, pk = self._signed("2025-12-31T23:59:59Z")
         keys = {kid: {"key": pk, "valid_from": "2026-01-01T00:00:00Z"}}
         self.assertFalse(A.verify_receipt(r, keys)["ok"])
 
+    @NEEDS_CRYPTO
     def test_the_end_of_the_window_is_exclusive(self):
         # The draft states the SHOULD and nothing about boundaries. [from, until) is the only reading under which
         # two consecutive keys do not both own the instant of a rotation; this test pins the choice so it cannot
@@ -336,6 +341,7 @@ class KeyValidityWindow(unittest.TestCase):
         keys_next = {kid: {"key": pk, "valid_from": "2026-06-01T00:00:00Z"}}
         self.assertTrue(A.verify_receipt(r, keys_next)["ok"])
 
+    @NEEDS_CRYPTO
     def test_without_a_window_nothing_changes(self):
         # §9.2 applies "when available": a relying party that supplies no window must see the previous behaviour,
         # in both the bare and the dict form.
@@ -343,6 +349,7 @@ class KeyValidityWindow(unittest.TestCase):
         self.assertTrue(A.verify_receipt(r, {kid: pk})["ok"])
         self.assertTrue(A.verify_receipt(r, {kid: {"key": pk}})["ok"])
 
+    @NEEDS_CRYPTO
     def test_a_leap_second_is_compared_and_not_skipped(self):
         # `_valid_instant` accepts :60 because RFC 3339 allows the form; before this, parsing it failed and the
         # window check was skipped, so a receipt could pass a window it should have been compared against.
@@ -364,6 +371,7 @@ class KeyValidityWindow(unittest.TestCase):
         for t in ("2026-06-30T23:59:60Z", "2026-03-15T12:00:00.12Z", "2026-03-15T12:00:00.1234567Z"):
             self.assertEqual(A._valid_instant(t), A._instant(t) is not None, t)
 
+    @NEEDS_CRYPTO
     def test_an_extreme_date_gives_a_verdict_not_an_exception(self):
         # `.astimezone()` raised OverflowError on dates at the edges of the calendar, which `except ValueError`
         # did not catch: a traceback where the suite requires a verdict.
@@ -371,11 +379,13 @@ class KeyValidityWindow(unittest.TestCase):
         for t in ("9999-12-31T23:00:00-05:00", "0001-01-01T00:00:00+01:00"):
             self.assertIsInstance(A._outside_window(t, {"valid_until": "2026-01-01T00:00:00Z"}), (tuple, type(None)), t)   # (kind, reason) since 26/09
 
+    @NEEDS_CRYPTO
     def test_an_uncomparable_instant_refuses_when_a_window_is_declared(self):
         r, kid, pk = self._signed("2026-03-15T12:00:00Z")
         self.assertIsNotNone(A._outside_window("not-an-instant", {"valid_until": "2026-06-01T00:00:00Z"}))
         self.assertIsNone(A._outside_window("not-an-instant", {"key": pk}))   # nessuna finestra: nulla da confrontare
 
+    @NEEDS_CRYPTO
     def test_a_malformed_window_refuses_rather_than_ignoring_it(self):
         r, kid, pk = self._signed("2026-03-15T12:00:00Z")
         keys = {kid: {"key": pk, "valid_until": "not-an-instant"}}
@@ -412,6 +422,7 @@ class VendoredVectorsAreTheOnesPublished(unittest.TestCase):
             self.assertEqual(got, want, f"{name} no longer matches the bytes we vendored")
 
 
+@NEEDS_CRYPTO
 class AbsenceSideOfTheVerdict(unittest.TestCase):
     """A missing tool on this host must not be reported with the same verdict value as a bad signature.
 
@@ -816,6 +827,7 @@ class MalformedInputsFound20260925(unittest.TestCase):
         self.assertEqual(self._cli(self._write("s.json", shallow), "--key", f"{self.kid}={self.pk.hex()}")[0], 0)
 
 
+@NEEDS_CRYPTO
 class SmallOrderKeys20260925(unittest.TestCase):
     """A small-order Ed25519 key makes R=identity, S=0 a signature on EVERY message, and OpenSSL accepts it (measured
     25/09/2026, 4-mind review round 2, finding A1). Red before the check: the forged receipt passed."""

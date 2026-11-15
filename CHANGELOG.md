@@ -9,6 +9,15 @@ run by the same author, not by a third party.
 
 ## Unreleased
 
+- **Every suite green without `cryptography`.** Without the `sign` extra 20 of the 66 suites broke instead of skipping
+  (5 at import, 14 with errors, 1 with a failure; the same 20 on Python 3.9.25 and 3.11.2, measured 15/11/2026), and two
+  suites (`test_ingest.py`, `test_tip.py`) decided that the library was present from `import signer`, which succeeds
+  without it. The cases that need the library are now skipped with the reason "needs `cryptography` (the `sign`
+  extra)"; with `CV_REQUIRE_CRYPTO=1` each of these suites exits non-zero when the library is missing, so the jobs that
+  install it cannot pass on skips (with cryptography the skipped tests are the same 13 of 789 as before). The CI job
+  without cryptography runs every suite and prints how many tests ran and how many were skipped (it ran only the
+  witness suite). `test_dependency_versions.py` reads "from PyPI" in the README, as the README says since the entry
+  "Install from PyPI" below (the test was red from that change).
 - **No commercial offer.** The README offered "a commercial licence of the same code", while SECURITY.md declares the
   project non-commercial open source; it now states that no commercial licence, paid pilot or support contract is
   offered at present (free and open-source software, without warranty as the licence states). ECOSYSTEM_FIT.md welcomes

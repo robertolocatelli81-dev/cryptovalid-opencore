@@ -21,6 +21,15 @@ import sys
 import tempfile
 import unittest
 
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an error
+    import cryptography  # noqa: F401
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PY = sys.executable
 SAMPLE = os.path.join(HERE, "examples", "sample_ledger.jsonl")
@@ -124,6 +133,7 @@ class TestVerifierPy(_Base):
             rc, _, _ = run([PY, os.path.join(HERE, "verifier.py"), path], "devfull", stderr_devfull=True)
             self.assertEqual(rc, EX_IOERR)
 
+    @NEEDS_CRYPTO
     def test_large_receipt_slow_reader_whole(self):
         # a receipt larger than a pipe buffer, read late, still arrives whole (exit 1 = the verdict). signer.py verify
         # names every unsigned entry (no cap): 3 000 entries, a receipt of about 220 KB

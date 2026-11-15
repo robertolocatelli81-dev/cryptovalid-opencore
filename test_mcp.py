@@ -17,6 +17,15 @@ sys.path.insert(0, _HERE)
 import signer  # noqa: E402
 from test_evidence_pack import _make_ledger  # noqa: E402
 
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an error
+    import cryptography  # noqa: F401
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+
 _SERVER = os.path.join(_HERE, "cryptovalid_mcp.py")
 
 
@@ -95,6 +104,7 @@ class TestMcpBenchFailsFirst(unittest.TestCase):
         self.assertIn("error", r)
 
 
+@NEEDS_CRYPTO
 class TestMcpPositive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
