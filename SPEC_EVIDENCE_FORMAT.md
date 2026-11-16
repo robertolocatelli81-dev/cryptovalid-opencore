@@ -1167,7 +1167,7 @@ not run (§10). `auto` (§12) does not change: a ledger carrying a payment entry
 
 Vectors: `spec/vectors/beacon/` — six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on
 2026-11-16 with their URLs and hashes (`README.md`), and a payment ledger derived from them by code
-(`test_beacon_20261116.py` rebuilds it and compares), and `conformance.json` with the inputs under `conformance/`: 45
+(`test_beacon_20261116.py` rebuilds it and compares), and `conformance.json` with the inputs under `conformance/`: 49
 cases with their expected status and reason (positive and negative, from the real pulses; pulses re-signed by a key made
 for the purpose where a check sits behind the signature; witnessed checkpoints) and 6 window cases (rule 8). Every
 refused or invalid input is derived from these by code (`make_conformance.py`), never written by hand.
