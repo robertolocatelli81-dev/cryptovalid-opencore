@@ -28,8 +28,10 @@ run by the same author, not by a third party.
     An IBAN is committed without spaces, in upper case, ASCII and passing ISO 7064 MOD 97-10; the rest in Unicode
     NFC. The provider keeps values and salts outside the ledger; `--disclosure` opens a commitment and
     `--require-disclosure` makes an opening required (`required_disclosure_missing`). Worded after EDPB Guidelines
-    02/2025 v2.0 §52: salted hashes remain personal data while the salt exists, and "should not be linkable" after it is
-    destroyed, under that paragraph's conditions;
+    02/2025 v2.0 §52: a salted hash "will also be considered personal data", and after the salt is deleted "should not be
+    linkable to the original data" under that paragraph's conditions. A committed or disclosed name uses only code points
+    assigned in Unicode 13.0.0, so that NFC gives the same bytes in every runtime (measured: with later code points
+    CPython 3.9, 3.13 and Node 22 disagree);
   - for each beacon value, the named pulse and its predecessor of NIST chain 2, version "2.0", in their closed grammar,
     against the beacon certificates the caller pins: signature (RSA PKCS#1 v1.5 SHA-512), outputValue, link, period,
     commitment, and the entry's value; the lower bound is the latest pulse;
@@ -71,6 +73,10 @@ run by the same author, not by a third party.
   rule 8, and 8 window cases, built by `make_conformance.py` with TSAs, CRLs, a trusted list and witnesses made for
   the purpose.
 - `bench/beacon_cost/`: the cost of one check, measured (below).
+- `test_beacon_review2_20261116.py`: 8 tests added after the second review (Unicode version of the commitments, a payee
+  entity as the only party identifier, a CRL entry extension and a freshestCRL extension, the scope sentences against
+  this SPEC, `ts` of one entry, the 1 MiB bound of one entry); each fails against the mutant or the defect it was written
+  for.
 - `test_beacon_20261116.py`: 90 tests, among them every pair of 15 faults of different steps (105 pairs: the code is
   always the earlier step's), the reviewer's 20-variants and 400-days case, one entry by its proof (and its control:
   the ledger's pack carries the other entries), the conformance cases; on 0.25.1 the file fails at its import (the
