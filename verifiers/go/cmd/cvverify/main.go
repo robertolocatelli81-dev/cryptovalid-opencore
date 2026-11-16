@@ -43,6 +43,10 @@ func main() {
 			os.Exit(2)
 		}
 	})
+	if *lid != "" && !cv.ValidLedgerID(*lid) { // SPEC v0.9 §17: a value that can match no ledger is a usage error
+		fmt.Fprintf(os.Stderr, "usage: -expect-ledger-id needs 64 lowercase hex characters, the self_hash of entry 0 (got %q)\n", *lid)
+		os.Exit(2)
+	}
 	if _, err := os.Stat(flag.Arg(0)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)

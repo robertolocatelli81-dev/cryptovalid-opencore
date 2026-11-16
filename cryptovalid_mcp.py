@@ -187,7 +187,7 @@ _TOOLS = {
         "fn": t_verify_ledger, "readonly": True,
         "description": ("Verify one hash-chained JSONL ledger (and its Ed25519 signatures "
                         "if present). READ-ONLY; returns verdict + provenance (path, SHA-256, UTC)."),
-        "schema": {"type": "object", "required": ["path"],
+        "schema": {"type": "object", "additionalProperties": False, "required": ["path"],
                    "properties": {"path": {"type": "string",
                                            "description": "path to the .jsonl ledger"}}}},
     "verify_pack": {
@@ -195,7 +195,7 @@ _TOOLS = {
         "description": ("Independently verify a CryptoValid evidence pack (file digests, "
                         "manifest, every ledger's chain+signatures, truncation guard, RFC 3161 "
                         "token). READ-ONLY, fail-closed; returns verdict + provenance."),
-        "schema": {"type": "object", "required": ["pack_dir"],
+        "schema": {"type": "object", "additionalProperties": False, "required": ["pack_dir"],
                    "properties": {"pack_dir": {"type": "string"}}}},
     "verify_ap2_evidence": {
         "fn": t_verify_ap2_evidence, "readonly": True,
@@ -203,7 +203,7 @@ _TOOLS = {
                         "SD-JWT mandates): digest, every ES256 signature with the SNAPSHOTTED "
                         "key material, disclosures, cross-artifact hash bindings, RFC 3161 token. "
                         "READ-ONLY, fail-closed; reports each key's provenance_class honestly."),
-        "schema": {"type": "object", "required": ["path"],
+        "schema": {"type": "object", "additionalProperties": False, "required": ["path"],
                    "properties": {"path": {"type": "string",
                                            "description": "path to the evidence .json file"}}}},
     "verify_archive": {
@@ -212,7 +212,7 @@ _TOOLS = {
                         "signed HEAD (tail guard), signatures against an optional trusted-signer "
                         "set, RFC 3161 anchors; optional eIDAS/LOTL qualification (network, "
                         "opt-in via lotl_check). READ-ONLY; verdict + provenance."),
-        "schema": {"type": "object", "required": ["directory"],
+        "schema": {"type": "object", "additionalProperties": False, "required": ["directory"],
                    "properties": {"directory": {"type": "string"},
                                   "prefix": {"type": "string", "default": "ledger"},
                                   "expected_pubkey_hex": {
@@ -226,7 +226,7 @@ _TOOLS = {
         "description": ("WRITE (human-gated): append one event to the agent's tamper-evident "
                         "archive. Refuses unless CRYPTOVALID_MCP_ALLOW_WRITE=1 and confirm_token "
                         "matches CRYPTOVALID_MCP_CONFIRM. The archive is the audit trail."),
-        "schema": {"type": "object", "required": ["directory", "event", "confirm_token"],
+        "schema": {"type": "object", "additionalProperties": False, "required": ["directory", "event", "confirm_token"],
                    "properties": {"directory": {"type": "string"},
                                   "event": {"type": "object"},
                                   "confirm_token": {"type": "string"}}}},
@@ -235,7 +235,7 @@ _TOOLS = {
         "description": ("WRITE (human-gated): seal the current segment into a signed Merkle STH "
                         "(RFC 3161-anchored when CRYPTOVALID_TSA_URL is set). Same double gate "
                         "as append_event."),
-        "schema": {"type": "object", "required": ["directory", "confirm_token"],
+        "schema": {"type": "object", "additionalProperties": False, "required": ["directory", "confirm_token"],
                    "properties": {"directory": {"type": "string"},
                                   "confirm_token": {"type": "string"}}}},
 }
@@ -272,8 +272,17 @@ def handle(msg: Dict) -> Optional[Dict]:
         tool = _TOOLS.get(name)
         if not tool:
             return _rpc_error(id_, -32602, f"unknown tool {name!r}")
+        args = params.get("arguments") or {}
+        if not isinstance(args, dict):
+            return _rpc_error(id_, -32602, "arguments must be a JSON object")
+        # closed by construction (SPEC v0.9 §17, 16/11/2026): an argument the tool does not take is refused, never ignored —
+        # until 0.25.0 verify_ledger with {"expect_ledger_id": …} or verify_pack with a key to pin dropped it and answered PASS
+        unknown = sorted(k for k in args if k not in tool["schema"].get("properties", {}))
+        if unknown:
+            return _rpc_error(id_, -32602, f"unknown argument(s) for {name}: {', '.join(repr(k) for k in unknown)[:200]} "
+                                           f"(it takes: {', '.join(sorted(tool['schema'].get('properties', {})))})")
         try:
-            out = tool["fn"](params.get("arguments") or {})
+            out = tool["fn"](args)
             is_err = bool(out.get("blocked") or out.get("error"))
             return _rpc_result(id_, {"content": [
                 {"type": "text", "text": json.dumps(out, ensure_ascii=False)}],

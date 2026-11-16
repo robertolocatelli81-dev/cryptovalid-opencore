@@ -209,6 +209,9 @@ What a PASS means, and what it does not:
   (key custody belongs in an HSM/KMS); a rollback to an older genuine tip passes unless `--tip-not-before` is given or
   the tip is compared with a copy kept elsewhere; when one key signs several ledgers, `--expect-ledger-id` binds the
   tip to its chain. Without a trusted key the tip is not checked (`tip_untrusted`), never a PASS.
+- **Expected ledger:** `--expect-ledger-id <self_hash of entry 0>` is compared with the file's entry 0 with or without
+  a tip (`ledger_id_mismatch`), and `--tip-not-before` makes the tip required (SPEC §17, since 0.25.1: until 0.25.0 both
+  were applied only when a trusted tip was checked, so without one another ledger was PASS).
 - **Signatures:** prove which key sealed each entry; they count only against a key the relying party pins. A
   non-exportable key does not stop a compromised host from asking the HSM to sign; KMS policy, rotation and
   revocation are part of the perimeter.

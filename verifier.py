@@ -715,6 +715,17 @@ def detect_algo(entries: List[Dict]) -> Optional[str]:
     return None
 
 
+_LEDGER_ID_RE = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def check_ledger_id_arg(expect_ledger_id: Optional[str]) -> None:
+    """SPEC v0.9 §17 rule 1: an expected ledger identity is 64 lowercase hex characters (the form of every self_hash) or
+    None (not given). Anything else can match no ledger: the caller's error, refused before the file is judged."""
+    if expect_ledger_id is not None and not (isinstance(expect_ledger_id, str) and _LEDGER_ID_RE.match(expect_ledger_id)):
+        raise ValueError("expect_ledger_id: 64 lowercase hex characters, the self_hash of entry 0 "
+                         f"(got {expect_ledger_id!r:.80})")
+
+
 def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = None,
                   trusted_pubkey_hex: Optional[str] = None, require_tip: bool = False,
                   tip_not_before: Optional[str] = None, expect_ledger_id: Optional[str] = None,
@@ -726,7 +737,11 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
     alone cannot see them). `require_tip`: a missing tip is a FAIL. `trusted_pubkey_hex`: the log key the
     relying party trusts (without it the tip's own key is used and the receipt says so: NOT trusted).
     The recursion headroom covers the whole verification (the entries decoded at the bound are hashed again), and the
-    caller's recursion limit is back when this returns (15/11/2026)."""
+    caller's recursion limit is back when this returns (15/11/2026).
+    `expect_ledger_id` (SPEC v0.9 §17): compared with the self_hash of entry 0 with or without a tip (until 0.25.0 only
+    inside the tip check: without a tip another ledger was PASS); a value that is not 64 lowercase hex is a ValueError.
+    `tip_not_before` makes the tip required (§17 rule 2)."""
+    check_ledger_id_arg(expect_ledger_id)
     with _RecursionHeadroom():
         return _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_before, expect_ledger_id,
                               trusted_pq_pubkey_b64)
@@ -855,9 +870,25 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
         chain_integrity = False
         errors.append({"line": 0, "error": "empty_ledger: zero entries, nothing to verify"})
 
+    # SPEC v0.9 §17 rule 1 (16/11/2026): the ledger identity is entry 0's self_hash, readable without a tip, so the expected
+    # identity is compared here, in every branch (until 0.25.0 only inside the tip check: no tip, or a tip without a trusted
+    # key, and another ledger was PASS, exit 0, the option not named; reported by Athena on 16/11/2026)
+    ledger_id_matched = False
+    if expect_ledger_id is not None:
+        first_id = entries[0].get("self_hash") if entries else None
+        ledger_id_matched = first_id == expect_ledger_id
+        if not ledger_id_matched:
+            chain_integrity = False
+            errors.append({"line": 0, "error": "ledger_id_mismatch: entry 0's self_hash is not the ledger id you expect "
+                                               "(--expect-ledger-id)" + ("" if entries else "; the file has no entry")})
+
     # Signed chain tip (15/09/2026): the only way a SNAPSHOT verifier can see tail truncation / suffix rewrite.
     tip_check: Optional[Dict] = None
     tip_file = tip if tip is not None else (path + ".tip.json" if os.path.exists(path + ".tip.json") else None)
+    if tip_not_before is not None:
+        # SPEC v0.9 §17 rule 2: the oldest acceptable tip is a requirement on a tip, which it makes required (until 0.25.0
+        # it was read only inside the tip check: without a tip, PASS)
+        require_tip = True
     if trusted_pq_pubkey_b64:
         # a trusted post-quantum key is a REQUIREMENT: it implies a required tip, and it is meaningless without the
         # trusted log key (council 15/09: PQ key alone → tip never checked → PASS, a fail-open)
@@ -927,13 +958,16 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
         "scope": {
             "proves": ["every self_hash recomputes from its entry (canonical JSON)",
                        "every prev_hash links to the previous self_hash (genesis = 64 zeros)",
-                       "idx is contiguous from 0"],
+                       "idx is contiguous from 0"] + (
+                          ["entry 0's self_hash is the ledger id you expect (--expect-ledger-id)"]
+                          if ledger_id_matched else []),
             "does_not_prove": (["no truncation / suffix rewrite by a party holding the LOG KEY (key custody is "
                                 "the limit: HSM/KMS, copies of the tip outside the writer's reach)",
                                 "no ROLLBACK to an older signed state (truncation + an older genuine tip restored): "
                                 "pass --tip-not-before, or compare with the monitor state / receipts / an anchor",
+                                ] + ([] if expect_ledger_id is not None else [
                                 "not that this is the ledger YOU expect when the log key signs several ledgers: pass "
-                                "--expect-ledger-id (self_hash of entry 0)"]
+                                "--expect-ledger-id (self_hash of entry 0)"])
                                if tip_check and tip_check.get("ok") else
                                ["no truncation (a shorter prefix is a valid chain)",
                                 "no suffix rewrite by a party with write access (re-chained fork)"]) + [
@@ -1033,6 +1067,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         v = getattr(args, flag, None)
         if v is not None and (v == "" or v.startswith("-")):   # "" or a flag as a value would silently mean "not given" (21/09/2026: one grammar in the four)
             parser.error(f"--{flag.replace('_', '-')} needs a value (got {v!r})")
+    try:
+        check_ledger_id_arg(args.expect_ledger_id)   # SPEC v0.9 §17: a value that can match no ledger is a usage error
+    except ValueError:
+        parser.error(f"--expect-ledger-id needs 64 lowercase hex characters, the self_hash of entry 0 (got {args.expect_ledger_id!r})")
 
     try:
         receipt = verify_ledger(args.ledger_path, algo=args.algo, tip=args.tip,

@@ -298,7 +298,9 @@ def check_tip(entries_count: int, last_self_hash: str, tip: Dict, trusted_pubkey
     as `ts`; instants are compared as the integer pair (seconds, nanoseconds), never as strings, so two tips in
     the same second ARE distinguishable by their fraction) lets a relying party who knows a later tip existed
     refuse older ones (`tip_rolled_back`); the monitor state / receipts / an external anchor are the systematic
-    answer."""
+    answer. SPEC v0.9 §17: `expect_ledger_id` is 64 lowercase hex or None (anything else, "" included, is a ValueError),
+    and a `not_before` of "" is a given value (`bad_not_before`), never "not given"."""
+    check_ledger_id_arg(expect_ledger_id)
     sig = verify_tip_signature(tip, trusted_pubkey_hex, trusted_pq_pubkey_b64)
     if not sig["ok"]:
         return {"ok": False, "error": (sig["why"] if sig["why"].startswith("tip_untrusted") else "tip_invalid: " + sig["why"]),
@@ -306,13 +308,13 @@ def check_tip(entries_count: int, last_self_hash: str, tip: Dict, trusted_pubkey
     n = int(tip["entries"])
     # identity: the tip must be THIS chain's (first self_hash) — and, out of band, the chain the relying party
     # expects (a whole pair file+tip of another ledger signed by the same key is caught only by expect_ledger_id)
-    if expect_ledger_id and tip["ledger_id"] != expect_ledger_id:
+    if expect_ledger_id is not None and tip["ledger_id"] != expect_ledger_id:
         return {"ok": False, "error": "ledger_id_mismatch: the tip belongs to a different ledger than the one you expect",
                 "signature": sig["why"], "pq_protected": False}
     if first_self_hash is not None and entries_count > 0 and tip["ledger_id"] != first_self_hash:
         return {"ok": False, "error": "tip_of_another_ledger: the tip's ledger_id is not this file's first self_hash",
                 "signature": sig["why"], "pq_protected": False}
-    if not_before:
+    if not_before is not None:
         try:
             nb = parse_instant(not_before)   # same profile as the tip's ts, in the three checkers (review: py/js took a date-only)
         except ValueError as e:
@@ -351,9 +353,9 @@ def load_tip(path: str) -> Dict:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say, write_output
+    from verifier import Parser, check_ledger_id_arg, emit, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say, write_output
+    from opencore.verifier import Parser, check_ledger_id_arg, emit, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -375,6 +377,10 @@ def main(argv=None) -> int:
         from signer import pq_backend_from_args
         emit(json.dumps(sign_tip(a.ledger, a.keyfile, a.out, pq_backend=pq_backend_from_args(a.pq_key, a.pq_kms, a.pq_kms_region, a.pq_kms_profile)), indent=1))
         return 0
+    try:
+        check_ledger_id_arg(a.expect_ledger_id)   # SPEC v0.9 §17: "" or a value that can match no ledger is a usage error
+    except ValueError:
+        p.error(f"--expect-ledger-id needs 64 lowercase hex characters, the self_hash of entry 0 (got {a.expect_ledger_id!r})")
     if not a.trusted_pubkey:
         emit(json.dumps({"ok": False, "error": "tip_untrusted: --trusted-pubkey is required (the key inside the tip "
                                                 "proves nothing); exit 2"}, indent=1))

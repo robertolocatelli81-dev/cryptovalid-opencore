@@ -206,6 +206,16 @@ func VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64,
 	}
 	defer f.Close()
 	v := VerifyLedger(f)
+	// SPEC v0.9 §17 rule 1 (16/11/2026): the ledger identity is entry 0's self_hash, readable without a tip, so the expected
+	// identity is compared in every branch (until 0.25.0 only inside CheckTip: without a tip another ledger was PASS)
+	if expectLedgerID != "" && (v.Entries == 0 || v.FirstSelfHash != expectLedgerID) {
+		v.Verdict = "FAIL"
+		why := "ledger_id_mismatch: entry 0's self_hash is not the ledger id you expect (-expect-ledger-id)"
+		if v.Entries == 0 {
+			why += "; the file has no entry"
+		}
+		v.Failures = append(v.Failures, why)
+	}
 	if requirePQ && pqPubkeyB64 == "" {
 		v.Verdict = "FAIL"
 		v.Failures = append(v.Failures, "require_pq_without_key: -require-pq needs -pq-pubkey (a post-quantum layer verified against the key inside the ledger is self-declared)")
@@ -243,6 +253,11 @@ func VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64,
 		if _, err := os.Stat(TipPath(ledgerPath)); err == nil {
 			tipPath = TipPath(ledgerPath)
 		}
+	}
+	if tipNotBefore != "" {
+		// SPEC v0.9 §17 rule 2: the oldest acceptable tip is a requirement on a tip, which it makes required (until 0.25.0
+		// it was read only inside CheckTip: without a tip, PASS)
+		requireTip = true
 	}
 	if trustedPQPubkeyB64 != "" {
 		// a trusted post-quantum key is a REQUIREMENT: it implies a required tip and needs the trusted log key

@@ -345,6 +345,7 @@ public class CvVerify {
             } catch (ArrayIndexOutOfBoundsException e) { usage(); return; }
         }
         if (ledger == null) { usage(); return; }
+        if (!lid.isEmpty() && !isHexN(lid, 64)) { usage(); return; }   // SPEC v0.9 §17: a value that can match no ledger is a usage error
         Map<String, Object> out = verify(ledger, tip, tpk, tpq, epk, epq, reqPQ, reqTip, nb, lid);
         emit(j(out), "PASS".equals(out.get("verdict")) ? 0 : 1);
     }
@@ -421,6 +422,9 @@ public class CvVerify {
         v.put("verdict", pass ? "PASS" : "FAIL"); v.put("algo", algo); v.put("entries_count", i);
         v.put("hash_recompute_passed", hashOK); v.put("link_passed", linkOK); v.put("failures", failures);
         if (!first.isEmpty()) v.put("first_self_hash", first); if (i > 0) v.put("last_self_hash", prev);
+        // SPEC v0.9 §17 rule 1 (16/11/2026): the ledger identity is entry 0's self_hash, readable without a tip, so the expected
+        // identity is compared in every branch (until 0.25.0 only inside checkTip: without a tip another ledger was PASS)
+        if (!lid.isEmpty() && (i == 0 || !lid.equals(first))) { v.put("verdict", "FAIL"); failures.add("ledger_id_mismatch: entry 0's self_hash is not the ledger id you expect (-expect-ledger-id)" + (i == 0 ? "; the file has no entry" : "")); }
 
         // per-entry signatures (same rules as signer.py / Go VerifyLedgerFull)
         if (reqPQ && epq.isEmpty()) { failures.add("require_pq_without_key: -require-pq needs -pq-pubkey (a post-quantum layer verified against the key inside the ledger is self-declared)"); v.put("verdict", "FAIL"); v.put("scope", SCOPE); return v; }
@@ -439,7 +443,8 @@ public class CvVerify {
                 v.put("verdict", "FAIL"); failures.add("signatures_failed: the signature layer the ledger carries does not verify (no key pinned)");
             }
         }
-        // signed chain tip
+        // signed chain tip; SPEC v0.9 §17 rule 2: the oldest acceptable tip makes the tip required (until 0.25.0: without a tip, PASS)
+        if (!nb.isEmpty()) reqTip = true;
         if (!tpq.isEmpty()) { reqTip = true; if (tpk.isEmpty()) { failures.add("pq_key_without_log_key: -trusted-pq-pubkey needs -trusted-pubkey (the post-quantum layer sits on top of the Ed25519 tip, never instead of it)"); v.put("verdict", "FAIL"); v.put("scope", SCOPE); return v; } }
         if (tipPath.isEmpty() && Files.exists(Path.of(ledgerPath + ".tip.json"))) tipPath = ledgerPath + ".tip.json";
         if (tipPath.isEmpty()) {

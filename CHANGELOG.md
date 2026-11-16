@@ -7,6 +7,45 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
+## Unreleased
+
+### Fixed
+
+- **`--expect-ledger-id` and `--tip-not-before` are applied without a tip** (SPEC v0.9 §17, written before the code).
+  Until 0.25.0 both were read only inside the check of a signed tip, so without a tip file, or with a tip and no trusted
+  log key, they were accepted and left out: measured on 16/11/2026 on 0.25.0, `verifier.py examples/sample_ledger.jsonl
+  --expect-ledger-id <the id of another ledger>` and `--tip-not-before 2099-01-01T00:00:00Z` were PASS, exit 0, and the
+  receipt did not name the option; the JS, Go and Java verifiers answered the same (exit 0). Reported by Athena on
+  16/11/2026. Now, in `verifier.py` / `cryptovalid.verify_ledger` and in the JS, Go and Java verifiers:
+  - the expected identity is compared with the `self_hash` of entry 0, with or without a tip, trusted or not: a
+    different value, or a file with no entry, is FAIL with `ledger_id_mismatch`; a match is named in the receipt's
+    `scope.proves` (the receipt keeps its keys);
+  - the expected identity is 64 lowercase hex characters; any other value (empty, upper case, with spaces, other
+    characters) is a usage error, exit 2, in the four command lines and in `cryptovalid_tip.py check`, and a
+    `ValueError` in `verify_ledger` and `cryptovalid_tip.check_tip` (until 0.25.0 an empty value given to the Python
+    functions meant "not given");
+  - `--tip-not-before` makes the tip required, as `--trusted-pq-pubkey` already did: without a tip FAIL `tip_missing`,
+    with a tip and no trusted key FAIL `tip_untrusted`; an empty value given to the Python functions is `bad_not_before`.
+  Unchanged, and written in §17: `--trusted-pubkey` without a tip file is still the bare chain's verdict (the tip is
+  required only with `--require-tip`); the Rust and Swift verifiers have none of these options and refuse them (exit 2:
+  Rust measured, Swift by its code).
+- **An empty pin in the archive verifier is refused** (SPEC §17 rule 4): `cryptovalid_ingest.verify_archive` with
+  `expected_pubkey_hex` `""`, `[]` or a list holding an empty key was ok true with the warning `no_pinned_pubkey`
+  (measured on 0.25.0 on a signed archive), and `cryptovalid-ingest verify --pubkey ""` the same, exit 0. Now a
+  `ValueError`, and exit 2 for `--pubkey ""`.
+- **The MCP server refuses an argument a tool does not take** (JSON-RPC `-32602`, the schemas say
+  `additionalProperties: false`). Until 0.25.0 it was dropped: `verify_ledger` with `{"path": …, "expect_ledger_id":
+  <another id>}` answered PASS (measured on 0.25.0).
+- `test_expect_applied_20261116.py`: 16 tests — the reported case; 840 generated combinations of expected identity
+  (none, right, another ledger's, a random one, 17 malformed values) x tip (none, untrusted, trusted, another
+  ledger's) x oldest tip (none, empty, past, future, malformed) x `--require-tip` on `verify_ledger`, checked against
+  an oracle written from §17 and spec/CONFORMANCE.md (680 refusals, 148 FAIL, 12 PASS; 420 cases without
+  `cryptography`, where no tip can be signed); 300 random identities; the same combinations on the command lines of
+  Python, JS, Go and Java (exit code and verdict) and the malformed values in each (exit 2, nothing on stdout);
+  `check_tip` and `cryptovalid_tip.py check`; the archive pins; the MCP arguments. 15 of the 16 fail on 0.25.0 (the
+  sixteenth is the negative control: without options the receipt is the receipt of 0.25.0). `verifiers/js/test.mjs`
+  and `verifiers/go/tip_test.go` gain the same checks on their libraries.
+
 ## 0.25.0 (2026-11-16)
 
 - **The witness module accepts a log that signs with ML-DSA-44, and tells the log from a witness by the list a key is

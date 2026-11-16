@@ -326,5 +326,41 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
   ok("no signature field: no signatures block (receipt of 0.20.3)", none.signatures === null && none.verdict === "PASS");
 }
 
+// SPEC v0.9 §17 (16/11/2026): the expected identity is compared without a tip; --tip-not-before makes the tip required;
+// a malformed identity is the caller's error (until 0.25.0 the first two were PASS without a tip)
+{
+  const text = readFileSync(join(VDIR, "valid_sha256.jsonl"), "utf-8");
+  const first = JSON.parse(text.split("\n")[0]).self_hash;
+  const other = createHash("sha256").update("another ledger").digest("hex");
+  const wrong = verifyLedger(text, { expectLedgerId: other });
+  ok("§17 another ledger's id without a tip is FAIL", wrong.verdict === "FAIL" && JSON.stringify(wrong.errors).includes("ledger_id_mismatch"), JSON.stringify(wrong.errors));
+  ok("§17 the right id without a tip is PASS", verifyLedger(text, { expectLedgerId: first }).verdict === "PASS");
+  ok("§17 no entry with an expected id is ledger_id_mismatch", JSON.stringify(verifyLedger("", { expectLedgerId: first }).errors).includes("ledger_id_mismatch"));
+  for (const bad of ["", first.toUpperCase(), " " + first, first + "\n", first.slice(0, 63), "ａ".repeat(64), 7]) {
+    let threw = false;
+    try { verifyLedger(text, { expectLedgerId: bad }); } catch (e) { threw = /expect_ledger_id/.test(e.message); }
+    ok(`§17 malformed id refused ${JSON.stringify(bad)}`, threw);
+  }
+  for (const nb of ["2099-01-01T00:00:00Z", "2000-01-01T00:00:00Z", ""]) {
+    const r = verifyLedger(text, { tipNotBefore: nb });
+    ok(`§17 --tip-not-before ${JSON.stringify(nb)} without a tip is tip_missing`, r.verdict === "FAIL" && JSON.stringify(r.errors).includes("tip_missing"));
+  }
+  const ut = verifyLedger(text, { tip: { kind: "cryptovalid_tip/1" }, tipNotBefore: "2000-01-01T00:00:00Z" });
+  ok("§17 --tip-not-before with an untrusted tip is tip_untrusted", ut.verdict === "FAIL" && JSON.stringify(ut.errors).includes("tip_untrusted"));
+  // checkTip: an empty notBefore is a given value (bad_not_before), never "not given" — on a tip whose signature verifies
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const pkHex = publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
+  const lines = text.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const last = lines[lines.length - 1].self_hash;
+  const ts = "2026-11-16T07:00:00Z";
+  const sig = edSign(null, tipPayload(lines.length, first, last, ts), privateKey).toString("hex");
+  const tdoc = { kind: "cryptovalid_tip/1", entries: lines.length, ledger_id: first, tip_sha256: last, ts, log_pubkey_hex: pkHex, signature_hex: sig };
+  ok("§17 control: the signed tip verifies", checkTip(lines.length, last, tdoc, pkHex, null, first, first).ok === true);
+  const e1 = checkTip(lines.length, last, tdoc, pkHex, "", first, null);
+  ok("§17 checkTip with an empty notBefore is bad_not_before", e1.ok === false && /^bad_not_before/.test(e1.error), JSON.stringify(e1));
+  const e2 = checkTip(lines.length, last, tdoc, pkHex, null, first, "");
+  ok("§17 checkTip with an empty expected id is not a pass", e2.ok === false, JSON.stringify(e2));
+}
+
 console.log(`\ncvverify test: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.8 (2026-11-15; v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
+# CryptoValid Evidence Format — candidate standard v0.9 (2026-11-16; v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -246,6 +246,12 @@ key, and a log signature counts only for the log and a witness cosignature only 
 is in (until then by the type of the key); a key given in both lists stays refused, now by rule 4 of §16; a checkpoint
 with extension lines whose only trusted log signature is ML-DSA-44 is refused, by the witness and by the relying party
 (no such checkpoint was accepted before: a 0x06 log key was refused).
+v0.9 (2026-11-16, cryptovalid-opencore 0.25.1) adds §17, what a ledger verifier does with the expectations its caller
+gives. Not additive: until v0.8 the expected ledger identity (`--expect-ledger-id`) and the oldest acceptable tip
+(`--tip-not-before`) were applied only inside the check of a signed tip, so without a tip file, or with a tip and no
+trusted log key, a ledger other than the one expected, or a ledger whose tip could not be dated, was PASS, exit 0, and
+the receipt did not name the option (measured on 2026-11-16 with `verifier.py` 0.25.0 and the JS, Go and Java
+verifiers). From v0.9 such a ledger is FAIL. The ledger format (§2–§5), its hashes and its vectors do not change.
 
 ## 7. Conformance (normative)
 
@@ -716,3 +722,44 @@ key, `testdata/interop/torchwood_mldsa44_log.*`) is cosigned; checkpoints of an 
 are accepted by `verify_witnessed`, the `verify` command, `witness_cosign` and `WitnessService.add_checkpoint`; a live checkpoint of the Sigstore staging log `pqc27-a1.us-east4.rekor.sigstage.dev` (ML-DSA-44 log key
 from its TUF `trusted_root.json`, three ML-DSA-44 witnesses; read at 2026-11-15T22:24:41Z) verifies with `min_witnesses`
 3 and not 4 when given (`CV_SIGSTAGE_DIR`; not shipped here).
+
+## 17. What the caller of a ledger verifier asks for is applied or refused (NORMATIVE since v0.9, 2026-11-16)
+
+A ledger verifier takes expectations from its caller besides the file: a trusted key, the identity of the ledger it
+expects, the oldest tip it accepts. An expectation the verifier accepts is applied in every branch of the
+verification, or the verdict is FAIL with the reason named; it is never accepted and then left out because the branch
+that applies it was not taken. A value that can satisfy no ledger is the caller's error, refused before the file is
+judged.
+
+1. **The ledger identity** is the `self_hash` of entry 0, as written in the file (the `ledger_id` of a signed tip is
+   the same value, `spec/CONFORMANCE.md`). It is readable without a tip. The expected identity (`expect_ledger_id`,
+   `--expect-ledger-id`, Go and Java `-expect-ledger-id`) is compared with it whether or not a tip is present, checked,
+   or trusted: a different value, or a file with no entry, is FAIL with `ledger_id_mismatch`. With a checked tip the
+   tip's own comparison (`ledger_id_mismatch`, `tip_of_another_ledger`) still applies. The expected identity is 64
+   lowercase hexadecimal characters (the form of every `self_hash` of §3); any other value (empty, upper case,
+   surrounded by spaces, other characters) is refused: a usage error, exit 2, in the command-line verifiers; a
+   `ValueError` in `verifier.verify_ledger` and `cryptovalid_tip.check_tip`.
+2. **The oldest acceptable tip** (`tip_not_before`, `--tip-not-before`) is a requirement on a signed tip: given, it
+   makes the tip required (as the trusted post-quantum log key already does). Without a tip the verdict is FAIL with
+   `tip_missing`; with a tip and no trusted log key, FAIL with `tip_untrusted`; with a checked tip, the comparison of
+   instants of `spec/CONFORMANCE.md` (`tip_rolled_back`, `bad_not_before`). An empty value given to the Python API is a
+   given value: `bad_not_before`, never "not given".
+3. **A PASS names what was compared.** When the expected identity is given and matches, the receipt's
+   `scope.proves` names it; the receipt keeps its keys (`cryptovalid/receipts.py`).
+4. **An empty pin is not "no pin".** A key the caller pins and leaves empty pins nothing and is refused: an empty
+   `--expect-ledger-id` or `--trusted-pubkey` (exit 2, as since 2026-09-21), and in the archive verifier
+   (`cryptovalid_ingest.verify_archive`, `cryptovalid-ingest verify --pubkey`, the MCP tool `verify_archive`) an
+   empty `expected_pubkey_hex` — `""`, an empty list, or a list holding an empty or non-string key — a `ValueError`
+   (exit 2 for `--pubkey ""`); until 0.25.0 it meant "not pinned", ok with the warning `no_pinned_pubkey`.
+5. **A tool argument is one the tool takes.** The MCP server (`cryptovalid_mcp.py`) refuses an argument outside a
+   tool's input schema (JSON-RPC `-32602`; the schemas say `additionalProperties: false`): until 0.25.0 it was dropped.
+
+Not changed by this section: a trusted log key (`--trusted-pubkey`) given without a tip file. It is the key a tip is
+checked with when there is one; the tip is required only with `--require-tip` (or rule 2, or a trusted post-quantum
+key), and without it the receipt's `tip` is `null` and its `scope` says the tail is not covered. The Rust and Swift
+verifiers have none of these options and refuse them as unknown flags, exit 2 (Rust measured on 2026-11-16; Swift by
+its code, `main.swift` takes only `--algo` and `--pubkey`).
+
+Measured on 2026-11-16 (`test_expect_applied_20261116.py`): on 0.25.0 `verifier.py examples/sample_ledger.jsonl
+--expect-ledger-id <another ledger's id>` is PASS, exit 0, and so is `--tip-not-before 2099-01-01T00:00:00Z`; the JS, Go
+and Java verifiers answer the same; from 0.25.1 the four answer FAIL, exit 1, and refuse a malformed identity with exit 2.

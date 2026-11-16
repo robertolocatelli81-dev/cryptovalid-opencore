@@ -235,3 +235,49 @@ func TestTipCrossLanguageWithPython(t *testing.T) {
 		t.Fatalf("Python did not see the truncation against the Go tip: %s", out)
 	}
 }
+
+// SPEC v0.9 §17 (16/11/2026): the expected identity is compared without a tip and -tip-not-before makes the tip required
+// (until 0.25.0 both were read only inside CheckTip: without a tip, PASS).
+func TestExpectationsWithoutTip(t *testing.T) {
+	dir := t.TempDir()
+	p := dir + "/l.jsonl"
+	ts := time.Date(2026, 11, 16, 7, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		if _, err := Append(p, ts, map[string]any{"i": i}, "sha256"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := VerifyLedger(mustOpen(t, p)).FirstSelfHash
+	other := strings.Repeat("ab", 32)
+	if v := VerifyLedgerFull(p, "", "", "", "", "", false, false, "", ""); v.Verdict != "PASS" {
+		t.Fatalf("control: %+v", v)
+	}
+	if v := VerifyLedgerFull(p, "", "", "", "", "", false, false, "", first); v.Verdict != "PASS" {
+		t.Fatalf("right id: %+v", v)
+	}
+	v := VerifyLedgerFull(p, "", "", "", "", "", false, false, "", other)
+	if v.Verdict != "FAIL" || !strings.Contains(strings.Join(v.Failures, " "), "ledger_id_mismatch") {
+		t.Fatalf("another ledger's id without a tip: %+v", v)
+	}
+	v = VerifyLedgerFull(p, "", "", "", "", "", false, false, "2000-01-01T00:00:00Z", "")
+	if v.Verdict != "FAIL" || !strings.Contains(strings.Join(v.Failures, " "), "tip_missing") {
+		t.Fatalf("-tip-not-before without a tip: %+v", v)
+	}
+	for _, bad := range []string{"", strings.ToUpper(first), " " + first, first[:63], strings.Repeat("ａ", 64)} {
+		if ValidLedgerID(bad) {
+			t.Fatalf("ValidLedgerID(%q) = true", bad)
+		}
+	}
+	if !ValidLedgerID(first) {
+		t.Fatal("ValidLedgerID(first) = false")
+	}
+}
+
+func mustOpen(t *testing.T, p string) *os.File {
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}

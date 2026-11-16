@@ -54,6 +54,10 @@ func TipPayload(entries int, ledgerID, tipSHA256, ts string) []byte {
 // anything else would not be the reference bytes (council 15/09)
 func isHex64(s string) bool { return isHexN(s, 64) }
 
+// ValidLedgerID: the form of an expected ledger identity, 64 lowercase hex characters like every self_hash (SPEC v0.9
+// §17 rule 1); any other value can match no ledger and is the caller's error (cvverify: usage, exit 2).
+func ValidLedgerID(s string) bool { return isHex64(s) }
+
 // isHexN: exactly n LOWERCASE hex digits (no whitespace, no uppercase — hex.DecodeString would take "AB")
 func isHexN(s string, n int) bool {
 	if len(s) != n {

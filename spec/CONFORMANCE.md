@@ -154,7 +154,9 @@ python3 conformance.py     # exit 0 = conformant
   the tip and the TRUSTED log key: (1) verifies the signature against the trusted key (the key inside the tip is
   informative only); (2) FAILs `tip_of_another_ledger` when `ledger_id` is not the file's first `self_hash`,
   `ledger_id_mismatch` when it is not the identity the relying party expects (`--expect-ledger-id`, out of band:
-  the only defence when a log key signs several ledgers and a whole pair file+tip is substituted),
+  the only defence when a log key signs several ledgers and a whole pair file+tip is substituted; since SPEC v0.9 §17
+  the expected identity is compared with the file's entry 0 with or without a tip, and `--tip-not-before` makes the
+  tip required),
   `tail_truncated` when the file has fewer entries than the tip, `unsealed_tail` when it has more,
   `tail_rewritten` when the count matches but the last `self_hash` differs; (3) when the tip is REQUIRED, a
   missing tip is `tip_missing`; a malformed tip is never silence (`tip_invalid` / `tip_unreadable`); (4) **without

@@ -418,7 +418,15 @@ def verify_archive(directory: str, prefix: str = "ledger",
     RFC 3161 tokens (`.sth.tsr`) are checked by SPEC §11 (`cryptovalid_tsa.verify_token`, v0.6): a segment counts as
     timestamped only when its token is `verified` against `tsa_certs` (the TSA certificates the caller pins) or, with
     `lotl_check`, when the certificate that signed it is a QTST certificate of the EU trusted lists; a token whose
-    signature verifies only with the certificate it carries is reported (`tsa_tokens`, a warning), not counted."""
+    signature verifies only with the certificate it carries is reported (`tsa_tokens`, a warning), not counted.
+    An empty pin ("" or an empty list, or a list holding an empty or non-string key) pins nothing and is a ValueError
+    (SPEC v0.9 §17, 16/11/2026: until 0.25.0 it meant "not pinned", ok true with the warning no_pinned_pubkey)."""
+    if expected_pubkey_hex is not None:
+        if not isinstance(expected_pubkey_hex, str):
+            expected_pubkey_hex = list(expected_pubkey_hex)
+        keys = [expected_pubkey_hex] if isinstance(expected_pubkey_hex, str) else expected_pubkey_hex
+        if not keys or not all(isinstance(k, str) and k for k in keys):
+            raise ValueError("expected_pubkey_hex: an empty pin pins nothing: give a key, a non-empty list of keys, or None")
     import verifier
     failures: List[Dict] = []
     warnings: List[str] = []
@@ -585,6 +593,8 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
     b.add_argument("--n", type=int, default=50_000); b.add_argument("--batch", type=int, default=256)
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     if a.cmd == "verify":
+        if a.pubkey is not None and (a.pubkey == "" or a.pubkey.startswith("-")):   # one grammar (verifier.py): "" is not "not given"
+            p.error(f"--pubkey needs a value (got {a.pubkey!r})")
         r = verify_archive(a.directory, a.prefix, a.pubkey,
                            lotl_check=a.lotl, lotl_member_states=a.lotl_ms, tsa_certs=a.tsa_cert)
         emit(json.dumps(r, indent=1)); return 0 if r["ok"] else 1

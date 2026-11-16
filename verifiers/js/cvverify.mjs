@@ -263,10 +263,10 @@ export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = nul
   } catch (e) { why = "bad_signature"; }
   if (why !== null) return { ok: false, pq_protected: false, error: "tip_invalid: tip signature invalid" + (why === "bad_signature" ? "" : ` (${why})`) };   // 0.21.0: named
   const n = Number(tip.entries), trusted = Boolean(trustedPubkeyHex);
-  if (expectLedgerId && tip.ledger_id !== expectLedgerId) return { ok: false, pq_protected: false, trusted, error: "ledger_id_mismatch: the tip belongs to a different ledger than the one you expect" };
+  if (expectLedgerId !== null && expectLedgerId !== undefined && tip.ledger_id !== expectLedgerId) return { ok: false, pq_protected: false, trusted, error: "ledger_id_mismatch: the tip belongs to a different ledger than the one you expect" };
   if (firstSelfHash !== null && entriesCount > 0 && tip.ledger_id !== firstSelfHash) return { ok: false, pq_protected: false, trusted, error: "tip_of_another_ledger: the tip's ledger_id is not this file's first self_hash" };
   // ROLLBACK (declared): an older genuine tip restored after a truncation passes; notBefore refuses older tips
-  if (notBefore) {   // instants, not strings (council 15/09): 'Z' / '+00:00' / other offsets of the same moment agree
+  if (notBefore !== null && notBefore !== undefined) {   // instants, not strings (council 15/09): 'Z' / '+00:00' / other offsets of the same moment agree
     const a = parseInstant(tip.ts), b = parseInstant(notBefore);
     if (b === null) return { ok: false, pq_protected: false, trusted, error: "bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm)" };   // the verifier's error, not the tip's
     if (instantBefore(a, b)) return { ok: false, pq_protected: false, trusted, error: `tip_rolled_back: the tip is dated ${tip.ts}, before the required ${notBefore}` };
@@ -334,6 +334,14 @@ export function verifyLedger(text, { algo = null, pubkey = null, tip = null, tru
   entries.forEach((e, i) => { if (e.idx !== i) { idxOk = false; errors.push({ line: i, error: `idx_mismatch: expected ${i}, got ${Object.prototype.hasOwnProperty.call(e, "idx") ? JSON.stringify(e.idx) : "(missing)"}` }); } });
   // zero entries = nothing verified = FAIL (2026-09-11: all four verifiers said PASS on an empty file)
   if (entries.length === 0) errors.push({ line: 0, error: "empty_ledger: zero entries, nothing to verify" });
+  // SPEC v0.9 §17 rule 1 (16/11/2026): the ledger identity is entry 0's self_hash, readable without a tip, so the expected
+  // identity is compared in every branch (until 0.25.0 only inside the tip check: without a tip another ledger was PASS)
+  if (expectLedgerId !== null && expectLedgerId !== undefined) {
+    if (!(typeof expectLedgerId === "string" && /^[0-9a-f]{64}$/.test(expectLedgerId))) throw new Error("expect_ledger_id: 64 lowercase hex characters, the self_hash of entry 0");
+    if (!entries.length || entries[0].self_hash !== expectLedgerId) errors.push({ line: 0, error: "ledger_id_mismatch: entry 0's self_hash is not the ledger id you expect (--expect-ledger-id)" + (entries.length ? "" : "; the file has no entry") });
+  }
+  // SPEC v0.9 §17 rule 2: the oldest acceptable tip is a requirement on a tip, which it makes required
+  if (tipNotBefore !== null && tipNotBefore !== undefined) requireTip = true;
   // signed chain tip: `tip` is the parsed document (or null); the CLI loads <ledger>.tip.json when present
   let tipCheck = null;
   if (tip !== null && !trustedPubkey) {
@@ -459,6 +467,7 @@ if (argv[0] === "--conformance") {
   const requireTip = Boolean(opts["--require-tip"]);
   const tipNotBefore = opts["--tip-not-before"] ?? null;
   const expectLedgerId = opts["--expect-ledger-id"] ?? null;
+  if (expectLedgerId !== null && !/^[0-9a-f]{64}$/.test(expectLedgerId)) usage();   // SPEC v0.9 §17: can match no ledger
   let text;
   let bytes;
   try { bytes = readFileSync(argv[0]); }
