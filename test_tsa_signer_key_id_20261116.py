@@ -9,7 +9,7 @@ PKCS #7 and refuses the second form with an ASN.1 error, so until v0.10 a valid 
 Everything is made with openssl on this machine: a CA and TSA certificates carrying a subjectKeyIdentifier, a token from
 `openssl ts -reply`, and the same TSTInfo re-signed by `openssl cms -sign -keyid -cades` (sid = subjectKeyIdentifier, an
 ESS signingCertificateV2 attribute). Positive control: openssl `ts -verify` refuses the re-signed token, cryptovalid
-0.25.1 refused it too (`test_openssl_ts_refuses_it`, and measured on 12f6c8b); now it is `verified`. Negatives: the key
+0.25.1 refused it too (`test_openssl_ts_refuses_it`; measured on 0.25.1: `not_issued_by_pinned_tsa`); now it is `verified`. Negatives: the key
 identifier of another certificate, another TSA's key, no ESS attribute, a certificate without timeStamping, a `tsa` field
 naming another TSA."""
 import copy

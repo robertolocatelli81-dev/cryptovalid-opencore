@@ -84,7 +84,7 @@ run by the same author, not by a third party.
   RSA, X.509 and Ed25519 checks cannot run). `test_tsa_revocation_20261116.py`: 18 tests on CAs, TSAs and CRLs made
   with openssl and `cryptography`; on 0.25.1 `test_defect_of_0_25_1_through_public_behaviour` fails by assertion (the
   token after a keyCompromise revocation is `verified`), the others by the missing `crls` parameter. 206 hand mutants of the new lines (`cryptovalid_beacon.py`,
-  `cryptovalid_tsa.py`, `evidence_pack.py`), run on 8af0d0d: 200 detected (one by a 300 s timeout: a FIFO read that
+  `cryptovalid_tsa.py`, `evidence_pack.py`), run on the branch before the second review: 200 detected (one by a 300 s timeout: a FIFO read that
   blocks); 3 more detected by tests added after the run (each run against its mutant); 3 equivalent: an entry looked up
   by `idx >=` instead of `==` on a ledger whose `idx` equals its position (SPEC §5 step 4); the log's signature
   status dropped from `checkpoint_log_not_trusted` (the origin is read only from a note whose signature verified, so a
@@ -101,7 +101,7 @@ run by the same author, not by a third party.
   signingCertificateV2 attribute against the signer certificate, the TSTInfo `tsa` field against its subject or
   subjectAltName, and `openssl verify -purpose timestampsign -partial_chain -attime` against the pinned certificates
   only. Found while extracting the payment profile into a separate repository. `test_tsa_signer_key_id_20261116.py`:
-  21 tests on CAs, TSAs and tokens made with openssl; the valid token is refused on 12f6c8b and verified now; another
+  21 tests on CAs, TSAs and tokens made with openssl; the valid token is `not_issued_by_pinned_tsa` on 0.25.1 and verified now; another
   key identifier, another TSA's key, no ESS attribute, a certificate without timeStamping, a `tsa` field naming another
   TSA, a system certificate directory and a CA without keyCertSign behind a pinned leaf are refused; 22 hand mutants of
   the new lines, 21 detected, 1 equivalent (the sid tag compared with `!= 0x30` instead of `== 0x80`: `parse_token`
