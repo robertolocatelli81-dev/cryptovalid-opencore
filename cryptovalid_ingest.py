@@ -566,9 +566,9 @@ def verify_archive(directory: str, prefix: str = "ledger",
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, append_line, emit, receipt_cli, say, write_output
+    from verifier import _Once, Parser, append_line, emit, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, append_line, emit, receipt_cli, say, write_output
+    from opencore.verifier import _Once, Parser, append_line, emit, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -582,7 +582,7 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
                                 description="High-frequency ingestion + archive verify.")
     sub = p.add_subparsers(dest="cmd", required=True)
     v = sub.add_parser("verify"); v.add_argument("directory")
-    v.add_argument("--prefix", default="ledger"); v.add_argument("--pubkey")
+    v.add_argument("--prefix", default="ledger"); v.add_argument("--pubkey", action=_Once)
     v.add_argument("--lotl", action="store_true",
                    help="certifica i token RFC 3161 come eIDAS-qualified via EU Trusted Lists (rete)")
     v.add_argument("--lotl-ms", nargs="*", default=None, help="restringi alle member state (es. ES IT)")

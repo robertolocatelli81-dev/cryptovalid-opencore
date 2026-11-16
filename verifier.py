@@ -879,8 +879,9 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
         ledger_id_matched = first_id == expect_ledger_id
         if not ledger_id_matched:
             chain_integrity = False
-            errors.append({"line": 0, "error": "ledger_id_mismatch: entry 0's self_hash is not the ledger id you expect "
-                                               "(--expect-ledger-id)" + ("" if entries else "; the file has no entry")})
+            # first: parse_errors keeps 10 lines, and with 10 earlier errors the reason was not in the receipt (NEMESIS 16/11/2026)
+            errors.insert(0, {"line": 0, "error": "ledger_id_mismatch: entry 0's self_hash is not the ledger id you expect "
+                                                  "(--expect-ledger-id)" + ("" if entries else "; the file has no entry")})
 
     # Signed chain tip (15/09/2026): the only way a SNAPSHOT verifier can see tail truncation / suffix rewrite.
     tip_check: Optional[Dict] = None
@@ -1024,6 +1025,17 @@ def package_version() -> str:
     return "unknown (neither a source checkout nor an installed distribution)"
 
 
+class _Once(argparse.Action):
+    """A value option given twice is a usage error, exit 2: argparse keeps the last value, so the first expectation would
+    be accepted and left out (SPEC v0.9 §17; NEMESIS 16/11/2026: `--expect-ledger-id <B> --expect-ledger-id <A>` was
+    PASS against A in the four verifiers)."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        if getattr(namespace, self.dest, None) is not None:
+            parser.error(f"{option_string} given twice (a second value would silently replace the first)")
+        setattr(namespace, self.dest, values)
+
+
 class VersionAction(argparse.Action):
     """`--version`: "<prog> <package_version()>" on STDOUT, written whole or exit 74 (argparse's own action prints
     through _print_message, which the Parser above sends to stderr)."""
@@ -1049,19 +1061,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("ledger_path", help="path of the .jsonl file to verify")
     parser.add_argument("--version", action=VersionAction)
     parser.add_argument(
-        "--algo", choices=SUPPORTED_ALGOS, default=None, help="force the hash algorithm (default: the one that matches the first entry, sha256 if neither does)"
+        "--algo", choices=SUPPORTED_ALGOS, default=None, action=_Once, help="force the hash algorithm (default: the one that matches the first entry, sha256 if neither does)"
     )
     parser.add_argument(
         "--quiet", action="store_true", help="print only the verdict (PASS/FAIL, and the exit code)"
     )
     parser.add_argument("--out", default=None, help="also write the JSON receipt to this file")
-    parser.add_argument("--tip", default=None, help="signed chain tip to check (default: <ledger>.tip.json if present)")
-    parser.add_argument("--trusted-pubkey", default=None, help="log key (hex) the tip must be signed with")
-    parser.add_argument("--trusted-pq-pubkey", default=None,
+    parser.add_argument("--tip", default=None, action=_Once, help="signed chain tip to check (default: <ledger>.tip.json if present)")
+    parser.add_argument("--trusted-pubkey", default=None, action=_Once, help="log key (hex) the tip must be signed with")
+    parser.add_argument("--trusted-pq-pubkey", default=None, action=_Once,
                         help="ML-DSA-65 log key (base64) a hybrid tip must ALSO be signed with (FAIL if missing/invalid)")
     parser.add_argument("--require-tip", action="store_true", help="FAIL when no signed tip is available")
-    parser.add_argument("--tip-not-before", default=None, help="refuse a tip dated before this ISO-8601 instant (rollback)")
-    parser.add_argument("--expect-ledger-id", default=None, help="the chain identity (self_hash of entry 0) you expect: refuses another ledger's pair")
+    parser.add_argument("--tip-not-before", default=None, action=_Once, help="refuse a tip dated before this ISO-8601 instant (rollback)")
+    parser.add_argument("--expect-ledger-id", default=None, action=_Once, help="the chain identity (self_hash of entry 0) you expect: refuses another ledger's pair")
     args = parser.parse_args(argv)
     for flag in ("algo", "pubkey", "tip", "trusted_pubkey", "trusted_pq_pubkey", "tip_not_before", "expect_ledger_id"):
         v = getattr(args, flag, None)

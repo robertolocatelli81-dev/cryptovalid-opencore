@@ -25,14 +25,22 @@ run by the same author, not by a third party.
     `ValueError` in `verify_ledger` and `cryptovalid_tip.check_tip` (until 0.25.0 an empty value given to the Python
     functions meant "not given");
   - `--tip-not-before` makes the tip required, as `--trusted-pq-pubkey` already did: without a tip FAIL `tip_missing`,
-    with a tip and no trusted key FAIL `tip_untrusted`; an empty value given to the Python functions is `bad_not_before`.
+    with a tip and no trusted key FAIL `tip_untrusted`; an empty value given to the Python functions is a given value
+    (the tip is required, and a checked tip FAILs with `bad_not_before`).
+  - a value option given twice is a usage error, exit 2, in the four command lines, in `cryptovalid_tip.py check` and
+    in `cryptovalid-ingest verify` (until 0.25.0 the last value was kept: `--expect-ledger-id <another ledger's id>
+    --expect-ledger-id <this ledger's id>` was PASS, exit 0, in the four verifiers);
+  - `cryptovalid_tip.py check` refuses an empty `--tip` or `--trusted-pq-pubkey`, exit 2 (until 0.25.0 an empty
+    `--trusted-pq-pubkey` dropped the post-quantum check: ok, exit 0);
+  - `ledger_id_mismatch` comes first in `parse_errors`, which keeps 10 lines (after 10 earlier errors it was not in
+    the receipt; the verdict was FAIL).
   Unchanged, and written in §17: `--trusted-pubkey` without a tip file is still the bare chain's verdict (the tip is
   required only with `--require-tip`); the Rust and Swift verifiers have none of these options and refuse them (exit 2:
   Rust measured, Swift by its code).
 - **An empty pin in the archive verifier is refused** (SPEC §17 rule 4): `cryptovalid_ingest.verify_archive` with
-  `expected_pubkey_hex` `""`, `[]` or a list holding an empty key was ok true with the warning `no_pinned_pubkey`
-  (measured on 0.25.0 on a signed archive), and `cryptovalid-ingest verify --pubkey ""` the same, exit 0. Now a
-  `ValueError`, and exit 2 for `--pubkey ""`.
+  `expected_pubkey_hex` `""` or `[]` was ok true with the warning `no_pinned_pubkey` (measured on 0.25.0 on a signed
+  archive; a list holding an empty key was already not ok, `sth_signer_mismatch`), and `cryptovalid-ingest verify
+  --pubkey ""` the same, exit 0. Now all three are a `ValueError`, and exit 2 for `--pubkey ""`.
 - **The MCP server refuses an argument a tool does not take** (JSON-RPC `-32602`, the schemas say
   `additionalProperties: false`). Until 0.25.0 it was dropped: `verify_ledger` with `{"path": …, "expect_ledger_id":
   <another id>}` answered PASS (measured on 0.25.0).
@@ -40,11 +48,15 @@ run by the same author, not by a third party.
   (none, right, another ledger's, a random one, 17 malformed values) x tip (none, untrusted, trusted, another
   ledger's) x oldest tip (none, empty, past, future, malformed) x `--require-tip` on `verify_ledger`, checked against
   an oracle written from §17 and spec/CONFORMANCE.md (680 refusals, 148 FAIL, 12 PASS; 420 cases without
-  `cryptography`, where no tip can be signed); 300 random identities; the same combinations on the command lines of
-  Python, JS, Go and Java (exit code and verdict) and the malformed values in each (exit 2, nothing on stdout);
+  `cryptography`, where no tip can be signed); 300 random identities; 72 of these combinations (identity none, this
+  ledger's or another's x oldest tip none, past or future x `--require-tip` x the four tip states) on the command lines
+  of Python, JS, Go and Java (exit code and verdict) and the malformed values in each (exit 2, nothing on stdout);
   `check_tip` and `cryptovalid_tip.py check`; the archive pins; the MCP arguments. 15 of the 16 fail on 0.25.0 (the
   sixteenth is the negative control: without options the receipt is the receipt of 0.25.0). `verifiers/js/test.mjs`
-  and `verifiers/go/tip_test.go` gain the same checks on their libraries.
+  and `verifiers/go/tip_test.go` gain the same checks on their libraries. `test_expect_once_20261116.py`: 4 tests
+  (a value option given twice in the four command lines, `cryptovalid_tip.py check` and `cryptovalid-ingest verify`;
+  empty values in `cryptovalid_tip.py check`; `ledger_id_mismatch` after 10 earlier errors), all 4 failing on
+  0.25.0.
 
 ## 0.25.0 (2026-11-16)
 

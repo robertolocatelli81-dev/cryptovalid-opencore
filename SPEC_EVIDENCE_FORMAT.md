@@ -726,10 +726,12 @@ from its TUF `trusted_root.json`, three ML-DSA-44 witnesses; read at 2026-11-15T
 ## 17. What the caller of a ledger verifier asks for is applied or refused (NORMATIVE since v0.9, 2026-11-16)
 
 A ledger verifier takes expectations from its caller besides the file: a trusted key, the identity of the ledger it
-expects, the oldest tip it accepts. An expectation the verifier accepts is applied in every branch of the
-verification, or the verdict is FAIL with the reason named; it is never accepted and then left out because the branch
-that applies it was not taken. A value that can satisfy no ledger is the caller's error, refused before the file is
-judged.
+expects, the oldest tip it accepts. The expected identity and the oldest tip are applied in every branch of the
+verification, or the verdict is FAIL with the reason named; they are never accepted and then left out because the branch
+that applies them was not taken. On the command line a value option given twice is a usage error (exit 2), never a
+second value that silently replaces the first. An expected identity that can match no ledger is the caller's error,
+refused before the file is judged (rule 1). The trusted log key given without a tip is the exception written at the end
+of this section.
 
 1. **The ledger identity** is the `self_hash` of entry 0, as written in the file (the `ledger_id` of a signed tip is
    the same value, `spec/CONFORMANCE.md`). It is readable without a tip. The expected identity (`expect_ledger_id`,
@@ -743,14 +745,20 @@ judged.
    makes the tip required (as the trusted post-quantum log key already does). Without a tip the verdict is FAIL with
    `tip_missing`; with a tip and no trusted log key, FAIL with `tip_untrusted`; with a checked tip, the comparison of
    instants of `spec/CONFORMANCE.md` (`tip_rolled_back`, `bad_not_before`). An empty value given to the Python API is a
-   given value: `bad_not_before`, never "not given".
+   given value, never "not given": it makes the tip required, and a checked tip FAILs with `bad_not_before`.
 3. **A PASS names what was compared.** When the expected identity is given and matches, the receipt's
    `scope.proves` names it; the receipt keeps its keys (`cryptovalid/receipts.py`).
-4. **An empty pin is not "no pin".** A key the caller pins and leaves empty pins nothing and is refused: an empty
-   `--expect-ledger-id` or `--trusted-pubkey` (exit 2, as since 2026-09-21), and in the archive verifier
-   (`cryptovalid_ingest.verify_archive`, `cryptovalid-ingest verify --pubkey`, the MCP tool `verify_archive`) an
-   empty `expected_pubkey_hex` — `""`, an empty list, or a list holding an empty or non-string key — a `ValueError`
-   (exit 2 for `--pubkey ""`); until 0.25.0 it meant "not pinned", ok with the warning `no_pinned_pubkey`.
+4. **An empty pin is not "no pin" on the command line and in the archive verifier.** An empty value of a value
+   option is refused: `--expect-ledger-id`, `--trusted-pubkey` and the other value options of the four command-line
+   verifiers (exit 2, as since 2026-09-21); `--tip` and `--trusted-pq-pubkey` of `cryptovalid_tip.py check` (exit 2;
+   until 0.25.0 an empty `--trusted-pq-pubkey` there dropped the post-quantum check: ok, exit 0); in the archive
+   verifier (`cryptovalid_ingest.verify_archive`, `cryptovalid-ingest verify --pubkey`, the MCP tool `verify_archive`)
+   an empty `expected_pubkey_hex` — `""`, an empty list, or a list holding an empty or non-string key — is a
+   `ValueError` (exit 2 for `--pubkey ""`). Until 0.25.0 `""` and an empty list meant "not pinned", ok with the warning
+   `no_pinned_pubkey`; a list holding an empty key was already not ok (`sth_signer_mismatch`). In the libraries an
+   empty trusted log key is still "not given", unchanged by this section: `trusted_pubkey_hex` and
+   `trusted_pq_pubkey_b64` of `verifier.verify_ledger`, `trustedPubkey` of the JS `verifyLedger`, and the string
+   parameters of the Go and Java libraries (the zero string).
 5. **A tool argument is one the tool takes.** The MCP server (`cryptovalid_mcp.py`) refuses an argument outside a
    tool's input schema (JSON-RPC `-32602`; the schemas say `additionalProperties: false`): until 0.25.0 it was dropped.
 

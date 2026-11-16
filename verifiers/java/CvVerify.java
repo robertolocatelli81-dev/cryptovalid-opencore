@@ -337,9 +337,9 @@ public class CvVerify {
             String a = args[k];
             try {
                 switch (a) {
-                    case "-tip": tip = val(args, ++k); break; case "-trusted-pubkey": tpk = val(args, ++k); break; case "-trusted-pq-pubkey": tpq = val(args, ++k); break;
-                    case "-tip-not-before": nb = val(args, ++k); break; case "-expect-ledger-id": lid = val(args, ++k); break; case "-pubkey": epk = val(args, ++k); break;
-                    case "-pq-pubkey": epq = val(args, ++k); break; case "-require-tip": reqTip = true; break; case "-require-pq": reqPQ = true; break;
+                    case "-tip": tip = once(tip, args, ++k); break; case "-trusted-pubkey": tpk = once(tpk, args, ++k); break; case "-trusted-pq-pubkey": tpq = once(tpq, args, ++k); break;
+                    case "-tip-not-before": nb = once(nb, args, ++k); break; case "-expect-ledger-id": lid = once(lid, args, ++k); break; case "-pubkey": epk = once(epk, args, ++k); break;
+                    case "-pq-pubkey": epq = once(epq, args, ++k); break; case "-require-tip": reqTip = true; break; case "-require-pq": reqPQ = true; break;
                     default: if (a.startsWith("-") || ledger != null) { usage(); return; } ledger = a;
                 }
             } catch (ArrayIndexOutOfBoundsException e) { usage(); return; }
@@ -375,6 +375,8 @@ public class CvVerify {
         System.exit(code);
     }
     // a value flag given with "" or with a flag as its value would silently mean "not given": usage (21/09/2026, one grammar in the five)
+    // a value flag given twice: usage (the first value would be dropped: SPEC v0.9 §17, NEMESIS 16/11/2026)
+    static String once(String current, String[] args, int k) { if (!current.isEmpty()) usage(); return val(args, k); }
     static String val(String[] args, int k) { if (k >= args.length || args[k].isEmpty() || args[k].startsWith("-")) usage(); return args[k]; }
     static void usage() { System.err.println("usage: java CvVerify.java <ledger.jsonl> [-tip F] [-trusted-pubkey HEX] [-trusted-pq-pubkey B64] [-require-tip] [-tip-not-before ISO] [-expect-ledger-id HEX] [-pubkey HEX] [-pq-pubkey B64] [-require-pq]"); System.exit(2); }
 

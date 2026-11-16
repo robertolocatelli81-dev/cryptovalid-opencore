@@ -456,7 +456,7 @@ if (argv[0] === "--conformance") {
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--require-tip") { opts[a] = true; continue; }
-    if (VALUE_FLAGS.has(a)) { const v = argv[i + 1]; if (v === undefined || v === "" || v.startsWith("-")) usage(); opts[a] = v; i++; continue; }
+    if (VALUE_FLAGS.has(a)) { const v = argv[i + 1]; if (v === undefined || v === "" || v.startsWith("-") || Object.prototype.hasOwnProperty.call(opts, a)) usage(); opts[a] = v; i++; continue; }   // given twice: usage (the first value would be dropped, SPEC v0.9 §17)
     usage();   // unknown flag, --flag=value form, or a second positional
   }
   if (argv[0].startsWith("-")) usage();

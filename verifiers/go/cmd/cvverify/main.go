@@ -17,17 +17,39 @@ import (
 	cv "github.com/robertolocatelli81-dev/cryptovalid-opencore/verifiers/go"
 )
 
+// onceString: a value flag given twice is a usage error, exit 2 (flag keeps the last value, so the first expectation would be
+// accepted and dropped: SPEC v0.9 §17, NEMESIS 16/11/2026)
+type once struct {
+	v   string
+	set bool
+}
+
+func (o *once) String() string { return o.v }
+func (o *once) Set(s string) error {
+	if o.set {
+		return fmt.Errorf("given twice (a second value would silently replace the first)")
+	}
+	o.v, o.set = s, true
+	return nil
+}
+
+func onceString(name, usage string) *string {
+	o := &once{}
+	flag.Var(o, name, usage)
+	return &o.v
+}
+
 func main() {
 	// a reader that is gone must be an EPIPE error the program sees, not a SIGPIPE death (exit 141, no message: 0.20.2)
 	signal.Ignore(syscall.SIGPIPE)
-	tip := flag.String("tip", "", "signed chain tip to check (default: <ledger>.tip.json if present)")
-	pk := flag.String("trusted-pubkey", "", "log key (hex) the tip must be signed with")
+	tip := onceString("tip", "signed chain tip to check (default: <ledger>.tip.json if present)")
+	pk := onceString("trusted-pubkey", "log key (hex) the tip must be signed with")
 	req := flag.Bool("require-tip", false, "FAIL when no signed tip is available")
-	nb := flag.String("tip-not-before", "", "refuse a tip dated before this ISO-8601 instant (rollback)")
-	lid := flag.String("expect-ledger-id", "", "the chain identity (self_hash of entry 0) you expect")
-	pq := flag.String("trusted-pq-pubkey", "", "ML-DSA-65 log key (base64) a hybrid tip must also be signed with (FAIL if missing/invalid)")
-	epk := flag.String("pubkey", "", "Ed25519 key (hex) every ENTRY signature must be by (signed ledgers)")
-	epq := flag.String("pq-pubkey", "", "ML-DSA-65 key (base64) every ENTRY must also be signed with: requires the layer (needs -pubkey)")
+	nb := onceString("tip-not-before", "refuse a tip dated before this ISO-8601 instant (rollback)")
+	lid := onceString("expect-ledger-id", "the chain identity (self_hash of entry 0) you expect")
+	pq := onceString("trusted-pq-pubkey", "ML-DSA-65 log key (base64) a hybrid tip must also be signed with (FAIL if missing/invalid)")
+	epk := onceString("pubkey", "Ed25519 key (hex) every ENTRY signature must be by (signed ledgers)")
+	epq := onceString("pq-pubkey", "ML-DSA-65 key (base64) every ENTRY must also be signed with: requires the layer (needs -pubkey)")
 	rpq := flag.Bool("require-pq", false, "FAIL unless every entry carries a valid ML-DSA-65 signature by -pq-pubkey")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: cvverify [-tip f] [-trusted-pubkey hex] [-require-tip] [-tip-not-before iso] [-expect-ledger-id hex] <ledger.jsonl>")

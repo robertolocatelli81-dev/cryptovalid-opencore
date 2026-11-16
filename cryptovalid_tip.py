@@ -353,9 +353,9 @@ def load_tip(path: str) -> Dict:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, check_ledger_id_arg, emit, receipt_cli, say, write_output
+    from verifier import _Once, Parser, check_ledger_id_arg, emit, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, check_ledger_id_arg, emit, receipt_cli, say, write_output
+    from opencore.verifier import _Once, Parser, check_ledger_id_arg, emit, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -369,14 +369,18 @@ def main(argv=None) -> int:
     s.add_argument("--pq-kms-region", help="AWS region of --pq-kms")
     s.add_argument("--pq-kms-profile", help="AWS credentials profile for --pq-kms")
     c = sub.add_parser("check", help="compare a ledger with a tip (chain itself is NOT verified here: use verifier.py --tip)")
-    c.add_argument("ledger"); c.add_argument("--tip"); c.add_argument("--trusted-pubkey"); c.add_argument("--not-before")
-    c.add_argument("--expect-ledger-id")
-    c.add_argument("--trusted-pq-pubkey", help="ML-DSA-65 log key (base64) the tip must ALSO be signed with (FAIL if missing/invalid)")
+    c.add_argument("ledger"); c.add_argument("--tip", action=_Once); c.add_argument("--trusted-pubkey", action=_Once)
+    c.add_argument("--not-before", action=_Once); c.add_argument("--expect-ledger-id", action=_Once)
+    c.add_argument("--trusted-pq-pubkey", action=_Once, help="ML-DSA-65 log key (base64) the tip must ALSO be signed with (FAIL if missing/invalid)")
     a = p.parse_args(argv)
     if a.cmd == "sign":
         from signer import pq_backend_from_args
         emit(json.dumps(sign_tip(a.ledger, a.keyfile, a.out, pq_backend=pq_backend_from_args(a.pq_key, a.pq_kms, a.pq_kms_region, a.pq_kms_profile)), indent=1))
         return 0
+    for flag in ("tip", "trusted_pq_pubkey"):   # one grammar with verifier.py: "" is not "not given" (until 0.25.1 an empty
+        v = getattr(a, flag)                     # --trusted-pq-pubkey dropped the post-quantum check: ok, exit 0; --not-before ""
+        if v is not None and (v == "" or v.startswith("-")):   # is bad_not_before, exit 1, §17 rule 2)
+            p.error(f"--{flag.replace('_', '-')} needs a value (got {v!r})")
     try:
         check_ledger_id_arg(a.expect_ledger_id)   # SPEC v0.9 §17: "" or a value that can match no ledger is a usage error
     except ValueError:
