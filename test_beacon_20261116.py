@@ -785,6 +785,8 @@ class Payment(unittest.TestCase):
         for bad in ("2026-02-29", "2026-13-01", "2026-11-16T00:00:00Z", "2026-1-16", "20261116", " 2026-11-16",
                     "2026-11-16\n", "２０２６-11-16", "0000-01-01"):
             self.assertMalformed(dict(base, execution_date=bad), "execution_date")
+        import datetime as dt                                            # a library value whose str() is a date
+        self.assertMalformed(dict(base, execution_date=dt.date(2026, 11, 16)), "execution_date")
         for k in ("payee_entity_id", "psp_id"):
             for good in ("A", "a" * 35, "IT01234567890"):
                 B.check_payment(dict(base, **{k: good}))
@@ -1740,7 +1742,8 @@ class EntryProof(unittest.TestCase):
 
     def test_entry_failures(self):
         e = json.loads(entry_line(self.led, 1))
-        for bad, why in ((b"not json", "entry_malformed"), (b"[]", "entry_malformed"),
+        for bad, why in ((b"not json", "entry_malformed"), (b"[]", "entry_malformed"), (b"5", "entry_malformed"),
+                         (b"null", "entry_malformed"), (b'"idx ts data prev_hash self_hash"', "entry_malformed"),
                          (json.dumps(dict(e, extra=1)).encode(), "entry_malformed"),
                          (json.dumps({k: v for k, v in e.items() if k != "ts"}).encode(), "entry_malformed"),
                          (json.dumps(dict(e, idx=True)).encode(), "entry_malformed"),
@@ -1792,7 +1795,8 @@ class EntryProof(unittest.TestCase):
         self.assertEqual(r["reason"], "proof_mismatch")                  # leaf against idx before the checkpoint
         r = self.v(checkpoint=witnessed_checkpoint(self.led, self.keys, witnesses=()))
         self.assertEqual(r["reason"], "checkpoint_not_in_pack")
-        for kw in ({"pack_dir": None}, {"checkpoint": None}):
+        for kw in ({"pack_dir": None}, {"checkpoint": None},
+                   {"checkpoint": None, "log_vkeys": None, "witness_vkeys": None}):   # never a proof without its root
             with self.assertRaises(ValueError):
                 self.v(**kw)
         with self.assertRaises(ValueError):

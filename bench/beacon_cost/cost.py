@@ -63,6 +63,8 @@ def main():
             lambda: conformance_run(cases["window_without_checkpoint_not_complete"]), n=max(5, N // 10))
         m["verify_complete_record_window_crl_checkpoint_trusted_list"] = median_ms(
             lambda: conformance_run(cases["complete_record"]), n=max(5, N // 10))
+        m["verify_entry_alone_proof_window_crl_checkpoint"] = median_ms(
+            lambda: conformance_run(cases["entry_alone_complete"]), n=max(5, N // 10))
     print(json.dumps(out, indent=1))
 
 
