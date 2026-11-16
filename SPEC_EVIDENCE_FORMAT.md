@@ -820,16 +820,16 @@ payload for a classic payment, so that the bound of §19 covers the payment's va
 and does not sit next to them. It is a recording format, not an assessment of compliance with any regulation.
 "Character" in this section and in §19 means a Unicode code point.
 
-*Texts the content was chosen after* (informative; all read on 2026-11-16 in secondary copies, not on EUR-Lex, which
-did not answer a direct read; to be re-read there before any of them is used as a legal statement): Regulation (EU)
-2023/1113 on transfers of funds, Art. 4-5 (within the Union the payment account numbers of payer and payee accompany a
-transfer, Art. 5(1); the names and further payer data are made available by the payment service provider within three
-working days on request, Art. 5(2)) and Art. 26 (the information of Art. 4-7 is kept for five years and then the
-personal data deleted, a Member State may extend the period by up to five years; read in the reproduction of
-springlex.eu); Regulation (EU) 2024/1624, Art. 77 (record keeping); Regulation (EU) 2024/886, Art. 5c (verification of
-the payee, applying to payment service providers in the euro area since 2025-10-09, according to the secondary sources
-read); Regulation (EU) 2016/679, Art. 5(1)(c) and Art. 17; EDPB Guidelines 02/2025 on processing of personal data through
-blockchain technologies, version 2.0 adopted on 2026-07-07, §52-53 (read on edpb.europa.eu).
+*Texts the content was chosen after* (informative; the version in force and where each was read are listed in §19
+rule 13; none of this is a legal opinion): Regulation (EU) 2023/1113, Art. 5(1) (within the Union a transfer carries at
+least the payment account numbers of payer and payee), Art. 5(2) (further information made available within three
+working days on request) and Art. 26 (records of the information of Art. 4-7 kept for five years, then the personal data
+deleted unless national law provides otherwise; a further retention a Member State allows or requires "shall not exceed
+five years"); Regulation (EU) 2024/1624, Art. 77 (record retention; the Regulation applies from 2027-07-10);
+Regulation (EU) No 260/2012, Art. 5c, inserted by Regulation (EU) 2024/886 (verification of the payee; payment service
+providers in a Member State whose currency is the euro comply by 2025-10-09, the others by 2027-07-09); Regulation (EU)
+2016/679, Art. 5(1)(c) and Art. 17; EDPB Guidelines 02/2025 on processing of personal data through blockchain
+technologies, version 2.0 adopted on 2026-07-07, §52-53.
 
 **Personal data.** An entry under a hash chain cannot be removed without breaking the chain. So the IBANs, the names, the
 payer's further data and the EndToEndId are recorded only as salted commitments, and their values and salts are kept by
@@ -907,7 +907,8 @@ of one digit by another and of one letter by another, not every substitution of 
 2026-11-16 on the two example IBANs below, 7 of their 1 540 single-character substitutions pass it, each a digit
 replaced by a letter (e.g. DE89370400440532I13000), which the registry's BBAN structure would refuse and this profile
 does not read. The IBAN rule applies to a disclosed value: the ledger holds only its commitment. Not carried: the
-outcome of the verification of the payee of Regulation (EU) 2024/886 Art. 5c; a member for it is left to a later
+outcome of the verification of the payee of Art. 5c of Regulation (EU) No 260/2012 (inserted by Regulation (EU)
+2024/886); a member for it is left to a later
 version, after its outcome codes are read on the primary text.
 
 **Amount limits.** The 18 integer digits are this profile's bound; whether every such amount fits the ISO 20022 amount
@@ -1109,9 +1110,11 @@ position in the history the pinned witnesses cosigned. Other entries of that his
 scope keeps `not_unique` (rule 7). A witness that cosigns two histories (dishonest or compromised), a log with two keys
 (two origins, two histories), and the revocation of a witness's or log's key are outside what this proves; several
 pinned witnesses narrow the first. The third party can also be a qualified electronic ledger: Commission Implementing
-Regulation (EU) 2025/2531 (read in secondary sources on 2026-11-16) asks of one a unique sequential chronological
-ordering by hash lists or trees (SHA-256 or stronger), advanced electronic signatures or seals under qualified
-certificates, and keys in a certified device. This format's own ledgers are not qualified electronic ledgers (their tips
+Regulation (EU) 2025/2531 (Annex, REQ-7.5-03 and REQ-7.5-04) asks of its provider a unique sequential chronological
+ordering of data records by cryptographic links "based in hash lists or hash trees" (SHA-256, SHA3-256 or higher), the
+origin of data records established by advanced electronic signatures or seals based on qualified certificates (CAdES,
+XAdES or JAdES), and, where digital signatures are used, the provider's signing keys in a certified secure cryptographic
+device. This format's own ledgers are not qualified electronic ledgers (their tips
 and checkpoints are not AdES under qualified certificates); this verifier checks only the witness.
 
 **7. Scope, closed.** The receipt carries `scope` = `{"proves": [...], "does_not_prove": [...]}`, sentences taken from
@@ -1213,6 +1216,29 @@ number of `--previous` other than of `--pulse`, a value option given twice or gi
 2). The receipt is one JSON object on stdout. Exit 0 `verified`, 1 `invalid` or `not_evaluated`, 2 a usage error or a
 `refused` input, 74 a receipt not written whole or a check that could not run (§10). `auto` (§12) does not change: a
 ledger carrying a payment entry is a ledger.
+
+**13. References, as checked on 2026-11-16.** Each with the version in force and where it was read; "not confirmed"
+marks what could not be checked against its issuer today.
+
+| Reference | Version and status | Read on |
+|---|---|---|
+| Regulation (EU) 2023/1113, Art. 4, 5, 26 | OJ L 150, 9.6.2023; "In force", no consolidated amendment listed | EUR-Lex (ELI page and status page) |
+| Regulation (EU) 2024/1624, Art. 77 | "In force"; applies from 2027-07-10 (Art. 90, as read) | EUR-Lex |
+| Regulation (EU) No 260/2012, Art. 5c | inserted by Regulation (EU) 2024/886 ("In force"); compliance 2025-10-09 (euro), 2027-07-09 (others) | EUR-Lex (2024/886) |
+| Commission Implementing Regulation (EU) 2025/2531 of 16 December 2025, Annex | "In force" | EUR-Lex |
+| Regulation (EU) No 910/2014 (eIDAS), Art. 41(2) | consolidated version of 2024-10-18 (after Regulation (EU) 2024/1183): Art. 41(2) unchanged | EUR-Lex |
+| Regulation (EU) 2016/679, Art. 5(1)(c), 17 | OJ L 119, 4.5.2016; in force | EUR-Lex (ELI page; consolidation not checked) |
+| EDPB Guidelines 02/2025 | version 2.0 adopted 2026-07-07 (its version history: 1.1 of 2025-04-08, 2.0 after public consultation); no later version found | edpb.europa.eu, PDF sha256 e90cc80ef9ba6c26… |
+| NIST IR 8213 | Initial Public Draft, May 2019, never finalised; NIST planning note of 2025-01-23: "NIST continues to develop this publication" | csrc.nist.gov |
+| RFC 3161 | Proposed Standard (2001), updated by RFC 5816 (ESSCertIDv2); not obsoleted | rfc-editor.org |
+| RFC 5280 | Proposed Standard (2008), updated by RFC 6818, 8398, 8399, 9549, 9598, 9608, 9618, 9925, 10007; not obsoleted | rfc-editor.org |
+| RFC 6962 | Experimental (2013), obsoleted by RFC 9162: cited only for the Merkle tree hash that C2SP tlog-checkpoint and this format's §9 use | rfc-editor.org |
+| RFC 9562 (UUID) | Proposed Standard (May 2024), obsoletes RFC 4122 | rfc-editor.org |
+| RFC 4998 | Proposed Standard (2007), not updated | rfc-editor.org |
+| ISO 4217 list one | published 2026-09-17 (attribute `Pblshd` of the file the maintenance agency serves, unchanged on 2026-11-16) | six-group.com |
+| ISO 13616-1, ISO/IEC 7064 | not confirmed: the ISO catalogue was not read; the rule applied is the one stated in §18 | — |
+| ETSI TS 119 612, TS 119 615, EN 319 102-1 | not confirmed: versions not re-read; the rules applied are the ones written in rule 5 | — |
+| C2SP tlog-checkpoint, tlog-witness | as in §16 (C2SP commit 09f3e519fe79, read 2026-11-15) | github.com/C2SP |
 
 **12. Limits of this version, stated** (each with its reason): the trust profile file (rule 9); the token's renewal
 (rule 5); `accuracy` (rule 5: read by §11 only as part of the token, not used); the verification of the payee's outcome
