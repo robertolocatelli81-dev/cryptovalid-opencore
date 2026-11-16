@@ -558,6 +558,113 @@ def _revocation(token_der: bytes, signer_sha256: str, pins_pem: bytes, crls: lis
     return "tsa_certificate_revoked", dict(rev, status="revoked")
 
 
+OID_SIGNING_CERTIFICATE = "1.2.840.113549.1.9.16.2.12"      # RFC 2634 §5.4, ESSCertID with SHA-1
+OID_SIGNING_CERTIFICATE_V2 = "1.2.840.113549.1.9.16.2.47"   # RFC 5035, ESSCertIDv2
+OID_SUBJECT_ALT_NAME = "2.5.29.17"
+ESS_HASHES = {"1.3.14.3.2.26": "sha1", "2.16.840.1.101.3.4.2.4": "sha224", "2.16.840.1.101.3.4.2.1": "sha256",
+              "2.16.840.1.101.3.4.2.2": "sha384", "2.16.840.1.101.3.4.2.3": "sha512", "2.16.840.1.101.3.4.2.8": "sha3_256",
+              "2.16.840.1.101.3.4.2.9": "sha3_384", "2.16.840.1.101.3.4.2.10": "sha3_512"}
+
+
+def _tlv_bytes(tag: int, v: bytes) -> bytes:
+    n = len(v)
+    ln = bytes([n]) if n < 0x80 else bytes([0x80 | ((n.bit_length() + 7) // 8)]) + n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([tag]) + ln + v
+
+
+def _signer_info(token_der: bytes):
+    """the SignerInfo and the TSTInfo elements of a token that passed parse_token: ([(tag, value)], [(tag, value)])"""
+    ci = _der_items(_der_one(token_der, "ContentInfo", 0x30), "ContentInfo")
+    sd = _der_items(_der_one(ci[1][1], "SignedData", 0x30), "SignedData")
+    si = _der_items(_der_items(sd[-1][1], "signerInfos")[0][1], "SignerInfo")
+    eci = _der_items(sd[2][1], "encapContentInfo")
+    tst = _der_items(_der_one(_der_one(eci[1][1], "eContent", 0x04), "TSTInfo", 0x30), "TSTInfo")
+    return si, tst
+
+
+def _signer_named_by_key_id(token_der: bytes) -> bool:
+    """SPEC §11 step 7: the SignerInfo's sid is [0] subjectKeyIdentifier (RFC 5652 §5.3), not issuerAndSerialNumber"""
+    return _signer_info(token_der)[0][1][0] == 0x80
+
+
+def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int, tmp: str):
+    """SPEC §11 step 7 for a signer named by subjectKeyIdentifier: None when the token is established under the pinned
+    certificates, else why not. (a) ESS signing-certificate attribute(s), (b) the `tsa` field, (c) openssl verify with the
+    timestampsign purpose, the chain to a pinned certificate and the validity at genTime."""
+    import base64
+    import hashlib
+    try:
+        si, tst = _signer_info(token_der)
+        cert = _der_items(_der_one(signer_der, "certificate", 0x30), "certificate")
+        tbs = _der_items(cert[0][1], "tbsCertificate")
+        k = 1 if tbs[0][0] == 0xA0 else 0
+        serial, issuer, subject = tbs[k][1], _tlv_bytes(0x30, tbs[k + 2][1]), _tlv_bytes(0x30, tbs[k + 4][1])
+        san = []
+        for tag, v in tbs[k + 6:]:
+            if tag == 0xA3:
+                for _t, ev in _der_items(_der_one(v, "extensions", 0x30), "extensions"):
+                    e = _der_items(ev, "Extension")
+                    if _der_oid(e[0][1], "extnID") == OID_SUBJECT_ALT_NAME:
+                        san = [_tlv_bytes(gt, gv) for gt, gv in _der_items(_der_one(e[-1][1], "subjectAltName", 0x30),
+                                                                              "GeneralNames")]
+        # (a) ESS
+        attrs = {}
+        for _t, av in _der_items(si[3][1], "signedAttrs"):
+            a = _der_items(av, "Attribute")
+            attrs.setdefault(_der_oid(a[0][1], "attrType"), []).append(a[1][1])
+        found = [o for o in (OID_SIGNING_CERTIFICATE, OID_SIGNING_CERTIFICATE_V2) if o in attrs]
+        if not found:
+            return "no signingCertificate or signingCertificateV2 attribute (ESS)"
+        for o in found:
+            vals = attrs[o]
+            if len(vals) != 1 or len(_der_items(vals[0], "attrValues")) != 1:
+                return f"ESS attribute {o}: not exactly one value"
+            sc = _der_items(_der_one(vals[0], "SigningCertificate", 0x30), "SigningCertificate")
+            ids = _der_items(sc[0][1], "certs")
+            if len(ids) != 1:
+                return f"ESS attribute {o}: {len(ids)} ESSCertIDs (exactly one is evaluated here)"
+            cid = _der_items(ids[0][1], "ESSCertID")
+            alg = "sha1"
+            if o == OID_SIGNING_CERTIFICATE_V2:
+                alg = "sha256"
+                if cid and cid[0][0] == 0x30:
+                    ai = _der_items(cid[0][1], "hashAlgorithm")
+                    alg = ESS_HASHES.get(_der_oid(ai[0][1], "hashAlgorithm"))
+                    if alg is None or not (len(ai) == 1 or (len(ai) == 2 and ai[1] == (0x05, b""))):
+                        return "ESSCertIDv2: hash algorithm not known"
+                    cid = cid[1:]
+            if not cid or cid[0][0] != 0x04 or len(cid) > 2 or (len(cid) == 2 and cid[1][0] != 0x30):
+                return "ESSCertID: not {certHash, issuerSerial?}"
+            if cid[0][1] != hashlib.new(alg, signer_der).digest():
+                return "ESS certHash is not the hash of the signer certificate"
+            if len(cid) == 2:
+                iss = _der_items(cid[1][1], "IssuerSerial")
+                names = _der_items(_der_one(_tlv_bytes(0x30, iss[0][1]), "GeneralNames", 0x30), "GeneralNames") \
+                    if iss and iss[0][0] == 0x30 else None
+                if not (len(iss) == 2 and iss[1][0] == 0x02 and names is not None and len(names) == 1
+                        and names[0] == (0xA4, issuer) and iss[1][1] == serial):
+                    return "ESS issuerSerial does not name the signer certificate's issuer and serial number"
+        # (b) the tsa field
+        tsa = [v for tag, v in tst[5:] if tag == 0xA0]
+        if tsa and tsa[0] not in [_tlv_bytes(0xA4, subject)] + san:
+            return "the TSTInfo tsa field names neither the signer's subject nor one of its subjectAltName"
+    except (TokenError, IndexError, ValueError) as e:
+        return f"signer certificate or attributes not read: {e}"[:160]
+    # (c) chain, purpose, validity at genTime: the OpenSSL chain building of ts -verify
+    pem = lambda der: b"-----BEGIN CERTIFICATE-----\n" + base64.encodebytes(der) + b"-----END CERTIFICATE-----\n"  # noqa: E731
+    sp, cp, up = (os.path.join(tmp, n) for n in ("ski_signer.pem", "ski_pinned.pem", "ski_untrusted.pem"))
+    _tmp_write(sp, pem(signer_der))
+    _tmp_write(cp, pins_pem)
+    _tmp_write(up, pins_pem + b"".join(pem(c) for c in _token_certificates(token_der)))
+    p = _run_openssl(["openssl", "verify", "-purpose", "timestampsign", "-partial_chain", "-attime", str(at),
+                      "-CAfile", cp, "-no-CApath", "-no-CAstore", "-untrusted", up, sp], capture_output=True, timeout=30)
+    if p.returncode < 0:
+        raise _not_run("cannot run openssl here", OSError(f"terminated by signal {-p.returncode}"))
+    if p.returncode != 0:
+        return _last_line(p.stderr or p.stdout, "openssl verify refused the signer certificate")
+    return None
+
+
 def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_certs=None, crls=None) -> dict:
     """SPEC §11 (v0.6): the one check of an RFC 3161 token in this repository. `token_der` is a TimeStampToken or a granted
     TimeStampResp; `digest` the expected messageImprint.hashedMessage; `hash_alg` (optional) the algorithm it was stamped
@@ -569,6 +676,7 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
     openssl present that cannot run here, does not answer, or is ended by a signal: CheckNotRun (SPEC §10, §11).
     `crls` (SPEC v0.10 §11 step 8, needs `tsa_certs`): CRLs the caller pins; a `verified` token is then checked for the
     revocation of its signer certificate, and the outcome gains `revocation`. None: no revocation check, as before."""
+    import hashlib
     import shutil
     from datetime import datetime, timezone
     out = {"status": "invalid", "counts_as_timestamp": False, "reason": None, "detail": None, "tst_info": None,
@@ -595,7 +703,8 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
         out.update(reason=e.reason, detail=e.detail)
         return out
     pins = _pem_certs(tsa_certs) if tsa_certs else None
-    state, signer, why = token_signer(t["token_der"], pins)
+    state, signer_der, why = _token_signer(t["token_der"], pins)
+    signer = None if signer_der is None else hashlib.sha256(signer_der).hexdigest()
     if state == "not_evaluated":
         out.update(status="not_evaluated", reason="openssl_absent", note="openssl absent: signature not checked")
         return out
@@ -612,13 +721,20 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
         _tmp_write(tp, t["token_der"])
         _tmp_write(cp, pins)
         at = int(datetime.strptime(t["gen_time"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
-        p = _run_openssl(["openssl", "ts", "-verify", "-token_in", "-in", tp, "-digest", t["hashed_message"].hex(),
-                          "-CAfile", cp, "-untrusted", cp, "-partial_chain", "-attime", str(at)], capture_output=True, timeout=30)
-        if p.returncode < 0:
-            raise _not_run("cannot run openssl here", OSError(f"terminated by signal {-p.returncode}"))
-        if p.returncode != 0 or b"Verification: OK" not in (p.stdout or b"").splitlines():
-            out.update(reason="not_issued_by_pinned_tsa", detail=_last_line(p.stderr, "openssl ts -verify refused it"))
-            return out
+        if _signer_named_by_key_id(t["token_der"]):   # SPEC §11 step 7, subjectKeyIdentifier: openssl ts cannot read it
+            why = _key_id_anchor(t["token_der"], signer_der, pins, at, d)
+            if why is not None:
+                out.update(reason="not_issued_by_pinned_tsa", detail=why[:200])
+                return out
+        else:
+            p = _run_openssl(["openssl", "ts", "-verify", "-token_in", "-in", tp, "-digest", t["hashed_message"].hex(),
+                              "-CAfile", cp, "-untrusted", cp, "-partial_chain", "-attime", str(at)],
+                             capture_output=True, timeout=30)
+            if p.returncode < 0:
+                raise _not_run("cannot run openssl here", OSError(f"terminated by signal {-p.returncode}"))
+            if p.returncode != 0 or b"Verification: OK" not in (p.stdout or b"").splitlines():
+                out.update(reason="not_issued_by_pinned_tsa", detail=_last_line(p.stderr, "openssl ts -verify refused it"))
+                return out
         out.update(status="verified", counts_as_timestamp=True, note="verified against the pinned TSA certificate(s)")
         if crl_objs is ImportError:
             out.update(status="not_evaluated", counts_as_timestamp=False, reason="crl_backend_missing",
@@ -636,12 +752,19 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
 
 
 def token_signer(token_der: bytes, pins_pem: bytes = None):
-    """SPEC §11 step 6 on a token that passes steps 1-4: ("valid", signer certificate SHA-256 hex, None), ("invalid", None,
+    """SPEC §11 step 6 (see _token_signer): ("valid", signer certificate SHA-256 hex, None), ("invalid", None, reason) or
+    ("not_evaluated", None, "openssl absent")."""
+    import hashlib
+    state, der, why = _token_signer(token_der, pins_pem)
+    return state, (None if der is None else hashlib.sha256(der).hexdigest()), why
+
+
+def _token_signer(token_der: bytes, pins_pem: bytes = None):
+    """SPEC §11 step 6 on a token that passes steps 1-4: ("valid", signer certificate DER, None), ("invalid", None,
     reason) or ("not_evaluated", None, "openssl absent"). openssl `cms -verify -noverify`: the CMS signature and the
     messageDigest attribute, with the certificate the SignerInfo names, looked up in the token and, when given, in
     `pins_pem` (a token requested with certReq FALSE carries no certificate, RFC 3161 §2.4.1); no chain. openssl present
     that cannot run here, does not answer or is ended by a signal: CheckNotRun."""
-    import hashlib
     import shutil
     try:
         tok = parse_token(token_der)["token_der"]
@@ -667,7 +790,7 @@ def token_signer(token_der: bytes, pins_pem: bytes = None):
                 der = _first_pem_der(f.read())
         if der is None:
             return "invalid", None, _last_line(p.stderr, "openssl cms -verify refused it")
-        return "valid", hashlib.sha256(der).hexdigest(), None
+        return "valid", der, None
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

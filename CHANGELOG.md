@@ -91,6 +91,22 @@ run by the same author, not by a third party.
   failed signature already leaves it outside the pinned names); `tree_size >= 1` dropped from the proof's grammar
   (implied by 0 <= leaf_index < tree_size).
 
+### Fixed
+
+- **An RFC 3161 token whose SignerInfo names its signer by subjectKeyIdentifier** (allowed by RFC 5652 §5.3) was
+  `not_issued_by_pinned_tsa` (in an evidence pack, `tsa_unresolved`) even when valid: openssl `ts -verify` reads the token
+  as PKCS #7 and refuses that form with an ASN.1 error. Measured on 2026-11-16 with OpenSSL 3.0.22: the TSTInfo of a
+  valid token re-signed by `openssl cms -sign -keyid -cades` with the same TSA key verified at §11 step 6 and failed
+  step 7. Step 7 (SPEC v0.10) now makes the same checks one by one for that form: the ESS signingCertificate or
+  signingCertificateV2 attribute against the signer certificate, the TSTInfo `tsa` field against its subject or
+  subjectAltName, and `openssl verify -purpose timestampsign -partial_chain -attime` against the pinned certificates
+  only. Found while extracting the payment profile into a separate repository. `test_tsa_signer_key_id_20261116.py`:
+  21 tests on CAs, TSAs and tokens made with openssl; the valid token is refused on 12f6c8b and verified now; another
+  key identifier, another TSA's key, no ESS attribute, a certificate without timeStamping, a `tsa` field naming another
+  TSA, a system certificate directory and a CA without keyCertSign behind a pinned leaf are refused; 22 hand mutants of
+  the new lines, 21 detected, 1 equivalent (the sid tag compared with `!= 0x30` instead of `== 0x80`: `parse_token`
+  admits no other tag).
+
 ### Measured
 
 - The deployed NIST Beacon 2.0 does not serialize as the draft NIST IR 8213 (May 2019, still an initial public draft on
