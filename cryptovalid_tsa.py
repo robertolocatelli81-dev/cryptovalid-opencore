@@ -429,8 +429,11 @@ def _last_line(err: bytes, default: str) -> str:
     return re.sub(r"^[0-9A-Fa-f]+:error:", "", lines[-1].strip())[:200] if lines else default   # no thread id
 
 
-# SPEC v0.10 §11 step 8: the RFC 5280 §5.3.1 reasons after which no token of the certificate is valid, whatever its genTime
-REVOKED_FOR_ALL_TOKENS = frozenset({"key_compromise", "ca_compromise", "aa_compromise"})
+# SPEC v0.10 §11 step 8, after RFC 3161 §4 item 1: only these reasons (RFC 5280 §5.3.1) leave valid the tokens generated
+# before the revocation time; a reason code absent, a compromise or any other reason makes every token of the certificate
+# invalid; certificateHold and removeFromCRL decide nothing (closed list: what is not named here is revoked for all)
+KEEPS_EARLIER_TOKENS = frozenset({"unspecified", "affiliation_changed", "superseded", "cessation_of_operation"})
+UNDECIDED_REASONS = frozenset({"certificate_hold", "remove_from_crl"})
 
 
 def _load_crls(crls) -> list:
@@ -510,6 +513,16 @@ def _revocation(token_der: bytes, signer_sha256: str, pins_pem: bytes, crls: lis
     if not applicable:
         return "tsa_revocation_unknown", {"status": "unknown",
                                           "detail": "no pinned CRL of the signer's issuer verifies under a pinned certificate"}
+    from cryptography.x509.oid import CRLEntryExtensionOID, ExtensionOID
+    read_crl = {ExtensionOID.CRL_NUMBER, ExtensionOID.AUTHORITY_KEY_IDENTIFIER, ExtensionOID.AUTHORITY_INFORMATION_ACCESS,
+                ExtensionOID.FRESHEST_CRL}
+    read_entry = {CRLEntryExtensionOID.CRL_REASON, CRLEntryExtensionOID.INVALIDITY_DATE}
+    for c in applicable:   # RFC 5280 §5.2, §6.3.3: a delta CRL or one with a distribution point does not cover every
+        other = [e.oid.dotted_string for e in c.extensions if e.oid not in read_crl]   # certificate and reason: not used
+        other += [e.oid.dotted_string for r in c for e in r.extensions if e.oid not in read_entry]
+        if other:
+            return "tsa_revocation_unknown", {"status": "unknown", "detail": "a pinned CRL carries an extension this check "
+                                              f"does not process ({', '.join(sorted(set(other)))[:120]}): not a complete CRL"}
     this_update = max(c.last_update_utc for c in applicable).strftime("%Y-%m-%dT%H:%M:%SZ")
     found = []
     for c in applicable:
@@ -530,9 +543,9 @@ def _revocation(token_der: bytes, signer_sha256: str, pins_pem: bytes, crls: lis
     reason, when = found[0]
     rev = {"crl_this_update": this_update, "revocation_reason": reason,
            "revocation_date": when.strftime("%Y-%m-%dT%H:%M:%SZ")}
-    if reason == "remove_from_crl":
-        return "tsa_revocation_unknown", dict(rev, status="unknown", detail="removeFromCRL in a CRL")
-    if reason in REVOKED_FOR_ALL_TOKENS:
+    if reason in UNDECIDED_REASONS:
+        return "tsa_revocation_unknown", dict(rev, status="unknown", detail=f"{reason} in a CRL")
+    if reason not in KEEPS_EARLIER_TOKENS:   # RFC 3161 §4: no reason code, a compromise, or a reason outside its list
         return "tsa_certificate_revoked", dict(rev, status="revoked")
     m = gen_time[:19] + "." + (gen_time[20:-1] + "000000")[:6] if "." in gen_time else gen_time[:19] + ".000000"
     gt = datetime.strptime(m, "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc)

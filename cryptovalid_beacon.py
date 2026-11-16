@@ -19,9 +19,9 @@ not the draft NIST IR 8213's 8-byte ones); outputValue; the link and the period 
 SHA-512(localRandomValue) = previous precommitmentValue; the entry's value = the pulse's outputValue. The window uses
 evidence_pack.verify_pack with pinned TSA certificates (SPEC §10-§11) and optional pinned CRLs (§11 step 8), within a
 maximum width the caller gives, reported as from a qualified TSA only through a pinned EU Trusted List snapshot
-(cryptovalid_lotl). The entry is "the unique one" only under a checkpoint signed by a pinned log key and
-cosigned by pinned witnesses (cryptovalid_witness.verify_witnessed, SPEC §19 rule 6): one pulse admits many records,
-and one token can cover them all. The receipt's `scope` names what is proved and what is not, from a closed list.
+(cryptovalid_lotl). The entry is fixed at its position in one history only under a checkpoint signed by a pinned log
+key and cosigned by pinned witnesses (cryptovalid_witness.verify_witnessed, SPEC §19 rule 6): one pulse admits many
+records, one token can cover them all, and other entries of the witnessed history may carry the same pulse. The receipt's `scope` names what is proved and what is not, from a closed list.
 
 Not checked: the certificate's chain and revocation (the pin is the trust); the hour/day/month/year list values; the
 status flags other than 0 (refused, not evaluated); CURBy (not supported yet, SPEC §19). `cryptography` is needed for
@@ -78,7 +78,8 @@ SCOPE = {
                                 "EU Trusted List snapshot",
     "unique_under_pinned_witness": "the entry is the one at its position in the history the pinned witnesses cosigned",
     "not_execution": "that a payment service provider executed the payment",
-    "not_unique": "that this is the only entry composed after that pulse",
+    "not_unique": "that this is the only entry composed after that pulse (a witness fixes the entry at its position, "
+                  "not the other entries that carry the same pulse)",
     "not_ownership": "that the IBANs belong to the parties",
     "not_operator": "anything against the beacon's operator beyond its freshness promise",
     "not_qualified": "that the upper bound is a qualified electronic time stamp",
@@ -568,7 +569,7 @@ def _witnessed(checkpoint, log_vkeys: List[str], witness_vkeys: List[str], min_w
 def _scope(window_ok: bool, unique_ok: bool, qualified: bool = False) -> Dict:
     proves = ["composed_after_pulse"] + (["stamped_before_gen_time"] if window_ok else []) \
         + (["stamped_by_qualified_tsa"] if qualified else []) + (["unique_under_pinned_witness"] if unique_ok else [])
-    not_proved = ["not_execution"] + ([] if unique_ok else ["not_unique"]) + ["not_ownership", "not_operator"] \
+    not_proved = ["not_execution", "not_unique", "not_ownership", "not_operator"] \
         + ([] if qualified else ["not_qualified"]) + ["not_legal_beacon"]
     return {"proves": [{k: SCOPE[k]} for k in proves], "does_not_prove": [{k: SCOPE[k]} for k in not_proved]}
 
@@ -715,7 +716,7 @@ def main(argv=None, prog=None, cmd_name=None) -> int:
     ap.add_argument("--tsa-trusted-list", action=_Once, type=_nonempty, metavar="XML",
                     help="an EU Trusted List snapshot you pin: the window says 'qualified' only through it (needs --pack)")
     ap.add_argument("--checkpoint", action=_Once, type=_nonempty,
-                    help="a checkpoint of this ledger cosigned by witnesses: establishes that the entry is the unique one")
+                    help="a checkpoint of this ledger cosigned by witnesses: fixes the entry at its position in the history the witnesses cosigned")
     ap.add_argument("--log-vkey", action="append", default=None, type=_nonempty,
                     help="the log key you trust for --checkpoint (repeatable)")
     ap.add_argument("--witness-vkey", action="append", default=None, type=_nonempty,

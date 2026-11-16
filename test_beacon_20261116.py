@@ -1213,9 +1213,23 @@ class Uniqueness(unittest.TestCase):
         self.assertEqual((r["unique"]["status"], r["unique"]["witnesses"], r["unique"]["checkpoint_size"]),
                          ("witnessed", ["witness.example/a"], 3))
         self.assertEqual([list(x)[0] for x in r["scope"]["proves"]], ["composed_after_pulse", "unique_under_pinned_witness"])
-        self.assertNotIn({"not_unique": B.SCOPE["not_unique"]}, r["scope"]["does_not_prove"])
+        self.assertIn({"not_unique": B.SCOPE["not_unique"]}, r["scope"]["does_not_prove"])   # NEMESIS 16/11: a witness
+        # fixes the entry at its position; another entry of the same history can carry the same pulse (below)
         self.assertIs(r["record_complete"], False)                      # no window without the pack
         self.assertEqual({x["reason"] for i, x in enumerate(results) if i != 7}, {"checkpoint_root_mismatch"})
+
+    def test_same_pulse_twice_in_one_witnessed_history(self):
+        """NEMESIS 16/11/2026: a witnessed checkpoint fixes each entry at its position, not that it is the only entry
+        after the pulse: two payments of one witnessed history carry the same pulse, both verify, both keep not_unique"""
+        p = pulse(2030303)
+        d = payment_datas(p)
+        twin = dict(d[1], payment_id="PAY-2026-11-16-0002B", amount="9999.00")
+        led = chain(d + [twin], payment_ts(p) + [payment_ts(p)[2]])
+        note = witnessed_checkpoint(led, self.keys)
+        for idx in (1, 3):
+            r = self.u(led, note, entry=idx)
+            self.assertEqual((r["status"], r["unique"]["status"]), ("verified", "witnessed"), idx)
+            self.assertIn({"not_unique": B.SCOPE["not_unique"]}, r["scope"]["does_not_prove"], idx)
 
     def test_checkpoint_failures(self):
         led = build_payment_ledger()
@@ -1276,7 +1290,7 @@ class Complete(unittest.TestCase):
             self.assertEqual([list(x)[0] for x in r["scope"]["proves"]],
                              ["composed_after_pulse", "stamped_before_gen_time", "unique_under_pinned_witness"])
             self.assertEqual([list(x)[0] for x in r["scope"]["does_not_prove"]],
-                             ["not_execution", "not_ownership", "not_operator", "not_qualified", "not_legal_beacon"])
+                             ["not_execution", "not_unique", "not_ownership", "not_operator", "not_qualified", "not_legal_beacon"])
             # eIDAS Art. 41(2): "qualified" only through a pinned Trusted List snapshot (cryptovalid_lotl, SPEC §19 rule 5)
             from test_lotl import _QC, _QTST, _svc, _tl
             from cryptography import x509

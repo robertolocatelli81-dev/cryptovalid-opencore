@@ -9,8 +9,10 @@ with the CRL refused it. Here a CA, a TSA and its CRL are made with openssl on t
 
 Positive control: without `crls` (the code of 0.25.1) the token issued after the revocation is `verified`
 (`test_positive_control_without_crls`); with them it is refused. The rule: keyCompromise, cACompromise, aACompromise
-make every token of the certificate invalid; another reason leaves valid a token whose genTime is before the revocation
-date."""
+make every token of the certificate invalid, and so does a revocation without a reason code (RFC 3161 §4 item 1) or with a
+reason outside RFC 3161's list; unspecified, affiliationChanged, superseded and cessationOfOperation leave valid a token
+whose genTime is before the revocation date; certificateHold and removeFromCRL decide nothing. A CRL with an extension
+this check does not process (a delta CRL, an issuing distribution point: RFC 5280 §5.2, §6.3.3) is not used."""
 import base64
 import hashlib
 import json
@@ -140,8 +142,8 @@ class Revocation(unittest.TestCase):
         self.assertTrue(lab.openssl_crl_check(tok))
 
     def test_compromise_reasons_invalidate_every_token(self):
-        for reason in ("keyCompromise", "CACompromise"):
-            lab = Lab(self.td, reason)
+        for reason in ("keyCompromise", "CACompromise", None):   # None: no reason code, RFC 3161 §4 item 1
+            lab = Lab(self.td, str(reason))
             before = lab.token()
             tick()
             lab.revoke(reason)
@@ -154,7 +156,7 @@ class Revocation(unittest.TestCase):
                 self.assertEqual(v["revocation"]["status"], "revoked")
 
     def test_other_reasons_keep_earlier_tokens(self):
-        for reason in ("superseded", "cessationOfOperation", "affiliationChanged", None):
+        for reason in ("superseded", "cessationOfOperation", "affiliationChanged", "unspecified"):
             lab = Lab(self.td, str(reason))
             before = lab.token()
             tick()
@@ -166,6 +168,99 @@ class Revocation(unittest.TestCase):
             self.assertEqual((v["status"], v["revocation"]["status"]), ("verified", "revoked_after_gen_time"), (reason, v))
             v = self.check(lab, after, [crl])
             self.assertEqual((v["status"], v["reason"]), ("invalid", "tsa_certificate_revoked"), (reason, v))
+
+    def test_certificate_hold_is_unknown(self):
+        lab = Lab(self.td)
+        tok = lab.token()
+        tick()
+        lab.revoke("certificateHold")
+        v = self.check(lab, tok, [lab.crl()])
+        self.assertEqual((v["status"], v["reason"], v["revocation"]["status"]), ("invalid", "tsa_revocation_unknown", "unknown"))
+
+    def _crl(self, lab, *, issuer_key=None, ext=None, reason=None, when=None, last=None, entry_ext=None):
+        """a CRL of the lab's CA built with cryptography (openssl ca cannot write these reasons and extensions)"""
+        import datetime
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        with open(lab.j("ca.crt"), "rb") as f:
+            ca = x509.load_pem_x509_certificate(f.read())
+        with open(issuer_key or lab.j("ca.key"), "rb") as f:
+            key = serialization.load_pem_private_key(f.read(), None)
+        with open(lab.j("tsa.crt"), "rb") as f:
+            tsa = x509.load_pem_x509_certificate(f.read())
+        now = datetime.datetime.now(datetime.timezone.utc)
+        b = (x509.CertificateRevocationListBuilder().issuer_name(ca.subject).last_update(last or now)
+             .next_update(now + datetime.timedelta(days=1)))
+        if ext is not None:
+            b = b.add_extension(ext, critical=True)
+        if when is not None:
+            e = x509.RevokedCertificateBuilder().serial_number(tsa.serial_number).revocation_date(when)
+            if reason is not None:
+                e = e.add_extension(x509.CRLReason(reason), critical=False)
+            if entry_ext is not None:
+                e = e.add_extension(entry_ext, critical=True)
+            b = b.add_revoked_certificate(e.build())
+        return b.sign(key, hashes.SHA256()).public_bytes(serialization.Encoding.DER)
+
+    def test_reasons_outside_rfc3161_and_aa_compromise(self):
+        import datetime
+        from cryptography import x509
+        lab = Lab(self.td)
+        tok = lab.token()
+        past = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)   # revoked AFTER the token
+        for reason in (x509.ReasonFlags.aa_compromise, x509.ReasonFlags.privilege_withdrawn):
+            v = self.check(lab, tok, [self._crl(lab, reason=reason, when=past)])
+            self.assertEqual((v["status"], v["reason"], v["revocation"]["status"]),
+                             ("invalid", "tsa_certificate_revoked", "revoked"), reason)
+        v = self.check(lab, tok, [self._crl(lab, reason=x509.ReasonFlags.superseded, when=past)])
+        self.assertEqual((v["status"], v["revocation"]["status"]), ("verified", "revoked_after_gen_time"))
+
+    def test_revocation_date_equal_to_gen_time(self):
+        import datetime
+        from cryptography import x509
+        lab = Lab(self.td)
+        tok = lab.token()
+        gt = T.verify_token(tok, DIGEST, "sha256", [lab.j("ca.crt")])["tst_info"]["gen_time"]
+        at = datetime.datetime.strptime(gt[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)
+        self.assertNotIn(".", gt)                                    # openssl ts with accuracy secs:1 writes whole seconds
+        v = self.check(lab, tok, [self._crl(lab, reason=x509.ReasonFlags.superseded, when=at)])
+        self.assertEqual((v["status"], v["reason"]), ("invalid", "tsa_certificate_revoked"))   # "at or after it"
+        v = self.check(lab, tok, [self._crl(lab, reason=x509.ReasonFlags.superseded, when=at + datetime.timedelta(seconds=1))])
+        self.assertEqual((v["status"], v["revocation"]["status"]), ("verified", "revoked_after_gen_time"))
+
+    def test_crl_scope_not_processed_is_unknown(self):
+        from cryptography import x509
+        lab = Lab(self.td)
+        tok = lab.token()
+        v = self.check(lab, tok, [self._crl(lab)])
+        self.assertEqual((v["status"], v["revocation"]["status"]), ("verified", "not_revoked"))   # control
+        for ext in (x509.DeltaCRLIndicator(1),
+                    x509.IssuingDistributionPoint(None, None, False, True, None, False, False),
+                    x509.IssuingDistributionPoint(None, None, False, False,
+                                                  frozenset({x509.ReasonFlags.superseded}), False, False)):
+            v = self.check(lab, tok, [self._crl(lab, ext=ext)])
+            self.assertEqual((v["status"], v["reason"]), ("invalid", "tsa_revocation_unknown"), ext)
+
+    def test_latest_this_update_and_issuer_name_with_its_own_key(self):
+        import datetime
+        lab, other = Lab(self.td, "a"), Lab(self.td, "b")
+        tok = lab.token()
+        old = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+        v = self.check(lab, tok, [self._crl(lab, last=old), self._crl(lab)])
+        self.assertEqual(v["revocation"]["status"], "not_revoked")
+        self.assertNotEqual(v["revocation"]["crl_this_update"], "2026-01-01T00:00:00Z")   # the latest is reported
+        forged = self._crl(lab, issuer_key=other.j("ca.key"))           # issuer name of lab's CA, signed by other's CA
+        v = T.verify_token(tok, DIGEST, "sha256", [lab.j("ca.crt"), other.j("ca.crt")], [forged])
+        self.assertEqual((v["status"], v["reason"]), ("invalid", "tsa_revocation_unknown"))
+
+    def test_crl_path_that_is_a_fifo(self):
+        """a pinned CRL path that is a FIFO is a ValueError at once, never a read that blocks (stat before open)"""
+        fifo = os.path.join(self.td, "crl.fifo")
+        os.mkfifo(fifo)
+        code = ("import sys; sys.path.insert(0, %r); import cryptovalid_tsa as T\n"
+                "try:\n    T._load_crls([%r])\nexcept ValueError as e:\n    print('ValueError', e)" % (ROOT, fifo))
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+        self.assertIn("is not a regular file", r.stdout, r.stderr)
 
     def test_remove_from_crl_is_unknown(self):
         lab = Lab(self.td)

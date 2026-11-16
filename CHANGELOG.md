@@ -37,10 +37,12 @@ run by the same author, not by a third party.
     reported as from a qualified TSA only when `--tsa-trusted-list` pins an EU Trusted List snapshot in which the
     token's signer is a granted QTST service at genTime (`cryptovalid_lotl`; otherwise `not_checked` or
     `not_qualified`);
-  - with `--checkpoint`, `--log-vkey` and `--witness-vkey`, that the entry is the unique one: under a checkpoint of this
-    ledger signed by the pinned log key and cosigned by pinned witnesses (`cryptovalid_witness.verify_witnessed`). One
-    pulse admits many records and one token can cover them all (Athena measured 100 of 100 on 16/11/2026); a tip signed
-    by the author does not close that, a witness that cosigns one history does.
+  - with `--checkpoint`, `--log-vkey` and `--witness-vkey`, that the entry is the one at its position in the history
+    the pinned witnesses cosigned: under a checkpoint of this ledger signed by the pinned log key and cosigned by pinned
+    witnesses (`cryptovalid_witness.verify_witnessed`). One pulse admits many records and one token can cover them all
+    (Athena measured 100 of 100 on 16/11/2026); a tip signed by the author does not close the choice among other
+    histories, a witness that cosigns one history does. Other entries of that history may carry the same pulse: the
+    receipt keeps "not unique" in its scope.
   The receipt states `not_before` = T against anyone but the beacon's operator, T minus one period only under the
   operator's freshness promise, and no bound against an operator that breaks its promises (§19 rule 4), and a closed
   `scope`: what is proved, and what is not (execution by a bank, uniqueness without a witness, ownership of the IBANs,
@@ -50,9 +52,11 @@ run by the same author, not by a third party.
   flags other than 0, the beacon certificate's chain and revocation.
 - **The TSA certificate's revocation, against CRLs the caller pins** (SPEC v0.10 §11 step 8):
   `cryptovalid_tsa.verify_token(..., crls=[...])` and `evidence_pack.verify_pack(..., tsa_crls=[...])` (library). A
-  certificate revoked for keyCompromise, cACompromise or aACompromise makes every token it signed invalid; another reason
-  leaves valid a token whose genTime is before the revocation date (`tsa_certificate_revoked`; a CRL that does not
-  apply or CRLs that disagree, `tsa_revocation_unknown`). Without `crls` nothing changes. Measured on 16/11/2026 on
+  certificate revoked without a reason code, or for keyCompromise, cACompromise, aACompromise or a reason outside RFC
+  3161 §4's list, makes every token it signed invalid; unspecified, affiliationChanged, superseded and
+  cessationOfOperation leave valid a token whose genTime is before the revocation date (`tsa_certificate_revoked`;
+  certificateHold, removeFromCRL, a CRL that does not apply, CRLs that disagree, or a CRL with an extension the check
+  does not process such as a delta CRL or an issuing distribution point, `tsa_revocation_unknown`). Without `crls` nothing changes. Measured on 16/11/2026 on
   0.25.1 (reported by Athena's review): a token issued after its TSA certificate was revoked for key compromise was
   `verified`; `openssl ts -verify -crl_check` with the CRL refuses it.
 - `spec/vectors/beacon/`: six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on 2026-11-16;
@@ -60,11 +64,12 @@ run by the same author, not by a third party.
   commitments; fictitious amounts); `conformance.json` with 49 cases (inputs under `conformance/`, expected status and
   reason, positive and negative, built by `make_conformance.py`) and 6 window cases, for independent implementations.
 - `bench/beacon_cost/`: the cost of one check, measured (below).
-- `test_beacon_20261116.py`: 69 tests (the module is absent at 0.25.1: the file fails there at its import, and
+- `test_beacon_20261116.py`: 70 tests (the module is absent at 0.25.1: the file fails there at its import, and
   `cryptovalid-verify beacon` exits 2 there). Every refused or invalid input is derived from the real files by code,
   re-signed with a key made in the test when the check under test sits behind the signature.
-  `test_tsa_revocation_20261116.py`: 10 tests on a CA, TSA and CRLs made with openssl (`openssl ca -revoke`,
-  `-gencrl`); all 10 fail on 0.25.1 (measured). 140 hand mutants of the new lines (`cryptovalid_beacon.py`, `cryptovalid_tsa.py`, `evidence_pack.py`):
+  `test_tsa_revocation_20261116.py`: 16 tests on a CA, TSA and CRLs made with openssl (`openssl ca -revoke`,
+  `-gencrl`) and, for the reasons and extensions openssl ca does not write, with `cryptography`; all fail on 0.25.1,
+  where `verify_token` has no `crls` parameter (TypeError), so the defect itself was measured apart on 0.25.1 (below). 140 hand mutants of the new lines (`cryptovalid_beacon.py`, `cryptovalid_tsa.py`, `evidence_pack.py`):
   139 detected (one of them by a 180 s timeout: a FIFO read that blocks), 1 equivalent (an entry looked up by `idx >=`
   instead of `==` on a ledger whose `idx` equals its position, SPEC §5 step 4).
 
