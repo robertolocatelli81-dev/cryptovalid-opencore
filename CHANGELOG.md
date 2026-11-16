@@ -34,8 +34,11 @@ run by the same author, not by a third party.
   flags other than 0, the certificate's chain and revocation.
 - `spec/vectors/beacon/`: six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on 2026-11-16,
   and a payment ledger rebuilt from them by the tests (published example IBANs, fictitious amounts and names).
-- `test_beacon_20261116.py`: 59 tests, all failing without the module (positive control: it is absent at v0.25.1);
-  hand mutants of the new module, every one killed (counts in the branch report).
+- `test_beacon_20261116.py`: 60 tests (the module is absent at 0.25.1, so the file fails there at its import, and
+  `cryptovalid-verify beacon` exits 2 there). Every refused or invalid input is derived from the real files by code,
+  re-signed with a key made in the test when the check under test sits behind the signature. 84 hand mutants of
+  `cryptovalid_beacon.py`: 83 detected (one of them by a 180 s timeout: a FIFO read that blocks), 1 equivalent (an
+  entry looked up by `idx >=` instead of `==` on a ledger whose `idx` equals its position, SPEC §5 step 4).
 
 ### Measured
 
