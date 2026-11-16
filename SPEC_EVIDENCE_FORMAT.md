@@ -833,10 +833,11 @@ technologies, version 2.0 adopted on 2026-07-07, §52-53.
 
 **Personal data.** An entry under a hash chain cannot be removed without breaking the chain. So the IBANs, the names, the
 payer's further data and the EndToEndId are recorded only as salted commitments, and their values and salts are kept by
-the payment service provider outside the ledger. In the terms of EDPB Guidelines 02/2025 v2.0 §52 such a commitment is a
-salted hash and remains personal data while the salt exists; after the provider destroys the value and the salt, the
-commitment "should not be linkable" to the person, under the conditions that paragraph sets (the algorithm unbroken, the
-salt neither leaked nor badly chosen). It is computationally hiding, not the perfectly hiding commitment of §53. The
+the payment service provider outside the ledger. Such a commitment is a salted hash in the terms of EDPB Guidelines
+02/2025 v2.0 §52, which says that "the hash will also be considered personal data, as will any other identifiers that
+might exist", and that after deletion of the salt "the hash should not be linkable to the original data, provided that
+the algorithm has not been broken, the keys have not been compromised or leaked, and the salt was not leaked or poorly
+chosen"; whether it then stops being personal data that paragraph does not say, and this format does not decide it. It is computationally hiding, not the perfectly hiding commitment of §53. The
 destruction is a statement of the provider, which this format cannot prove; it covers the provider's backups and logs
 only if the provider says so, and never a copy of a disclosure held by someone else. The members in clear (amount,
 currency, the random `payment_id`, the beacon values, the record salt) may also be personal data, depending on what else
@@ -903,7 +904,13 @@ outside the ledger, and the normalised value is: for the two IBAN members, the I
 the letters in upper case (a value with a character outside ASCII is refused first: "ß" in upper case is "SS"), which
 MUST then pass the IBAN rule below before it is committed; for the other members, the string in Unicode NFC (a disclosed
 name that normalises to the same NFC string opens the same commitment: the provider records the exact string it
-discloses, and the verifier normalises it); then UTF-8. The member name in the hashed bytes keeps a commitment from being
+discloses, and the verifier normalises it); then UTF-8. *Unicode version:* every code point of a value of these members
+MUST be assigned in Unicode 13.0.0 (the database of CPython 3.9, the oldest runtime supported); a value with another code
+point, or with a lone surrogate, is refused (`disclosure_malformed` for a disclosure, an error for the writer). NFC of a
+string of such code points is the same in every later Unicode version (the normalization stability policy); for a code
+point assigned later it is not: measured on 2026-11-16, "a" U+1E08F U+0316 is reordered by NFC in Unicode 15.1 (CPython
+3.13) and not in 13.0 (CPython 3.9), and U+105D2 U+0307 is composed into U+105C9 by Node 22 (Unicode 17.0) and by no
+CPython from 3.9 to 3.13, so one disclosure would open a commitment in one runtime and not in another. The member name in the hashed bytes keeps a commitment from being
 moved to another member, the zero byte ends the name (no member name contains it), and the salt's fixed length leaves
 one way to split what follows. A value is 1 to 1024 characters before normalisation. A disclosure is `{"member": <one of
 the commitment members of the table>, "salt": <32 lowercase hex>, "value": <string>}`, exactly these members; the verifier
@@ -1238,7 +1245,9 @@ Zikas, "Timed Signatures and Zero-Knowledge Proofs — Timestamping in the Block
 **11. Command.** `cryptovalid-verify beacon <ledger> --entry <idx> --pulse <file> --previous <file> [--pulse <file>
 --previous <file> ...] --certificate <file> [--certificate <file> ...] [--pack <dir> --tsa-cert <pem> ... --max-window
 <s> [--clock-tolerance <s>] [--tsa-crl <crl> ...] [--tsa-trusted-list <xml>] [--checkpoint <note> --log-vkey <vkey>
---witness-vkey <vkey> ... [--min-witnesses <n>]]] [--disclosure <file> ...]`. The i-th `--pulse` and the i-th
+--witness-vkey <vkey> ... [--min-witnesses <n>]]] [--disclosure <file> ...] [--require-disclosure <member> ...]`; for
+one entry without its ledger (rule 14), `--entry-file <entry> --proof <proof>` in place of `<ledger> --entry <idx>`, with
+`--pack` and `--checkpoint`. The i-th `--pulse` and the i-th
 `--previous` are the pair of the i-th element of `beacons`. Each `--disclosure` is a JSON file holding one disclosure of
 §18 (read as the pulses are, at most 64 KiB); the receipt lists the members disclosed and matched, never the values.
 Options that need `--pack` without it, `--log-vkey` and `--witness-vkey` without `--checkpoint` and the reverse, a
