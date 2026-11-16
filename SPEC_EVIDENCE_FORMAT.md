@@ -1098,7 +1098,8 @@ disclosures. Steps, in order, the first failure ending the run:
    `output_value_mismatch`, `previous_mismatch`, `period_mismatch`, `commitment_mismatch`, `beacon_value_mismatch`).
    `cryptography` absent: `not_evaluated` / `backend_missing`.
 5. Window, rule 5 (`pack_not_valid`, `time_anchor_not_verified`, `ledger_not_in_pack`, `window_inverted`,
-   `window_too_wide`), the TSA token by §11 with step 8 when CRLs are pinned.
+   `window_too_wide`, `trusted_list_malformed`), the TSA token by §11 with step 8 when CRLs are pinned, and its
+   qualification when a Trusted List snapshot is pinned.
 6. Uniqueness, rule 6 (`checkpoint_malformed`, `checkpoint_not_witnessed`, `checkpoint_not_covering_entry`,
    `checkpoint_root_mismatch`).
 7. Receipt: `status` (`verified` | `invalid` | `refused` | `not_evaluated`), `reason` (one code above or null), `bounds`
@@ -1106,7 +1107,7 @@ disclosures. Steps, in order, the first failure ending the run:
 
 Status `refused` (malformed input, exit 2) has exactly the codes `entry_not_a_payment`, `payment_malformed`,
 `source_not_supported`, `disclosure_malformed`, `input_unreadable`, `input_too_large`, `pulse_malformed`,
-`certificate_malformed`, `checkpoint_malformed`; every other code is `invalid` (exit 1). Conformance vectors with the
+`certificate_malformed`, `checkpoint_malformed`, `trusted_list_malformed`; every other code is `invalid` (exit 1). Conformance vectors with the
 expected status and reason of each case: `spec/vectors/beacon/conformance.json`.
 
 **9. Security considerations.**
@@ -1156,7 +1157,7 @@ not run (§10). `auto` (§12) does not change: a ledger carrying a payment entry
 
 Vectors: `spec/vectors/beacon/` — six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on
 2026-11-16 with their URLs and hashes (`README.md`), and a payment ledger derived from them by code
-(`test_beacon_20261116.py` rebuilds it and compares), and `conformance.json` with the inputs under `conformance/`: 40
+(`test_beacon_20261116.py` rebuilds it and compares), and `conformance.json` with the inputs under `conformance/`: 45
 cases with their expected status and reason (positive and negative, from the real pulses; pulses re-signed by a key made
 for the purpose where a check sits behind the signature; witnessed checkpoints) and 6 window cases (rule 8). Every
 refused or invalid input is derived from these by code (`make_conformance.py`), never written by hand.
