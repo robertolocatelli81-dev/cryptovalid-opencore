@@ -1095,10 +1095,11 @@ if it cosigned before the question could be chosen: an independent review measur
 its own pack, and a witness cosignature added 400 days later on the variant chosen, all 20 then reported as fixed by
 v0.10 as it was. So the entry is fixed in one history only when the witnessed checkpoint is **inside the evidence pack**
 and therefore under the token: `--checkpoint <file>`, `--log-vkey <vkey>`, `--witness-vkey <vkey> ...` (needs `--pack`).
-Checks, in order: the checkpoint file's SHA-256 is the value `file_digests_sha256` of the pack gives to one of its files
-(`checkpoint_not_in_pack`); the note verifies under a pinned log key and carries at least `--min-witnesses` (default 1)
-cosignatures of pinned witnesses, by the rules of §16 (`checkpoint_not_witnessed`, `checkpoint_malformed` when the note,
-a key or the arguments cannot be read); no counted cosignature carries a timestamp after genTime
+Checks, in order: the checkpoint file is read (a regular file of at most 1 MiB, else `checkpoint_malformed`); its
+SHA-256 is the value `file_digests_sha256` of the pack gives to one of its files (`checkpoint_not_in_pack`); the note
+verifies under a pinned log key and carries at least `--min-witnesses` (default 1) cosignatures of pinned witnesses, by
+the rules of §16 (`checkpoint_malformed` when a pinned key cannot be parsed or the keys break §16's rules on roles,
+`checkpoint_not_witnessed` otherwise, a note that is not a signed note included); no counted cosignature carries a timestamp after genTime
 (`checkpoint_cosigned_after_gen_time`: the witness's clock and the TSA's contradict each other); its size N covers the
 entry (N > idx, `checkpoint_not_covering_entry`); its root is the RFC 6962 root of the first N entries of this ledger
 (`cryptovalid_merkle`, leaves = the canonical entries; a size larger than the ledger is `checkpoint_root_mismatch`).
@@ -1157,8 +1158,8 @@ checkpoint with its pinned log and witness keys; disclosures. Steps, in this ord
    pinned certificates (`certificate_malformed`). `cryptography` absent: `not_evaluated` / `backend_missing`.
 5. Window, rule 5, in the order written there (`pack_not_valid`, `time_anchor_not_verified`, `pack_not_valid`,
    `ledger_not_in_pack`, `window_inverted`, `window_too_wide`, `trusted_list_malformed`).
-6. Fixed in one history, rule 6, in the order written there (`checkpoint_not_in_pack`, `checkpoint_malformed`,
-   `checkpoint_not_witnessed`, `checkpoint_cosigned_after_gen_time`, `checkpoint_not_covering_entry`,
+6. Fixed in one history, rule 6, in the order written there (`checkpoint_malformed`, `checkpoint_not_in_pack`,
+   `checkpoint_malformed`, `checkpoint_not_witnessed`, `checkpoint_cosigned_after_gen_time`, `checkpoint_not_covering_entry`,
    `checkpoint_root_mismatch`).
 7. Receipt: `status` (`verified` | `invalid` | `refused` | `not_evaluated`), `reason` (one code above or null), `bounds`
    (rule 4), `window`, `unique`, `disclosed`, `scope` (rule 7), `record_complete`.
