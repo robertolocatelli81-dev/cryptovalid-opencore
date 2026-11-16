@@ -252,8 +252,9 @@ gives. Not additive: until v0.8 the expected ledger identity (`--expect-ledger-i
 trusted log key, a ledger other than the one expected, or a ledger whose tip could not be dated, was PASS, exit 0, and
 the receipt did not name the option (measured on 2026-11-16 with `verifier.py` 0.25.0 and the JS, Go and Java
 verifiers). From v0.9 such a ledger is FAIL. The ledger format (§2–§5), its hashes and its vectors do not change.
-v0.10 (2026-11-16) adds §18, a closed payment entry profile (`cryptovalid-payment/1`: amount, currency, the two IBANs
-checked by ISO 7064 MOD 97-10, an optional beacon value), and §19, a "not before" bound from the NIST Randomness Beacon
+v0.10 (2026-11-16) adds §18, a closed payment entry profile (`cryptovalid-payment/1`: payment identifier, amount,
+ISO 4217 currency, the two IBANs checked by ISO 7064 MOD 97-10, the beacon value, optional salted commitments to the
+parties' names and the payer's details), and §19, a "not before" bound from the NIST Randomness Beacon
 2.0 carried inside that entry, with the window it gives together with the RFC 3161 token of an evidence pack. Additive:
 a new command (`cryptovalid-verify beacon`) and a new module; the ledger verifiers, `auto`, the pack and their receipts do
 not change. The ledger format (§2–§5), its hashes and its vectors do not change.
@@ -780,34 +781,63 @@ and Java verifiers answer the same; from 0.25.1 the four answer FAIL, exit 1, an
 ## 18. Payment entry profile `cryptovalid-payment/1` (NORMATIVE since v0.10, 2026-11-16)
 
 The `data` of an entry is free-form (§4) and the ledger verifiers do not read it (§2.1). This section defines one closed
-payload, the smallest a payment needs, so that a bound of §19 can cover a payment's value and its parties and not sit
-next to them. A `data` object whose member `profile` is the string `cryptovalid-payment/1` is a payment entry and has
-exactly these members:
+payload for a classic payment, so that the bound of §19 covers the payment's value and its parties inside one entry
+and does not sit next to them. Its content follows Regulation (EU) 2023/1113 on transfers of funds (OJ L 150,
+9.6.2023), as read on 2026-11-16: within the Union the payment account numbers of payer and payee are what must
+accompany a transfer (Art. 5(1)); the names and, for the payer, the address or document or date and place of birth
+(Art. 4(1)(a), (c), Art. 4(2)(a)) are made available by the payment service provider within three working days on
+request (Art. 5(2)). This profile records the first in clear and the second only as salted commitments: they are
+personal data, and the ledger keeps the minimum (Regulation (EU) 2016/679, Art. 5(1)(c)). It is a recording format, not
+an assessment of compliance with either regulation.
 
-| member | value |
-|---|---|
-| `profile` | `"cryptovalid-payment/1"` |
-| `amount` | a string, a decimal number without sign, exponent or leading zeros: `0` or 1 to 18 digits not starting with 0, then optionally `.` and 1 to 4 digits; greater than zero. A string, never a JSON number (§3) |
-| `currency` | three capital letters A–Z (the form of an ISO 4217 alphabetic code; membership of the ISO 4217 list is not checked) |
-| `payer_iban` | the payer's IBAN, rule below |
-| `payee_iban` | the payee's IBAN, rule below |
-| `beacon` | optional: the beacon value of §19, an object of exactly `source`, `chain_index`, `pulse_index`, `output_value` |
+A `data` object whose member `profile` is the string `cryptovalid-payment/1` is a payment entry and has exactly these
+members (plain names: the ISO 20022 message definitions could not be read on 2026-11-16, the site answered 403, so no
+alignment with their element names is claimed):
+
+| member | required | value |
+|---|---|---|
+| `profile` | yes | `"cryptovalid-payment/1"` |
+| `payment_id` | yes | the payment's unique identifier: 1 to 64 characters U+0021–U+007E (printable ASCII, no space); no two payment entries of one ledger carry the same value (`payment_id_not_unique`) |
+| `amount` | yes | a string (never a JSON number, §3): `0` or 1 to 18 digits not starting with 0, then optionally `.` and 1 to N digits, N the minor units of the currency (none when N = 0); greater than zero |
+| `currency` | yes | an ISO 4217 alphabetic code with numeric minor units, from list one as published by the maintenance agency on 2026-09-17 (165 codes; the 13 codes whose minor units are "N.A.", such as XAU and XDR, are not accepted) |
+| `payer_iban` | yes | the payer's IBAN, rule below |
+| `payee_iban` | yes | the payee's IBAN, rule below |
+| `beacon` | yes | the beacon value of §19: an object of exactly `source`, `chain_index`, `pulse_index`, `output_value` |
+| `payer_name_commitment` | no | commitment to the payer's name (Art. 4(1)(a)), rule below |
+| `payer_details_commitment` | no | commitment to the payer's address, document or birth data (Art. 4(1)(c)) as the provider records them |
+| `payee_name_commitment` | no | commitment to the payee's name (Art. 4(2)(a)) |
+
+The RFC 3161 token that gives the upper bound is not a member: it binds the ledger through an evidence pack (§19 rule 5).
+A payment record is complete in this format when its entry is valid here and a window of §19 is verified for it.
 
 **IBAN** (ISO 13616-1, electronic format): two capital letters (the country code), two digits (the check digits), then 11
 to 30 capital letters or digits; 15 to 34 characters in all, no space, no lower case. Its check is ISO 7064 MOD 97-10:
 move the first four characters to the end, replace each letter by two digits (A = 10 … Z = 35), and the number read in
 decimal MUST be 1 modulo 97. The check digits MUST be in 02–98, the only values the MOD 97-10 computation produces (00,
 01 and 99 pass the modulo exactly when 97, 98 and 02 do). Not checked: that the country code is a country of the IBAN
-registry, and the length and the BBAN structure the registry gives each country.
+registry, and the length and the BBAN structure the registry gives each country. The check catches every substitution
+of one digit by another and of one letter by another, not every substitution of a digit by a letter: measured on
+2026-11-16 on the two example IBANs below, 7 of their 1 540 single-character substitutions pass it, each a digit
+replaced by a letter (e.g. DE89370400440532I13000), which the registry's BBAN structure would refuse and this profile
+does not read.
+
+**Commitment.** 64 lowercase hexadecimal characters: SHA-256(salt || UTF-8(value)), where salt is 32 bytes the payment
+service provider draws at random and keeps, and value is the text it will disclose, exactly as recorded (no Unicode
+normalisation, no trimming: the provider discloses the string it committed to). The salt's fixed length leaves one way
+to split the hashed bytes; a value is a non-empty string of at most 1024 characters. A disclosure is `{"member": <one of
+the three commitment members>, "salt": <64 lowercase hex>, "value": <string>}`, exactly these members; it matches when
+the commitment recomputed from it equals the entry's member byte for byte. Anyone holding the disclosure checks that
+the name is the one bound in the entry; without it, the commitment shows nothing about the name, provided the salt
+stays secret and random.
 
 A member missing, a member not in the table, a member of another type, or a value of another form is refused with the
-member named (`payment_malformed`: `payer_iban` with the reason `iban_checksum`, `iban_check_digits`, `iban_length` or
-`iban_charset`, and so on). Who applies the profile: `cryptovalid_beacon.check_payment(data)` and `cryptovalid-verify
-beacon` (§19), on the entry it dates. `verifier.py` and the other ledger verifiers do not: a ledger whose payment entry
-holds a malformed IBAN is still PASS for steps 1–4 of §5 (unchanged).
+member named (`payment_malformed`, its detail `<member>: <reason>`, e.g. `payer_iban: iban_checksum`, `currency:
+currency_unknown`, `amount: too_many_decimals`). Who applies the profile: `cryptovalid_beacon.check_payment(data)` and
+`cryptovalid-verify beacon` (§19), on the entry it dates. `verifier.py` and the other ledger verifiers do not: a ledger
+whose payment entry holds a malformed IBAN is still PASS for steps 1–4 of §5 (unchanged).
 
 Vectors: `spec/vectors/beacon/payment_ledger.jsonl` uses only IBANs published as examples (GB82WEST12345698765432,
-DE89370400440532013000) and fictitious amounts, never a real account.
+DE89370400440532013000), fictitious amounts and names, never a real account.
 
 ## 19. A "not before" bound from a public randomness beacon (NORMATIVE since v0.10, 2026-11-16)
 
@@ -836,10 +866,12 @@ signatures and its commitments, never "quantum certified".
 **1. Where the value is: inside the entry it dates.** The value is the member `beacon` of a payment entry (§18):
 `{"source", "chain_index" (integer ≥ 0), "pulse_index" (integer ≥ 1), "output_value" (128 hexadecimal characters, the
 pulse's `outputValue`, either case)}`, exactly these members. It is inside `data`, so the entry's `self_hash` (§3)
-covers it together with `amount`, `currency`, `payer_iban` and `payee_iban`: the bound is a bound on the bytes that put
-the value and these fields together, and the receipt names the fields it covers. The caller names the entry (`--entry
-<idx>`); the ledger MUST pass steps 1–4 of §5 (`ledger_invalid`); an entry that is not a payment entry is
-`entry_not_a_payment`, a payment entry without `beacon` is `no_beacon_in_entry`, a malformed one `payment_malformed`.
+covers it together with every other member of the payment (§18): the bound is a bound on the bytes that put the value
+and these members together, and the receipt names the members it covers. The caller names the entry (`--entry <idx>`);
+the ledger (UTF-8, at most 64 MiB) MUST pass steps 1–4 of §5 (`ledger_invalid`); no entry of that `idx` is
+`entry_not_found`; an entry that is not a payment entry is `entry_not_a_payment` (refused); a payment entry that breaks
+§18, a missing `beacon` included, is `payment_malformed` (refused); a `payment_id` that another payment entry of the
+ledger also carries is `payment_id_not_unique`.
 
 What the bound does not cover. An entry before the one that carries the value gets no bound from it. An entry after it
 holds, through `prev_hash`, a hash that depends on the value, so its bytes too were put together after T; this
@@ -855,11 +887,13 @@ a lone surrogate, nesting deeper than the bound are refused), whose value is `{"
 `external`, `listValues`, `precommitmentValue`, `statusCode`, `signatureValue`, `outputValue`; `external` exactly
 `sourceId`, `statusCode`, `value`; `listValues` is a list of exactly five objects of exactly `uri`, `type`, `value`,
 whose `type` is `previous`, `hour`, `day`, `month`, `year` in this order. `uri`, `version` and the `uri` of each list
-value are strings of 1 to 2048 characters without control characters; `cipherSuite`, `period`, `statusCode` and
+value are strings of 1 to 2048 characters without control characters (Unicode category Cc); `cipherSuite`, `period`, `statusCode` and
 `external.statusCode` are integers in [0, 2^32−1] (a boolean is not an integer); `chainIndex` and `pulseIndex` integers
 ≥ 0; `timeStamp` is `YYYY-MM-DDThh:mm:ss.sssZ` and a real calendar time; `certificateId` and every other value are 128
 hexadecimal characters (64 bytes), either case; `signatureValue` is hexadecimal, 2 to 2048 characters, an even number.
-Anything else is refused with the member named. The `uri` of the list values is not signed by the beacon and is not used.
+Anything else is refused with the member named (`pulse_malformed`); a path that is not a readable regular file is
+`input_unreadable`, a larger file `input_too_large`. The `uri` of the list values is not signed by the beacon and is not
+used.
 
 **3. The checks,** in order; the first that fails gives the outcome:
 
@@ -873,7 +907,8 @@ Anything else is refused with the member named. The `uri` of the list values is 
    `chain_index` in both, `pulseIndex` equal to `pulse_index` and to `pulse_index − 1`, and the `uri` of each exactly
    `https://beacon.nist.gov/beacon/2.0/chain/<chainIndex>/pulse/<pulseIndex>` (`pulse_mismatch`); equal `period` and
    `certificateId` in both (`chain_inconsistent`).
-4. **Certificate.** The caller pins the beacon's certificate (a PEM file holding exactly one certificate, or DER). Its
+4. **Certificate.** The caller pins the beacon's certificate (a PEM file of at most 64 KiB holding exactly one PEM block,
+   a certificate, or DER; anything else is refused, `certificate_malformed`). Its
    SHA-512 over the DER MUST equal `certificateId` (`certificate_mismatch`); its key MUST be RSA of at least 2048 bits
    (`certificate_key_not_supported`); both `timeStamp`s MUST lie within its validity
    (`certificate_not_valid_at_pulse_time`). The certificate's chain to a CA and its revocation are not checked: the pin
@@ -904,7 +939,9 @@ agrees). A pulse served in the draft's form would be refused at step 5.
 **4. The verdict and its two bounds.** The outcome is `verified` when the entry and steps 1–9 pass, `invalid` with the
 reason of the first that fails, `refused` when an input breaks rule 2, a pin cannot be read or the arguments are
 malformed, and `not_evaluated` (`backend_missing`) when the RSA and X.509 checks cannot run because `cryptography` is
-absent. Only `verified` states bounds, with T the named pulse's `timeStamp` and π its `period`:
+absent. Bounds are stated only when the entry and steps 1–9 pass (the outcome is then `verified`, or `invalid` with a
+reason of rule 5 when a window was asked for and cannot be established), with T the named pulse's `timeStamp` and π its
+`period`:
 
 - `not_before` = T, **against anyone but the beacon's operator.** The draft NIST IR 8213 (§3.3, promises 1 and 2)
   promises that `outputValue` stays unpredictable to outsiders until T. An entry that carries it was put together after
@@ -927,13 +964,20 @@ ledger's head (`head_self_hash`) and the head binds every entry through `prev_ha
 why (`pack_not_valid`, `time_anchor_not_verified`, `ledger_not_in_pack`). The window is [T, genTime] against anyone but
 the operator, [T − π, genTime] under the operator's freshness promise. A window whose lower bound is after its upper
 bound, genTime < T, is refused as `window_inverted`: one of the two time sources is wrong or was subverted, and the
-evidence proves no interval. genTime = T is a window of one instant. The TSA's `accuracy` and the clock skew of either
+evidence proves no interval. genTime = T is a window of one instant. The window is what shows a later change: an
+entry rewritten after T, its amount or an IBAN changed and every hash recomputed, still carries the value and still
+gets `not_before` (it too was put together after T), but its ledger is no longer the one the pack's token binds
+(`ledger_not_in_pack`). The TSA's `accuracy` and the clock skew of either
 party are not added (§11 does not read `accuracy`; the draft NIST IR 8213 asks the beacon to keep its skew below one
 tenth of the period): a reader who needs them widens the window by them. The entry's own `ts` is a claim of its writer
 and is not used.
 
 **6. Command.** `cryptovalid-verify beacon <ledger> --entry <idx> --pulse <file> --previous <file> --certificate <file>
-[--pack <dir> --tsa-cert <pem> ...]`. `--pack` without `--tsa-cert`, or `--tsa-cert` without `--pack`, is a usage
+[--pack <dir> --tsa-cert <pem> ...] [--disclosure <file> ...]`. Each `--disclosure` is a JSON file holding one
+disclosure of §18 (read as the pulses are, at most 64 KiB); it is checked against the entry's member it names
+(`disclosure_mismatch` when it does not match or the entry has no such member; two disclosures for one member, or a
+malformed one, are refused, `disclosure_malformed`); the receipt lists the members disclosed and
+matched, never the values. The receipt's `record_complete` is true only with a verified window. `--pack` without `--tsa-cert`, or `--tsa-cert` without `--pack`, is a usage
 error; so is a value option given twice or given empty (§17); `--tsa-cert` is repeatable, as in the evidence pack's
 verify. The receipt is one JSON object on stdout. Exit 0 `verified` (with the window when `--pack` is given), 1
 `invalid` or `not_evaluated`, 2 a usage error or a `refused` input, 74 a receipt not written whole or a check that could
