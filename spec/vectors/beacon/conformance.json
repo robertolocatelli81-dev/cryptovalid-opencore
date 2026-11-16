@@ -1,0 +1,645 @@
+{
+ "format": "cryptovalid-beacon-conformance/1",
+ "spec": "SPEC_EVIDENCE_FORMAT.md v0.10 §18-§19",
+ "paths": "relative to spec/vectors/beacon/",
+ "cases": [
+  {
+   "name": "entry1_pulse_2030303",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "verified",
+    "reason": null
+   }
+  },
+  {
+   "name": "entry0_pulse_2030302",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 0,
+   "pulse": "nist/pulse_2030302.json",
+   "previous": "nist/pulse_2030301.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "verified",
+    "reason": null
+   }
+  },
+  {
+   "name": "entry0_five_disclosures",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 0,
+   "pulse": "nist/pulse_2030302.json",
+   "previous": "nist/pulse_2030301.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "disclosures": [
+    "conformance/disclosures/payer_iban_commitment.json",
+    "conformance/disclosures/payee_iban_commitment.json",
+    "conformance/disclosures/payer_name_commitment.json",
+    "conformance/disclosures/payer_details_commitment.json",
+    "conformance/disclosures/payee_name_commitment.json"
+   ],
+   "expected": {
+    "status": "verified",
+    "reason": null
+   }
+  },
+  {
+   "name": "disclosure_other_name",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 0,
+   "pulse": "nist/pulse_2030302.json",
+   "previous": "nist/pulse_2030301.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "disclosures": [
+    "conformance/disclosures/payer_name_wrong.json"
+   ],
+   "expected": {
+    "status": "invalid",
+    "reason": "disclosure_mismatch"
+   }
+  },
+  {
+   "name": "disclosure_other_salt",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 0,
+   "pulse": "nist/pulse_2030302.json",
+   "previous": "nist/pulse_2030301.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "disclosures": [
+    "conformance/disclosures/payer_iban_other_salt.json"
+   ],
+   "expected": {
+    "status": "invalid",
+    "reason": "disclosure_mismatch"
+   }
+  },
+  {
+   "name": "disclosure_salt_64_bits",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 0,
+   "pulse": "nist/pulse_2030302.json",
+   "previous": "nist/pulse_2030301.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "disclosures": [
+    "conformance/disclosures/payer_iban_short_salt.json"
+   ],
+   "expected": {
+    "status": "refused",
+    "reason": "disclosure_malformed"
+   }
+  },
+  {
+   "name": "committed_bad_iban_undisclosed",
+   "ledger": "conformance/ledgers/committed_bad_iban.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "verified",
+    "reason": null
+   }
+  },
+  {
+   "name": "committed_bad_iban_disclosed",
+   "ledger": "conformance/ledgers/committed_bad_iban.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "disclosures": [
+    "conformance/disclosures/payee_iban_bad.json"
+   ],
+   "expected": {
+    "status": "invalid",
+    "reason": "disclosure_iban_invalid"
+   }
+  },
+  {
+   "name": "previous_not_predecessor",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030301.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "pulse_mismatch"
+   }
+  },
+  {
+   "name": "pulse_of_another_index",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030302.json",
+   "previous": "nist/pulse_2030301.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "pulse_mismatch"
+   }
+  },
+  {
+   "name": "pulse_unknown_member",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/unknown_member.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "pulse_malformed"
+   }
+  },
+  {
+   "name": "pulse_unknown_member_external",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/unknown_member_external.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "pulse_malformed"
+   }
+  },
+  {
+   "name": "pulse_external_status_uint64",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/external_status_uint64.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "pulse_malformed"
+   }
+  },
+  {
+   "name": "pulse_hex_too_short",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/hex_too_short.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "pulse_malformed"
+   }
+  },
+  {
+   "name": "pulse_time_without_millis",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/time_without_millis.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "pulse_malformed"
+   }
+  },
+  {
+   "name": "pulse_status_gap",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/status_gap.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "status_not_supported"
+   }
+  },
+  {
+   "name": "pulse_cipher_suite_1",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/cipher_suite_1.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "cipher_suite_not_supported"
+   }
+  },
+  {
+   "name": "pulse_version_2_1",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/version_2_1.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "version_not_supported"
+   }
+  },
+  {
+   "name": "pulse_signed_field_changed",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/signed_field_changed.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "signature_invalid"
+   }
+  },
+  {
+   "name": "pulse_uri_http",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/uri_http.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "pulse_mismatch"
+   }
+  },
+  {
+   "name": "certificate_not_the_pulses",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "conformance/other/certificate.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "certificate_mismatch"
+   }
+  },
+  {
+   "name": "resigned_commitment_broken",
+   "ledger": "conformance/ledgers/resigned_commitment_broken.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/resigned_commitment_broken.json",
+   "previous": "conformance/pulses/resigned_commitment_broken_previous.json",
+   "certificate": "conformance/other/certificate.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "commitment_mismatch"
+   }
+  },
+  {
+   "name": "resigned_period_30s",
+   "ledger": "conformance/ledgers/resigned_period_30s.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/resigned_period_30s.json",
+   "previous": "conformance/pulses/resigned_period_30s_previous.json",
+   "certificate": "conformance/other/certificate.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "period_mismatch"
+   }
+  },
+  {
+   "name": "resigned_previous_value_other",
+   "ledger": "conformance/ledgers/resigned_previous_value_other.jsonl",
+   "entry": 1,
+   "pulse": "conformance/pulses/resigned_previous_value_other.json",
+   "previous": "conformance/pulses/resigned_previous_value_other_previous.json",
+   "certificate": "conformance/other/certificate.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "previous_mismatch"
+   }
+  },
+  {
+   "name": "ledger_iban_in_clear",
+   "ledger": "conformance/ledgers/iban_in_clear.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_payer_iban_commitment_missing",
+   "ledger": "conformance/ledgers/payer_iban_commitment_missing.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_commitment_upper_case",
+   "ledger": "conformance/ledgers/commitment_upper_case.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_currency_unknown",
+   "ledger": "conformance/ledgers/currency_unknown.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_amount_decimals",
+   "ledger": "conformance/ledgers/amount_decimals.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_amount_zero",
+   "ledger": "conformance/ledgers/amount_zero.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_amount_negative",
+   "ledger": "conformance/ledgers/amount_negative.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_unknown_member",
+   "ledger": "conformance/ledgers/unknown_member.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_record_salt_120_bits",
+   "ledger": "conformance/ledgers/record_salt_120_bits.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_beacon_missing",
+   "ledger": "conformance/ledgers/beacon_missing.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_beacon_other_source",
+   "ledger": "conformance/ledgers/beacon_other_source.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "source_not_supported"
+   }
+  },
+  {
+   "name": "ledger_beacon_value_other_pulse",
+   "ledger": "conformance/ledgers/beacon_value_other_pulse.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "beacon_value_mismatch"
+   }
+  },
+  {
+   "name": "ledger_payment_id_twice",
+   "ledger": "conformance/ledgers/payment_id_twice.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "payment_id_not_unique"
+   }
+  },
+  {
+   "name": "ledger_changed_hash_not_recomputed",
+   "ledger": "conformance/ledgers/changed_not_rehashed.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "ledger_invalid"
+   }
+  },
+  {
+   "name": "entry_not_a_payment",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 2,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "entry_not_a_payment"
+   }
+  },
+  {
+   "name": "entry_not_found",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 3,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "invalid",
+    "reason": "entry_not_found"
+   }
+  },
+  {
+   "name": "witnessed_unique",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "checkpoint": "conformance/checkpoints/witnessed.note",
+   "log_vkeys": [
+    "example.org/payments+b0c81f37+Acbg+kKO8Dj0zfmed8K57PvEk9b4RJHQiCEjZrkq0IFH"
+   ],
+   "witness_vkeys": [
+    "witness.example/a+2426c1b1+BBWr03OxgdVetYv7m7mBrlkMMpvsTIV57ub6MIyCJC65"
+   ],
+   "expected": {
+    "status": "verified",
+    "reason": null
+   }
+  },
+  {
+   "name": "witnessed_too_small",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "checkpoint": "conformance/checkpoints/size1.note",
+   "log_vkeys": [
+    "example.org/payments+b0c81f37+Acbg+kKO8Dj0zfmed8K57PvEk9b4RJHQiCEjZrkq0IFH"
+   ],
+   "witness_vkeys": [
+    "witness.example/a+2426c1b1+BBWr03OxgdVetYv7m7mBrlkMMpvsTIV57ub6MIyCJC65"
+   ],
+   "expected": {
+    "status": "invalid",
+    "reason": "checkpoint_not_covering_entry"
+   }
+  },
+  {
+   "name": "witnessed_other_ledger",
+   "ledger": "conformance/ledgers/variant_amount.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "checkpoint": "conformance/checkpoints/witnessed.note",
+   "log_vkeys": [
+    "example.org/payments+b0c81f37+Acbg+kKO8Dj0zfmed8K57PvEk9b4RJHQiCEjZrkq0IFH"
+   ],
+   "witness_vkeys": [
+    "witness.example/a+2426c1b1+BBWr03OxgdVetYv7m7mBrlkMMpvsTIV57ub6MIyCJC65"
+   ],
+   "expected": {
+    "status": "invalid",
+    "reason": "checkpoint_root_mismatch"
+   }
+  },
+  {
+   "name": "not_witnessed",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "checkpoint": "conformance/checkpoints/no_witness.note",
+   "log_vkeys": [
+    "example.org/payments+b0c81f37+Acbg+kKO8Dj0zfmed8K57PvEk9b4RJHQiCEjZrkq0IFH"
+   ],
+   "witness_vkeys": [
+    "witness.example/a+2426c1b1+BBWr03OxgdVetYv7m7mBrlkMMpvsTIV57ub6MIyCJC65"
+   ],
+   "expected": {
+    "status": "invalid",
+    "reason": "checkpoint_not_witnessed"
+   }
+  },
+  {
+   "name": "witnessed_by_unpinned",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "checkpoint": "conformance/checkpoints/other_witness.note",
+   "log_vkeys": [
+    "example.org/payments+b0c81f37+Acbg+kKO8Dj0zfmed8K57PvEk9b4RJHQiCEjZrkq0IFH"
+   ],
+   "witness_vkeys": [
+    "witness.example/a+2426c1b1+BBWr03OxgdVetYv7m7mBrlkMMpvsTIV57ub6MIyCJC65"
+   ],
+   "expected": {
+    "status": "invalid",
+    "reason": "checkpoint_not_witnessed"
+   }
+  }
+ ],
+ "window_cases": [
+  {
+   "t": "2026-11-16T13:04:00.000Z",
+   "period_ms": 60000,
+   "gen_time": "2026-11-16T13:05:00Z",
+   "max_window_s": 60,
+   "expected": null
+  },
+  {
+   "t": "2026-11-16T13:04:00.000Z",
+   "period_ms": 60000,
+   "gen_time": "2026-11-16T13:05:00.000001Z",
+   "max_window_s": 60,
+   "expected": "window_too_wide"
+  },
+  {
+   "t": "2026-11-16T13:04:00.000Z",
+   "period_ms": 60000,
+   "gen_time": "2026-11-16T13:04:00Z",
+   "max_window_s": 0,
+   "expected": null
+  },
+  {
+   "t": "2026-11-16T13:04:00.000Z",
+   "period_ms": 60000,
+   "gen_time": "2026-11-16T13:03:59.999999Z",
+   "max_window_s": 3600,
+   "expected": "window_inverted"
+  },
+  {
+   "t": "2026-11-16T13:04:00.000Z",
+   "period_ms": 60000,
+   "gen_time": "2026-11-13T09:00:00Z",
+   "max_window_s": 1000000000,
+   "expected": "window_inverted"
+  },
+  {
+   "t": "2026-11-16T13:04:00.000Z",
+   "period_ms": 60000,
+   "gen_time": "2026-11-16T14:04:00Z",
+   "max_window_s": 3600,
+   "expected": null
+  }
+ ]
+}

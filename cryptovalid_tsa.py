@@ -429,7 +429,119 @@ def _last_line(err: bytes, default: str) -> str:
     return re.sub(r"^[0-9A-Fa-f]+:error:", "", lines[-1].strip())[:200] if lines else default   # no thread id
 
 
-def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_certs=None) -> dict:
+# SPEC v0.10 §11 step 8: the RFC 5280 §5.3.1 reasons after which no token of the certificate is valid, whatever its genTime
+REVOKED_FOR_ALL_TOKENS = frozenset({"key_compromise", "ca_compromise", "aa_compromise"})
+
+
+def _load_crls(crls) -> list:
+    """the CRLs the caller pins (paths or bytes, PEM or DER, one CRL each): cryptography CRL objects, ValueError otherwise"""
+    from cryptography import x509
+    import stat
+    if not isinstance(crls, (list, tuple)) or not crls:   # a str or bytes is not a list of CRLs
+        raise ValueError("crls: a non-empty list of CRL files or bytes, or None for no revocation check")
+    out = []
+    for it in crls:
+        if isinstance(it, str):
+            try:
+                if not stat.S_ISREG(os.stat(it).st_mode):
+                    raise ValueError(f"crls: {it!r} is not a regular file")
+                with open(it, "rb") as f:
+                    it = f.read()
+            except OSError as e:
+                raise ValueError(f"crls: cannot read {it!r}: {e.strerror or e}") from None
+        if not isinstance(it, (bytes, bytearray)) or not it:
+            raise ValueError("crls: each item is a path or the bytes of a CRL")
+        it = bytes(it)
+        try:
+            if b"-----BEGIN" in it:
+                if it.count(b"-----BEGIN") != 1 or it.count(b"-----BEGIN X509 CRL-----") != 1:
+                    raise ValueError("one PEM block, an X509 CRL")
+                out.append(x509.load_pem_x509_crl(it))
+            else:
+                out.append(x509.load_der_x509_crl(it))
+        except ValueError as e:
+            raise ValueError(f"crls: an item is not a CRL ({str(e)[:80]})") from None
+    return out
+
+
+def _token_certificates(token_der: bytes) -> list:
+    """the DER of each certificate in the token's SignedData `[0] certificates` (read with this module's DER reader)"""
+    def tlv(tag, v):
+        n = len(v)
+        ln = bytes([n]) if n < 0x80 else bytes([0x80 | ((n.bit_length() + 7) // 8)]) + n.to_bytes((n.bit_length() + 7) // 8, "big")
+        return bytes([tag]) + ln + v
+    try:
+        ci = _der_items(_der_one(_token_of(bytes(token_der)), "ContentInfo", 0x30), "ContentInfo")
+        sd = _der_items(_der_one(ci[1][1], "SignedData", 0x30), "SignedData")
+        return [tlv(t, v) for tag, val in sd[3:] if tag == 0xA0 for t, v in _der_items(val, "certificates") if t == 0x30]
+    except (TokenError, IndexError):
+        return []
+
+
+def _revocation(token_der: bytes, signer_sha256: str, pins_pem: bytes, crls: list, gen_time: str):
+    """SPEC v0.10 §11 step 8: (reason or None, revocation dict). reason None = the token stays verified."""
+    import hashlib
+    from datetime import datetime, timezone
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    pinned = x509.load_pem_x509_certificates(pins_pem)
+    carried = []
+    for der in _token_certificates(token_der):
+        try:
+            carried.append(x509.load_der_x509_certificate(der))
+        except ValueError:
+            pass
+    signer = [c for c in list(carried) + pinned
+              if hashlib.sha256(c.public_bytes(serialization.Encoding.DER)).hexdigest() == signer_sha256]
+    if not signer:
+        return "tsa_revocation_unknown", {"status": "unknown", "detail": "signer certificate not found"}
+    cert = signer[0]
+
+    def _signed_by_pin(crl):
+        for p in pinned:
+            if p.subject == crl.issuer:
+                try:
+                    if crl.is_signature_valid(p.public_key()):
+                        return True
+                except (TypeError, ValueError):
+                    pass
+        return False
+    applicable = [c for c in crls if c.issuer == cert.issuer and _signed_by_pin(c)]
+    if not applicable:
+        return "tsa_revocation_unknown", {"status": "unknown",
+                                          "detail": "no pinned CRL of the signer's issuer verifies under a pinned certificate"}
+    this_update = max(c.last_update_utc for c in applicable).strftime("%Y-%m-%dT%H:%M:%SZ")
+    found = []
+    for c in applicable:
+        e = c.get_revoked_certificate_by_serial_number(cert.serial_number)
+        if e is None:
+            found.append(None)
+            continue
+        try:
+            reason = e.extensions.get_extension_for_class(x509.CRLReason).value.reason.name
+        except x509.ExtensionNotFound:
+            reason = None
+        found.append((reason, e.revocation_date_utc))
+    if len(set(found)) != 1:
+        return "tsa_revocation_unknown", {"status": "unknown", "detail": "the pinned CRLs disagree on the signer",
+                                          "crl_this_update": this_update}
+    if found[0] is None:
+        return None, {"status": "not_revoked", "crl_this_update": this_update}
+    reason, when = found[0]
+    rev = {"crl_this_update": this_update, "revocation_reason": reason,
+           "revocation_date": when.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if reason == "remove_from_crl":
+        return "tsa_revocation_unknown", dict(rev, status="unknown", detail="removeFromCRL in a CRL")
+    if reason in REVOKED_FOR_ALL_TOKENS:
+        return "tsa_certificate_revoked", dict(rev, status="revoked")
+    m = gen_time[:19] + "." + (gen_time[20:-1] + "000000")[:6] if "." in gen_time else gen_time[:19] + ".000000"
+    gt = datetime.strptime(m, "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc)
+    if gt < when:
+        return None, dict(rev, status="revoked_after_gen_time")
+    return "tsa_certificate_revoked", dict(rev, status="revoked")
+
+
+def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_certs=None, crls=None) -> dict:
     """SPEC §11 (v0.6): the one check of an RFC 3161 token in this repository. `token_der` is a TimeStampToken or a granted
     TimeStampResp; `digest` the expected messageImprint.hashedMessage; `hash_alg` (optional) the algorithm it was stamped
     with ("sha256", ...); `tsa_certs` (optional) the TSA certificates the caller pins (paths or bytes, PEM or DER: the
@@ -437,11 +549,21 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
     Returns {"status", "counts_as_timestamp", "reason", "detail", "tst_info", "imprint_ok", "signer_sha256", "note"}:
     status `verified` (pinned TSA, the only one that counts), `signature_only` (no pin: signature valid with the certificate
     contained in the token, chain not established), `invalid` (a closed `reason`), `not_evaluated` (openssl absent).
-    openssl present that cannot run here, does not answer, or is ended by a signal: CheckNotRun (SPEC §10, §11)."""
+    openssl present that cannot run here, does not answer, or is ended by a signal: CheckNotRun (SPEC §10, §11).
+    `crls` (SPEC v0.10 §11 step 8, needs `tsa_certs`): CRLs the caller pins; a `verified` token is then checked for the
+    revocation of its signer certificate, and the outcome gains `revocation`. None: no revocation check, as before."""
     import shutil
     from datetime import datetime, timezone
     out = {"status": "invalid", "counts_as_timestamp": False, "reason": None, "detail": None, "tst_info": None,
            "imprint_ok": False, "signer_sha256": None, "note": None}
+    crl_objs = None
+    if crls is not None:
+        if not tsa_certs:
+            raise ValueError("crls need tsa_certs: revocation is checked only for a token verified under pinned certificates")
+        try:
+            crl_objs = _load_crls(crls)
+        except ImportError:
+            crl_objs = ImportError
     try:
         t = parse_token(token_der)
         if hash_alg is not None and t["hash_algorithm"] != hash_alg:
@@ -481,6 +603,16 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
             out.update(reason="not_issued_by_pinned_tsa", detail=_last_line(p.stderr, "openssl ts -verify refused it"))
             return out
         out.update(status="verified", counts_as_timestamp=True, note="verified against the pinned TSA certificate(s)")
+        if crl_objs is ImportError:
+            out.update(status="not_evaluated", counts_as_timestamp=False, reason="crl_backend_missing",
+                       note="cryptography absent: the pinned CRLs were not read")
+        elif crl_objs is not None:
+            why, out["revocation"] = _revocation(t["token_der"], signer, pins, crl_objs, t["gen_time"])
+            if why is not None:
+                out.update(status="invalid", counts_as_timestamp=False, reason=why,
+                           detail=out["revocation"].get("detail") or f"signer certificate revoked "
+                           f"({out['revocation'].get('revocation_reason')}, {out['revocation'].get('revocation_date')})",
+                           note=None)
         return out
     finally:
         shutil.rmtree(d, ignore_errors=True)

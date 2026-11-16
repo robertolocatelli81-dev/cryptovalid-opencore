@@ -17,12 +17,12 @@ and exports exactly the names of its `__all__`:
 | `verify_ledger(path, algo=None, tip=None, trusted_pubkey_hex=None, require_tip=False, tip_not_before=None, expect_ledger_id=None, trusted_pq_pubkey_b64=None) -> LedgerReceipt` | the reference check of a hash-chained ledger (SPEC §5) |
 | `LedgerReceipt` | `TypedDict` of the receipt of `verify_ledger` (`cryptovalid.receipts`) |
 | `canonical_payload(entry) -> bytes`, `hash_with(algo, payload) -> str` | canonical JSON of an entry and its hash (SPEC §3) |
-| `verify_pack(pack_dir, pq_pubkey_b64=None, signer_pubkey_hex=None, manifest_signer_hex=None, tsa_certs=None) -> dict` | check of an evidence pack (SPEC §10; `tsa_certs`, the pinned TSA certificates, since SPEC v0.8) |
+| `verify_pack(pack_dir, pq_pubkey_b64=None, signer_pubkey_hex=None, manifest_signer_hex=None, tsa_certs=None, tsa_crls=None) -> dict` | check of an evidence pack (SPEC §10; `tsa_certs`, the pinned TSA certificates, since SPEC v0.8; `tsa_crls`, the pinned CRLs of the TSA, since SPEC v0.10) |
 | `verify_ledger_signatures(entries, expected_pubkey_hex=None, expected_pq_pubkey_b64=None, require_pq=False) -> dict` | per-entry signatures (needs the `sign` extra) |
 | `verify_note(note, vkeys) -> dict`, `parse_checkpoint(text) -> dict`, `NoteError` | C2SP signed notes and checkpoints (SPEC §13) |
 | `verify_inclusion(m, n, leaf_data, proof, root) -> bool`, `verify_consistency(m, n, proof, old_root, new_root) -> bool` | RFC 6962 proofs (SPEC §9) |
 | `verify_tiles(directory, size, root=None, profile="tlog-tiles", entries=True, encoding="auto", max_size=...) -> dict`, `TileError` | tiles of C2SP tiled logs (SPEC §14) |
-| `verify_token(token_der, digest, hash_alg=None, tsa_certs=None) -> dict`, `TokenError` | RFC 3161 token check (SPEC §11) |
+| `verify_token(token_der, digest, hash_alg=None, tsa_certs=None, crls=None) -> dict`, `TokenError` | RFC 3161 token check (SPEC §11; `crls`, the revocation step 8, since SPEC v0.10) |
 | `CheckNotRun` | raised when a check the input asks for cannot be run here (SPEC §10) |
 | `CryptovalidDeprecationWarning` | the warning class of a deprecated name (below) |
 | `__version__` | the installed version of the distribution |

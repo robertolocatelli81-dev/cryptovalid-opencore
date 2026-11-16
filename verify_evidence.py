@@ -24,7 +24,7 @@ Usage:
   cryptovalid-verify vkey-rfc6962 --name <origin> --key-b64 <DER>   # vkey (0x05) of a static CT log
   (the last three are the commands of cryptovalid_checkpoint.py, run by the same code; since 2026-11-15)
   cryptovalid-verify beacon <ledger> --entry <idx> --pulse <f> --previous <f> --certificate <f>
-                     [--pack <dir> --tsa-cert <pem>] [--disclosure <json>]
+                     [--pack <dir> --tsa-cert <pem> --max-window <s>] [--checkpoint <note> ...] (options: --help)
   (a "not before" bound from the NIST Randomness Beacon inside a payment entry, SPEC §18-§19; cryptovalid_beacon.py)
 
 Status: `auto`, `pack` and `ledger` are the maintained core; `archive`, `ap2` and `cldma` are EXPERIMENTAL

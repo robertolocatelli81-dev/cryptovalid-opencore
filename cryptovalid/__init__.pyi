@@ -60,6 +60,7 @@ def verify_pack(
     signer_pubkey_hex: Optional[str] = None,
     manifest_signer_hex: Optional[str] = None,
     tsa_certs: Optional[Sequence[Union[str, bytes]]] = None,
+    tsa_crls: Optional[Sequence[Union[str, bytes]]] = None,
 ) -> Dict[str, Any]: ...
 def verify_ledger_signatures(
     entries: List[Dict[str, Any]],
@@ -85,4 +86,5 @@ def verify_token(
     digest: bytes,
     hash_alg: Optional[str] = None,
     tsa_certs: Optional[Sequence[Union[str, bytes]]] = None,
+    crls: Optional[Sequence[Union[str, bytes]]] = None,
 ) -> Dict[str, Any]: ...

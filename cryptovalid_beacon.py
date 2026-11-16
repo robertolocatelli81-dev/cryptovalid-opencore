@@ -4,25 +4,32 @@
 
 Every time proof cryptovalid verified until v0.9 is an upper bound (an RFC 3161 token, a signed tip, a checkpoint).
 A value that the NIST Randomness Beacon 2.0 published at T, carried inside a ledger entry whose self_hash also covers
-the payment (identifier, amount, currency, payer and payee IBAN, salted commitments to the names), shows that the entry's bytes were put together after T, for
-anyone but the beacon's operator. With the RFC 3161 token of an evidence pack that holds the ledger, the entry is
+the payment (identifier, amount, currency, and the parties' IBANs and names as 128-bit salted commitments: personal data
+are never in clear, so they can be erased by destroying the salts outside the ledger), shows that the entry's bytes were
+put together after T, for anyone but the beacon's operator. The beacon value is technical evidence, not a legal
+timestamp. With the RFC 3161 token of an evidence pack that holds the ledger, the entry is
 dated inside a window [T, genTime].
 
 What is checked, offline, from the bytes the caller supplies: the ledger's chain (verifier.py, SPEC §5 steps 1-4); the
-payment entry's closed profile (§18: IBANs by ISO 7064 MOD 97-10, ISO 4217 currency and its minor units, a payment
-identifier unique in the ledger, optional disclosures checked against the commitments); the two NIST pulses (the named one and its
+payment entry's closed profile (§18: ISO 4217 currency and its minor units, a payment identifier unique in the ledger,
+the commitments' form; disclosures checked against the commitments, a disclosed IBAN by ISO 7064 MOD 97-10); the two NIST pulses (the named one and its
 predecessor) in their closed grammar; the certificate the caller pins (SHA-512 of its DER = certificateId); each pulse's
 RSA PKCS#1 v1.5 SHA-512 signature over the message the service deploys (4-byte length prefixes, measured on 16/11/2026:
 not the draft NIST IR 8213's 8-byte ones); outputValue; the link and the period between the two pulses; the commitment
 SHA-512(localRandomValue) = previous precommitmentValue; the entry's value = the pulse's outputValue. The window uses
-evidence_pack.verify_pack with pinned TSA certificates (SPEC §10-§11).
+evidence_pack.verify_pack with pinned TSA certificates (SPEC §10-§11) and optional pinned CRLs (§11 step 8), within a
+maximum width the caller gives, reported as from a qualified TSA only through a pinned EU Trusted List snapshot
+(cryptovalid_lotl). The entry is "the unique one" only under a checkpoint signed by a pinned log key and
+cosigned by pinned witnesses (cryptovalid_witness.verify_witnessed, SPEC §19 rule 6): one pulse admits many records,
+and one token can cover them all. The receipt's `scope` names what is proved and what is not, from a closed list.
 
 Not checked: the certificate's chain and revocation (the pin is the trust); the hour/day/month/year list values; the
 status flags other than 0 (refused, not evaluated); CURBy (not supported yet, SPEC §19). `cryptography` is needed for
 RSA and X.509 only; without it the outcome is not_evaluated (backend_missing).
 
 Command: cryptovalid-verify beacon <ledger> --entry <idx> --pulse <file> --previous <file> --certificate <file>
-         [--pack <dir> --tsa-cert <pem> ...] [--disclosure <json> ...]
+         [--pack <dir> --tsa-cert <pem> ... --max-window <s> [--tsa-crl <crl> ...] [--tsa-trusted-list <xml>]]
+         [--checkpoint <note> --log-vkey <vkey> --witness-vkey <vkey> ... [--min-witnesses <n>]] [--disclosure <json> ...]
 Exit 0 verified, 1 invalid or not_evaluated, 2 usage error or refused input, 74 receipt not written / check not run.
 """
 import sys as _sys_0203
@@ -53,11 +60,30 @@ import verifier
 PAYMENT_PROFILE = "cryptovalid-payment/1"
 SOURCES = ("nist-beacon-2.0",)                     # SPEC §19: a closed list
 # SPEC §18, in the order of its table: required, then the optional commitments
-PAYMENT_REQUIRED = ("profile", "payment_id", "amount", "currency", "payer_iban", "payee_iban", "beacon")
-COMMITMENTS = ("payer_name_commitment", "payer_details_commitment", "payee_name_commitment")
-PAYMENT_KEYS = PAYMENT_REQUIRED + COMMITMENTS
+PAYMENT_REQUIRED = ("profile", "payment_id", "amount", "currency", "payer_iban_commitment", "payee_iban_commitment",
+                    "beacon", "record_salt")
+IBAN_COMMITMENTS = ("payer_iban_commitment", "payee_iban_commitment")
+NAME_COMMITMENTS = ("payer_name_commitment", "payer_details_commitment", "payee_name_commitment")
+COMMITMENTS = IBAN_COMMITMENTS + NAME_COMMITMENTS
+PAYMENT_KEYS = PAYMENT_REQUIRED + NAME_COMMITMENTS
+SALT_BYTES = 16   # SPEC §18: every commitment's salt is exactly 128 bits
 BEACON_KEYS = frozenset({"source", "chain_index", "pulse_index", "output_value"})
 DISCLOSURE_KEYS = frozenset({"member", "salt", "value"})
+# SPEC §19 rule 7: the closed list of the receipt's scope sentences
+SCOPE = {
+    "composed_after_pulse": "the entry's bytes, with every member of the payment, were put together after the pulse's "
+                            "timeStamp, for anyone but the beacon's operator",
+    "stamped_before_gen_time": "the same bytes existed at the TSA's genTime",
+    "stamped_by_qualified_tsa": "the TSA's certificate was a granted qualified timestamp service, at genTime, in the pinned "
+                                "EU Trusted List snapshot",
+    "unique_under_pinned_witness": "the entry is the one at its position in the history the pinned witnesses cosigned",
+    "not_execution": "that a payment service provider executed the payment",
+    "not_unique": "that this is the only entry composed after that pulse",
+    "not_ownership": "that the IBANs belong to the parties",
+    "not_operator": "anything against the beacon's operator beyond its freshness promise",
+    "not_qualified": "that the upper bound is a qualified electronic time stamp",
+    "not_legal_beacon": "that the beacon value is a legal timestamp: it is technical evidence of not before",
+}
 # ISO 4217 list one, as published by its maintenance agency (SIX) on 2026-09-17, fetched on 2026-11-16 from
 # six-group.com (list-one.xml, sha256 33139b438657d1cee116ba737807ea71d19d6de4b90f799a09c56f0cc6a1b0ff): the 165
 # alphabetic codes whose minor units are a number, by minor units. The 13 codes with "N.A." are not accepted (SPEC §18).
@@ -91,6 +117,8 @@ _GEN_TIME = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})
 _AMOUNT = re.compile(r"(0|[1-9][0-9]{0,17})(?:\.([0-9]+))?")
 _PAYMENT_ID = re.compile(r"[\x21-\x7e]{1,64}")
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+_SALT_HEX = re.compile(r"[0-9a-f]{32}")
+_RECORD_SALT = re.compile(r"(?:[0-9a-f]{2}){16,64}")   # SPEC §18: 16 to 64 bytes, at least 128 bits
 _IBAN_CHARS = re.compile(r"[A-Z0-9]+")
 _IBAN_SHAPE = re.compile(r"[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}")
 _DIGITS = re.compile(r"0|[1-9][0-9]*")
@@ -160,10 +188,8 @@ def check_payment(data) -> Dict:
         bad("amount", f"too_many_decimals (the minor units of {c} are {MINOR_UNITS[c]})")
     if int(m.group(1)) == 0 and int(frac or "0") == 0:
         bad("amount", "not greater than zero")
-    for k in ("payer_iban", "payee_iban"):
-        why = iban_problem(data[k])
-        if why:
-            bad(k, why)
+    if not (isinstance(data["record_salt"], str) and _RECORD_SALT.fullmatch(data["record_salt"])):
+        bad("record_salt", "not 32 to 128 lowercase hexadecimal characters, an even number (at least 128 bits)")
     for k in COMMITMENTS:
         if k in data and not (isinstance(data[k], str) and _SHA256_HEX.fullmatch(data[k])):
             bad(k, "not 64 lowercase hexadecimal characters")
@@ -186,24 +212,24 @@ def check_payment(data) -> Dict:
 
 
 def commitment(salt: bytes, value: str) -> str:
-    """SPEC §18: SHA-256(salt || UTF-8(value)), salt 32 bytes, value as recorded (no normalisation)"""
-    if not (isinstance(salt, (bytes, bytearray)) and len(salt) == 32):
-        raise ValueError("salt: 32 bytes")
+    """SPEC §18: SHA-256(salt || UTF-8(value)), salt 16 bytes (128 bits), value as recorded (no normalisation)"""
+    if not (isinstance(salt, (bytes, bytearray)) and len(salt) == SALT_BYTES):
+        raise ValueError(f"salt: {SALT_BYTES} bytes")
     if not (isinstance(value, str) and 1 <= len(value) <= 1024):
         raise ValueError("value: a string of 1 to 1024 characters")
     return hashlib.sha256(bytes(salt) + value.encode("utf-8")).hexdigest()
 
 
 def parse_disclosure(src) -> Dict:
-    """SPEC §18: {"member", "salt" (64 lowercase hex), "value"}, closed; Refused('disclosure_malformed') otherwise"""
+    """SPEC §18: {"member", "salt" (32 lowercase hex), "value"}, closed; Refused('disclosure_malformed') otherwise"""
     try:
         d = _json(_read(src, "disclosure", MAX_PULSE), "disclosure")
     except Refused as e:
         raise Refused("disclosure_malformed", e.detail or e.reason) from None
     if not (isinstance(d, dict) and set(d) == DISCLOSURE_KEYS and d["member"] in COMMITMENTS
-            and isinstance(d["salt"], str) and _SHA256_HEX.fullmatch(d["salt"])
+            and isinstance(d["salt"], str) and _SALT_HEX.fullmatch(d["salt"])
             and isinstance(d["value"], str) and 1 <= len(d["value"]) <= 1024):
-        raise Refused("disclosure_malformed", "not {member: a commitment member, salt: 64 lowercase hex, value: 1 to "
+        raise Refused("disclosure_malformed", "not {member: a commitment member, salt: 32 lowercase hex, value: 1 to "
                                               "1024 characters}")
     return d
 
@@ -422,10 +448,13 @@ def gen_time_instant(gen_time: str) -> Fraction:
     return _instant(base) + frac
 
 
-def window(t: datetime, period_ms: int, gen_time: str) -> Dict:
-    """SPEC §19 rule 5: [T, genTime]; Invalid('window_inverted') when genTime < T"""
+def window(t: datetime, period_ms: int, gen_time: str, max_window_s: int) -> Dict:
+    """SPEC §19 rule 5: [T, genTime]; Invalid('window_inverted') when genTime < T, Invalid('window_too_wide') when
+    genTime - T > max_window_s (the caller's maximum width, seconds)"""
     if gen_time_instant(gen_time) < _instant(t):
         raise Invalid("window_inverted", f"token genTime {gen_time} is before the pulse's {_iso(t)}")
+    if gen_time_instant(gen_time) - _instant(t) > max_window_s:
+        raise Invalid("window_too_wide", f"genTime {gen_time} is more than {max_window_s} s after the pulse's {_iso(t)}")
     return {"not_before": _iso(t), "not_after": gen_time,
             "not_before_operator_promise": _iso(t - timedelta(milliseconds=period_ms))}
 
@@ -446,16 +475,33 @@ def _entries(ledger_bytes: bytes) -> List[Dict]:
     return [verifier._loads_strict(line) for line in ledger_bytes.decode("utf-8").split("\n") if line.strip(" \t\r")]
 
 
-def _pack_window(pack_dir: str, tsa_certs, ledger_bytes: bytes, beacon: Dict) -> Dict:
+def _qualification(tsr_b64: str, signer_sha256: str, gen_time: str, trusted_list) -> str:
+    """SPEC §19 rule 5 "Qualified or not": the token's signer in the pinned Trusted List snapshot at genTime"""
+    import base64
+    import cryptovalid_lotl as L
+    try:
+        tl = _read(trusted_list, "trusted list", MAX_LEDGER)
+        at = datetime.strptime(gen_time[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+        st = L.qtst_status_at(tl, at)
+    except Refused:
+        raise
+    except Exception as e:   # the snapshot is the caller's pin: one it cannot be read is its error
+        raise Refused("trusted_list_malformed", f"{type(e).__name__}: {str(e)[:120]}") from None
+    return L.qualification(base64.b64decode(tsr_b64), st["granted"], st["errors"], signer_sha256)[0]
+
+
+def _pack_window(pack_dir: str, tsa_certs, tsa_crls, max_window_s: int, ledger_bytes: bytes, beacon: Dict,
+                 trusted_list=None) -> Dict:
     import evidence_pack
-    r = evidence_pack.verify_pack(pack_dir, tsa_certs=tsa_certs)
+    r = evidence_pack.verify_pack(pack_dir, tsa_certs=tsa_certs, tsa_crls=tsa_crls)
     st = r.get("states") or {}
-    if not (r.get("valid") is True and r.get("admission") == "admitted"
-            and (st.get("sealed_content") or {}).get("state") == "verified"):
+    if not (r.get("admission") == "admitted" and (st.get("sealed_content") or {}).get("state") == "verified"):
         raise Invalid("pack_not_valid", str(r.get("error") or (st.get("sealed_content") or {}).get("reasons"))[:160])
     if (st.get("time_anchor") or {}).get("state") != "verified":
         ta = st.get("time_anchor") or {}
-        raise Invalid("time_anchor_not_verified", f"{ta.get('state')} {ta.get('reasons')}")
+        raise Invalid("time_anchor_not_verified", f"{ta.get('state')} {ta.get('reasons')} {ta.get('detail') or ''}"[:200])
+    if r.get("valid") is not True:
+        raise Invalid("pack_not_valid", "the pack's verify answers valid: false")
     man = verifier._loads_strict(_read(os.path.join(pack_dir, "MANIFEST.json"), "MANIFEST.json", MAX_LEDGER).decode("utf-8"))
     digest = hashlib.sha256(ledger_bytes).hexdigest()
     leds = [lm for lm in man["ledgers"] if man["file_digests_sha256"].get(lm["file"]) == digest
@@ -463,9 +509,47 @@ def _pack_window(pack_dir: str, tsa_certs, ledger_bytes: bytes, beacon: Dict) ->
     if not leds:
         raise Invalid("ledger_not_in_pack", "no ledger of the pack has these bytes")
     gt = (r.get("rfc3161") or {}).get("tsa_check", {}).get("gen_time")
-    w = window(beacon["_t"], beacon["period_ms"], gt)
-    w.update({"pack_ledger": leds[0]["file"], "tsa_signer_sha256": r["rfc3161"]["tsa_check"].get("signer_sha256")})
+    w = window(beacon["_t"], beacon["period_ms"], gt, max_window_s)
+    chk = r["rfc3161"]["tsa_check"]
+    w.update({"max_window_s": max_window_s, "pack_ledger": leds[0]["file"], "tsa_signer_sha256": chk.get("signer_sha256"),
+              "tsa_revocation": chk["revocation"] if tsa_crls is not None else "not_checked",
+              "tsa_qualification": "not_checked" if trusted_list is None else
+              _qualification(man["rfc3161_timestamp"]["tsr_b64"], chk.get("signer_sha256"), gt, trusted_list)})
     return w
+
+
+def _witnessed(checkpoint, log_vkeys: List[str], witness_vkeys: List[str], min_witnesses: int, entries: List[Dict],
+               entry_idx: int) -> Dict:
+    """SPEC §19 rule 6: the entry under a checkpoint signed by a pinned log key and cosigned by pinned witnesses"""
+    import base64
+    import cryptovalid_checkpoint as C
+    import cryptovalid_merkle as M
+    import cryptovalid_witness as W
+    try:
+        note = C.read_note_file(checkpoint) if isinstance(checkpoint, str) else bytes(checkpoint)
+        v = W.verify_witnessed(note, log_vkeys, witness_vkeys, min_witnesses)
+    except (C.NoteError, OSError, TypeError) as e:
+        raise Refused("checkpoint_malformed", str(e)[:160]) from None
+    if v["stato"] == "NON_VERIFICATA":
+        raise ImportError(v["motivo"])
+    if v["stato"] != "OK":
+        raise Invalid("checkpoint_not_witnessed", str(v["motivo"])[:160])
+    size, root = v["checkpoint"]["size"], base64.b64decode(v["checkpoint"]["root"])
+    if size <= entry_idx:
+        raise Invalid("checkpoint_not_covering_entry", f"checkpoint size {size}, entry {entry_idx}")
+    leaves = [M.canonical(e) for e in entries]
+    if size > len(leaves) or M.mth(leaves[:size]) != root:
+        raise Invalid("checkpoint_root_mismatch", f"the root of the first {size} entries of this ledger is not the checkpoint's")
+    return {"status": "witnessed", "witnesses": v["witnesses"], "checkpoint_size": size,
+            "origin": v["checkpoint"]["origin"]}
+
+
+def _scope(window_ok: bool, unique_ok: bool, qualified: bool = False) -> Dict:
+    proves = ["composed_after_pulse"] + (["stamped_before_gen_time"] if window_ok else []) \
+        + (["stamped_by_qualified_tsa"] if qualified else []) + (["unique_under_pinned_witness"] if unique_ok else [])
+    not_proved = ["not_execution"] + ([] if unique_ok else ["not_unique"]) + ["not_ownership", "not_operator"] \
+        + ([] if qualified else ["not_qualified"]) + ["not_legal_beacon"]
+    return {"proves": [{k: SCOPE[k]} for k in proves], "does_not_prove": [{k: SCOPE[k]} for k in not_proved]}
 
 
 def _bounds(b: Dict) -> Dict:
@@ -478,18 +562,44 @@ def _bounds(b: Dict) -> Dict:
 
 def verify_beacon_entry(ledger, entry_idx: int, pulse, previous, certificate,
                         pack_dir: Optional[str] = None, tsa_certs: Optional[List] = None,
-                        disclosures: Optional[List] = None) -> Dict:
+                        disclosures: Optional[List] = None, max_window_s: Optional[int] = None,
+                        tsa_crls: Optional[List] = None, checkpoint=None, log_vkeys: Optional[List[str]] = None,
+                        witness_vkeys: Optional[List[str]] = None, min_witnesses: Optional[int] = None,
+                        tsa_trusted_list=None) -> Dict:
     """SPEC §19: the receipt for entry `entry_idx` of `ledger` (path or bytes). `pulse`, `previous`, `certificate`:
     paths or bytes. With `pack_dir` (and `tsa_certs`, required with it) the window with the pack's token.
     `disclosures`: paths or bytes of SPEC §18 disclosures, each checked against the entry's commitment it names.
+    `max_window_s` (required with `pack_dir`): the maximum width of the window, seconds. `tsa_crls`: CRLs pinned for the
+    TSA (SPEC §11 step 8). `tsa_trusted_list` (path or bytes): a pinned EU Trusted List snapshot that decides whether the
+    TSA is qualified (SPEC §19 rule 5). `checkpoint` (path or bytes) with `log_vkeys` and `witness_vkeys` (and `min_witnesses`,
+    default 1): the witnessed checkpoint of SPEC §19 rule 6.
     Never raises on the inputs: status refused / invalid / not_evaluated / verified. A check that cannot run here
     (openssl, SPEC §10) raises verifier.CheckNotRun."""
     if type(entry_idx) is not int or entry_idx < 0:
         raise ValueError("entry_idx: an integer >= 0")
     if (pack_dir is None) != (tsa_certs is None):
         raise ValueError("pack_dir and tsa_certs go together: the window needs a token checked with pinned certificates")
+    if (pack_dir is None) != (max_window_s is None):
+        raise ValueError("pack_dir and max_window_s go together: the caller says how wide a fresh window may be")
+    if max_window_s is not None and (type(max_window_s) is not int or max_window_s < 0):
+        raise ValueError("max_window_s: an integer >= 0 (seconds)")
+    if tsa_crls is not None and pack_dir is None:
+        raise ValueError("tsa_crls need pack_dir")
+    if tsa_trusted_list is not None and pack_dir is None:
+        raise ValueError("tsa_trusted_list needs pack_dir")
+    if tsa_crls is not None:
+        import cryptovalid_tsa
+        try:
+            cryptovalid_tsa._load_crls(tsa_crls)   # a pinned CRL that cannot be read is the caller's error, before any input
+        except ImportError:
+            pass                                    # read again by verify_token, which reports crl_backend_missing
+    if not ((checkpoint is None) == (log_vkeys is None) == (witness_vkeys is None)):
+        raise ValueError("checkpoint, log_vkeys and witness_vkeys go together")
+    if min_witnesses is not None and (checkpoint is None or type(min_witnesses) is not int or min_witnesses < 1):
+        raise ValueError("min_witnesses: an integer >= 1, with a checkpoint")
     out = {"kind": "beacon", "status": None, "reason": None, "detail": "", "valid": False, "record_complete": False,
-           "entry": None, "pulse": None, "bounds": None, "window": None, "disclosed": []}
+           "entry": None, "pulse": None, "bounds": None, "window": None, "unique": {"status": "not_established"},
+           "disclosed": [], "scope": None}
     try:
         lb = _read(ledger, "ledger", MAX_LEDGER)   # bytes that are not UTF-8 FAIL verify_ledger (SPEC §3): ledger_invalid
         entries = _entries(lb)
@@ -506,10 +616,12 @@ def verify_beacon_entry(ledger, entry_idx: int, pulse, previous, certificate,
         if len({d["member"] for d in ds}) != len(ds):
             raise Refused("disclosure_malformed", "two disclosures for one member")
         out["entry"] = {"idx": entry_idx, "self_hash": e["self_hash"], "covers": [k for k in PAYMENT_KEYS if k in data],
-                        "payment": {k: data[k] for k in ("payment_id", "amount", "currency", "payer_iban", "payee_iban")}}
+                        "payment": {k: data[k] for k in ("payment_id", "amount", "currency")}}
         for d in ds:
             if data.get(d["member"]) != commitment(bytes.fromhex(d["salt"]), d["value"]):
                 raise Invalid("disclosure_mismatch", f"{d['member']}: the disclosed salt and value do not give the entry's commitment")
+            if d["member"] in IBAN_COMMITMENTS and iban_problem(d["value"]):
+                raise Invalid("disclosure_iban_invalid", f"{d['member']}: {iban_problem(d['value'])}")
             out["disclosed"].append(d["member"])
         p = parse_pulse(pulse, "pulse")
         q = parse_pulse(previous, "previous")
@@ -520,9 +632,20 @@ def verify_beacon_entry(ledger, entry_idx: int, pulse, previous, certificate,
             return out
         out["pulse"] = {k: v for k, v in b.items() if not k.startswith("_")}
         out["bounds"] = _bounds(b)
+        out["scope"] = _scope(False, False)
         if pack_dir is not None:
-            out["window"] = _pack_window(pack_dir, tsa_certs, lb, b)
-        out.update(status="verified", valid=True, record_complete=out["window"] is not None)
+            out["window"] = _pack_window(pack_dir, tsa_certs, tsa_crls, max_window_s, lb, b, tsa_trusted_list)
+        if checkpoint is not None:
+            try:
+                out["unique"] = _witnessed(checkpoint, list(log_vkeys), list(witness_vkeys), min_witnesses or 1,
+                                           entries, entry_idx)
+            except ImportError as ie:
+                out.update(status="not_evaluated", reason="backend_missing", detail=f"checkpoint: {ie}"[:160])
+                return out
+        unique = out["unique"]["status"] == "witnessed"
+        out["scope"] = _scope(out["window"] is not None, unique,
+                              (out["window"] or {}).get("tsa_qualification") == "qualified")
+        out.update(status="verified", valid=True, record_complete=out["window"] is not None and unique)
     except Refused as x:
         out.update(status="refused", reason=x.reason, detail=x.detail)
     except Invalid as x:
@@ -562,12 +685,28 @@ def main(argv=None, prog=None, cmd_name=None) -> int:
     ap.add_argument("--pack", action=_Once, type=_nonempty, help="evidence pack holding the ledger: gives the window")
     ap.add_argument("--tsa-cert", action="append", default=None, metavar="PEM", type=T.tsa_cert_arg,
                     help="pin a TSA certificate (or a CA above it) for the pack's token (repeatable; needs --pack)")
+    ap.add_argument("--max-window", action=_Once, type=_entry_arg, metavar="SECONDS",
+                    help="the widest window you accept between the pulse and the token's genTime (required with --pack)")
+    ap.add_argument("--tsa-crl", action="append", default=None, metavar="CRL", type=_nonempty,
+                    help="a CRL you pin for the TSA certificate's revocation (repeatable; needs --pack)")
+    ap.add_argument("--tsa-trusted-list", action=_Once, type=_nonempty, metavar="XML",
+                    help="an EU Trusted List snapshot you pin: the window says 'qualified' only through it (needs --pack)")
+    ap.add_argument("--checkpoint", action=_Once, type=_nonempty,
+                    help="a checkpoint of this ledger cosigned by witnesses: establishes that the entry is the unique one")
+    ap.add_argument("--log-vkey", action="append", default=None, type=_nonempty,
+                    help="the log key you trust for --checkpoint (repeatable)")
+    ap.add_argument("--witness-vkey", action="append", default=None, type=_nonempty,
+                    help="a witness key you trust for --checkpoint (repeatable)")
+    ap.add_argument("--min-witnesses", action=_Once, type=_entry_arg, help="witness cosignatures required (default 1)")
     ap.add_argument("--disclosure", action="append", default=None, metavar="JSON", type=_nonempty,
                     help="a disclosure {member, salt, value} to check against the entry's commitment (repeatable)")
     a = ap.parse_args(argv)
-    if (a.pack is None) != (a.tsa_cert is None):
-        ap.error("--pack and --tsa-cert go together: the window needs a token checked with a pinned TSA")
-    r = verify_beacon_entry(a.ledger, a.entry, a.pulse, a.previous, a.certificate, a.pack, a.tsa_cert, a.disclosure)
+    try:   # the library refuses options that do not go together, and a pinned CRL it cannot read: a usage error
+        r = verify_beacon_entry(a.ledger, a.entry, a.pulse, a.previous, a.certificate, a.pack, a.tsa_cert, a.disclosure,
+                                a.max_window, a.tsa_crl, a.checkpoint, a.log_vkey, a.witness_vkey, a.min_witnesses,
+                                a.tsa_trusted_list)
+    except ValueError as e:
+        ap.error(str(e)[:200])
     emit(json.dumps(r, ensure_ascii=False, indent=1))
     return {"verified": 0, "refused": 2}.get(r["status"], 1)
 
