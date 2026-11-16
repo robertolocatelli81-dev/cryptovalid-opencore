@@ -12,76 +12,89 @@ run by the same author, not by a third party.
 ### Added
 
 - **A "not before" bound from the NIST Randomness Beacon 2.0, inside a payment entry** (SPEC v0.10 §18-§19, written
-  before the code). Until 0.25.1 every time proof this repository verified was an upper bound (an RFC 3161 token, a
-  signed tip, a checkpoint): nothing showed that a record was not prepared in advance. `cryptovalid_beacon.py` and
+  before the code; revised after two reviews and a sample built for a public-sector payment receipt, 16/11/2026).
+  Until 0.25.1 every time proof this repository verified was an upper bound (an RFC 3161 token, a signed tip, a
+  checkpoint): nothing showed that a record was not prepared in advance. `cryptovalid_beacon.py` and
   `cryptovalid-verify beacon <ledger> --entry <idx> --pulse <f> --previous <f> --certificate <f>` (options: `--help`)
-  check, offline:
-  - a closed payment entry profile, `cryptovalid-payment/1` (§18): `payment_id` (1 to 35 characters after ISO 20022
-    Max35Text, the Latin set used for EndToEndId, no leading or trailing space; unique in the ledger), `amount` as a
-    decimal string within the minor units of its currency, `currency` from ISO 4217 list one (165 codes, published
-    2026-09-17), the `beacon` value, a `record_salt` of at least 128 bits, and the parties' personal data only as
-    commitments, SHA-256("cryptovalid-payment/1/" || member || 0x00 || 16-byte salt || normalised value), the IBAN
-    without spaces, in upper case and checked by ISO 7064 MOD 97-10 (check digits 02-98) before it is committed, a name
-    in Unicode NFC: `payer_iban_commitment`, `payee_iban_commitment` (required), `payer_name_commitment`,
-    `payer_details_commitment`, `payee_name_commitment` (optional). The member name in the hashed bytes keeps a
-    commitment from being moved to another member. The provider keeps values and salts outside the ledger; a disclosure
-    (`--disclosure`) opens a commitment; destroying values and salts erases the personal data and leaves the chain
-    intact;
-  - the two NIST pulses in their closed grammar, against the certificate the caller pins (SHA-512 of its DER =
-    `certificateId`, RSA of at least 2048 bits, valid at both pulses): signature (RSA PKCS#1 v1.5 SHA-512), outputValue,
-    the link and the period between the pulses, the commitment SHA-512(localRandomValue) = previous
-    precommitmentValue, and the entry's value = the pulse's outputValue;
-  - with `--pack`, a pinned TSA and `--max-window`, the window [T, genTime] with the evidence pack's RFC 3161 token,
-    refused when genTime < T (`window_inverted`) or wider than the caller's maximum (`window_too_wide`), with the TSA's
-    revocation checked when `--tsa-crl` pins CRLs (otherwise the receipt says `tsa_revocation: "not_checked"`), and
-    reported as from a qualified TSA only when `--tsa-trusted-list` pins an EU Trusted List snapshot in which the
-    token's signer is a granted QTST service at genTime (`cryptovalid_lotl`; otherwise `not_checked` or
-    `not_qualified`);
-  - with `--checkpoint`, `--log-vkey` and `--witness-vkey`, that the entry is the one at its position in the history
-    the pinned witnesses cosigned: under a checkpoint of this ledger signed by the pinned log key and cosigned by pinned
-    witnesses (`cryptovalid_witness.verify_witnessed`). One pulse admits many records and one token can cover them all
-    (Athena measured 100 of 100 on 16/11/2026); a tip signed by the author does not close the choice among other
-    histories, a witness that cosigns one history does. Other entries of that history may carry the same pulse: the
-    receipt keeps "not unique" in its scope.
+  check, offline, in the closed order of §19 rule 8:
+  - a closed payment entry profile, `cryptovalid-payment/1` (§18): `payment_id`, a version 4 UUID in lowercase
+    canonical form drawn by the provider (unique in the ledger); `amount` in one canonical form (exactly the minor units
+    of its currency); `currency` from ISO 4217 list one (165 codes, published 2026-09-17); `beacons`, a list of 1 to 8
+    beacon values; a `record_salt` of at least 128 bits; in clear only `execution_date`, `payee_entity_id` (a payee
+    that is not a natural person) and `psp_id`; everything else that can identify a person or a payment of one only as
+    commitments, SHA-256("cryptovalid-payment/1/" || member || 0x00 || 16-byte salt || normalised value): IBANs of
+    payer and payee (optional: a card payment has none, a creditor may not know the payer's), names, tax identifiers,
+    debtor, payer details, EndToEndId, notice code, purpose, receipt identifier, RRN; at least one party identifier.
+    An IBAN is committed without spaces, in upper case, ASCII and passing ISO 7064 MOD 97-10; the rest in Unicode
+    NFC. The provider keeps values and salts outside the ledger; `--disclosure` opens a commitment and
+    `--require-disclosure` makes an opening required (`required_disclosure_missing`). Worded after EDPB Guidelines
+    02/2025 v2.0 §52: salted hashes remain personal data while the salt exists, and "should not be linkable" after it is
+    destroyed, under that paragraph's conditions;
+  - for each beacon value, the named pulse and its predecessor of NIST chain 2, version "2.0", in their closed grammar,
+    against the beacon certificates the caller pins: signature (RSA PKCS#1 v1.5 SHA-512), outputValue, link, period,
+    commitment, and the entry's value; the lower bound is the latest pulse;
+  - with `--pack`, pinned TSA certificates and `--max-window`, the window [T, genTime] with the evidence pack's RFC 3161
+    token (`window_inverted`, `window_too_wide`, a `--clock-tolerance` the caller gives), the TSA's revocation with
+    `--tsa-crl`, and "qualified" only through a pinned Trusted List (`--tsa-trusted-list`, `cryptovalid_lotl`);
+  - with `--checkpoint` (a file of the pack, under its token), `--log-vkey` and `--witness-vkey`, the entry fixed at its
+    position in the history the pinned witnesses cosigned before genTime (`checkpoint_not_in_pack`,
+    `checkpoint_log_not_trusted` for a note the pinned log did not sign, `checkpoint_not_witnessed`,
+    `checkpoint_cosigned_after_gen_time`). A checkpoint outside the pack, or a cosignature after genTime, fixes
+    nothing: an independent review measured on the first version 20 variants made "unique" by a cosignature added 400
+    days later; now none;
+  - **one entry without its ledger** (§19 rule 14): `cryptovalid-verify beacon --entry-file <entry> --proof <proof>`
+    with the pack and the checkpoint, the RFC 6962 inclusion proof of the entry under the witnessed checkpoint
+    (`cryptovalid_beacon.inclusion_proof` makes it). A third party that verifies one payment no longer receives the
+    other payers' entries: the sample of 16/11 showed amounts and identifiers of two other payers in clear in the
+    ledger it had to receive; the test checks that no member of the other entries is in anything given.
   The receipt states `not_before` = T against anyone but the beacon's operator, T minus one period only under the
-  operator's freshness promise, and no bound against an operator that breaks its promises (§19 rule 4), and a closed
-  `scope`: what is proved, and what is not (execution by a bank, uniqueness without a witness, ownership of the IBANs,
-  anything against the operator, a qualified time stamp without the Trusted List, a legal value of the beacon, which
-  is technical evidence and which NIST calls a beta service). `record_complete` is true only with a window and a witnessed checkpoint. Exit 0
-  verified, 1 invalid or not evaluated, 2 usage error or refused input. Not supported: CURBy (§19 says why), status
-  flags other than 0, the beacon certificate's chain and revocation.
+  operator's freshness promise, and no bound against an operator that breaks its promises (§19 rule 4); a closed
+  `scope` that always keeps `not_unique` and names the commitments not opened (`commitments_not_opened`) and, for one
+  entry without its ledger, `payment_id_uniqueness`; and `record_complete` only with a window, a revocation check and
+  a witnessed checkpoint in the pack. Exit 0 verified, 1 invalid or not evaluated, 2 usage error or refused input.
+  Stated as limits in §19 rule 12, with their reasons: drand (planned), CURBy, a trust-profile file, the token's
+  renewal, the TSA's `accuracy`, the outcome of the verification of the payee, the beacon certificate's revocation,
+  a qualified signature or seal over the checkpoint (planned; Ed25519 today), a paper pointer format.
 - **The TSA certificate's revocation, against CRLs the caller pins** (SPEC v0.10 §11 step 8):
-  `cryptovalid_tsa.verify_token(..., crls=[...])` and `evidence_pack.verify_pack(..., tsa_crls=[...])` (library). A
-  certificate revoked without a reason code, or for keyCompromise, cACompromise, aACompromise or a reason outside RFC
-  3161 §4's list, makes every token it signed invalid; unspecified, affiliationChanged, superseded and
-  cessationOfOperation leave valid a token whose genTime is before the revocation date (`tsa_certificate_revoked`;
-  certificateHold, removeFromCRL, a CRL that does not apply, CRLs that disagree, or a CRL with an extension the check
-  does not process such as a delta CRL or an issuing distribution point, `tsa_revocation_unknown`). Without `crls` nothing changes. Measured on 16/11/2026 on
-  0.25.1 (reported by Athena's review): a token issued after its TSA certificate was revoked for key compromise was
-  `verified`; `openssl ts -verify -crl_check` with the CRL refuses it.
-- `spec/vectors/beacon/`: six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on 2026-11-16;
-  a payment ledger rebuilt from them by the tests (published example IBANs and fictitious names, both only as
-  commitments; fictitious amounts); `conformance.json` with 49 cases (inputs under `conformance/`, expected status and
-  reason, positive and negative, built by `make_conformance.py`) and 6 window cases, for independent implementations.
+  `cryptovalid_tsa.verify_token(..., crls=[...])` and `evidence_pack.verify_pack(..., tsa_crls=[...])` (library). After RFC
+  3161 §4: unspecified, affiliationChanged, superseded and cessationOfOperation leave valid a token whose genTime is
+  before the revocation date; no reason code, a compromise or any other reason makes every token of the certificate
+  invalid (`tsa_certificate_revoked`); certificateHold, removeFromCRL, a CRL that does not apply, CRLs that disagree, a
+  CRL with an extension the check does not process (a delta CRL, an issuing distribution point), and CRLs whose latest
+  thisUpdate is before genTime give `tsa_revocation_unknown`. Without `crls` nothing changes. Measured on 16/11/2026 on
+  0.25.1: a token issued after its TSA certificate was revoked for key compromise is `verified`;
+  `openssl ts -verify -crl_check` with the CRL refuses it.
+- `spec/vectors/beacon/`: six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on 2026-11-16; a
+  payment ledger rebuilt from them by the tests (published example IBANs and fictitious names and identifiers, only as
+  commitments); `conformance.json` (format `cryptovalid-beacon-conformance/3`) with 71 cases, among them a complete
+  record of a ledger entry and of one entry alone, and at least one case for every one of the 46 result codes of §19
+  rule 8, and 8 window cases, built by `make_conformance.py` with TSAs, CRLs, a trusted list and witnesses made for
+  the purpose.
 - `bench/beacon_cost/`: the cost of one check, measured (below).
-- `test_beacon_20261116.py`: 70 tests (the module is absent at 0.25.1: the file fails there at its import, and
-  `cryptovalid-verify beacon` exits 2 there). Every refused or invalid input is derived from the real files by code,
-  re-signed with a key made in the test when the check under test sits behind the signature.
-  `test_tsa_revocation_20261116.py`: 16 tests on a CA, TSA and CRLs made with openssl (`openssl ca -revoke`,
-  `-gencrl`) and, for the reasons and extensions openssl ca does not write, with `cryptography`; all fail on 0.25.1,
-  where `verify_token` has no `crls` parameter (TypeError), so the defect itself was measured apart on 0.25.1 (below). 140 hand mutants of the new lines (`cryptovalid_beacon.py`, `cryptovalid_tsa.py`, `evidence_pack.py`):
-  139 detected (one of them by a 180 s timeout: a FIFO read that blocks), 1 equivalent (an entry looked up by `idx >=`
-  instead of `==` on a ledger whose `idx` equals its position, SPEC §5 step 4).
+- `test_beacon_20261116.py`: 90 tests, among them every pair of 15 faults of different steps (105 pairs: the code is
+  always the earlier step's), the reviewer's 20-variants and 400-days case, one entry by its proof (and its control:
+  the ledger's pack carries the other entries), the conformance cases; on 0.25.1 the file fails at its import (the
+  module is absent) and `cryptovalid-verify beacon` exits 2. Without `cryptography`: 38 run and pass, 52 skipped (the
+  RSA, X.509 and Ed25519 checks cannot run). `test_tsa_revocation_20261116.py`: 18 tests on CAs, TSAs and CRLs made
+  with openssl and `cryptography`; on 0.25.1 `test_defect_of_0_25_1_through_public_behaviour` fails by assertion (the
+  token after a keyCompromise revocation is `verified`), the others by the missing `crls` parameter. 206 hand mutants of the new lines (`cryptovalid_beacon.py`,
+  `cryptovalid_tsa.py`, `evidence_pack.py`), run on 8af0d0d: 200 detected (one by a 300 s timeout: a FIFO read that
+  blocks); 3 more detected by tests added after the run (each run against its mutant); 3 equivalent: an entry looked up
+  by `idx >=` instead of `==` on a ledger whose `idx` equals its position (SPEC §5 step 4); the log's signature
+  status dropped from `checkpoint_log_not_trusted` (the origin is read only from a note whose signature verified, so a
+  failed signature already leaves it outside the pinned names); `tree_size >= 1` dropped from the proof's grammar
+  (implied by 0 <= leaf_index < tree_size).
 
 ### Measured
 
-- The deployed NIST Beacon 2.0 does not serialize as the draft NIST IR 8213 (May 2019) says: 4-byte length prefixes,
-  not 8; `external.statusCode` in 4 bytes, not 8; outputValue over the raw signature. On the six pulses of the vectors
-  the draft's rules verify 0 signatures and 0 output values, the deployed rules 6 and 6.
-
-- Cost of one check (`bench/beacon_cost/README.md`, Intel Core i3-N305, Python 3.13): about 2.2 ms for one entry with
-  its two pulses read from disk (0.5 ms of it the two RSA-4096 signatures and the commitment), 3.1 ms with a witnessed
-  checkpoint, 54 ms with the evidence pack's window (pack verify and two openssl processes).
+- The deployed NIST Beacon 2.0 does not serialize as the draft NIST IR 8213 (May 2019, still an initial public draft on
+  2026-11-16) says: 4-byte length prefixes, not 8; `external.statusCode` in 4 bytes, not 8; outputValue over the raw
+  signature. On the six pulses of the vectors the draft's rules verify 0 signatures and 0 output values, the deployed
+  rules 6 and 6.
+- Cost of one check (`bench/beacon_cost/README.md`, Intel Core i3-N305, Python 3.13): about 2.5 ms for one entry with
+  its two pulses read from disk (0.5 ms of it the two RSA-4096 signatures and the commitment), 53 to 56 ms with the
+  evidence pack's window, a complete record, or one entry alone by its inclusion proof (pack verify and two openssl
+  processes).
 
 ### Changed
 
