@@ -95,7 +95,7 @@ class TestCutBytecodeCache(unittest.TestCase):
                 if guard in s:
                     n += 1
                     self.assertIn("        _L0210.get_code = _get_code_0210", s, f)
-        self.assertEqual(n, 33)
+        self.assertEqual(n, 34)   # 34 since cryptovalid_beacon.py (SPEC v0.10 §19, 16/11/2026)
 
 
 if __name__ == "__main__":

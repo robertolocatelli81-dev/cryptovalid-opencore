@@ -1,0 +1,1136 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""SPEC v0.10 §18-§19 (16/11/2026): a "not before" bound from the NIST Randomness Beacon 2.0, inside a payment entry.
+
+The data are real: six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on 2026-11-16
+(spec/vectors/beacon/README.md). The payment ledger of the vectors is rebuilt here from the pulse file and compared byte
+for byte; its IBANs are published examples, its amounts fictitious. Every refused or invalid input below is derived
+from these files by code. When a mutation must reach a check behind the signature, the pulses are re-signed with a
+key made here and pinned with its own certificate (certificateId, signature and outputValue recomputed), so that the
+mutation, not the signature, is what the check meets.
+
+Positive control: before 0.25.1+beacon there is no cryptovalid_beacon module and no `beacon` command: every test here
+fails at the import or with exit 2 from cryptovalid-verify. The draft NIST IR 8213 serialization is run beside the
+deployed one on the six pulses: it must verify none of them, or the check of the format would prove nothing."""
+import base64
+import copy
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from datetime import datetime, timedelta, timezone
+from unittest import mock
+
+sys.dont_write_bytecode = True
+ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "verifiers"))
+import cryptovalid_beacon as B  # noqa: E402
+import cryptovalid_tsa as T  # noqa: E402
+import evidence_pack as EP  # noqa: E402
+import verifier  # noqa: E402
+
+VB = os.path.join(ROOT, "spec", "vectors", "beacon")
+VN = os.path.join(VB, "nist")
+CERT = os.path.join(VN, "certificate_5b6386e6ac8a993b.pem")
+PULSES = list(range(2030298, 2030304))
+LEDGER = os.path.join(VB, "payment_ledger.jsonl")
+EXAMPLE_IBANS = ("GB82WEST12345698765432", "DE89370400440532013000")   # published examples, never a real account
+
+try:
+    import cryptography  # noqa: F401
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:
+    raise RuntimeError("CV_REQUIRE_CRYPTO=1 and cryptography is not importable")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs cryptography (RSA and X.509)")
+NEEDS_OPENSSL = unittest.skipIf(shutil.which("openssl") is None, "needs openssl (the TSA's signature is checked with it)")
+
+
+def pf(i):
+    return os.path.join(VN, f"pulse_{i}.json")
+
+
+def raw(i):
+    with open(pf(i), "rb") as f:
+        return f.read()
+
+
+def pulse(i):
+    return json.loads(raw(i))["pulse"]
+
+
+def doc(p):
+    return json.dumps({"pulse": p}, indent=2).encode()
+
+
+# ───────────────────────────── the payment ledger of the vectors, rebuilt from the pulse file
+
+def chain(datas, ts, algo="sha256"):
+    """a ledger (bytes) of these `data`, hashes computed by the format's rule (SPEC §3)"""
+    out, prev = [], "0" * 64
+    for i, (d, t) in enumerate(zip(datas, ts)):
+        e = {"idx": i, "ts": t, "data": d, "prev_hash": prev}
+        e["self_hash"] = verifier.hash_with(algo, verifier.canonical_payload(e))
+        prev = e["self_hash"]
+        out.append(json.dumps(e, ensure_ascii=False, sort_keys=True))
+    return ("\n".join(out) + "\n").encode()
+
+
+# fictitious parties: the salts are derived from a label, so the vector is rebuilt byte for byte
+NAMES = {"payer_name_commitment": "Maria Example", "payer_details_commitment": "Via Esempio 1, 00100 Roma, IT",
+         "payee_name_commitment": "Example Supplies Ltd"}
+
+
+def salt_of(member, label="v1"):
+    return hashlib.sha256(f"test salt {label} {member}".encode()).digest()
+
+
+def beacon_of(p):
+    return {"source": "nist-beacon-2.0", "chain_index": p["chainIndex"], "pulse_index": p["pulseIndex"],
+            "output_value": p["outputValue"]}
+
+
+def payment_datas(p):
+    """entry 0: a payment carrying pulse 2030302, with the three commitments; entry 1: a payment carrying the value of
+    pulse p, without commitments; entry 2: not a payment"""
+    gb, de = EXAMPLE_IBANS
+    first = {"profile": B.PAYMENT_PROFILE, "payment_id": "PAY-2026-11-16-0001", "amount": "1250.00", "currency": "EUR",
+             "payer_iban": gb, "payee_iban": de, "beacon": beacon_of(pulse(2030302))}
+    for m, v in NAMES.items():
+        first[m] = B.commitment(salt_of(m), v)
+    return [
+        first,
+        {"profile": B.PAYMENT_PROFILE, "payment_id": "PAY-2026-11-16-0002", "amount": "99.95", "currency": "EUR",
+         "payer_iban": de, "payee_iban": gb, "beacon": beacon_of(p)},
+        {"event": "note", "text": "not a payment"},
+    ]
+
+
+def payment_ts(p):
+    t = B.pulse_time(p["timeStamp"])
+    return [(t + timedelta(seconds=s)).strftime("%Y-%m-%dT%H:%M:%SZ") for s in (-60, 30, 45)]
+
+
+def build_payment_ledger():
+    p = pulse(2030303)
+    return chain(payment_datas(p), payment_ts(p))
+
+
+def write(td, name, b):
+    path = os.path.join(td, name)
+    with open(path, "wb") as f:
+        f.write(b)
+    return path
+
+
+def run(ledger, entry=1, p=2030303, prev=2030302, cert=CERT, **kw):
+    return B.verify_beacon_entry(ledger, entry, raw(p) if isinstance(p, int) else p,
+                                 raw(prev) if isinstance(prev, int) else prev, cert, **kw)
+
+
+def draft_message(p):
+    """the draft NIST IR 8213 (May 2019) serialization: 8-byte length prefixes, external.statusCode in 8 bytes"""
+    h = bytes.fromhex
+
+    def lp(b):
+        return len(b).to_bytes(8, "big") + b
+    out = lp(p["uri"].encode()) + lp(p["version"].encode()) + p["cipherSuite"].to_bytes(4, "big") + p["period"].to_bytes(4, "big")
+    out += lp(h(p["certificateId"])) + p["chainIndex"].to_bytes(8, "big") + p["pulseIndex"].to_bytes(8, "big")
+    out += lp(p["timeStamp"].encode()) + lp(h(p["localRandomValue"]))
+    e = p["external"]
+    out += lp(h(e["sourceId"])) + e["statusCode"].to_bytes(8, "big") + lp(h(e["value"]))
+    for x in p["listValues"]:
+        out += lp(h(x["value"]))
+    return out + lp(h(p["precommitmentValue"])) + p["statusCode"].to_bytes(4, "big")
+
+
+class OwnBeacon:
+    """a key and certificate made here, to re-sign mutated pulses so a mutation reaches the check after the signature"""
+
+    def __init__(self, not_before=None, not_after=None, bits=2048):
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+        self.key = rsa.generate_private_key(public_exponent=65537, key_size=bits)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test beacon")])
+        nb = not_before or datetime(2026, 1, 1, tzinfo=timezone.utc)
+        na = not_after or datetime(2027, 12, 31, tzinfo=timezone.utc)
+        cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(self.key.public_key())
+                .serial_number(1).not_valid_before(nb).not_valid_after(na).sign(self.key, hashes.SHA256()))
+        self.der = cert.public_bytes(serialization.Encoding.DER)
+        self.pem = cert.public_bytes(serialization.Encoding.PEM)
+        self.cid = hashlib.sha512(self.der).hexdigest()
+
+    def sign(self, p, keep_cid=False, output=True):
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+        p = copy.deepcopy(p)
+        if not keep_cid:
+            p["certificateId"] = self.cid
+        m = B.signed_message(p)
+        s = self.key.sign(m, padding.PKCS1v15(), hashes.SHA512())
+        p["signatureValue"] = s.hex().upper()
+        if output:
+            p["outputValue"] = hashlib.sha512(m + s).hexdigest().upper()
+        return p
+
+
+_OWN = None
+
+
+def own():
+    global _OWN
+    if _OWN is None:
+        _OWN = OwnBeacon()
+    return _OWN
+
+
+def resigned_pair(mutate_prev=None, mutate_pulse=None, relink=True):
+    """(prev, pulse, ledger bytes): the real pair re-signed by OwnBeacon, after the mutations; the pulse's previous
+    list value relinked to the new predecessor, the ledger's beacon value set to the new pulse's outputValue"""
+    o = own()
+    q = pulse(2030302)
+    if mutate_prev:
+        mutate_prev(q)
+    q = o.sign(q)
+    p = pulse(2030303)
+    if relink:
+        p["listValues"][0]["value"] = q["outputValue"]
+    if mutate_pulse:
+        mutate_pulse(p)
+    p = o.sign(p)
+    return q, p, chain(payment_datas(p), payment_ts(p))
+
+
+# ───────────────────────────── tests
+
+class Vectors(unittest.TestCase):
+    def test_files_are_the_ones_the_readme_names(self):
+        with open(os.path.join(VB, "README.md"), encoding="utf-8") as f:
+            readme = f.read()
+        for name in [f"nist/pulse_{i}.json" for i in PULSES] + ["nist/certificate_5b6386e6ac8a993b.pem",
+                                                                 "payment_ledger.jsonl"]:
+            with open(os.path.join(VB, name), "rb") as f:
+                self.assertIn(f"{hashlib.sha256(f.read()).hexdigest()}  {name}", readme)
+
+    def test_payment_ledger_is_rebuilt_from_the_pulse(self):
+        with open(LEDGER, "rb") as f:
+            self.assertEqual(f.read(), build_payment_ledger())
+
+    def test_pulses_are_consecutive_and_served_as_one_object(self):
+        for i in PULSES:
+            p = B.parse_pulse(pf(i))
+            self.assertEqual((p["chainIndex"], p["pulseIndex"]), (2, i))
+
+
+@NEEDS_CRYPTO
+class RealPulses(unittest.TestCase):
+    def test_every_consecutive_pair_verifies(self):
+        for i in PULSES[1:]:
+            p, q = B.parse_pulse(pf(i)), B.parse_pulse(pf(i - 1))
+            b = {"source": "nist-beacon-2.0", "chain_index": 2, "pulse_index": i, "output_value": p["outputValue"]}
+            r = B.check_pulses(b, p, q, CERT)
+            self.assertEqual(r["pulse_index"], i)
+            self.assertEqual(r["period_ms"], 60000)
+
+    def test_draft_serialization_verifies_none_deployed_verifies_all(self):
+        """the divergence from the draft NIST IR 8213, measured: with the draft's rules 0/6, with the SPEC's 6/6"""
+        from cryptography import x509
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+        with open(CERT, "rb") as f:
+            key = x509.load_pem_x509_certificate(f.read()).public_key()
+        counts = {"draft_sig": 0, "draft_out": 0, "spec_sig": 0, "spec_out": 0}
+        for i in PULSES:
+            p = pulse(i)
+            s = bytes.fromhex(p["signatureValue"])
+            for tag, m, out_in in (("draft", draft_message(p), draft_message(p) + len(s).to_bytes(8, "big") + s),
+                                   ("spec", B.signed_message(p), B.signed_message(p) + s)):
+                try:
+                    key.verify(s, m, padding.PKCS1v15(), hashes.SHA512())
+                    counts[tag + "_sig"] += 1
+                except InvalidSignature:
+                    pass
+                counts[tag + "_out"] += hashlib.sha512(out_in).hexdigest().upper() == p["outputValue"].upper()
+        self.assertEqual(counts, {"draft_sig": 0, "draft_out": 0, "spec_sig": 6, "spec_out": 6})
+
+    def test_entry_receipt(self):
+        r = run(LEDGER)
+        self.assertEqual((r["status"], r["valid"], r["reason"]), ("verified", True, None), r)
+        self.assertEqual(r["bounds"]["not_before"], "2026-11-16T13:04:00.000Z")
+        self.assertEqual(r["bounds"]["not_before_operator_promise"], "2026-11-16T13:03:00.000Z")
+        self.assertIsNone(r["bounds"]["against_an_operator_breaking_its_promises"])
+        self.assertEqual(r["entry"]["covers"], ["profile", "payment_id", "amount", "currency", "payer_iban",
+                                                "payee_iban", "beacon"])
+        self.assertEqual(r["entry"]["payment"], {"payment_id": "PAY-2026-11-16-0002", "amount": "99.95", "currency": "EUR",
+                                                 "payer_iban": EXAMPLE_IBANS[1], "payee_iban": EXAMPLE_IBANS[0]})
+        self.assertIs(r["record_complete"], False)                  # no window without the pack's token
+        self.assertEqual(r["pulse"]["certificate_sha512"], pulse(2030303)["certificateId"])
+        self.assertIsNone(r["window"])
+
+    def test_sha3_ledger_and_lower_case_value(self):
+        p = pulse(2030303)
+        d = payment_datas(p)
+        d[1]["beacon"]["output_value"] = p["outputValue"].lower()
+        with tempfile.TemporaryDirectory() as td:
+            r = run(write(td, "l.jsonl", chain(d, payment_ts(p), "sha3_256")))
+        self.assertEqual(r["status"], "verified", r)
+
+    def test_without_cryptography_not_evaluated(self):
+        real = __import__
+
+        def imp(name, *a, **kw):
+            if name.startswith("cryptography"):
+                raise ImportError("blocked by the test")
+            return real(name, *a, **kw)
+        with mock.patch("builtins.__import__", imp):
+            r = run(LEDGER)
+        self.assertEqual((r["status"], r["reason"], r["valid"]), ("not_evaluated", "backend_missing", False))
+
+
+class PulseGrammar(unittest.TestCase):
+    """generative: every member of every object of the real pulse, removed, doubled, joined by an unknown member,
+    given every wrong type; every hex value broken; refused with pulse_malformed, never read"""
+
+    def paths(self, p):
+        out = []
+        for k in p:
+            out.append((k,))
+            if k == "external":
+                out += [(k, x) for x in p[k]]
+            if k == "listValues":
+                for i, lv in enumerate(p[k]):
+                    out += [(k, i, x) for x in lv]
+        return out
+
+    @staticmethod
+    def get_parent(p, path):
+        o = p
+        for x in path[:-1]:
+            o = o[x]
+        return o
+
+    def assertRefused(self, b, why):
+        r = run(LEDGER, p=b)
+        self.assertEqual((r["status"], r["reason"]), ("refused", "pulse_malformed"), (why, r))
+
+    def test_generative_members(self):
+        base = pulse(2030303)
+        n = 0
+        wrong = [None, True, False, 0, -1, 1.5, "", "x", [], {}, 2 ** 53, "0" * 128 + "0"]
+        for path in self.paths(base):
+            p = copy.deepcopy(base)
+            del self.get_parent(p, path)[path[-1]]
+            self.assertRefused(doc(p), ("delete", path))
+            n += 1
+            for w in wrong:
+                p = copy.deepcopy(base)
+                cur = self.get_parent(p, path)[path[-1]]
+                if type(w) is type(cur) and w == cur:
+                    continue
+                if path[-1] == "uri" and isinstance(w, str) and w:   # a uri is any text: checked at step 3, not here
+                    continue
+                if path[-1] == "version" and isinstance(w, str) and w:
+                    continue
+                if type(w) is int and type(cur) is int and 0 <= w <= (B.U32 if path[-1] in (
+                        "cipherSuite", "period", "statusCode") else verifier._SAFE_INT):
+                    continue   # a value of the right type and range is read: the checks of rule 3 judge it (below)
+                self.get_parent(p, path)[path[-1]] = w
+                self.assertRefused(doc(p), ("type", path, w))
+                n += 1
+        # an unknown member at every level
+        for where in ([], ["pulse"], ["pulse", "external"]) + tuple(["pulse", "listValues", i] for i in range(5)):
+            p = {"pulse": copy.deepcopy(base)}
+            o = p
+            for x in where:
+                o = o[x]
+            o["zz_unknown"] = 0
+            self.assertRefused(json.dumps(p).encode(), ("unknown", where))
+            n += 1
+        self.assertGreater(n, 200)
+
+    def test_duplicate_keys_at_every_level(self):
+        text = raw(2030303).decode()
+        n = 0
+        for key in ['"uri"', '"external"', '"sourceId"', '"type"', '"pulse"', '"statusCode"']:
+            i = text.index(key)
+            j = text.index(",", i)
+            dup = text[:j + 1] + text[i:j + 1] + text[j + 1:]
+            self.assertRefused(dup.encode(), ("dup", key))
+            n += 1
+        self.assertEqual(n, 6)
+
+    def test_bad_hex_and_lengths(self):
+        base = pulse(2030303)
+        keys = ["certificateId", "localRandomValue", "precommitmentValue", "outputValue"]
+        for k in keys + ["signatureValue"]:
+            v = base[k]
+            for bad in (v[:-1], v[:-2], v + "00", v[:-1] + "G", " " + v[1:], v[:-1] + "\n", "0x" + v[2:], v[:-1] + "é"):
+                p = copy.deepcopy(base)
+                p[k] = bad
+                if k == "signatureValue" and bad in (v[:-2], v + "00"):
+                    continue   # an even hex string of another length is read; the signature check refuses it (below)
+                self.assertRefused(doc(p), (k, bad[-3:]))
+        for f in ("sourceId", "value"):
+            p = copy.deepcopy(base)
+            p["external"][f] = p["external"][f][:-2]
+            self.assertRefused(doc(p), f)
+        for i in range(5):
+            p = copy.deepcopy(base)
+            p["listValues"][i]["value"] += "00"
+            self.assertRefused(doc(p), i)
+
+    def test_list_order_and_count(self):
+        base = pulse(2030303)
+        for mut in (lambda lv: lv.reverse(), lambda lv: lv.pop(), lambda lv: lv.append(copy.deepcopy(lv[0])),
+                    lambda lv: lv.__setitem__(1, copy.deepcopy(lv[0]))):
+            p = copy.deepcopy(base)
+            mut(p["listValues"])
+            self.assertRefused(doc(p), mut)
+
+    def test_bad_documents(self):
+        for b in (b"", b"[]", b"null", b'{"pulse": []}', b"\xef\xbb\xbf" + raw(2030303), raw(2030303)[:-5],
+                  raw(2030303).replace(b"60000", b"6e4"), raw(2030303).replace(b'"2.0"', b'"2.0\\ud800"'),
+                  b"\xff" + raw(2030303), b'{"pulse": ' * 600 + b"{}" + b"}" * 600):
+            self.assertRefused(b, b[:20])
+
+    def test_time_stamps(self):
+        base = pulse(2030303)
+        for t in ("2026-11-16T13:04:00Z", "2026-11-16T13:04:00.000+00:00", "2026-02-30T13:04:00.000Z",
+                  "2026-11-16 13:04:00.000Z", "2026-11-16T13:04:00.0000Z", "２026-11-16T13:04:00.000Z",
+                  "2026-11-16T24:00:00.000Z", "2026-11-16T13:04:00.000Z\n"):
+            p = copy.deepcopy(base)
+            p["timeStamp"] = t
+            self.assertRefused(doc(p), t)
+
+    def test_integer_ranges(self):
+        base = pulse(2030303)
+        for k, v in (("period", 2 ** 32), ("statusCode", -1), ("cipherSuite", 2 ** 32), ("pulseIndex", -1),
+                     ("chainIndex", 2 ** 53)):
+            p = copy.deepcopy(base)
+            p[k] = v
+            self.assertRefused(doc(p), k)
+        p = copy.deepcopy(base)
+        p["external"]["statusCode"] = 2 ** 32   # the draft's uint64 does not fit the deployed 4 bytes
+        self.assertRefused(doc(p), "external.statusCode")
+
+    def test_texts(self):
+        base = pulse(2030303)
+        for k in ("uri", "version"):
+            for bad in (base[k] + "\n", base[k] + "\x00", "\x85" + base[k], base[k] + "\x7f", "x" * 2049):
+                p = copy.deepcopy(base)
+                p[k] = bad
+                self.assertRefused(doc(p), (k, bad[-2:]))
+        p = copy.deepcopy(base)
+        p["listValues"][2]["uri"] = "u" * 2049
+        self.assertRefused(doc(p), "list uri")
+        p = copy.deepcopy(base)
+        p["listValues"][2]["uri"] = "u" * 2048                      # the bound itself is read (the list uris are unsigned)
+        self.assertEqual(run(LEDGER, p=doc(p))["reason"], None if HAVE_CRYPTO else "backend_missing")
+
+    def test_size_and_file_kind(self):
+        r = run(LEDGER, p=raw(2030303) + b" " * B.MAX_PULSE)
+        self.assertEqual((r["status"], r["reason"]), ("refused", "input_too_large"))
+        with tempfile.TemporaryDirectory() as td:
+            big = write(td, "big.json", raw(2030303) + b" " * (B.MAX_PULSE - len(raw(2030303)) + 1))
+            r = run(LEDGER, p=big)
+            self.assertEqual((r["status"], r["reason"]), ("refused", "input_too_large"))
+            edge = write(td, "edge.json", raw(2030303) + b" " * (B.MAX_PULSE - len(raw(2030303))))
+            self.assertNotEqual(run(LEDGER, p=edge)["status"], "refused")
+            r = run(LEDGER, p=td)
+            self.assertEqual((r["status"], r["reason"]), ("refused", "input_unreadable"))
+            r = run(LEDGER, p=os.path.join(td, "absent"))
+            self.assertEqual((r["status"], r["reason"]), ("refused", "input_unreadable"))
+            os.mkfifo(os.path.join(td, "fifo"))
+            r = run(LEDGER, p=os.path.join(td, "fifo"))
+            self.assertEqual((r["status"], r["reason"]), ("refused", "input_unreadable"))
+
+
+@NEEDS_CRYPTO
+class PulseChecks(unittest.TestCase):
+    """each check of SPEC §19 rule 3 reached by a mutation of the real pulses (re-signed where the check is behind
+    the signature), and failing with its own reason"""
+
+    def assertInvalid(self, r, reason):
+        self.assertEqual((r["status"], r["reason"], r["valid"]), ("invalid", reason, False), r)
+
+    def with_own(self, q, p, led):
+        with tempfile.TemporaryDirectory() as td:
+            return run(write(td, "l.jsonl", led), p=doc(p), prev=doc(q), cert=own().pem)
+
+    def test_positive_control_resigned_pair_verifies(self):
+        q, p, led = resigned_pair()
+        self.assertEqual(self.with_own(q, p, led)["status"], "verified")
+
+    def test_version_cipher_status(self):
+        for k, v, why in (("version", "2.1", "version_not_supported"), ("cipherSuite", 1, "cipher_suite_not_supported"),
+                          ("statusCode", 1, "status_not_supported"), ("statusCode", 2, "status_not_supported"),
+                          ("statusCode", 4, "status_not_supported"), ("statusCode", 8, "status_not_supported")):
+            for which in ("pulse", "prev"):
+                p, q = pulse(2030303), pulse(2030302)
+                (p if which == "pulse" else q)[k] = v
+                self.assertInvalid(run(LEDGER, p=doc(p), prev=doc(q)), why)
+
+    def test_pulse_mismatch(self):
+        self.assertInvalid(run(LEDGER, p=2030302, prev=2030301), "pulse_mismatch")      # the wrong pulse
+        self.assertInvalid(run(LEDGER, p=2030303, prev=2030301), "pulse_mismatch")      # not the predecessor
+        self.assertInvalid(run(LEDGER, p=2030303, prev=2030303), "pulse_mismatch")
+        p = pulse(2030303)
+        p["uri"] = p["uri"].replace("https://", "http://")
+        self.assertInvalid(run(LEDGER, p=doc(p)), "pulse_mismatch")
+        p = pulse(2030303)
+        p["chainIndex"] = 3
+        self.assertInvalid(run(LEDGER, p=doc(p)), "pulse_mismatch")
+        d = payment_datas(pulse(2030303))
+        d[1]["beacon"]["chain_index"] = 1
+        with tempfile.TemporaryDirectory() as td:
+            self.assertInvalid(run(write(td, "l", chain(d, payment_ts(pulse(2030303))))), "pulse_mismatch")
+
+    def test_wrong_period_and_certificate_change_between_pulses(self):
+        q, p, led = resigned_pair(mutate_pulse=lambda p: p.__setitem__("period", 30000))
+        self.assertInvalid(self.with_own(q, p, led), "chain_inconsistent")
+        q, p, led = resigned_pair(mutate_prev=lambda q: q.__setitem__("period", 30000),
+                                  mutate_pulse=lambda p: p.__setitem__("period", 30000))
+        self.assertInvalid(self.with_own(q, p, led), "period_mismatch")      # both 30 s, one minute apart
+        q, p, led = resigned_pair(mutate_pulse=lambda p: p.__setitem__("timeStamp", "2026-11-16T13:04:00.001Z"))
+        self.assertInvalid(self.with_own(q, p, led), "period_mismatch")
+        q, p, led = resigned_pair(mutate_pulse=lambda p: p.__setitem__("timeStamp", "2026-11-16T13:03:59.999Z"))
+        self.assertInvalid(self.with_own(q, p, led), "period_mismatch")
+        o = own()
+        q = o.sign(pulse(2030302))
+        p = pulse(2030303)
+        p["listValues"][0]["value"] = q["outputValue"]
+        p = o.sign(p, keep_cid=True)                     # signed by the pinned key, but names NIST's certificate
+        self.assertInvalid(self.with_own(q, p, chain(payment_datas(p), payment_ts(p))), "chain_inconsistent")
+
+    def test_wrong_certificate(self):
+        self.assertInvalid(run(LEDGER, cert=own().pem), "certificate_mismatch")
+        self.assertInvalid(run(LEDGER, cert=own().der), "certificate_mismatch")
+        with open(CERT, "rb") as f:
+            pem = f.read()
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        der = x509.load_pem_x509_certificate(pem).public_bytes(serialization.Encoding.DER)
+        self.assertEqual(run(LEDGER, cert=der)["status"], "verified")           # DER of the same certificate
+        for bad, why in ((pem + pem, "two certificates"), (pem[:200], "cut"), (b"", "empty"), (b"\x30\x03\x02\x01\x01", "der"),
+                         (pem.replace(b"CERTIFICATE", b"PUBLIC KEY"), "another block"),
+                         (pem + b"-----BEGIN PRIVATE KEY-----\n", "a second block")):
+            r = run(LEDGER, cert=bad)
+            self.assertEqual(r["status"], "refused", (why, r))
+
+    def test_certificate_validity_and_key(self):
+        for nb, na in ((datetime(2026, 11, 16, 13, 3, 30, tzinfo=timezone.utc), None),
+                       (None, datetime(2026, 11, 16, 13, 3, 30, tzinfo=timezone.utc))):
+            o = OwnBeacon(nb, na)
+            q = o.sign(pulse(2030302))
+            p = pulse(2030303)
+            p["listValues"][0]["value"] = q["outputValue"]
+            p = o.sign(p)
+            with tempfile.TemporaryDirectory() as td:
+                r = run(write(td, "l", chain(payment_datas(p), payment_ts(p))), p=doc(p), prev=doc(q), cert=o.pem)
+            self.assertInvalid(r, "certificate_not_valid_at_pulse_time")
+        o = OwnBeacon(bits=1024)
+        q = o.sign(pulse(2030302))
+        p = pulse(2030303)
+        p["listValues"][0]["value"] = q["outputValue"]
+        p = o.sign(p)
+        with tempfile.TemporaryDirectory() as td:
+            r = run(write(td, "l", chain(payment_datas(p), payment_ts(p))), p=doc(p), prev=doc(q), cert=o.pem)
+        self.assertInvalid(r, "certificate_key_not_supported")
+
+    def test_signature_from_another_key(self):
+        o = own()
+        p = o.sign(pulse(2030303), keep_cid=True)        # NIST's certificateId, another key's signature
+        self.assertInvalid(run(LEDGER, p=doc(p)), "signature_invalid")
+        q = o.sign(pulse(2030302), keep_cid=True)
+        self.assertInvalid(run(LEDGER, prev=doc(q)), "signature_invalid")
+        for k in ("timeStamp", "localRandomValue", "statusCode"):   # any signed field changed: the real signature fails
+            p = pulse(2030303)
+            p[k] = {"timeStamp": "2026-11-16T13:04:00.001Z", "localRandomValue": "00" * 64, "statusCode": 0}[k]
+            if p[k] == pulse(2030303)[k]:
+                p["external"]["statusCode"] = 1
+            self.assertInvalid(run(LEDGER, p=doc(p)), "signature_invalid")
+        p = pulse(2030303)
+        p["signatureValue"] = p["signatureValue"][:-2]
+        self.assertInvalid(run(LEDGER, p=doc(p)), "signature_invalid")
+        p = pulse(2030303)
+        p["listValues"][4]["uri"] = "https://example.invalid/"   # the list uris are not signed and not used
+        self.assertEqual(run(LEDGER, p=doc(p))["status"], "verified")
+
+    def test_output_value(self):
+        q, p, led = resigned_pair()
+        p["outputValue"] = hashlib.sha512(b"other").hexdigest().upper()
+        self.assertInvalid(self.with_own(q, p, chain(payment_datas(p), payment_ts(p))), "output_value_mismatch")
+        q2 = dict(q, outputValue=hashlib.sha512(b"other").hexdigest().upper())
+        self.assertInvalid(self.with_own(q2, p, led), "output_value_mismatch")
+
+    def test_previous_link(self):
+        q, p, led = resigned_pair(relink=False)          # the pulse's previous value is NIST's, not the re-signed one
+        self.assertInvalid(self.with_own(q, p, led), "previous_mismatch")
+
+    def test_broken_commitment(self):
+        q, p, led = resigned_pair(mutate_prev=lambda q: q.__setitem__("precommitmentValue", "AB" * 64))
+        self.assertInvalid(self.with_own(q, p, led), "commitment_mismatch")
+        q, p, led = resigned_pair(mutate_pulse=lambda p: p.__setitem__("localRandomValue", "CD" * 64))
+        self.assertInvalid(self.with_own(q, p, led), "commitment_mismatch")
+
+    def test_beacon_value_mismatch(self):
+        p = pulse(2030303)
+        for v in (pulse(2030302)["outputValue"], p["localRandomValue"], "00" * 64):
+            d = payment_datas(p)
+            d[1]["beacon"]["output_value"] = v
+            with tempfile.TemporaryDirectory() as td:
+                self.assertInvalid(run(write(td, "l", chain(d, payment_ts(p)))), "beacon_value_mismatch")
+
+
+class Payment(unittest.TestCase):
+    """SPEC §18: the closed payment profile and the IBAN check, generative"""
+
+    def assertMalformed(self, data, member=None):
+        with self.assertRaises(B.Refused) as c:
+            B.check_payment(data)
+        self.assertEqual(c.exception.reason, "payment_malformed", data)
+        if member:
+            self.assertTrue(c.exception.detail.startswith(member), (c.exception.detail, member))
+
+    def test_published_examples_pass(self):
+        for i in EXAMPLE_IBANS:
+            self.assertIsNone(B.iban_problem(i))
+
+    def test_single_character_substitutions(self):
+        """measured: MOD 97-10 catches every substitution of a digit by a digit and of a letter by a letter; 7 of the
+        1540 substitutions of the two examples, all a digit replaced by a letter, pass it (SPEC §18: the BBAN
+        structure of the registry, which would refuse a letter there, is not checked)"""
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        n, passed = 0, []
+        for iban in EXAMPLE_IBANS:
+            for pos in range(len(iban)):
+                for c in alphabet:
+                    if c == iban[pos]:
+                        continue
+                    s = iban[:pos] + c + iban[pos + 1:]
+                    n += 1
+                    if B.iban_problem(s) is None:
+                        passed.append(s)
+                        self.assertTrue(iban[pos].isdigit() and c.isalpha(), s)
+        self.assertEqual(n, (22 + 22) * 35)
+        self.assertEqual(sorted(passed), sorted([
+            "GB82WEST1234569D765432", "GB82WEST12345698G65432", "GB82WEST123456987654L2", "DE893S0400440532013000",
+            "DE893704T0440532013000", "DE893704004T0532013000", "DE89370400440532I13000"]))
+
+    def test_every_adjacent_transposition_is_caught(self):
+        for iban in EXAMPLE_IBANS:
+            for pos in range(len(iban) - 1):
+                if iban[pos] == iban[pos + 1]:
+                    continue
+                s = iban[:pos] + iban[pos + 1] + iban[pos] + iban[pos + 2:]
+                self.assertIsNotNone(B.iban_problem(s), s)
+
+    def test_forms(self):
+        gb = EXAMPLE_IBANS[0]
+        cases = {gb.lower(): "iban_charset", gb[:4] + " " + gb[4:]: "iban_charset", gb + "\n": "iban_charset",
+                 "GB82": "iban_length", "GB82WEST123456": "iban_length", gb + "0" * 13: "iban_length", "GB82WEST1234569876543Ä": "iban_charset",
+                 "1282WEST12345698765432": "iban_charset", "GBX2WEST12345698765432": "iban_charset",
+                 "GB00WEST12345698765432": "iban_check_digits", "GB99WEST12345698765432": "iban_check_digits",
+                 "GB01WEST12345698765432": "iban_check_digits", "GB83WEST12345698765432": "iban_checksum",
+                 "GB82WEST1234569876543２": "iban_charset", 1: "iban_type", None: "iban_type", "": "iban_charset"}
+        for v, why in cases.items():
+            self.assertEqual(B.iban_problem(v), why, v)
+        # 00 / 01 / 99 pass the modulo exactly when 97 / 98 / 02 do: the range rule is what refuses them
+        for good in EXAMPLE_IBANS:
+            for cd in range(100):
+                s = good[:2] + f"{cd:02d}" + good[4:]
+                bare = int("".join(str(int(c, 36)) for c in s[4:] + s[:4])) % 97 == 1
+                self.assertEqual(B.iban_problem(s) is None, bare and 2 <= cd <= 98, s)
+
+    def test_profile_closed(self):
+        """every member removed, given every wrong type, and an unknown member at both levels"""
+        base = payment_datas(pulse(2030303))[0]
+        n = 0
+        for k in list(base):
+            d = copy.deepcopy(base)
+            del d[k]
+            n += 1
+            if k in B.COMMITMENTS:
+                self.assertIs(B.check_payment(d), d)        # a commitment is optional
+            elif k == "profile":
+                with self.assertRaises(B.Refused) as c:
+                    B.check_payment(d)
+                self.assertEqual(c.exception.reason, "entry_not_a_payment")
+            else:
+                self.assertMalformed(d, k)
+            for w in (None, True, 0, 1.5, [], {}, "", "x"):
+                d = copy.deepcopy(base)
+                d[k] = w
+                n += 1
+                if k == "profile":
+                    with self.assertRaises(B.Refused):
+                        B.check_payment(d)
+                elif k == "payment_id" and w == "x":
+                    self.assertIs(B.check_payment(d), d)
+                else:
+                    self.assertMalformed(d, k)
+        for d in (dict(base, zz=1), dict(base, beacon=dict(base["beacon"], zz=1)), dict(base, Amount="1.00")):
+            self.assertMalformed(d)
+        for k in base["beacon"]:
+            d = copy.deepcopy(base)
+            del d["beacon"][k]
+            self.assertMalformed(d, "beacon")
+            for w in (None, True, -1, 1.5, [], {}, "", "0" * 127):
+                d = copy.deepcopy(base)
+                d["beacon"][k] = w
+                if k == "source" and isinstance(w, str):
+                    with self.assertRaises(B.Refused) as c:
+                        B.check_payment(d)
+                    self.assertEqual(c.exception.reason, "source_not_supported")
+                    continue
+                self.assertMalformed(d, "beacon")
+        d = copy.deepcopy(base)
+        d["beacon"]["pulse_index"] = 0
+        self.assertMalformed(d, "beacon.pulse_index")
+        d = copy.deepcopy(base)
+        d["beacon"]["chain_index"] = 0
+        self.assertIs(B.check_payment(d), d)
+        for s in ("curby-twine", "NIST-BEACON-2.0", "nist-beacon-2.0 "):
+            d = copy.deepcopy(base)
+            d["beacon"]["source"] = s
+            with self.assertRaises(B.Refused) as c:
+                B.check_payment(d)
+            self.assertEqual(c.exception.reason, "source_not_supported")
+        self.assertEqual(n, 10 * 9)
+
+    def test_missing_iban(self):
+        base = payment_datas(pulse(2030303))[1]
+        for k in ("payer_iban", "payee_iban"):
+            d = dict(base)
+            del d[k]
+            self.assertMalformed(d, k)
+
+    def test_amounts_by_currency_minor_units(self):
+        base = payment_datas(pulse(2030303))[1]
+        good = [("EUR", "1"), ("EUR", "0.01"), ("EUR", "1250.5"), ("EUR", "999999999999999999.99"), ("JPY", "1"),
+                ("JPY", "1000"), ("BHD", "0.001"), ("CLF", "0.0001"), ("USD", "10")]
+        for c, a in good:
+            d = dict(base, currency=c, amount=a)
+            self.assertIs(B.check_payment(d), d)
+        bad = [("EUR", "1.001", "too_many_decimals"), ("JPY", "1.0", "too_many_decimals"), ("JPY", "1.", "not a decimal"),
+               ("BHD", "0.0001", "too_many_decimals"), ("CLF", "0.00001", "too_many_decimals"),
+               ("EUR", "0", "not greater"), ("EUR", "0.00", "not greater"), ("JPY", "0", "not greater"),
+               ("EUR", "-1", "not a decimal"), ("EUR", "-0.01", "not a decimal"), ("EUR", "+1", "not a decimal"),
+               ("EUR", "01.00", "not a decimal"), ("EUR", ".5", "not a decimal"), ("EUR", "1e3", "not a decimal"),
+               ("EUR", " 1", "not a decimal"), ("EUR", "1,00", "not a decimal"), ("EUR", "１", "not a decimal"),
+               ("EUR", "1\n", "not a decimal"), ("EUR", "1000000000000000000", "not a decimal")]
+        for c, a, why in bad:
+            d = dict(base, currency=c, amount=a)
+            with self.assertRaises(B.Refused) as e:
+                B.check_payment(d)
+            self.assertTrue(e.exception.detail.startswith("amount: " + why), (c, a, e.exception.detail))
+        for a in (1250, 12.5, None, True):
+            self.assertMalformed(dict(base, amount=a), "amount")
+
+    def test_currencies(self):
+        base = payment_datas(pulse(2030303))[1]
+        self.assertEqual(len(B.MINOR_UNITS), 165)
+        self.assertEqual({n: sum(1 for v in B.MINOR_UNITS.values() if v == n) for n in (0, 2, 3, 4)},
+                         {0: 17, 2: 139, 3: 7, 4: 2})
+        for c in ("XAU", "XDR", "XTS", "ABC", "eur", "EU", "EURO", "EUR ", "ÉUR", 978, None, "DEM", "ZWL"):
+            self.assertMalformed(dict(base, currency=c), "currency")
+
+    def test_payment_ids(self):
+        base = payment_datas(pulse(2030303))[1]
+        for v in ("a", "!", "~" * 64, "E2E/2026-11-16:0001"):
+            d = dict(base, payment_id=v)
+            self.assertIs(B.check_payment(d), d)
+        for v in ("", "a b", "x" * 65, "é", "a\n", "\x7f", 1, None):
+            self.assertMalformed(dict(base, payment_id=v), "payment_id")
+
+
+class Commitments(unittest.TestCase):
+    """SPEC §18: SHA-256(salt || UTF-8(value)), 32-byte salt, no normalisation"""
+
+    def test_encoding_against_openssl(self):
+        if shutil.which("openssl") is None:
+            self.skipTest("needs openssl as an independent SHA-256")
+        for m, v in NAMES.items():
+            r = subprocess.run(["openssl", "dgst", "-sha256", "-r"], input=salt_of(m) + v.encode("utf-8"),
+                               capture_output=True, check=True)
+            self.assertEqual(B.commitment(salt_of(m), v), r.stdout.split()[0].decode())
+
+    def test_salt_and_value(self):
+        name = "Maria Example"
+        a, b = B.commitment(salt_of("x", "1"), name), B.commitment(salt_of("x", "2"), name)
+        self.assertNotEqual(a, b)                                     # same name, another salt
+        self.assertNotEqual(a, B.commitment(salt_of("x", "1"), "Maria Exampl"))
+        self.assertNotEqual(B.commitment(salt_of("x", "1"), "Mária"), B.commitment(salt_of("x", "1"), "Mária"))
+        for salt in (b"", b"\x00" * 31, b"\x00" * 33, "00" * 32, None):
+            with self.assertRaises(ValueError):
+                B.commitment(salt, name)
+        for v in ("", "x" * 1025, None, b"Maria"):
+            with self.assertRaises(ValueError):
+                B.commitment(b"\x00" * 32, v)
+        self.assertEqual(len(B.commitment(b"\x00" * 32, "x" * 1024)), 64)
+
+    def test_commitment_forms_in_the_entry(self):
+        base = payment_datas(pulse(2030303))[0]
+        for k in B.COMMITMENTS:
+            for bad in (base[k].upper(), base[k][:-1], base[k] + "0", "g" * 64, 0, None, ""):
+                with self.assertRaises(B.Refused) as c:
+                    B.check_payment(dict(base, **{k: bad}))
+                self.assertTrue(c.exception.detail.startswith(k), c.exception.detail)
+
+    @staticmethod
+    def disclosure(member, value=None, salt=None, **extra):
+        d = {"member": member, "salt": (salt or salt_of(member)).hex(), "value": value or NAMES[member]}
+        d.update(extra)
+        return json.dumps(d).encode()
+
+    @NEEDS_CRYPTO
+    def test_disclosures(self):
+        run0 = dict(entry=0, p=2030302, prev=2030301)
+        r = run(LEDGER, disclosures=[self.disclosure(m) for m in B.COMMITMENTS], **run0)
+        self.assertEqual((r["status"], r["disclosed"]), ("verified", list(B.COMMITMENTS)), r)
+        self.assertNotIn("Maria", json.dumps(r))                       # the receipt names members, never values
+        for d, why in ((self.disclosure("payer_name_commitment", "Maria Exampel"), "another name"),
+                       (self.disclosure("payer_name_commitment", salt=salt_of("payer_name_commitment", "v2")), "another salt"),
+                       (self.disclosure("payee_name_commitment", NAMES["payer_name_commitment"],
+                                        salt_of("payer_name_commitment")), "the payer's pair for the payee")):
+            r = run(LEDGER, disclosures=[d], **run0)
+            self.assertEqual((r["status"], r["reason"]), ("invalid", "disclosure_mismatch"), why)
+        r = run(LEDGER, disclosures=[self.disclosure("payer_name_commitment")])       # entry 1 has no commitment
+        self.assertEqual((r["status"], r["reason"]), ("invalid", "disclosure_mismatch"))
+        good = json.loads(self.disclosure("payer_name_commitment"))
+        for bad in ([self.disclosure("payer_name_commitment")] * 2,
+                    [self.disclosure("payer_name_commitment", zz=1)],
+                    [json.dumps(dict(good, salt=good["salt"].upper())).encode()],
+                    [json.dumps(dict(good, salt=good["salt"][:-2])).encode()],
+                    [json.dumps(dict(good, value="")).encode()],
+                    [json.dumps(dict(good, member="payment_id")).encode()],
+                    [json.dumps({k: v for k, v in good.items() if k != "value"}).encode()],
+                    [b'{"member": "payer_name_commitment", "member": "payee_name_commitment", "salt": "%s", "value": "x"}'
+                     % good["salt"].encode()],
+                    [b"[]"], [b"\xff"]):
+            r = run(LEDGER, disclosures=bad, **run0)
+            self.assertEqual((r["status"], r["reason"]), ("refused", "disclosure_malformed"), bad)
+
+
+@NEEDS_CRYPTO
+class Binding(unittest.TestCase):
+    """the cases Roberto asked for (16/11/2026): the bound covers the payment's value and parties inside one entry"""
+
+    def assertReason(self, r, status, reason):
+        self.assertEqual((r["status"], r["reason"]), (status, reason), r)
+
+    def test_both_payments_of_the_vector(self):
+        r = run(LEDGER, entry=0, p=2030302, prev=2030301)
+        self.assertReason(r, "verified", None)
+        self.assertEqual(r["entry"]["covers"], list(B.PAYMENT_KEYS))
+        self.assertEqual(r["bounds"]["not_before"], "2026-11-16T13:03:00.000Z")
+        self.assertEqual(run(LEDGER, entry=0)["reason"], "pulse_mismatch")     # entry 0 carries pulse 2030302
+
+    def test_entry_without_beacon_and_non_payment(self):
+        p = pulse(2030303)
+        d = payment_datas(p)
+        del d[1]["beacon"]
+        with tempfile.TemporaryDirectory() as td:
+            r = run(write(td, "l", chain(d, payment_ts(p))))
+        self.assertReason(r, "refused", "payment_malformed")
+        self.assertEqual(r["detail"], "beacon: member_missing")
+        self.assertReason(run(LEDGER, entry=2), "refused", "entry_not_a_payment")
+        self.assertReason(run(LEDGER, entry=3), "invalid", "entry_not_found")
+
+    def test_beacon_moved_to_another_entry(self):
+        p = pulse(2030303)
+        d = payment_datas(p)
+        d[0]["beacon"] = d[1].pop("beacon")
+        with tempfile.TemporaryDirectory() as td:
+            led = write(td, "l", chain(d, payment_ts(p)))
+            r = run(led, entry=1)
+            self.assertReason(r, "refused", "payment_malformed")
+            r = run(led, entry=0)                       # it dates the entry that carries it, and names that one's members
+            self.assertReason(r, "verified", None)
+            self.assertEqual(r["entry"]["payment"]["amount"], "1250.00")
+
+    def test_payment_id_unique_in_the_ledger(self):
+        p = pulse(2030303)
+        d = payment_datas(p)
+        d[1]["payment_id"] = d[0]["payment_id"]
+        with tempfile.TemporaryDirectory() as td:
+            led = write(td, "l", chain(d, payment_ts(p)))
+            self.assertReason(run(led), "invalid", "payment_id_not_unique")
+            self.assertReason(run(led, entry=0, p=2030302, prev=2030301), "invalid", "payment_id_not_unique")
+        d = payment_datas(p)
+        d[2] = {"event": "note", "payment_id": d[1]["payment_id"]}       # not a payment entry: not counted
+        with tempfile.TemporaryDirectory() as td:
+            self.assertReason(run(write(td, "l", chain(d, payment_ts(p)))), "verified", None)
+
+    def test_changed_without_recomputing_hashes_is_a_broken_chain(self):
+        lines = build_payment_ledger().decode().split("\n")
+        for old, new in (('"99.95"', '"99.96"'), (EXAMPLE_IBANS[1], "FR1420041010050500013M02606"),
+                         ('"EUR"', '"USD"')):
+            text = "\n".join([lines[0], lines[1].replace(old, new, 1)] + lines[2:])
+            with tempfile.TemporaryDirectory() as td:
+                self.assertReason(run(write(td, "l", text.encode())), "invalid", "ledger_invalid")
+
+    def test_ledger_not_utf8(self):
+        led = build_payment_ledger()
+        for bad in (led.replace(b'"note"', b'"n\xe9te"'), led + b"\xff\n", led.replace(b'"note"', b'"n\xed\xa0\x80te"')):
+            self.assertReason(run(bad), "invalid", "ledger_invalid")
+
+    def test_bad_checksum_iban_with_hashes_recomputed(self):
+        p = pulse(2030303)
+        for k in ("payer_iban", "payee_iban"):
+            d = payment_datas(p)
+            d[1][k] = d[1][k][:-1] + str((int(d[1][k][-1]) + 1) % 10)
+            with tempfile.TemporaryDirectory() as td:
+                r = run(write(td, "l", chain(d, payment_ts(p))))
+            self.assertReason(r, "refused", "payment_malformed")
+            self.assertTrue(r["detail"].startswith(f"{k}: iban_checksum"), r)
+
+
+@NEEDS_CRYPTO
+@NEEDS_OPENSSL
+class Window(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from pack_states_bench import LocalTsa
+        cls.td = tempfile.mkdtemp()
+        os.makedirs(os.path.join(cls.td, "tsa"))
+        cls.tsa = LocalTsa(os.path.join(cls.td, "tsa"))
+        cls.pack = os.path.join(cls.td, "pack")
+        cls.ledger = os.path.join(cls.td, "payments.jsonl")
+        with open(cls.ledger, "wb") as f:
+            f.write(build_payment_ledger())
+        cls.stamp(cls.pack, cls.ledger)
+
+    @classmethod
+    def stamp(cls, pack, ledger):
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            EP.build_pack([ledger], pack, subject="beacon test")
+        with open(os.path.join(pack, "MANIFEST.json")) as f:
+            m = json.load(f)
+        m["rfc3161_timestamp"] = {"anchored": True, "tsa": "local", "tsr_b64": cls.tsa.token(m["manifest_digest_sha256"])}
+        with open(os.path.join(pack, "MANIFEST.json"), "w") as f:
+            json.dump(m, f, indent=1, sort_keys=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.td)
+
+    def pins(self):
+        return [self.tsa.j("ca.crt")]
+
+    def test_window_verified(self):
+        r = run(self.ledger, pack_dir=self.pack, tsa_certs=self.pins())
+        self.assertEqual(r["status"], "verified", r)
+        w = r["window"]
+        self.assertEqual(w["not_before"], "2026-11-16T13:04:00.000Z")
+        self.assertEqual(w["not_before_operator_promise"], "2026-11-16T13:03:00.000Z")
+        self.assertGreaterEqual(B.gen_time_instant(w["not_after"]), B.gen_time_instant("2026-11-16T13:04:00Z"))
+        self.assertEqual(w["pack_ledger"], "payments.jsonl")
+        self.assertIs(r["record_complete"], True)
+
+    def test_window_with_the_ledger_given_from_outside_the_pack(self):
+        r = run(build_payment_ledger(), pack_dir=self.pack, tsa_certs=self.pins())
+        self.assertEqual(r["status"], "verified", r)
+
+    def test_changed_after_the_beacon_with_hashes_recomputed(self):
+        """a rewrite that keeps the beacon and recomputes every hash is still 'after T' (it was assembled after T):
+        the upper bound is what catches it, because the pack's token binds the head of the original ledger"""
+        p = pulse(2030303)
+        for k, v in (("amount", "99.96"), ("payee_iban", "FR1420041010050500013M02606"), ("currency", "USD")):
+            d = payment_datas(p)
+            d[1][k] = v
+            led = chain(d, payment_ts(p))
+            self.assertEqual(run(led)["status"], "verified")
+            self.assertEqual(run(led, pack_dir=self.pack, tsa_certs=self.pins())["reason"], "ledger_not_in_pack")
+
+    def test_entry_after_the_packed_head(self):
+        led = build_payment_ledger()
+        e = json.loads(led.decode().split("\n")[2])
+        d = dict(payment_datas(pulse(2030303))[1], payment_id="PAY-2026-11-16-0003")
+        nxt = {"idx": 3, "ts": e["ts"], "data": d, "prev_hash": e["self_hash"]}
+        nxt["self_hash"] = verifier.hash_with("sha256", verifier.canonical_payload(nxt))
+        led2 = led + (json.dumps(nxt, sort_keys=True) + "\n").encode()
+        self.assertEqual(run(led2, entry=3)["status"], "verified")
+        self.assertEqual(run(led2, entry=3, pack_dir=self.pack, tsa_certs=self.pins())["reason"], "ledger_not_in_pack")
+
+    def test_pack_problems(self):
+        with tempfile.TemporaryDirectory() as td:
+            pk = os.path.join(td, "p")
+            shutil.copytree(self.pack, pk)
+            other = os.path.join(td, "other")
+            os.makedirs(other)
+            from pack_states_bench import LocalTsa
+            r = run(self.ledger, pack_dir=pk, tsa_certs=[LocalTsa(other).j("ca.crt")])
+            self.assertEqual((r["status"], r["reason"]), ("invalid", "time_anchor_not_verified"), r)
+            self.assertEqual(r["bounds"]["not_before"], "2026-11-16T13:04:00.000Z")   # the bound stands without a window
+            with open(os.path.join(pk, "payments.jsonl"), "ab") as f:
+                f.write(b"\n")
+            r = run(self.ledger, pack_dir=pk, tsa_certs=self.pins())
+            self.assertEqual((r["status"], r["reason"]), ("invalid", "pack_not_valid"), r)
+            pk3 = os.path.join(td, "p3")                            # a broken manifest signature: content and token
+            shutil.copytree(self.pack, pk3)                         # still verified, the pack not valid
+            with open(os.path.join(pk3, "MANIFEST.json")) as f:
+                m3 = json.load(f)
+            m3["manifest_signature"], m3["manifest_signer"] = base64.b64encode(b"\x01" * 64).decode(), "ab" * 32
+            with open(os.path.join(pk3, "MANIFEST.json"), "w") as f:
+                json.dump(m3, f)
+            v3 = EP.verify_pack(pk3, tsa_certs=self.pins())
+            self.assertEqual((v3["valid"], v3["states"]["sealed_content"]["state"], v3["states"]["time_anchor"]["state"]),
+                             (False, "verified", "verified"))
+            r = run(self.ledger, pack_dir=pk3, tsa_certs=self.pins())
+            self.assertEqual((r["status"], r["reason"]), ("invalid", "pack_not_valid"), r)
+            with open(os.path.join(self.pack, "MANIFEST.json")) as f:
+                m = json.load(f)
+            m["rfc3161_timestamp"] = {"anchored": False, "note": "no TSA provided"}
+            pk2 = os.path.join(td, "p2")
+            shutil.copytree(self.pack, pk2)
+            with open(os.path.join(pk2, "MANIFEST.json"), "w") as f:
+                json.dump(m, f)
+            r = run(self.ledger, pack_dir=pk2, tsa_certs=self.pins())
+            self.assertEqual((r["status"], r["reason"]), ("invalid", "time_anchor_not_verified"), r)
+
+    def test_window_inverted_with_a_real_token(self):
+        """the real freetsa.org token of spec/vectors/rfc3161 (requested on 2026-11-13) is before the pulse of 16/11"""
+        V = os.path.join(ROOT, "spec", "vectors", "rfc3161")
+        with open(os.path.join(V, "manifest.json")) as f:
+            man = json.load(f)
+        with open(os.path.join(V, "freetsa.tsr"), "rb") as f:
+            v = T.verify_token(f.read(), bytes.fromhex(man["digest_sha256"]), "sha256",
+                               [os.path.join(V, "freetsa_cacert.pem")])
+        self.assertEqual(v["status"], "verified")
+        t = B.pulse_time("2026-11-16T13:04:00.000Z")
+        with self.assertRaises(B.Invalid) as c:
+            B.window(t, 60000, v["tst_info"]["gen_time"])
+        self.assertEqual(c.exception.reason, "window_inverted")
+        self.assertTrue(v["tst_info"]["gen_time"].startswith("2026-11-13"))
+
+    def test_window_edges(self):
+        t = B.pulse_time("2026-11-16T13:04:00.000Z")
+        self.assertEqual(B.window(t, 60000, "2026-11-16T13:04:00Z")["not_after"], "2026-11-16T13:04:00Z")   # one instant
+        self.assertEqual(B.window(t, 60000, "2026-11-16T13:04:00.0001Z")["not_before"], "2026-11-16T13:04:00.000Z")
+        for g in ("2026-11-16T13:03:59.999999999Z", "2026-11-16T13:03:59Z", "2025-11-16T13:04:00Z"):
+            with self.assertRaises(B.Invalid):
+                B.window(t, 60000, g)
+        t2 = B.pulse_time("2026-11-16T13:04:00.500Z")
+        with self.assertRaises(B.Invalid):
+            B.window(t2, 60000, "2026-11-16T13:04:00.4999Z")
+        self.assertEqual(B.window(t2, 60000, "2026-11-16T13:04:00.5Z")["not_before"], "2026-11-16T13:04:00.500Z")
+        for bad in (None, "", "2026-11-16T13:04:00", "2026-11-16 13:04:00Z", "2026-11-16T13:04:00.Z"):
+            with self.assertRaises(ValueError):
+                B.window(t, 60000, bad)
+
+    def test_window_inverted_end_to_end(self):
+        """the pack's token said genTime before T: the CLI path refuses the window (genTime made earlier by a
+        patched §11 outcome, the only part not reproducible on demand: openssl's TSA stamps the present)"""
+        real = EP._pinned_time_anchor
+
+        def early(*a, **kw):
+            el, chk = real(*a, **kw)
+            return el, dict(chk, gen_time="2026-11-16T13:03:59Z")
+        with mock.patch.object(EP, "_pinned_time_anchor", early):
+            r = run(self.ledger, pack_dir=self.pack, tsa_certs=self.pins())
+        self.assertEqual((r["status"], r["reason"]), ("invalid", "window_inverted"), r)
+
+
+class Command(unittest.TestCase):
+    """cryptovalid-verify beacon: exit 0 / 1 / 2, usage errors, through the installed entry point's code"""
+
+    def cli(self, *args):
+        env = dict(os.environ, HOME=tempfile.mkdtemp())
+        env.pop("PYTHONPATH", None)
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py"), "beacon", *args],
+                           capture_output=True, text=True, env=env, cwd=env["HOME"])
+        shutil.rmtree(env["HOME"])
+        return r
+
+    def base(self, **over):
+        a = {"--entry": "1", "--pulse": pf(2030303), "--previous": pf(2030302), "--certificate": CERT}
+        a.update(over)
+        out = [LEDGER]
+        for k, v in a.items():
+            if v is not None:
+                out += [k, v]
+        return out
+
+    @NEEDS_CRYPTO
+    def test_exit_codes(self):
+        r = self.cli(*self.base())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["status"], "verified")
+        r = self.cli(*self.base(**{"--previous": pf(2030301)}))
+        self.assertEqual((r.returncode, json.loads(r.stdout)["reason"]), (1, "pulse_mismatch"))
+        r = self.cli(*self.base(**{"--entry": "0"}))
+        self.assertEqual((r.returncode, json.loads(r.stdout)["reason"]), (1, "pulse_mismatch"))
+        e0 = self.base(**{"--entry": "0", "--pulse": pf(2030302), "--previous": pf(2030301)})
+        with tempfile.TemporaryDirectory() as td:
+            ok = write(td, "ok.json", Commitments.disclosure("payee_name_commitment"))
+            wrong = write(td, "wrong.json", Commitments.disclosure("payee_name_commitment", "Example Supplies Ltd."))
+            bad = write(td, "bad.json", Commitments.disclosure("payee_name_commitment", zz=1))
+            r = self.cli(*e0, "--disclosure", ok)
+            self.assertEqual((r.returncode, json.loads(r.stdout)["disclosed"]), (0, ["payee_name_commitment"]), r.stderr)
+            r = self.cli(*e0, "--disclosure", wrong)
+            self.assertEqual((r.returncode, json.loads(r.stdout)["reason"]), (1, "disclosure_mismatch"))
+            for args in (("--disclosure", bad), ("--disclosure", ok, "--disclosure", ok)):
+                r = self.cli(*e0, *args)
+                self.assertEqual((r.returncode, json.loads(r.stdout)["reason"]), (2, "disclosure_malformed"))
+        r = self.cli(*self.base(**{"--entry": "2"}))
+        self.assertEqual((r.returncode, json.loads(r.stdout)["reason"]), (2, "entry_not_a_payment"))
+        with tempfile.TemporaryDirectory() as td:
+            bad = write(td, "p.json", raw(2030303).replace(b'"version"', b'"zz": 1, "version"'))
+            r = self.cli(*self.base(**{"--pulse": bad}))
+            self.assertEqual((r.returncode, json.loads(r.stdout)["reason"]), (2, "pulse_malformed"))
+
+    def test_usage_errors(self):
+        with tempfile.TemporaryDirectory() as td:
+            with open(CERT, "rb") as f:
+                pem = write(td, "c.pem", f.read())
+            for args in (self.base(**{"--entry": "-1"}), self.base(**{"--entry": "01"}), self.base(**{"--entry": "1.0"}),
+                         self.base(**{"--entry": ""}), self.base(**{"--entry": "１"}), self.base(**{"--pulse": ""}),
+                         self.base(**{"--certificate": ""}), self.base(**{"--entry": None}),
+                         self.base(**{"--pack": td}), self.base(**{"--tsa-cert": pem}), self.base(**{"--pack": ""}),
+                         self.base() + ["--entry", "1"], self.base() + ["--pulse", pf(2030302)],
+                         self.base() + ["--certificate", CERT], self.base() + ["--previous", pf(2030302)],
+                         self.base() + ["--pack", td, "--pack", td, "--tsa-cert", pem],
+                         self.base() + ["--unknown"], self.base() + ["--ent", "1"],
+                         self.base(**{"--tsa-cert": os.path.join(td, "absent"), "--pack": td}),
+                         self.base() + ["--disclosure", ""]):
+                r = self.cli(*args)
+                self.assertEqual((r.returncode, r.stdout), (2, ""), (args, r.stderr))
+
+    def test_help_and_listing(self):
+        r = self.cli("--help")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("--certificate", r.stdout)
+        self.assertIn("cryptovalid-verify beacon", r.stdout)
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py"), "--help"],
+                           capture_output=True, text=True, env=env)
+        self.assertIn("beacon", r.stdout)
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py"), "--", "beacon", LEDGER],
+                           capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 2)
+
+    def test_library_arguments(self):
+        for bad in (-1, True, "1", 1.0, None):
+            with self.assertRaises(ValueError):
+                run(LEDGER, entry=bad)
+        with self.assertRaises(ValueError):
+            run(LEDGER, pack_dir="/x")
+        with self.assertRaises(ValueError):
+            run(LEDGER, tsa_certs=["/x"])
+
+
+if __name__ == "__main__":
+    unittest.main()

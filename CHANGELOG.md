@@ -7,6 +7,46 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
+## Unreleased
+
+### Added
+
+- **A "not before" bound from the NIST Randomness Beacon 2.0, inside a payment entry** (SPEC v0.10 §18-§19, written
+  before the code). Until 0.25.1 every time proof this repository verified was an upper bound (an RFC 3161 token, a
+  signed tip, a checkpoint): nothing showed that a record was not prepared in advance. `cryptovalid_beacon.py` and
+  `cryptovalid-verify beacon <ledger> --entry <idx> --pulse <f> --previous <f> --certificate <f> [--pack <dir>
+  --tsa-cert <pem> ...] [--disclosure <json> ...]` check, offline:
+  - a closed payment entry profile, `cryptovalid-payment/1` (§18): payment identifier (unique in the ledger), amount as
+    a decimal string within the minor units of its currency, an ISO 4217 code of list one (165 codes, published
+    2026-09-17), payer and payee IBAN (ISO 7064 MOD 97-10, check digits 02-98), the beacon value, and optional salted
+    commitments (SHA-256 of a 32-byte salt and the UTF-8 value) to the payer's name, the payer's details and the
+    payee's name, which the payment service provider can disclose and anyone can check (`--disclosure`); names are
+    never in clear in the ledger;
+  - the two NIST pulses in their closed grammar, against the certificate the caller pins (SHA-512 of its DER =
+    `certificateId`, RSA of at least 2048 bits, valid at both pulses): signature (RSA PKCS#1 v1.5 SHA-512), outputValue,
+    the link and the period between the pulses, the commitment SHA-512(localRandomValue) = previous
+    precommitmentValue, and the entry's value = the pulse's outputValue;
+  - with `--pack` and a pinned TSA, the window [T, genTime] with the evidence pack's RFC 3161 token, refused when
+    genTime < T (`window_inverted`).
+  The receipt states `not_before` = T against anyone but the beacon's operator, T minus one period only under the
+  operator's freshness promise, and no bound against an operator that breaks its promises (§19 rule 4). Exit 0
+  verified, 1 invalid or not evaluated, 2 usage error or refused input. Not supported: CURBy (§19 says why), status
+  flags other than 0, the certificate's chain and revocation.
+- `spec/vectors/beacon/`: six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on 2026-11-16,
+  and a payment ledger rebuilt from them by the tests (published example IBANs, fictitious amounts and names).
+- `test_beacon_20261116.py`: 59 tests, all failing without the module (positive control: it is absent at v0.25.1);
+  hand mutants of the new module, every one killed (counts in the branch report).
+
+### Measured
+
+- The deployed NIST Beacon 2.0 does not serialize as the draft NIST IR 8213 (May 2019) says: 4-byte length prefixes,
+  not 8; `external.statusCode` in 4 bytes, not 8; outputValue over the raw signature. On the six pulses of the vectors
+  the draft's rules verify 0 signatures and 0 output values, the deployed rules 6 and 6.
+
+### Changed
+
+- `test_pyc_cut_20261014.py` counts 34 commands carrying the bytecode wrapper (33 until 0.25.1): the new module is one.
+
 ## 0.25.1 (2026-11-16)
 
 ### Fixed

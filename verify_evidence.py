@@ -23,6 +23,9 @@ Usage:
   cryptovalid-verify tiles <dir> --vkey <vkey> --profile static-ct-api|tlog-tiles   # C2SP tiles (SPEC §14)
   cryptovalid-verify vkey-rfc6962 --name <origin> --key-b64 <DER>   # vkey (0x05) of a static CT log
   (the last three are the commands of cryptovalid_checkpoint.py, run by the same code; since 2026-11-15)
+  cryptovalid-verify beacon <ledger> --entry <idx> --pulse <f> --previous <f> --certificate <f>
+                     [--pack <dir> --tsa-cert <pem>] [--disclosure <json>]
+  (a "not before" bound from the NIST Randomness Beacon inside a payment entry, SPEC §18-§19; cryptovalid_beacon.py)
 
 Status: `auto`, `pack` and `ledger` are the maintained core; `archive`, `ap2` and `cldma` are EXPERIMENTAL
 (README, "Core and experimental modules"): kept and tested, no new scope is added to them.
@@ -502,6 +505,8 @@ _COMMANDS = {
     "checkpoint": "C2SP checkpoint or signed note, verified against trusted vkeys (SPEC §13; options: --help)",
     "tiles": "C2SP tiles of a log directory, with its checkpoint (SPEC §14; options: --help)",
     "vkey-rfc6962": "print the vkey (type 0x05) of a static CT log from its public key (SPEC §13)",
+    "beacon": "a 'not before' bound from the NIST Randomness Beacon inside a payment entry, and its window\n"
+              "               with an evidence pack's RFC 3161 token (SPEC §18-§19; options: --help)",
 }
 # SPEC §13-§14: the commands of cryptovalid_checkpoint.py, run by its own code (cryptovalid-verify name -> its command)
 _C2SP_COMMANDS = {"checkpoint": "verify", "tiles": "tiles", "vkey-rfc6962": "vkey-rfc6962"}
@@ -526,6 +531,10 @@ def _main(argv=None) -> int:
         _need_opencore()
         import cryptovalid_checkpoint as C
         return C.main([_C2SP_COMMANDS[args[0]]] + args[1:], prog=PROG, cmd_name=args[0])
+    if args and args[0] == "beacon":   # SPEC §19, its own arguments and --help
+        _need_opencore()
+        import cryptovalid_beacon as B
+        return B.main(args[1:], prog=PROG, cmd_name="beacon")
     from verifier import Parser, VersionAction, receipt_not_written, write_stdout   # 0.20.3: the write rule of verifier.py
     p = Parser(prog=PROG, formatter_class=argparse.RawDescriptionHelpFormatter,
                description="One offline verifier for every kind of CryptoValid evidence.",
@@ -534,7 +543,7 @@ def _main(argv=None) -> int:
     p.add_argument("path", help="file or directory to verify")
     p.add_argument("--version", action=VersionAction)
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
-    if a.cmd in _C2SP_COMMANDS:   # reached only when it is not the first argument (e.g. after "--"): a usage error, not a traceback
+    if a.cmd in _C2SP_COMMANDS or a.cmd == "beacon":   # reached only when it is not the first argument (e.g. after "--"): a usage error, not a traceback
         p.error(f"{a.cmd} takes its own options and must come first: cryptovalid-verify {a.cmd} --help")
     fn = {"auto": verify_auto, "pack": verify_pack, "archive": verify_archive,
           "ledger": verify_ledger, "ap2": verify_ap2, "cldma": verify_cldma}[a.cmd]
