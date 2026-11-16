@@ -1273,14 +1273,15 @@ marks what could not be checked against its issuer today.
 **14. One entry without the ledger.** Rule 5 binds the token to the whole ledger file, so a third party that verifies
 one payment receives every other payment of that ledger, with their amounts and identifiers in clear (found on
 2026-11-16 by a sample built for a public-sector receipt). A provider can instead give one entry and an inclusion proof:
-`cryptovalid-verify beacon-entry <entry> --proof <proof> ...` (library `verify_beacon_entry_proof`), with `--pack`,
+`cryptovalid-verify beacon --entry-file <entry> --proof <proof> ...` (library `verify_beacon_entry_proof`), with `--pack`,
 `--checkpoint`, `--log-vkey` and `--witness-vkey` required. The pack need not hold the ledger: it holds the witnessed
 checkpoint (rule 6), whose RFC 6962 root covers every entry up to its size, and the token over the pack is the upper bound
 for all of them. The third party receives the entry, the proof, the pack with the checkpoint, the pulses and the
 disclosures; no other entry of the ledger, and the test of this rule checks that the other entries are absent from
 everything it is given. Checks, replacing step 1 of rule 8 and completing step 6:
 
-1. **The entry**: a UTF-8 JSON document of at most 1 MiB, read as a ledger line (§3), whose value is one entry of §2 with
+1. **The entry**: a UTF-8 JSON document of at most 1 MiB with no white space around it but one final line feed
+   (this rule and item 2), whose value is one entry of §2 with
    the closed members of §2.1 (`entry_malformed`); its `self_hash` is the SHA-256 or SHA3-256 of its canonical form (§3;
    `entry_hash_mismatch`).
 2. **The proof**: a UTF-8 JSON document of at most 64 KiB, read the same way, whose value is exactly `{"format":
@@ -1294,7 +1295,10 @@ everything it is given. Checks, replacing step 1 of rule 8 and completing step 6
    (`inclusion_proof_invalid`).
 
 The entry's `prev_hash` is not checked (its predecessor is not given): the chain is shown by the inclusion under a
-checkpoint the log signed and the witnesses cosigned, not by `prev_hash`. A provider makes the proof with
+checkpoint the log signed and the witnesses cosigned, not by `prev_hash`. What the third party learns of other entries:
+the predecessor's `self_hash` (in `prev_hash`) and the proof's node hashes, hashes over entries that carry a random
+`record_salt`; no member of them. A pack holds at least one ledger file (§10, measured: a pack with none is not valid): the provider may put there a ledger of its
+checkpoints, which carries no payment. A provider makes the proof with
 `cryptovalid_beacon.inclusion_proof(ledger, idx, tree_size)`.
 
 **15. Required disclosures.** A verifier's caller can require that named commitment members be opened:
