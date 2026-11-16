@@ -253,8 +253,8 @@ trusted log key, a ledger other than the one expected, or a ledger whose tip cou
 the receipt did not name the option (measured on 2026-11-16 with `verifier.py` 0.25.0 and the JS, Go and Java
 verifiers). From v0.9 such a ledger is FAIL. The ledger format (§2–§5), its hashes and its vectors do not change.
 v0.10 (2026-11-16) adds §18, a closed payment entry profile (`cryptovalid-payment/1`: payment identifier, amount,
-ISO 4217 currency, the two IBANs checked by ISO 7064 MOD 97-10, the beacon value, optional salted commitments to the
-parties' names and the payer's details), and §19, a "not before" bound from the NIST Randomness Beacon
+ISO 4217 currency, the beacon value, a record salt, and the parties' IBANs and names only as salted commitments, opened
+by disclosures and deleted by destroying their salts), and §19, a "not before" bound from the NIST Randomness Beacon
 2.0 carried inside that entry, with the window it gives together with the RFC 3161 token of an evidence pack. Additive:
 a new command (`cryptovalid-verify beacon`) and a new module; the ledger verifiers, `auto`, the pack and their receipts do
 not change. The ledger format (§2–§5), its hashes and its vectors do not change.
@@ -482,7 +482,8 @@ certificate was revoked for key compromise is `verified`; `openssl ts -verify -c
    `revoked_after_gen_time`), one at or after it is `tsa_certificate_revoked`; removeFromCRL is `tsa_revocation_unknown`.
    `cryptography` absent: `not_evaluated`, reason `crl_backend_missing`.
 
-The CRL is the caller's: this function does not fetch one and does not judge whether it is recent enough (its
+`crls` without `tsa_certs`, or a pinned item that is not one CRL, is a `ValueError` (exit 2 in a command). The CRL is
+the caller's: this function does not fetch one and does not judge whether it is recent enough (its
 `thisUpdate` is returned). Without `crls` nothing changes and the outcome has no `revocation` member: revocation is not
 checked, and a caller that reports to a person says so (the beacon window of §19 writes `tsa_revocation:
 "not_checked"`). `evidence_pack.verify_pack(..., tsa_crls=[...])` passes them to this function (library only; the
@@ -807,13 +808,22 @@ and Java verifiers answer the same; from 0.25.1 the four answer FAIL, exit 1, an
 
 The `data` of an entry is free-form (§4) and the ledger verifiers do not read it (§2.1). This section defines one closed
 payload for a classic payment, so that the bound of §19 covers the payment's value and its parties inside one entry
-and does not sit next to them. Its content follows Regulation (EU) 2023/1113 on transfers of funds (OJ L 150,
-9.6.2023), as read on 2026-11-16: within the Union the payment account numbers of payer and payee are what must
-accompany a transfer (Art. 5(1)); the names and, for the payer, the address or document or date and place of birth
-(Art. 4(1)(a), (c), Art. 4(2)(a)) are made available by the payment service provider within three working days on
-request (Art. 5(2)). This profile records the first in clear and the second only as salted commitments: they are
-personal data, and the ledger keeps the minimum (Regulation (EU) 2016/679, Art. 5(1)(c)). It is a recording format, not
-an assessment of compliance with either regulation.
+and does not sit next to them. It is a recording format, not an assessment of compliance with any regulation. Its
+content was chosen after these texts, as read on 2026-11-16 (not from EUR-Lex, which did not answer a direct read; to
+be re-read there before any of these sentences is used as a legal statement): Regulation (EU) 2023/1113 on transfers of
+funds, Art. 4-5 (within the Union the payment account numbers of payer and payee accompany a transfer, Art. 5(1); the
+names and, for the payer, the address or document or date and place of birth are made available by the payment service
+provider within three working days on request, Art. 5(2)); Regulation (EU) 2024/1624, Art. 77 (records kept for a
+period of years, then the personal data deleted; read in secondary sources); Regulation (EU) 2016/679, Art. 5(1)(c) and
+Art. 17 (minimisation, erasure).
+
+**Personal data are never in clear in the ledger.** An entry under a hash chain cannot be deleted without breaking the
+chain, and the law asks that personal data be deleted after a retention period. So the IBANs and names are recorded only
+as salted commitments; their clear values and salts are kept by the payment service provider outside the ledger. To
+disclose, the provider gives the value and its salt and anyone checks it against the commitment (and, for an IBAN, its
+MOD 97-10 check). To delete, the provider destroys the values and salts (crypto-shredding): the chain stays intact and
+the commitments can no longer be opened. Amount, currency, payment identifier and beacon value are not personal data
+and stay in clear.
 
 A `data` object whose member `profile` is the string `cryptovalid-payment/1` is a payment entry and has exactly these
 members (plain names: the ISO 20022 message definitions could not be read on 2026-11-16, the site answered 403, so no
@@ -825,25 +835,31 @@ alignment with their element names is claimed):
 | `payment_id` | yes | the payment's unique identifier: 1 to 64 characters U+0021–U+007E (printable ASCII, no space); no two payment entries of one ledger carry the same value (`payment_id_not_unique`) |
 | `amount` | yes | a string (never a JSON number, §3): `0` or 1 to 18 digits not starting with 0, then optionally `.` and 1 to N digits, N the minor units of the currency (none when N = 0); greater than zero |
 | `currency` | yes | an ISO 4217 alphabetic code with numeric minor units, from list one as published by the maintenance agency on 2026-09-17 (165 codes; the 13 codes whose minor units are "N.A.", such as XAU and XDR, are not accepted) |
-| `payer_iban` | yes | the payer's IBAN, rule below |
-| `payee_iban` | yes | the payee's IBAN, rule below |
+| `payer_iban_commitment` | yes | commitment to the payer's IBAN, rule below |
+| `payee_iban_commitment` | yes | commitment to the payee's IBAN |
 | `beacon` | yes | the beacon value of §19: an object of exactly `source`, `chain_index`, `pulse_index`, `output_value` |
-| `record_salt` | yes | 32 to 128 lowercase hexadecimal characters, an even number (16 to 64 bytes: at least 128 bits) the payment service provider draws at random for this entry; shorter is refused |
-| `payer_name_commitment` | no | commitment to the payer's name (Art. 4(1)(a)), rule below |
-| `payer_details_commitment` | no | commitment to the payer's address, document or birth data (Art. 4(1)(c)) as the provider records them |
-| `payee_name_commitment` | no | commitment to the payee's name (Art. 4(2)(a)) |
+| `record_salt` | yes | 32 to 128 lowercase hexadecimal characters, an even number (16 to 64 bytes: at least 128 bits) the provider draws at random for this entry |
+| `payer_name_commitment` | no | commitment to the payer's name |
+| `payer_details_commitment` | no | commitment to the payer's address, document or birth data, as the provider records them |
+| `payee_name_commitment` | no | commitment to the payee's name |
 
-**Why a record salt.** The ledger holder keeps the entries; what leaves its hands are hashes: an entry's `self_hash`, a
-signed tip, a checkpoint's root, a manifest digest. Every other member of a payment is guessable (a public beacon value,
-an amount, a currency, IBANs from a list, a sequential identifier), so a hash of them alone can be searched: Athena
-measured on 2026-11-16 the last five digits of an account recovered from such a hash in 2.4 s, and a 16-bit salt still
-searchable over a dictionary of names. `record_salt` puts at least 128 bits the searcher does not know under the same
-`self_hash`. The entry is hashed as canonical JSON (§3), never
-as concatenated fields: two free fields joined without lengths collide (`INV-1` + `0.50` and `INV-` + `10.50`, measured).
+**Commitment.** 64 lowercase hexadecimal characters: SHA-256(salt || UTF-8(value)), where salt is exactly 16 bytes (128
+bits) the provider draws at random for this member of this entry and keeps outside the ledger, and value is the text it
+will disclose, exactly as recorded: for an IBAN its electronic format (rule below), for a name the string as recorded
+(no Unicode normalisation, no trimming: "José" in NFC and in NFD are two commitments). The salt's fixed length leaves
+one way to split the hashed bytes (one fixed-length part, one free part). A value is a non-empty string of at most 1024
+characters. A disclosure is `{"member": <one of the five commitment members>, "salt": <32 lowercase hex>, "value":
+<string>}`, exactly these members; it matches when the commitment recomputed from it equals the entry's member byte for
+byte, and a disclosure of an IBAN commitment must then also pass the IBAN rule (`disclosure_iban_invalid`). Without the
+salt a commitment shows nothing about its value, provided the salt stays secret and random: 128 bits make a search over
+a list of IBANs or names hopeless, where Athena measured on 2026-11-16 the last five digits of an account recovered in
+2.4 s from an unsalted hash and a 16-bit salt still searchable over a dictionary of names.
 
-The RFC 3161 token that gives the upper bound is not a member: it binds the ledger through an evidence pack (§19 rule 5).
-A payment record is complete in this format when its entry is valid here, a window of §19 is verified for it, and
-the entry is under a checkpoint a pinned witness cosigned (§19 rule 7).
+**Why also a record salt.** What leaves the provider's hands are hashes: an entry's `self_hash`, a signed tip, a
+checkpoint's root, a manifest digest. `record_salt` puts at least 128 bits under the same `self_hash`, so that the
+members in clear (amount, identifier, beacon value) cannot be searched behind it either. It is not personal data and is
+not deleted. The entry is hashed as canonical JSON (§3), never as concatenated fields: two free fields joined without
+lengths collide (`INV-1` + `0.50` and `INV-` + `10.50`, measured by Athena).
 
 **IBAN** (ISO 13616-1, electronic format): two capital letters (the country code), two digits (the check digits), then 11
 to 30 capital letters or digits; 15 to 34 characters in all, no space, no lower case. Its check is ISO 7064 MOD 97-10:
@@ -854,32 +870,29 @@ registry, and the length and the BBAN structure the registry gives each country.
 of one digit by another and of one letter by another, not every substitution of a digit by a letter: measured on
 2026-11-16 on the two example IBANs below, 7 of their 1 540 single-character substitutions pass it, each a digit
 replaced by a letter (e.g. DE89370400440532I13000), which the registry's BBAN structure would refuse and this profile
-does not read.
+does not read. The IBAN rule applies to a disclosed value: the ledger holds only its commitment.
 
-**Commitment.** 64 lowercase hexadecimal characters: SHA-256(salt || UTF-8(value)), where salt is 32 bytes the payment
-service provider draws at random and keeps, and value is the text it will disclose, exactly as recorded (no Unicode
-normalisation, no trimming: the provider discloses the string it committed to; "José" in NFC and in NFD are two
-commitments). The salt's fixed length leaves one way to split the hashed bytes (one fixed-length part, one free part); a value is a non-empty string of at most 1024 characters. A disclosure is `{"member": <one of
-the three commitment members>, "salt": <64 lowercase hex>, "value": <string>}`, exactly these members; it matches when
-the commitment recomputed from it equals the entry's member byte for byte. Anyone holding the disclosure checks that
-the name is the one bound in the entry; without it, the commitment shows nothing about the name, provided the salt
-stays secret and random.
+The RFC 3161 token that gives the upper bound is not a member: it binds the ledger through an evidence pack (§19 rule 5).
+A payment record is complete in this format when its entry is valid here, a window of §19 is verified for it, and the
+entry is under a checkpoint held by a third party (§19 rule 6).
 
 A member missing, a member not in the table, a member of another type, or a value of another form is refused with the
-member named (`payment_malformed`, its detail `<member>: <reason>`, e.g. `payer_iban: iban_checksum`, `currency:
-currency_unknown`, `amount: too_many_decimals`). Who applies the profile: `cryptovalid_beacon.check_payment(data)` and
-`cryptovalid-verify beacon` (§19), on the entry it dates. `verifier.py` and the other ledger verifiers do not: a ledger
-whose payment entry holds a malformed IBAN is still PASS for steps 1–4 of §5 (unchanged).
+member named (`payment_malformed`, its detail `<member>: <reason>`, e.g. `currency: currency_unknown`, `amount:
+too_many_decimals`). Who applies the profile: `cryptovalid_beacon.check_payment(data)` and `cryptovalid-verify beacon`
+(§19), on the entry it dates. `verifier.py` and the other ledger verifiers do not (unchanged).
 
-Vectors: `spec/vectors/beacon/payment_ledger.jsonl` uses only IBANs published as examples (GB82WEST12345698765432,
-DE89370400440532013000), fictitious amounts and names, never a real account.
+Vectors: `spec/vectors/beacon/` uses only IBANs published as examples (GB82WEST12345698765432,
+DE89370400440532013000), fictitious amounts and names, never a real account or person.
 
 ## 19. A "not before" bound from a public randomness beacon (NORMATIVE since v0.10, 2026-11-16)
 
 Every time proof this format verified until v0.9 is an upper bound: an RFC 3161 token (§11), a signed tip or a
 checkpoint says that something existed no later than an instant. None says "not earlier": a record can be prepared in
 advance and stamped later. A value that a public randomness beacon published at an instant T, and that nobody outside
-the beacon could know before T, gives the other bound: the bytes that carry it were put together after T. This section
+the beacon could know before T, gives the other bound: the bytes that carry it were put together after T. It is
+additional technical evidence, not a timestamp with a legal category: the NIST service names itself "NIST Randomness
+Beacon (Version 2.0 Beta)" and "a beta release" (beacon.nist.gov/home, read on 2026-11-16), and no regulation gives a
+beacon value the presumption eIDAS Art. 41(2) gives a qualified electronic time stamp. This section
 defines where the value is carried, how a verifier checks the beacon's pulse offline, the bounds it may then state, and
 how the bound combines with an RFC 3161 token into a window. The module is `cryptovalid_beacon.py`, the command
 `cryptovalid-verify beacon`.
@@ -1013,17 +1026,32 @@ caller chooses it, by its own policy (a relying party that expects a payment to 
 composition gives minutes); this format gives no default, because a default would decide for the caller what "fresh"
 means. Without a maximum, a pulse of last year and a token of today would be a window of a year, true and useless.
 
-*Pins.* The beacon's certificate, the TSA's certificates and CRLs, and the witness and log keys of rule 7 are given by
+*Pins.* The beacon's certificate, the TSA's certificates and CRLs, and the witness and log keys of rule 6 are given by
 the verifier's caller, never read from the evidence: a beacon certificate carried with the proof lets its author run a
 beacon of its own (Athena's bench: `pulse_certificate_id_mismatch` or `pulse_signature_invalid` only when pinned). The
 TSA's revocation is checked with the CRLs the caller pins (§11 step 8, `--tsa-crl`); without them the receipt's window
 says `tsa_revocation: "not_checked"`.
 
-**7. One window, not one of many.** A window proves when the entry was composed, not that it is the only entry composed.
+*Qualified or not.* Only a qualified electronic time stamp has the presumption of eIDAS Art. 41(2). The window says
+`tsa_qualification: "qualified"` only when the caller pins an EU Trusted List snapshot (`--tsa-trusted-list <xml>`, a
+national trusted list of ETSI TS 119 612) and the certificate that signed the token (§11 step 6) is, at genTime, the
+certificate of a service of type TSA/QTST with status granted in it (`cryptovalid_lotl.qtst_status_at`,
+`qualification`, as §11 "LOTL" reads them); `not_qualified` when it is not, `indeterminate` when the list's history
+makes the service an error (ETSI TS 119 615 PRO-4.3.4-03A); without a snapshot `not_checked`, and the window is an upper
+bound from "an RFC 3161 TSA", nothing more. The snapshot's own XML signature is not checked here: the caller pins it as it
+pins a certificate.
+
+**6. One window, not one of many.** A window proves when the entry was composed, not that it is the only entry composed.
 After one pulse an author can compose N ledgers with N different amounts and cover them all with one token (a Merkle
 root, or N tokens): every one gives a valid window (Athena measured 100 of 100 on 2026-11-16). A signed tip does not
 close this when its signer is the author, who signs a tip for each variant (100 of 100 again); it closes it only when the
-tip or checkpoint was held by a third party before the question was asked (1 of 100). This format uses the witnessed
+tip or checkpoint was held by a third party before the question was asked (1 of 100). The third party can be a witness
+or a qualified electronic ledger: Commission Implementing Regulation (EU) 2025/2531 (read in secondary sources on
+2026-11-16) asks of a qualified electronic ledger a unique sequential chronological ordering by hash lists or trees
+(SHA-256 or stronger), advanced electronic signatures or seals under qualified certificates, and keys in a certified
+device. This format's own ledgers are not qualified electronic ledgers (their tips and checkpoints are not AdES under
+qualified certificates); an entry recorded in a qualified electronic ledger kept by a third party is unique under that
+ledger's rules, which this verifier does not check. What this verifier checks is the witness. This format uses the witnessed
 checkpoints it already verifies (§16, `cryptovalid_witness.verify_witnessed`): with `--checkpoint <note> --log-vkey
 <vkey> --witness-vkey <vkey> ...`, the note MUST verify under a pinned log key and carry at least one cosignature of a
 pinned witness (§16 rules); its size N MUST cover the entry (N > idx), and its root MUST be the RFC 6962 root of the
@@ -1036,27 +1064,90 @@ size. Failures: `checkpoint_not_witnessed` (the note does not verify under the p
 "not_established"}` and the scope says so. A witness that cosigns two histories (a dishonest or compromised witness) is
 outside what this proves; several pinned witnesses (`--min-witnesses`) narrow it.
 
-**8. Scope, closed.** The receipt carries `scope` = `{"proves": [...], "does_not_prove": [...]}`, sentences taken from
+**7. Scope, closed.** The receipt carries `scope` = `{"proves": [...], "does_not_prove": [...]}`, sentences taken from
 this closed list, never composed:
 
 - proves `composed_after_pulse`: "the entry's bytes, with every member of the payment, were put together after the
   pulse's timeStamp, for anyone but the beacon's operator";
 - proves `stamped_before_gen_time` (with a window): "the same bytes existed at the TSA's genTime";
+- proves `stamped_by_qualified_tsa` (with `tsa_qualification` `qualified`): "the TSA's certificate was a granted qualified
+  timestamp service, at genTime, in the pinned EU Trusted List snapshot";
 - proves `unique_under_pinned_witness` (with `unique.status` `witnessed`): "the entry is the one at its position in the
   history the pinned witnesses cosigned";
 - does not prove `not_execution`: "that a payment service provider executed the payment";
 - does not prove `not_unique` (without a witnessed checkpoint): "that this is the only entry composed after that pulse";
 - does not prove `not_ownership`: "that the IBANs belong to the parties";
-- does not prove `not_operator`: "anything against the beacon's operator beyond its freshness promise".
+- does not prove `not_operator`: "anything against the beacon's operator beyond its freshness promise";
+- does not prove `not_qualified` (unless `stamped_by_qualified_tsa`): "that the upper bound is a qualified electronic
+  time stamp";
+- does not prove `not_legal_beacon`: "that the beacon value is a legal timestamp: it is technical evidence of not
+  before".
 
-**6. Command.** `cryptovalid-verify beacon <ledger> --entry <idx> --pulse <file> --previous <file> --certificate <file>
-[--pack <dir> --tsa-cert <pem> ... --max-window <s> [--tsa-crl <crl> ...]] [--checkpoint <note> --log-vkey <vkey>
+**8. The algorithm, in one place, and its result codes.** For an implementer who does not read this repository's code.
+Inputs: the ledger bytes, the entry's `idx`, the two pulse documents, the pinned beacon certificate; optionally the
+evidence pack, its pinned TSA certificates, CRLs and maximum width; the checkpoint with its pinned log and witness keys;
+disclosures. Steps, in order, the first failure ending the run:
+
+1. Ledger: §5 steps 1–4 (`ledger_invalid`); the entry of `idx` (`entry_not_found`).
+2. Payment profile, §18, member by member in the order of its table (`entry_not_a_payment`, `payment_malformed`,
+   `source_not_supported`); `payment_id` unique among the ledger's payment entries (`payment_id_not_unique`).
+3. Disclosures, §18 (`disclosure_malformed`, `disclosure_mismatch`, `disclosure_iban_invalid`).
+4. Pulses, rule 2 (`input_unreadable`, `input_too_large`, `pulse_malformed`), then rule 3 steps 1–9 (`version_not_supported`,
+   `cipher_suite_not_supported`, `status_not_supported`, `pulse_mismatch`, `chain_inconsistent`, `certificate_malformed`,
+   `certificate_mismatch`, `certificate_key_not_supported`, `certificate_not_valid_at_pulse_time`, `signature_invalid`,
+   `output_value_mismatch`, `previous_mismatch`, `period_mismatch`, `commitment_mismatch`, `beacon_value_mismatch`).
+   `cryptography` absent: `not_evaluated` / `backend_missing`.
+5. Window, rule 5 (`pack_not_valid`, `time_anchor_not_verified`, `ledger_not_in_pack`, `window_inverted`,
+   `window_too_wide`), the TSA token by §11 with step 8 when CRLs are pinned.
+6. Uniqueness, rule 6 (`checkpoint_malformed`, `checkpoint_not_witnessed`, `checkpoint_not_covering_entry`,
+   `checkpoint_root_mismatch`).
+7. Receipt: `status` (`verified` | `invalid` | `refused` | `not_evaluated`), `reason` (one code above or null), `bounds`
+   (rule 4), `window`, `unique`, `disclosed`, `scope` (rule 7), `record_complete`.
+
+Status `refused` (malformed input, exit 2) has exactly the codes `entry_not_a_payment`, `payment_malformed`,
+`source_not_supported`, `disclosure_malformed`, `input_unreadable`, `input_too_large`, `pulse_malformed`,
+`certificate_malformed`, `checkpoint_malformed`; every other code is `invalid` (exit 1). Conformance vectors with the
+expected status and reason of each case: `spec/vectors/beacon/conformance.json`.
+
+**9. Security considerations.**
+
+- *The operator.* A single beacon gives no lower bound against an operator that does not keep its promises (rule 4):
+  the commitment of step 8 shows the value was fixed at the latest one period before T, not that it was unknown
+  earlier, and the pulse's `external` value, which could bring entropy from outside the operator, is all zeros on
+  chain 2 (measured on the six pulses of the vectors). Values of several independent beacons in one record would
+  reduce the trust to "not all their operators colluding"; this profile carries one beacon value (v0.10).
+- *Many values.* One pulse admits many records; rule 6.
+- *Pins.* Every key and certificate is the verifier's caller's (rule 5, "Pins"); a beacon certificate or TSA certificate
+  taken from the evidence would let its author run a beacon or a TSA of its own.
+- *Revocation.* The TSA's revocation is checked only with pinned CRLs (§11 step 8); the beacon certificate's revocation
+  is not checked (rule 3 step 4).
+- *Window width.* Without a maximum width a window is true and useless; the caller chooses it (rule 5, "Width").
+- *Guessable fields.* The 128-bit salts of §18 keep the IBANs and names, and the record salt the members in clear, from
+  being searched behind a hash given to third parties.
+- *Erasure.* Personal data are in the ledger only as commitments; destroying a value and its salt outside the ledger
+  makes the commitment unopenable and leaves the chain intact. Whoever kept a copy of a disclosure still holds it: erasure
+  binds the provider's copies, not a recipient's.
+- *Legal weight.* The beacon value is technical evidence; only a token whose TSA is qualified in a pinned Trusted List
+  snapshot is reported as qualified (rule 5).
+- *Clocks.* The TSA's `accuracy` and the skew of the two clocks are not added to the bounds (rule 5).
+
+**10. Prior art.** The idea is not new, and this section does not present it as new: it is a profile for payments that
+combines existing standards (the NIST beacon, RFC 3161, C2SP checkpoints and witnesses, ISO 13616, ISO 4217). Tierion's
+Chainpoint put the value of the NIST beacon into every proof so that a proof was created after the beacon's timestamp;
+Tierion's own account of 2020 dates that announcement to May 2017 and describes its replacement by drand on 2020-07-09
+(medium.com/tierion, "Tierion Joins the League of Entropy", read on 2026-11-16 through a search index: the page answered
+403 to a direct read, and the 2017 announcement itself was not found). The formal treatment of timestamping that
+separates security against postdating and against backdating is Abadi, Ciampi, Kiayias, Zikas, "Timed Signatures and
+Zero-Knowledge Proofs — Timestamping in the Blockchain Era", IACR ePrint 2019/644 (read on 2026-11-16).
+
+**11. Command.** `cryptovalid-verify beacon <ledger> --entry <idx> --pulse <file> --previous <file> --certificate <file>
+[--pack <dir> --tsa-cert <pem> ... --max-window <s> [--tsa-crl <crl> ...] [--tsa-trusted-list <xml>]] [--checkpoint <note> --log-vkey <vkey>
 --witness-vkey <vkey> ... [--min-witnesses <n>]] [--disclosure <file> ...]`. Each `--disclosure` is a JSON file holding one
 disclosure of §18 (read as the pulses are, at most 64 KiB); it is checked against the entry's member it names
 (`disclosure_mismatch` when it does not match or the entry has no such member; two disclosures for one member, or a
 malformed one, are refused, `disclosure_malformed`); the receipt lists the members disclosed and
 matched, never the values. The receipt's `record_complete` is true only with a verified window and a witnessed
-checkpoint. `--max-window` and `--tsa-crl` without `--pack`, `--log-vkey` and `--witness-vkey` without `--checkpoint`, and
+checkpoint. `--max-window`, `--tsa-crl` and `--tsa-trusted-list` without `--pack`, `--log-vkey` and `--witness-vkey` without `--checkpoint`, and
 the reverse, are usage errors. `--pack` without `--tsa-cert`, or `--tsa-cert` without `--pack`, is a usage
 error; so is a value option given twice or given empty (§17); `--tsa-cert` is repeatable, as in the evidence pack's
 verify. The receipt is one JSON object on stdout. Exit 0 `verified` (with the window when `--pack` is given), 1
@@ -1065,5 +1156,7 @@ not run (§10). `auto` (§12) does not change: a ledger carrying a payment entry
 
 Vectors: `spec/vectors/beacon/` — six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on
 2026-11-16 with their URLs and hashes (`README.md`), and a payment ledger derived from them by code
-(`test_beacon_20261116.py` rebuilds it and compares). Every refused or invalid input of the tests is derived from these
-by code, never written by hand.
+(`test_beacon_20261116.py` rebuilds it and compares), and `conformance.json` with the inputs under `conformance/`: 40
+cases with their expected status and reason (positive and negative, from the real pulses; pulses re-signed by a key made
+for the purpose where a check sits behind the signature; witnessed checkpoints) and 6 window cases (rule 8). Every
+refused or invalid input is derived from these by code (`make_conformance.py`), never written by hand.
