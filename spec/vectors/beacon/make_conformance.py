@@ -2,256 +2,305 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Roberto Locatelli
 """Builds the conformance cases of SPEC v0.10 §18-§19 under spec/vectors/beacon/conformance/ and their expected results in
-spec/vectors/beacon/conformance.json. Every input is derived by this code from the real files of nist/ (six pulses of NIST
-chain 2 and the beacon's certificate, 16/11/2026) and from payment_ledger.jsonl; none is written by hand. Run once on
-2026-11-16; the outputs are committed. The cases that reach a check behind the beacon's signature are re-signed with an
-RSA key made on the spot, whose certificate is committed (other/certificate.pem) and whose private key is not: a new run
-gives other bytes for those cases and the same expected results. The witness keys are derived from fixed labels, so the
-checkpoint cases are the same at every run. Usage, from the repository root:
+spec/vectors/beacon/conformance.json: a complete record (window, revocation checked, witnessed checkpoint inside the pack,
+qualified TSA) and at least one case for every result code of §19 rule 8. Every input is derived by code from the real
+files of nist/ (six pulses of NIST chain 2 and the beacon's certificate, 16/11/2026) and from payment_ledger.jsonl; none
+is written by hand. The evidence packs are stamped by a TSA made on the spot with openssl (its CA certificate, the TSA
+certificate and the CRLs are committed, its private keys are not); the cases that reach a check behind the beacon's
+signature are re-signed with an RSA key made on the spot (certificate committed, key not); witness keys are derived from
+fixed labels. A new run gives other bytes for the packs and re-signed pulses and the same expected results. Needs
+openssl and cryptography. Usage, from the repository root:
     python3 spec/vectors/beacon/make_conformance.py"""
+import base64
 import copy
 import datetime
 import hashlib
 import json
 import os
+import shutil
 import sys
+import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "verifiers"))
 sys.dont_write_bytecode = True
 import cryptovalid_beacon as B  # noqa: E402
-import verifier  # noqa: E402
+import test_beacon_20261116 as TB  # noqa: E402   (the helpers the tests use: one source of the ledger and the packs)
+from test_tsa_revocation_20261116 import Lab  # noqa: E402
 
 OUT = os.path.join(HERE, "conformance")
-NIST = os.path.join(HERE, "nist")
 CERT = "nist/certificate_5b6386e6ac8a993b.pem"
+P3, P2, P1 = "nist/pulse_2030303.json", "nist/pulse_2030302.json", "nist/pulse_2030301.json"
 LOG = "example.org/payments"
-WITNESSES = ("witness.example/a", "witness.example/b")
-COSIGN_TIME = 1794834000   # 2026-11-16T13:00:00Z, fixed so the cosignatures are reproducible
 
 
-def pulse(i):
-    with open(os.path.join(NIST, f"pulse_{i}.json"), encoding="utf-8") as f:
-        return json.load(f)["pulse"]
+def rel(path):
+    return os.path.relpath(path, HERE)
 
 
-def ledger_lines():
-    with open(os.path.join(HERE, "payment_ledger.jsonl"), encoding="utf-8") as f:
-        return [json.loads(x) for x in f if x.strip()]
-
-
-def chain(datas, tss):
-    out, prev = [], "0" * 64
-    for i, (d, t) in enumerate(zip(datas, tss)):
-        e = {"idx": i, "ts": t, "data": d, "prev_hash": prev}
-        e["self_hash"] = verifier.hash_with("sha256", verifier.canonical_payload(e))
-        prev = e["self_hash"]
-        out.append(json.dumps(e, ensure_ascii=False, sort_keys=True))
-    return ("\n".join(out) + "\n").encode()
-
-
-def put(rel, data):
-    p = os.path.join(OUT, rel)
+def put(name, data):
+    p = os.path.join(OUT, name)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p, "wb") as f:
         f.write(data if isinstance(data, bytes) else data.encode())
-    return "conformance/" + rel
+    return rel(p)
 
 
-def mutated_ledger(name, fn):
-    es = ledger_lines()
-    datas, tss = [e["data"] for e in es], [e["ts"] for e in es]
-    fn(datas)
-    return put(f"ledgers/{name}.jsonl", chain(datas, tss))
+def ledger_with(fn=None):
+    p = TB.pulse(2030303)
+    datas = TB.payment_datas(p)
+    if fn:
+        fn(datas)
+    return TB.chain(datas, TB.payment_ts(p))
 
 
-def pulse_doc(p):
-    return json.dumps({"pulse": p}, indent=2).encode()
+def own_cert(nb=None, na=None, bits=2048):
+    return TB.OwnBeacon(nb, na, bits)
 
 
-class Own:
-    def __init__(self):
-        from cryptography import x509
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-        from cryptography.x509.oid import NameOID
-        self.key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        n = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "conformance beacon (not NIST)")])
-        c = (x509.CertificateBuilder().subject_name(n).issuer_name(n).public_key(self.key.public_key()).serial_number(1)
-             .not_valid_before(datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
-             .not_valid_after(datetime.datetime(2027, 12, 31, tzinfo=datetime.timezone.utc)).sign(self.key, hashes.SHA256()))
-        self.pem = c.public_bytes(serialization.Encoding.PEM)
-        self.cid = hashlib.sha512(c.public_bytes(serialization.Encoding.DER)).hexdigest()
-
-    def sign(self, p):
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.asymmetric import padding
-        p = copy.deepcopy(p)
-        p["certificateId"] = self.cid
-        m = B.signed_message(p)
-        s = self.key.sign(m, padding.PKCS1v15(), hashes.SHA512())
-        p["signatureValue"], p["outputValue"] = s.hex().upper(), hashlib.sha512(m + s).hexdigest().upper()
-        return p
+def resigned(o, mutate_prev=None, mutate_pulse=None, relink=True):
+    q = TB.pulse(2030302)
+    if mutate_prev:
+        mutate_prev(q)
+    q = o.sign(q)
+    p = TB.pulse(2030303)
+    if relink:
+        p["listValues"][0]["value"] = q["outputValue"]
+    if mutate_pulse:
+        mutate_pulse(p)
+    p = o.sign(p)
+    return q, p
 
 
-def witness_keys():
-    import cryptovalid_checkpoint as C
-    out = {}
-    for name, typ in ((LOG, C.TYPE_ED25519),) + tuple((w, C.TYPE_COSIG_V1) for w in WITNESSES):
-        seed = hashlib.sha256(f"conformance key {name}".encode()).digest()
-        out[name] = (seed, C.vkey(name, typ, C.pubkey_from_seed(seed)))
-    return out
-
-
-def checkpoint(ledger_rel, keys, size=None, witnesses=WITNESSES[:1]):
-    import cryptovalid_checkpoint as C
-    import cryptovalid_merkle as M
-    with open(os.path.join(HERE, ledger_rel), encoding="utf-8") as f:
-        leaves = [M.canonical(json.loads(x)) for x in f if x.strip()]
-    size = len(leaves) if size is None else size
-    note = C.sign_note(C.checkpoint_text(LOG, size, M.mth(leaves[:size])), LOG, keys[LOG][0])
-    for w in witnesses:
-        note = C.cosign_v1(note, w, keys[w][0], COSIGN_TIME)
-    return note
+def ledger_for(p):
+    pp = TB.pulse(2030303)
+    datas = TB.payment_datas(pp)
+    datas[1]["beacons"] = [TB.beacon_of(p)]
+    return TB.chain(datas, TB.payment_ts(pp))
 
 
 def main():
+    if os.path.isdir(OUT):
+        shutil.rmtree(OUT)
+    os.makedirs(OUT)
+    work = tempfile.mkdtemp()
     cases = []
 
-    def case(name, expect, reason, ledger="payment_ledger.jsonl", entry=1, p="nist/pulse_2030303.json",
-             prev="nist/pulse_2030302.json", cert=CERT, **extra):
-        cases.append(dict({"name": name, "ledger": ledger, "entry": entry, "pulse": p, "previous": prev,
-                           "certificate": cert}, **extra, expected={"status": expect, "reason": reason}))
+    def case(name, status, reason, complete=False, ledger="payment_ledger.jsonl", entry=1, pulses=((P3, P2),),
+             certificates=(CERT,), **extra):
+        c = {"name": name, "ledger": ledger, "entry": entry, "pulses": [list(x) for x in pulses],
+             "certificates": list(certificates)}
+        c.update({k: v for k, v in extra.items() if v is not None})
+        c["expected"] = {"status": status, "reason": reason, "record_complete": complete}
+        cases.append(c)
 
-    # positive, real pulses
-    case("entry1_pulse_2030303", "verified", None)
-    case("entry0_pulse_2030302", "verified", None, entry=0, p="nist/pulse_2030302.json", prev="nist/pulse_2030301.json")
-    names = {"payer_iban_commitment": "GB82WEST12345698765432", "payee_iban_commitment": "DE89370400440532013000",
-             "payer_name_commitment": "Maria Example", "payer_details_commitment": "Via Esempio 1, 00100 Roma, IT",
-             "payee_name_commitment": "Example Supplies Ltd"}
+    try:
+        lab = Lab(work, "tsa")
+        other = Lab(work, "other")
+        revoked = Lab(work, "revoked")
+        keys = TB.witness_material()
+        wk = {"log_vkeys": [keys[LOG][1]], "witness_vkeys": [keys["witness.example/a"][1]]}
+        pins = {"tsa_certs": [put("tsa/ca.crt", open(lab.j("ca.crt"), "rb").read())]}
+        led = TB.build_payment_ledger()
+        led_rel = "payment_ledger.jsonl"
 
-    def salt(m, label="v1"):
-        return hashlib.sha256(f"test salt {label} {m}".encode()).digest()[:16]
-    discl = []
-    for m, v in names.items():
-        discl.append(put(f"disclosures/{m}.json", json.dumps({"member": m, "salt": salt(m).hex(), "value": v})))
-    e0 = dict(entry=0, p="nist/pulse_2030302.json", prev="nist/pulse_2030301.json")
-    case("entry0_five_disclosures", "verified", None, disclosures=discl, **e0)
-    case("disclosure_other_name", "invalid", "disclosure_mismatch", disclosures=[put(
-        "disclosures/payer_name_wrong.json", json.dumps({"member": "payer_name_commitment", "salt": salt(
-            "payer_name_commitment").hex(), "value": "Maria Exampel"}))], **e0)
-    case("disclosure_other_salt", "invalid", "disclosure_mismatch", disclosures=[put(
-        "disclosures/payer_iban_other_salt.json", json.dumps({"member": "payer_iban_commitment", "salt": salt(
-            "payer_iban_commitment", "v2").hex(), "value": names["payer_iban_commitment"]}))], **e0)
-    case("disclosure_salt_64_bits", "refused", "disclosure_malformed", disclosures=[put(
-        "disclosures/payer_iban_short_salt.json", json.dumps({"member": "payer_iban_commitment", "salt": salt(
-            "payer_iban_commitment")[:8].hex(), "value": names["payer_iban_commitment"]}))], **e0)
-    bad_iban = "GB83WEST12345698765432"
-    bad_led = mutated_ledger("committed_bad_iban", lambda d: d[1].__setitem__(
-        "payee_iban_commitment", hashlib.sha256(b"cryptovalid-payment/1/payee_iban_commitment\x00" + salt(
-            "payee_iban_commitment", "bad") + bad_iban.encode()).hexdigest()))   # a writer that skipped the IBAN rule
-    case("committed_bad_iban_undisclosed", "verified", None, ledger=bad_led)
-    case("committed_bad_iban_disclosed", "invalid", "disclosure_iban_invalid", ledger=bad_led, disclosures=[put(
-        "disclosures/payee_iban_bad.json", json.dumps({"member": "payee_iban_commitment", "salt": salt(
-            "payee_iban_commitment", "bad").hex(), "value": bad_iban}))])
-    # pulses: order, grammar, signed fields
-    case("previous_not_predecessor", "invalid", "pulse_mismatch", prev="nist/pulse_2030301.json")
-    case("pulse_of_another_index", "invalid", "pulse_mismatch", p="nist/pulse_2030302.json", prev="nist/pulse_2030301.json")
-    for name, fn, exp, why in (
-            ("unknown_member", lambda p: p.__setitem__("zz", 0), "refused", "pulse_malformed"),
-            ("unknown_member_external", lambda p: p["external"].__setitem__("zz", 0), "refused", "pulse_malformed"),
-            ("external_status_uint64", lambda p: p["external"].__setitem__("statusCode", 2 ** 32), "refused", "pulse_malformed"),
-            ("hex_too_short", lambda p: p.__setitem__("localRandomValue", p["localRandomValue"][:-2]), "refused", "pulse_malformed"),
-            ("time_without_millis", lambda p: p.__setitem__("timeStamp", "2026-11-16T13:04:00Z"), "refused", "pulse_malformed"),
-            ("status_gap", lambda p: p.__setitem__("statusCode", 2), "invalid", "status_not_supported"),
-            ("cipher_suite_1", lambda p: p.__setitem__("cipherSuite", 1), "invalid", "cipher_suite_not_supported"),
-            ("version_2_1", lambda p: p.__setitem__("version", "2.1"), "invalid", "version_not_supported"),
-            ("signed_field_changed", lambda p: p.__setitem__("localRandomValue", "00" * 64), "invalid", "signature_invalid"),
-            ("uri_http", lambda p: p.__setitem__("uri", p["uri"].replace("https:", "http:")), "invalid", "pulse_mismatch")):
-        p = pulse(2030303)
-        fn(p)
-        case(f"pulse_{name}", exp, why, p=put(f"pulses/{name}.json", pulse_doc(p)))
-    own = Own()
-    own_cert = put("other/certificate.pem", own.pem)
-    case("certificate_not_the_pulses", "invalid", "certificate_mismatch", cert=own_cert)
-    # re-signed by the conformance key: the mutation reaches the check behind the signature
-    for name, mp, mq, why in (
-            ("commitment_broken", None, lambda q: q.__setitem__("precommitmentValue", "AB" * 64), "commitment_mismatch"),
-            ("period_30s", None, lambda q: q.__setitem__("timeStamp", "2026-11-16T13:03:30.000Z"), "period_mismatch"),
-            ("previous_value_other", lambda p: p["listValues"][0].__setitem__("value", "CD" * 64), None, "previous_mismatch")):
-        q = pulse(2030302)
-        if mq:
-            mq(q)
-        q = own.sign(q)
-        p = pulse(2030303)
-        p["listValues"][0]["value"] = q["outputValue"]
-        if mp:
-            mp(p)
-        p = own.sign(p)
-        es = ledger_lines()
-        datas = [e["data"] for e in es]
-        datas[1]["beacon"]["output_value"] = p["outputValue"]
-        led = put(f"ledgers/resigned_{name}.jsonl", chain(datas, [e["ts"] for e in es]))
-        case(f"resigned_{name}", "invalid", why, ledger=led, p=put(f"pulses/resigned_{name}.json", pulse_doc(p)),
-             prev=put(f"pulses/resigned_{name}_previous.json", pulse_doc(q)), cert=own_cert)
-    # ledgers, hashes recomputed so the change reaches the profile
-    for name, fn, exp, why in (
-            ("iban_in_clear", lambda d: d[1].__setitem__("payee_iban", "GB82WEST12345698765432"), "refused", "payment_malformed"),
-            ("payer_iban_commitment_missing", lambda d: d[1].pop("payer_iban_commitment"), "refused", "payment_malformed"),
-            ("commitment_upper_case", lambda d: d[1].__setitem__("payer_iban_commitment", d[1]["payer_iban_commitment"].upper()),
-             "refused", "payment_malformed"),
-            ("currency_unknown", lambda d: d[1].__setitem__("currency", "XAU"), "refused", "payment_malformed"),
-            ("amount_decimals", lambda d: d[1].__setitem__("amount", "99.951"), "refused", "payment_malformed"),
-            ("amount_zero", lambda d: d[1].__setitem__("amount", "0.00"), "refused", "payment_malformed"),
-            ("amount_negative", lambda d: d[1].__setitem__("amount", "-99.95"), "refused", "payment_malformed"),
-            ("unknown_member", lambda d: d[1].__setitem__("note", "x"), "refused", "payment_malformed"),
-            ("record_salt_120_bits", lambda d: d[1].__setitem__("record_salt", "00" * 15), "refused", "payment_malformed"),
-            ("beacon_missing", lambda d: d[1].pop("beacon"), "refused", "payment_malformed"),
-            ("beacon_other_source", lambda d: d[1]["beacon"].__setitem__("source", "curby-twine"), "refused", "source_not_supported"),
-            ("beacon_value_other_pulse", lambda d: d[1]["beacon"].__setitem__("output_value", pulse(2030302)["outputValue"]),
-             "invalid", "beacon_value_mismatch"),
-            ("payment_id_36_characters", lambda d: d[1].__setitem__("payment_id", "P" * 36), "refused", "payment_malformed"),
-            ("payment_id_trailing_space", lambda d: d[1].__setitem__("payment_id", "PAY-1 "), "refused", "payment_malformed"),
-            ("commitments_swapped", lambda d: d[1].update(payer_iban_commitment=d[1]["payee_iban_commitment"],
-                                                          payee_iban_commitment=d[1]["payer_iban_commitment"]),
-             "verified", None),
-            ("payment_id_twice", lambda d: d[1].__setitem__("payment_id", d[0]["payment_id"]), "invalid", "payment_id_not_unique")):
-        case(f"ledger_{name}", exp, why, ledger=mutated_ledger(name, fn))
-    # a commitment moved to the other member cannot be opened there: the member name is in the hashed bytes
-    case("commitment_moved_disclosed", "invalid", "disclosure_mismatch", ledger="conformance/ledgers/commitments_swapped.jsonl",
-         disclosures=[put("disclosures/payee_iban_as_payer.json", json.dumps({
-             "member": "payer_iban_commitment", "salt": salt("payee_iban_commitment", "e1").hex(),
-             "value": "GB82WEST12345698765432"}))])
-    with open(os.path.join(HERE, "payment_ledger.jsonl"), "rb") as f:
-        raw = f.read()
-    case("ledger_changed_hash_not_recomputed", "invalid", "ledger_invalid",
-         ledger=put("ledgers/changed_not_rehashed.jsonl", raw.replace(b'"99.95"', b'"99.96"', 1)))
-    case("entry_not_a_payment", "refused", "entry_not_a_payment", entry=2)
-    case("entry_not_found", "invalid", "entry_not_found", entry=3)
-    # uniqueness: witnessed checkpoints, keys from fixed labels
-    keys = witness_keys()
-    wk = {"log_vkeys": [keys[LOG][1]], "witness_vkeys": [keys[WITNESSES[0]][1]]}
-    cp = put("checkpoints/witnessed.note", checkpoint("payment_ledger.jsonl", keys))
-    case("witnessed_unique", "verified", None, checkpoint=cp, **wk)
-    case("witnessed_too_small", "invalid", "checkpoint_not_covering_entry",
-         checkpoint=put("checkpoints/size1.note", checkpoint("payment_ledger.jsonl", keys, size=1)), **wk)
-    case("witnessed_other_ledger", "invalid", "checkpoint_root_mismatch", ledger=mutated_ledger(
-        "variant_amount", lambda d: d[1].__setitem__("amount", "199.95")), checkpoint=cp, **wk)
-    case("not_witnessed", "invalid", "checkpoint_not_witnessed",
-         checkpoint=put("checkpoints/no_witness.note", checkpoint("payment_ledger.jsonl", keys, witnesses=())), **wk)
-    case("witnessed_by_unpinned", "invalid", "checkpoint_not_witnessed", checkpoint=put(
-        "checkpoints/other_witness.note", checkpoint("payment_ledger.jsonl", keys, witnesses=WITNESSES[1:])), **wk)
-    # the window of rule 5 as data: T, period, genTime, maximum width -> expected
-    windows = [{"t": "2026-11-16T13:04:00.000Z", "period_ms": 60000, "gen_time": g, "max_window_s": m, "expected": e}
-               for g, m, e in (("2026-11-16T13:05:00Z", 60, None), ("2026-11-16T13:05:00.000001Z", 60, "window_too_wide"),
-                               ("2026-11-16T13:04:00Z", 0, None), ("2026-11-16T13:03:59.999999Z", 3600, "window_inverted"),
-                               ("2026-11-13T09:00:00Z", 10 ** 9, "window_inverted"), ("2026-11-16T14:04:00Z", 3600, None))]
-    doc = {"format": "cryptovalid-beacon-conformance/1", "spec": "SPEC_EVIDENCE_FORMAT.md v0.10 §18-§19",
-           "paths": "relative to spec/vectors/beacon/", "cases": cases, "window_cases": windows}
-    with open(os.path.join(HERE, "conformance.json"), "w", encoding="utf-8") as f:
-        f.write(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
-    print(len(cases), "cases,", len(windows), "window cases")
+        def pack(name, ledger_bytes, extra=None, with_lab=lab):
+            d = TB.make_pack(work, name, ledger_bytes, with_lab, extra)
+            dst = os.path.join(OUT, "packs", name)
+            shutil.copytree(d, dst)
+            return rel(dst)
+
+        # the complete record: window, CRL after the token, witnessed checkpoint inside the pack, qualified TSA
+        note = TB.witnessed_checkpoint(led, keys)
+        full_pack = pack("complete", led, {"checkpoint.note": note})
+        note_rel = put("checkpoints/witnessed.note", note)
+        crl = put("tsa/crl.pem", open(lab.crl(), "rb").read())
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        from test_lotl import _QTST, _svc, _tl
+        tsa_b64 = base64.b64encode(x509.load_pem_x509_certificate(open(lab.j("tsa.crt"), "rb").read()).public_bytes(
+            serialization.Encoding.DER)).decode()
+        tl = put("tsa/trusted_list.xml", _tl(_svc(_QTST, "granted", "2020-01-01T00:00:00Z", tsa_b64)))
+        win = dict(pack=full_pack, max_window_s=30 * 86400, **pins)
+        case("complete_record", "verified", None, True, tsa_crls=[crl], tsa_trusted_list=tl, checkpoint=note_rel,
+             disclosures=None, **win, **wk)
+        case("window_without_crl_not_complete", "verified", None, False, checkpoint=note_rel, **win, **wk)
+        case("window_without_checkpoint_not_complete", "verified", None, False, tsa_crls=[crl], **win)
+
+        # step 1, the ledger
+        case("entry_1", "verified", None)
+        case("ledger_unreadable", "refused", "input_unreadable", ledger="nist")
+        case("ledger_invalid", "invalid", "ledger_invalid",
+             ledger=put("ledgers/changed_not_rehashed.jsonl", led.replace(b'"99.95"', b'"99.96"', 1)))
+        case("entry_not_found", "invalid", "entry_not_found", entry=3)
+        case("entry_not_a_payment", "refused", "entry_not_a_payment", entry=2)
+
+        # step 2, the profile, one case per check in its order
+        for name, fn, why in (
+                ("unknown_member", lambda d: d[1].__setitem__("note", "x"), "payment_malformed"),
+                ("missing_payee_iban_commitment", lambda d: d[1].pop("payee_iban_commitment"), "payment_malformed"),
+                ("payment_id_not_uuid4", lambda d: d[1].__setitem__("payment_id", "NOTPROVIDED"), "payment_malformed"),
+                ("currency_unknown", lambda d: d[1].__setitem__("currency", "XAU"), "payment_malformed"),
+                ("amount_not_canonical", lambda d: d[1].__setitem__("amount", "99.9"), "payment_malformed"),
+                ("amount_zero", lambda d: d[1].__setitem__("amount", "0.00"), "payment_malformed"),
+                ("record_salt_120_bits", lambda d: d[1].__setitem__("record_salt", "00" * 15), "payment_malformed"),
+                ("commitment_upper_case", lambda d: d[1].__setitem__("payer_iban_commitment",
+                                                                    d[1]["payer_iban_commitment"].upper()), "payment_malformed"),
+                ("iban_in_clear", lambda d: d[1].__setitem__("payee_iban", "GB82WEST12345698765432"), "payment_malformed"),
+                ("beacons_empty", lambda d: d[1].__setitem__("beacons", []), "payment_malformed"),
+                ("beacon_chain_1", lambda d: d[1]["beacons"][0].__setitem__("chain_index", 1), "payment_malformed"),
+                ("beacon_value_lower_case", lambda d: d[1]["beacons"][0].__setitem__(
+                    "output_value", d[1]["beacons"][0]["output_value"].lower()), "payment_malformed"),
+                ("beacon_source_drand", lambda d: d[1]["beacons"][0].__setitem__("source", "drand"), "source_not_supported"),
+                ("payment_id_twice", lambda d: d[1].__setitem__("payment_id", d[0]["payment_id"]), "payment_id_not_unique"),
+                ("double_fault_salt_and_source", lambda d: (d[1].__setitem__("record_salt", "00"),
+                                                            d[1]["beacons"][0].__setitem__("source", "drand")),
+                 "payment_malformed")):
+            status = "invalid" if why == "payment_id_not_unique" else "refused"
+            case(f"profile_{name}", status, why, ledger=put(f"ledgers/{name}.jsonl", ledger_with(fn)))
+
+        # step 3, disclosures
+        def salt(m, label="v1"):
+            return TB.salt_of(m, label)
+        e0 = dict(entry=0, pulses=((P2, P1),))
+        discl = [put(f"disclosures/{m}.json", json.dumps({"member": m, "salt": salt(m).hex(), "value": v}))
+                 for m, v in TB.NAMES.items()]
+        case("entry_0_six_disclosures", "verified", None, disclosures=discl, **e0)
+        case("disclosure_malformed", "refused", "disclosure_malformed",
+             disclosures=[put("disclosures/short_salt.json", json.dumps({"member": "payer_iban_commitment",
+                          "salt": salt("payer_iban_commitment")[:8].hex(), "value": TB.EXAMPLE_IBANS[0]}))], **e0)
+        case("disclosure_unreadable", "refused", "input_unreadable", disclosures=["nist"], **e0)
+        case("disclosure_mismatch", "invalid", "disclosure_mismatch",
+             disclosures=[put("disclosures/other_name.json", json.dumps({"member": "payer_name_commitment",
+                          "salt": salt("payer_name_commitment").hex(), "value": "Maria Exampel"}))], **e0)
+        bad_iban = "GB83WEST12345698765432"
+        bad_led = put("ledgers/committed_bad_iban.jsonl", ledger_with(lambda d: d[1].__setitem__(
+            "payee_iban_commitment", TB.raw_commitment("payee_iban_commitment", salt("payee_iban_commitment", "bad"),
+                                                       bad_iban))))
+        case("disclosure_iban_invalid", "invalid", "disclosure_iban_invalid", ledger=bad_led,
+             disclosures=[put("disclosures/bad_iban.json", json.dumps({"member": "payee_iban_commitment",
+                          "salt": salt("payee_iban_commitment", "bad").hex(), "value": bad_iban}))])
+
+        # step 4, pulses
+        big = TB.raw(2030303) + b" " * (B.MAX_PULSE + 1 - len(TB.raw(2030303)))
+        case("pulse_unreadable", "refused", "input_unreadable", pulses=(("nist", P2),))
+        case("pulse_too_large", "refused", "input_too_large", pulses=((put("pulses/too_large.json", big), P2),))
+        for name, fn, status, why in (
+                ("unknown_member", lambda p: p.__setitem__("zz", 0), "refused", "pulse_malformed"),
+                ("external_status_uint64", lambda p: p["external"].__setitem__("statusCode", 2 ** 32), "refused", "pulse_malformed"),
+                ("version_2_1", lambda p: p.__setitem__("version", "2.1"), "invalid", "version_not_supported"),
+                ("cipher_suite_1", lambda p: p.__setitem__("cipherSuite", 1), "invalid", "cipher_suite_not_supported"),
+                ("status_gap", lambda p: p.__setitem__("statusCode", 2), "invalid", "status_not_supported"),
+                ("uri_http", lambda p: p.__setitem__("uri", p["uri"].replace("https:", "http:")), "invalid", "pulse_mismatch"),
+                ("signed_field_changed", lambda p: p.__setitem__("localRandomValue", "00" * 64), "invalid", "signature_invalid")):
+            p = TB.pulse(2030303)
+            fn(p)
+            case(f"pulse_{name}", status, why, pulses=((put(f"pulses/{name}.json", TB.doc(p)), P2),))
+        case("previous_not_predecessor", "invalid", "pulse_mismatch", pulses=((P3, P1),))
+        case("certificate_malformed", "refused", "certificate_malformed", certificates=[put("other/not_a_certificate.pem",
+             b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")])
+        o = own_cert()
+        own_pem = put("other/certificate.pem", o.pem)
+        case("certificate_not_the_pulses", "invalid", "certificate_mismatch", certificates=[own_pem])
+
+        def resigned_case(name, why, o, cert_rel, **kw):
+            q, p = resigned(o, **kw)
+            case(f"resigned_{name}", "invalid", why, ledger=put(f"ledgers/resigned_{name}.jsonl", ledger_for(p)),
+                 pulses=((put(f"pulses/resigned_{name}.json", TB.doc(p)),
+                          put(f"pulses/resigned_{name}_previous.json", TB.doc(q))),), certificates=[cert_rel])
+            return q, p
+        resigned_case("period_in_pulse_only", "chain_inconsistent", o, own_pem, mutate_pulse=lambda p: p.__setitem__("period", 30000))
+        resigned_case("commitment_broken", "commitment_mismatch", o, own_pem,
+                      mutate_prev=lambda q: q.__setitem__("precommitmentValue", "AB" * 64))
+        resigned_case("period_30s", "period_mismatch", o, own_pem,
+                      mutate_prev=lambda q: q.__setitem__("timeStamp", "2026-11-16T13:03:30.000Z"))
+        resigned_case("previous_value_other", "previous_mismatch", o, own_pem,
+                      mutate_pulse=lambda p: p["listValues"][0].__setitem__("value", "CD" * 64))
+        weak = own_cert(bits=1024)
+        resigned_case("rsa_1024", "certificate_key_not_supported", weak, put("other/rsa_1024.pem", weak.pem))
+        expired = own_cert(na=datetime.datetime(2026, 11, 16, 13, 3, 30, tzinfo=datetime.timezone.utc))
+        resigned_case("certificate_expired", "certificate_not_valid_at_pulse_time", expired, put("other/expired.pem", expired.pem))
+        q, p = resigned(o)
+        p["outputValue"] = hashlib.sha512(b"other").hexdigest().upper()
+        case("resigned_output_value", "invalid", "output_value_mismatch", ledger=put("ledgers/resigned_output_value.jsonl",
+             ledger_for(p)), pulses=((put("pulses/resigned_output_value.json", TB.doc(p)),
+                                      put("pulses/resigned_output_value_previous.json", TB.doc(q))),), certificates=[own_pem])
+        case("beacon_value_of_other_pulse", "invalid", "beacon_value_mismatch", ledger=put(
+            "ledgers/beacon_value_other.jsonl", ledger_with(lambda d: d[1]["beacons"][0].__setitem__(
+                "output_value", TB.pulse(2030302)["outputValue"]))))
+        two = ledger_with(lambda d: d[1].__setitem__("beacons", [TB.beacon_of(TB.pulse(2030302)), TB.beacon_of(TB.pulse(2030303))]))
+        case("two_beacon_values", "verified", None, ledger=put("ledgers/two_beacons.jsonl", two), pulses=((P2, P1), (P3, P2)))
+
+        # step 5, the window
+        case("pack_not_valid", "invalid", "pack_not_valid", pack=_tampered(full_pack), max_window_s=30 * 86400, **pins)
+        case("time_anchor_other_tsa", "invalid", "time_anchor_not_verified", pack=full_pack, max_window_s=30 * 86400,
+             tsa_certs=[put("tsa/other_ca.crt", open(other.j("ca.crt"), "rb").read())])
+        rpack = pack("revoked_tsa", led, with_lab=revoked)
+        time.sleep(1.2)
+        revoked.revoke("keyCompromise")
+        case("time_anchor_tsa_revoked", "invalid", "time_anchor_not_verified", pack=rpack, max_window_s=30 * 86400,
+             tsa_certs=[put("tsa/revoked_ca.crt", open(revoked.j("ca.crt"), "rb").read())],
+             tsa_crls=[put("tsa/revoked_crl.pem", open(revoked.crl(), "rb").read())])
+        case("ledger_not_in_pack", "invalid", "ledger_not_in_pack", ledger=put("ledgers/variant_amount.jsonl", ledger_with(
+            lambda d: d[1].__setitem__("amount", "199.95"))), pack=full_pack, max_window_s=30 * 86400, **pins)
+        case("window_too_wide", "invalid", "window_too_wide", pack=full_pack, max_window_s=0, **pins)
+        q, p = resigned(o, mutate_prev=lambda q: q.__setitem__("timeStamp", "2027-01-01T00:00:00.000Z"),
+                        mutate_pulse=lambda p: p.__setitem__("timeStamp", "2027-01-01T00:01:00.000Z"))
+        future = ledger_for(p)
+        case("window_inverted", "invalid", "window_inverted", ledger=put("ledgers/pulse_of_2027.jsonl", future),
+             pulses=((put("pulses/pulse_of_2027.json", TB.doc(p)), put("pulses/pulse_of_2027_previous.json", TB.doc(q))),),
+             certificates=[own_pem], pack=pack("pulse_of_2027", future), max_window_s=30 * 86400, **pins)
+        case("trusted_list_malformed", "refused", "trusted_list_malformed", pack=full_pack, max_window_s=30 * 86400,
+             tsa_trusted_list=put("tsa/not_a_trusted_list.xml", b"<not a trusted list"), **pins)
+
+        # step 6, the checkpoint inside the pack
+        def cp_case(name, why, note_bytes, status="invalid", in_pack=True, **kw):
+            pk = pack(f"cp_{name}", led, {"checkpoint.note": note_bytes} if in_pack else None)
+            a = dict(wk)
+            a.update(kw)
+            case(f"checkpoint_{name}", status, why, pack=pk, max_window_s=30 * 86400,
+                 checkpoint=put(f"checkpoints/{name}.note", note_bytes), **pins, **a)
+        cp_case("not_in_pack", "checkpoint_not_in_pack", note, in_pack=False)
+        cp_case("witness_key_as_log_key", "checkpoint_malformed", note, status="refused",
+                log_vkeys=[keys["witness.example/a"][1]])
+        cp_case("no_witness", "checkpoint_not_witnessed", TB.witnessed_checkpoint(led, keys, witnesses=()))
+        cp_case("cosigned_a_year_later", "checkpoint_cosigned_after_gen_time",
+                TB.witnessed_checkpoint(led, keys, cosigned_at=int(time.time()) + 365 * 86400))
+        cp_case("size_1", "checkpoint_not_covering_entry", TB.witnessed_checkpoint(led, keys, size=1))
+        cp_case("size_beyond_ledger", "checkpoint_root_mismatch", TB.witnessed_checkpoint(led, keys, size=5, leaves_upto=3))
+        case("checkpoint_unreadable", "refused", "checkpoint_malformed", pack=full_pack, max_window_s=30 * 86400,
+             checkpoint="nist", **pins, **wk)
+
+        windows = [{"t": "2026-11-16T13:04:00.000Z", "period_ms": 60000, "gen_time": g, "max_window_s": m,
+                    "clock_tolerance_s": tol, "expected": e}
+                   for g, m, tol, e in (("2026-11-16T13:05:00Z", 60, 0, None),
+                                        ("2026-11-16T13:05:00.000001Z", 60, 0, "window_too_wide"),
+                                        ("2026-11-16T13:04:00Z", 0, 0, None),
+                                        ("2026-11-16T13:03:59.999999Z", 3600, 0, "window_inverted"),
+                                        ("2026-11-16T13:03:59.5Z", 3600, 1, None),
+                                        ("2026-11-16T13:03:58.999999Z", 3600, 1, "window_inverted"),
+                                        ("2026-11-13T09:00:00Z", 10 ** 9, 0, "window_inverted"),
+                                        ("2026-11-16T14:04:00Z", 3600, 0, None))]
+        doc = {"format": "cryptovalid-beacon-conformance/2", "spec": "SPEC_EVIDENCE_FORMAT.md v0.10 §18-§19",
+               "paths": "relative to spec/vectors/beacon/", "cases": cases, "window_cases": windows}
+        with open(os.path.join(HERE, "conformance.json"), "w", encoding="utf-8") as f:
+            f.write(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
+        print(len(cases), "cases,", len(windows), "window cases")
+    finally:
+        shutil.rmtree(work)
+
+
+def _tampered(pack_rel):
+    """a copy of the pack whose ledger gained a byte after the token: its content no longer matches the manifest"""
+    src = os.path.join(HERE, pack_rel)
+    dst = os.path.join(OUT, "packs", "tampered")
+    shutil.copytree(src, dst)
+    with open(os.path.join(dst, "payments.jsonl"), "ab") as f:
+        f.write(b"\n")
+    return rel(dst)
 
 
 if __name__ == "__main__":

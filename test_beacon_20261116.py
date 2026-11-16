@@ -87,7 +87,9 @@ def chain(datas, ts, algo="sha256"):
 # fictitious parties: the salts are derived from a label, so the vector is rebuilt byte for byte
 NAMES = {"payer_iban_commitment": EXAMPLE_IBANS[0], "payee_iban_commitment": EXAMPLE_IBANS[1],
          "payer_name_commitment": "Maria Example", "payer_details_commitment": "Via Esempio 1, 00100 Roma, IT",
-         "payee_name_commitment": "Example Supplies Ltd"}
+         "payee_name_commitment": "Example Supplies Ltd", "end_to_end_id_commitment": "INV-2026-0001"}
+# random identifiers of SPEC §18 (version 4 UUIDs), fixed so that the vector is rebuilt byte for byte
+PIDS = ("0f8b6c2e-4a71-4d3b-9c55-1e2f3a4b5c6d", "7d1e9a40-2b6c-4f8e-a3d2-5c6b7a8e9f01", "c3a9e5d1-8f2b-4e6c-b7a1-0d9e8f7a6b5c")
 
 
 def salt_of(member, label="v1"):
@@ -113,16 +115,16 @@ def payment_datas(p):
     value of pulse p, with its two IBAN commitments only (payer DE89..., payee GB82..., salts labelled e1); entry 2: not a
     payment"""
     gb, de = EXAMPLE_IBANS
-    first = {"profile": B.PAYMENT_PROFILE, "payment_id": "PAY-2026-11-16-0001", "amount": "1250.00", "currency": "EUR",
-             "beacon": beacon_of(pulse(2030302)), "record_salt": record_salt_of(1)}
+    first = {"profile": B.PAYMENT_PROFILE, "payment_id": PIDS[0], "amount": "1250.00", "currency": "EUR",
+             "beacons": [beacon_of(pulse(2030302))], "record_salt": record_salt_of(1)}
     for m, v in NAMES.items():
         first[m] = B.commitment(m, salt_of(m), v)
     return [
         first,
-        {"profile": B.PAYMENT_PROFILE, "payment_id": "PAY-2026-11-16-0002", "amount": "99.95", "currency": "EUR",
+        {"profile": B.PAYMENT_PROFILE, "payment_id": PIDS[1], "amount": "99.95", "currency": "EUR",
          "payer_iban_commitment": B.commitment("payer_iban_commitment", salt_of("payer_iban_commitment", "e1"), de),
          "payee_iban_commitment": B.commitment("payee_iban_commitment", salt_of("payee_iban_commitment", "e1"), gb),
-         "beacon": beacon_of(p), "record_salt": record_salt_of(2)},
+         "beacons": [beacon_of(p)], "record_salt": record_salt_of(2)},
         {"event": "note", "text": "not a payment"},
     ]
 
@@ -284,21 +286,23 @@ class RealPulses(unittest.TestCase):
         self.assertEqual(r["bounds"]["not_before_operator_promise"], "2026-11-16T13:03:00.000Z")
         self.assertIsNone(r["bounds"]["against_an_operator_breaking_its_promises"])
         self.assertEqual(r["entry"]["covers"], ["profile", "payment_id", "amount", "currency", "payer_iban_commitment",
-                                                "payee_iban_commitment", "beacon", "record_salt"])
+                                                "payee_iban_commitment", "beacons", "record_salt"])
         self.assertEqual([list(x)[0] for x in r["scope"]["proves"]], ["composed_after_pulse"])
-        self.assertEqual(r["entry"]["payment"], {"payment_id": "PAY-2026-11-16-0002", "amount": "99.95", "currency": "EUR"})
+        self.assertEqual(r["entry"]["payment"], {"payment_id": PIDS[1], "amount": "99.95", "currency": "EUR"})
         self.assertNotIn(EXAMPLE_IBANS[0], json.dumps(r))             # no IBAN in clear, in the ledger or the receipt
         self.assertIs(r["record_complete"], False)                  # no window without the pack's token
         self.assertEqual(r["pulse"]["certificate_sha512"], pulse(2030303)["certificateId"])
         self.assertIsNone(r["window"])
 
-    def test_sha3_ledger_and_lower_case_value(self):
+    def test_sha3_ledger_and_upper_case_value(self):
         p = pulse(2030303)
         d = payment_datas(p)
-        d[1]["beacon"]["output_value"] = p["outputValue"].lower()
         with tempfile.TemporaryDirectory() as td:
             r = run(write(td, "l.jsonl", chain(d, payment_ts(p), "sha3_256")))
-        self.assertEqual(r["status"], "verified", r)
+            self.assertEqual(r["status"], "verified", r)
+            d[1]["beacons"][0]["output_value"] = p["outputValue"].lower()   # one rule: upper case, as NIST serves it
+            r = run(write(td, "l2.jsonl", chain(d, payment_ts(p), "sha3_256")))
+            self.assertEqual((r["status"], r["detail"][:26]), ("refused", "beacons[0].output_value: n"))
 
     def test_without_cryptography_not_evaluated(self):
         real = __import__
@@ -495,6 +499,13 @@ class PulseChecks(unittest.TestCase):
                 (p if which == "pulse" else q)[k] = v
                 self.assertInvalid(run(LEDGER, p=doc(p), prev=doc(q)), why)
 
+    def test_version_exactly_2_0(self):
+        """NEMESIS b26: a pulse re-signed with version "2.0.1" (or "2.00", "2.0 ") is not version 2.0"""
+        for v in ("2.0.1", "2.00", "2.0 ", "Version 2.0", "2"):
+            q, p, led = resigned_pair(mutate_prev=lambda q: q.__setitem__("version", v),
+                                      mutate_pulse=lambda p: p.__setitem__("version", v))
+            self.assertInvalid(self.with_own(q, p, led), "version_not_supported")
+
     def test_pulse_mismatch(self):
         self.assertInvalid(run(LEDGER, p=2030302, prev=2030301), "pulse_mismatch")      # the wrong pulse
         self.assertInvalid(run(LEDGER, p=2030303, prev=2030301), "pulse_mismatch")      # not the predecessor
@@ -506,9 +517,10 @@ class PulseChecks(unittest.TestCase):
         p["chainIndex"] = 3
         self.assertInvalid(run(LEDGER, p=doc(p)), "pulse_mismatch")
         d = payment_datas(pulse(2030303))
-        d[1]["beacon"]["chain_index"] = 1
+        d[1]["beacons"][0]["chain_index"] = 1                          # only chain 2 is accepted (SPEC §19)
         with tempfile.TemporaryDirectory() as td:
-            self.assertInvalid(run(write(td, "l", chain(d, payment_ts(pulse(2030303))))), "pulse_mismatch")
+            r = run(write(td, "l", chain(d, payment_ts(pulse(2030303)))))
+        self.assertEqual((r["status"], r["reason"], r["detail"][:22]), ("refused", "payment_malformed", "beacons[0].chain_index"))
 
     def test_wrong_period_and_certificate_change_between_pulses(self):
         q, p, led = resigned_pair(mutate_pulse=lambda p: p.__setitem__("period", 30000))
@@ -602,7 +614,7 @@ class PulseChecks(unittest.TestCase):
         p = pulse(2030303)
         for v in (pulse(2030302)["outputValue"], p["localRandomValue"], "00" * 64):
             d = payment_datas(p)
-            d[1]["beacon"]["output_value"] = v
+            d[1]["beacons"][0]["output_value"] = v
             with tempfile.TemporaryDirectory() as td:
                 self.assertInvalid(run(write(td, "l", chain(d, payment_ts(p)))), "beacon_value_mismatch")
 
@@ -690,38 +702,54 @@ class Payment(unittest.TestCase):
                 if k == "profile":
                     with self.assertRaises(B.Refused):
                         B.check_payment(d)
-                elif k == "payment_id" and w == "x":
-                    self.assertIs(B.check_payment(d), d)
                 else:
                     self.assertMalformed(d, k)
-        for d in (dict(base, zz=1), dict(base, beacon=dict(base["beacon"], zz=1)), dict(base, Amount="1.00")):
+        for d in (dict(base, zz=1), dict(base, beacons=[dict(base["beacons"][0], zz=1)]), dict(base, Amount="1.00"),
+                  dict(base, beacon=base["beacons"][0])):
             self.assertMalformed(d)
-        for k in base["beacon"]:
+        for k in base["beacons"][0]:
             d = copy.deepcopy(base)
-            del d["beacon"][k]
-            self.assertMalformed(d, "beacon")
-            for w in (None, True, -1, 1.5, [], {}, "", "0" * 127):
+            del d["beacons"][0][k]
+            self.assertMalformed(d, "beacons[0]")
+            for w in (None, True, -1, 1.5, [], {}, "", "0" * 127, 1):
                 d = copy.deepcopy(base)
-                d["beacon"][k] = w
+                d["beacons"][0][k] = w
                 if k == "source" and isinstance(w, str):
                     with self.assertRaises(B.Refused) as c:
                         B.check_payment(d)
                     self.assertEqual(c.exception.reason, "source_not_supported")
                     continue
-                self.assertMalformed(d, "beacon")
-        d = copy.deepcopy(base)
-        d["beacon"]["pulse_index"] = 0
-        self.assertMalformed(d, "beacon.pulse_index")
-        d = copy.deepcopy(base)
-        d["beacon"]["chain_index"] = 0
-        self.assertIs(B.check_payment(d), d)
-        for s in ("curby-twine", "NIST-BEACON-2.0", "nist-beacon-2.0 "):
+                if k == "pulse_index" and type(w) is int and w == 1:
+                    self.assertIs(B.check_payment(d), d)
+                    continue
+                self.assertMalformed(d, "beacons[0]")
+        for i, mut in enumerate((lambda d: d["beacons"][0].__setitem__("pulse_index", 0),
+                                 lambda d: d["beacons"][0].__setitem__("chain_index", 1),
+                                 lambda d: d["beacons"][0].__setitem__("chain_index", 0),
+                                 lambda d: d["beacons"][0].__setitem__("output_value", d["beacons"][0]["output_value"].lower()))):
             d = copy.deepcopy(base)
-            d["beacon"]["source"] = s
+            mut(d)
+            self.assertMalformed(d, "beacons[0].")
+        for s in ("curby-twine", "drand", "NIST-BEACON-2.0", "nist-beacon-2.0 "):
+            d = copy.deepcopy(base)
+            d["beacons"][0]["source"] = s
             with self.assertRaises(B.Refused) as c:
                 B.check_payment(d)
             self.assertEqual(c.exception.reason, "source_not_supported")
-        self.assertEqual(n, 11 * 9)
+        self.assertEqual(n, 12 * 9)
+
+    def test_beacons_list(self):
+        base = payment_datas(pulse(2030303))[1]
+        b = base["beacons"][0]
+        other = beacon_of(pulse(2030302))
+        for v in ([b, other], [other, b], [b] + [dict(b, pulse_index=b["pulse_index"] + i) for i in range(1, 8)]):
+            d = dict(base, beacons=v)
+            self.assertIs(B.check_payment(d), d)
+        for v in ([], [b] * 2, [b] + [dict(b, pulse_index=b["pulse_index"] + i) for i in range(1, 9)], b, "x", None):
+            self.assertMalformed(dict(base, beacons=v), "beacons")
+        with self.assertRaises(B.Refused) as c:   # a later element of another source: refused at its own place
+            B.check_payment(dict(base, beacons=[b, dict(other, source="drand")]))
+        self.assertEqual((c.exception.reason, c.exception.detail[:21]), ("source_not_supported", "beacons[1].source 'dr"))
 
     def test_missing_iban(self):
         base = payment_datas(pulse(2030303))[1]
@@ -733,19 +761,21 @@ class Payment(unittest.TestCase):
             self.assertMalformed(dict(base, **{k: v}), k)
 
     def test_amounts_by_currency_minor_units(self):
+        """one canonical form: exactly the currency's minor units after the point, no point when there are none"""
         base = payment_datas(pulse(2030303))[1]
-        good = [("EUR", "1"), ("EUR", "0.01"), ("EUR", "1250.5"), ("EUR", "999999999999999999.99"), ("JPY", "1"),
-                ("JPY", "1000"), ("BHD", "0.001"), ("CLF", "0.0001"), ("USD", "10")]
+        good = [("EUR", "1.00"), ("EUR", "0.01"), ("EUR", "1250.50"), ("EUR", "999999999999999999.99"), ("JPY", "1"),
+                ("JPY", "1000"), ("BHD", "0.001"), ("CLF", "0.0001"), ("USD", "10.00")]
         for c, a in good:
             d = dict(base, currency=c, amount=a)
             self.assertIs(B.check_payment(d), d)
-        bad = [("EUR", "1.001", "too_many_decimals"), ("JPY", "1.0", "too_many_decimals"), ("JPY", "1.", "not a decimal"),
-               ("BHD", "0.0001", "too_many_decimals"), ("CLF", "0.00001", "too_many_decimals"),
-               ("EUR", "0", "not greater"), ("EUR", "0.00", "not greater"), ("JPY", "0", "not greater"),
-               ("EUR", "-1", "not a decimal"), ("EUR", "-0.01", "not a decimal"), ("EUR", "+1", "not a decimal"),
-               ("EUR", "01.00", "not a decimal"), ("EUR", ".5", "not a decimal"), ("EUR", "1e3", "not a decimal"),
-               ("EUR", " 1", "not a decimal"), ("EUR", "1,00", "not a decimal"), ("EUR", "１", "not a decimal"),
-               ("EUR", "1\n", "not a decimal"), ("EUR", "1000000000000000000", "not a decimal")]
+        bad = [("EUR", "1", "not_canonical"), ("EUR", "1.5", "not_canonical"), ("EUR", "1.001", "not_canonical"),
+               ("JPY", "1.0", "not_canonical"), ("JPY", "1.", "not a decimal"), ("BHD", "0.0001", "not_canonical"),
+               ("BHD", "0.01", "not_canonical"), ("CLF", "0.00001", "not_canonical"),
+               ("EUR", "0.00", "not greater"), ("JPY", "0", "not greater"), ("BHD", "0.000", "not greater"),
+               ("EUR", "-1.00", "not a decimal"), ("EUR", "+1.00", "not a decimal"), ("EUR", "01.00", "not a decimal"),
+               ("EUR", ".50", "not a decimal"), ("EUR", "1e3", "not a decimal"), ("EUR", " 1.00", "not a decimal"),
+               ("EUR", "1,00", "not a decimal"), ("EUR", "１.00", "not a decimal"), ("EUR", "1.00\n", "not a decimal"),
+               ("EUR", "1000000000000000000.00", "not a decimal")]
         for c, a, why in bad:
             d = dict(base, currency=c, amount=a)
             with self.assertRaises(B.Refused) as e:
@@ -763,11 +793,16 @@ class Payment(unittest.TestCase):
             self.assertMalformed(dict(base, currency=c), "currency")
 
     def test_payment_ids(self):
+        """a version 4 UUID in lowercase canonical form (SPEC §18): a random identifier, never the payer's reference"""
+        import uuid
         base = payment_datas(pulse(2030303))[1]
-        for v in ("a", "E2E/2026-11-16:0001", "x" * 35, "A b", "O'Neil (+1), ref. 7?", "a  b", "-"):
+        for v in [str(uuid.uuid4()) for _ in range(200)] + list(PIDS):
             d = dict(base, payment_id=v)
             self.assertIs(B.check_payment(d), d)
-        for v in ("", " a", "a ", " ", "x" * 36, "é", "a\n", "\x7f", "~", "!", "_", "a_b", "#1", "a\tb", 1, None):
+        u = PIDS[0]
+        for v in (u.upper(), u.replace("-", ""), "{" + u + "}", "urn:uuid:" + u, u + "\n", u[:-1], u + "0",
+                  u[:14] + "1" + u[15:], u[:19] + "c" + u[20:], u[:19] + "7" + u[20:], str(uuid.uuid1()),
+                  "NOTPROVIDED", "GB82WEST12345698765432", "PAY-2026-11-16-0001", "", 1, None):
             self.assertMalformed(dict(base, payment_id=v), "payment_id")
 
 
@@ -876,18 +911,18 @@ class Binding(unittest.TestCase):
     def test_entry_without_beacon_and_non_payment(self):
         p = pulse(2030303)
         d = payment_datas(p)
-        del d[1]["beacon"]
+        del d[1]["beacons"]
         with tempfile.TemporaryDirectory() as td:
             r = run(write(td, "l", chain(d, payment_ts(p))))
         self.assertReason(r, "refused", "payment_malformed")
-        self.assertEqual(r["detail"], "beacon: member_missing")
+        self.assertEqual(r["detail"], "beacons: member_missing")
         self.assertReason(run(LEDGER, entry=2), "refused", "entry_not_a_payment")
         self.assertReason(run(LEDGER, entry=3), "invalid", "entry_not_found")
 
     def test_beacon_moved_to_another_entry(self):
         p = pulse(2030303)
         d = payment_datas(p)
-        d[0]["beacon"] = d[1].pop("beacon")
+        d[0]["beacons"] = d[1].pop("beacons")
         with tempfile.TemporaryDirectory() as td:
             led = write(td, "l", chain(d, payment_ts(p)))
             r = run(led, entry=1)
@@ -993,11 +1028,12 @@ class Window(unittest.TestCase):
         self.assertGreaterEqual(B.gen_time_instant(w["not_after"]), B.gen_time_instant("2026-11-16T13:04:00Z"))
         self.assertEqual(w["pack_ledger"], "payments.jsonl")
         self.assertEqual((w["max_window_s"], w["tsa_revocation"]), (WIDE, "not_checked"))
-        self.assertIs(r["record_complete"], False)                   # no witnessed checkpoint: not the unique one
+        self.assertIs(r["record_complete"], False)                   # no witnessed checkpoint: not fixed in one history
         self.assertEqual(r["unique"], {"status": "not_established"})
         self.assertEqual([list(x)[0] for x in r["scope"]["proves"]], ["composed_after_pulse", "stamped_before_gen_time"])
         self.assertEqual([list(x)[0] for x in r["scope"]["does_not_prove"]],
-                         ["not_execution", "not_unique", "not_ownership", "not_operator", "not_qualified", "not_legal_beacon"])
+                         ["not_execution", "not_unique", "not_ownership", "commitments_not_opened", "not_operator",
+                          "not_qualified", "not_legal_beacon"])
 
     def test_window_with_the_ledger_given_from_outside_the_pack(self):
         r = run(build_payment_ledger(), pack_dir=self.pack, tsa_certs=self.pins(), max_window_s=WIDE)
@@ -1019,7 +1055,7 @@ class Window(unittest.TestCase):
     def test_entry_after_the_packed_head(self):
         led = build_payment_ledger()
         e = json.loads(led.decode().split("\n")[2])
-        d = dict(payment_datas(pulse(2030303))[1], payment_id="PAY-2026-11-16-0003")
+        d = dict(payment_datas(pulse(2030303))[1], payment_id=PIDS[2])
         nxt = {"idx": 3, "ts": e["ts"], "data": d, "prev_hash": e["self_hash"]}
         nxt["self_hash"] = verifier.hash_with("sha256", verifier.canonical_payload(nxt))
         led2 = led + (json.dumps(nxt, sort_keys=True) + "\n").encode()
@@ -1148,6 +1184,23 @@ class Width(unittest.TestCase):
             self.assertEqual(c.exception.reason, "window_too_wide")
         self.assertEqual(B.window(t, 60000, "2026-11-16T14:04:00Z", 3600)["not_after"], "2026-11-16T14:04:00Z")
 
+    def test_clock_tolerance(self):
+        """SPEC §19 rule 5: genTime in [T - tolerance, T) is one instant at T; before that, inverted"""
+        t = B.pulse_time("2026-11-16T13:04:00.000Z")
+        w = B.window(t, 60000, "2026-11-16T13:03:59.5Z", 60, 1)
+        self.assertEqual((w["not_before"], w["not_after"], w["gen_time"]),
+                         ("2026-11-16T13:04:00.000Z", "2026-11-16T13:04:00.000Z", "2026-11-16T13:03:59.5Z"))
+        self.assertEqual(B.window(t, 60000, "2026-11-16T13:03:59Z", 60, 1)["not_after"], "2026-11-16T13:04:00.000Z")
+        for g, tol in (("2026-11-16T13:03:58.999999Z", 1), ("2026-11-16T13:03:59.5Z", 0), ("2026-11-16T13:03:00Z", 59)):
+            with self.assertRaises(B.Invalid) as c:
+                B.window(t, 60000, g, 60, tol)
+            self.assertEqual(c.exception.reason, "window_inverted")
+        for bad in (-1, 1.5, "1", True):
+            with self.assertRaises(ValueError):
+                run(LEDGER, pack_dir="/x", tsa_certs=[CERT], max_window_s=60, clock_tolerance_s=bad)
+        with self.assertRaises(ValueError):
+            run(LEDGER, clock_tolerance_s=0)                       # without a pack
+
     def test_library_requires_an_explicit_width(self):
         for kw in ({"pack_dir": "/x", "tsa_certs": [CERT]}, {"max_window_s": 60},
                    {"pack_dir": "/x", "tsa_certs": [CERT], "max_window_s": -1},
@@ -1160,7 +1213,7 @@ class Width(unittest.TestCase):
                 run(LEDGER, **kw)
 
 
-def witness_material(td):
+def witness_material(td=None):
     """an Ed25519 log key and two witness keys made here (cryptovalid_checkpoint), as vkeys and seeds"""
     import cryptovalid_checkpoint as C
     keys = {}
@@ -1171,76 +1224,174 @@ def witness_material(td):
     return keys
 
 
-def witnessed_checkpoint(ledger_bytes, keys, size=None, witnesses=("witness.example/a",), origin="example.org/payments"):
+def witnessed_checkpoint(ledger_bytes, keys, size=None, witnesses=("witness.example/a",), origin="example.org/payments",
+                         cosigned_at=None, leaves_upto=None):
+    """a checkpoint of the ledger, signed by the log key and cosigned by `witnesses` at `cosigned_at` (Unix seconds,
+    default: 5 s ago, before any token made afterwards); `leaves_upto` takes the root of fewer entries than `size`"""
     import cryptovalid_checkpoint as C
     import cryptovalid_merkle as M
     leaves = [M.canonical(json.loads(x)) for x in ledger_bytes.decode().split("\n") if x.strip()]
     size = len(leaves) if size is None else size
-    note = C.sign_note(C.checkpoint_text(origin, size, M.mth(leaves[:size])), "example.org/payments",
-                       keys["example.org/payments"][0])
+    root = M.mth(leaves[:size if leaves_upto is None else leaves_upto])
+    note = C.sign_note(C.checkpoint_text(origin, size, root), "example.org/payments", keys["example.org/payments"][0])
     for w in witnesses:
-        note = C.cosign_v1(note, w, keys[w][0], int(time.time()))
+        note = C.cosign_v1(note, w, keys[w][0], int(time.time()) - 5 if cosigned_at is None else cosigned_at)
     return note
 
 
+def make_pack(td, name, ledger_bytes, lab, extra=None):
+    """an evidence pack holding the ledger (payments.jsonl) and the `extra` files ({name: bytes}), its manifest stamped
+    by the openssl TSA of `lab`: the extra files are under the token too"""
+    import contextlib
+    import io
+    d = os.path.join(td, name)
+    src = os.path.join(td, name + ".src")
+    os.makedirs(src)
+    led = write(src, "payments.jsonl", ledger_bytes)
+    with contextlib.redirect_stdout(io.StringIO()):
+        EP.build_pack([led], d, subject="beacon test")
+    with open(os.path.join(d, "MANIFEST.json")) as f:
+        m = json.load(f)
+    for n, b in (extra or {}).items():
+        write(d, n, b)
+        m["file_digests_sha256"][n] = hashlib.sha256(b).hexdigest()
+    m2 = {k: v for k, v in m.items() if k not in ("manifest_digest_sha256", "rfc3161_timestamp", "manifest_signature",
+                                                 "manifest_signer")}
+    m["manifest_digest_sha256"] = hashlib.sha256(EP._canon(m2)).hexdigest()
+    tok = lab.token(bytes.fromhex(m["manifest_digest_sha256"]))
+    m["rfc3161_timestamp"] = {"anchored": True, "tsa": "local", "tsr_b64": base64.b64encode(tok).decode()}
+    with open(os.path.join(d, "MANIFEST.json"), "w") as f:
+        json.dump(m, f, indent=1, sort_keys=True)
+    return d
+
+
 @NEEDS_CRYPTO
+@NEEDS_OPENSSL
 class Uniqueness(unittest.TestCase):
-    """SPEC §19 rule 6, Athena's "many values" (measured 100/100 on her bench): one pulse, N ledgers with N amounts,
-    each with a valid "not before"; only the one under a checkpoint a pinned witness cosigned is the unique one"""
+    """SPEC §19 rule 6: one pulse admits many records; an entry is fixed in one history only by a witnessed checkpoint
+    INSIDE the pack (under the token), cosigned no later than genTime"""
 
-    def setUp(self):
-        self.keys = witness_material(None)
-        self.log = [self.keys["example.org/payments"][1]]
-        self.wit = [self.keys["witness.example/a"][1]]
+    @classmethod
+    def setUpClass(cls):
+        from test_tsa_revocation_20261116 import Lab
+        cls.td = tempfile.mkdtemp()
+        cls.lab = Lab(cls.td)
+        cls.keys = witness_material()
+        cls.log = [cls.keys["example.org/payments"][1]]
+        cls.wit = [cls.keys["witness.example/a"][1]]
+        cls.n = 0
 
-    def u(self, led, note, **kw):
-        a = dict(checkpoint=note, log_vkeys=self.log, witness_vkeys=self.wit)
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.td)
+
+    def pack(self, led, extra=None):
+        type(self).n += 1
+        return make_pack(self.td, f"p{self.n}", led, self.lab, extra)
+
+    def u(self, led, note, pack=None, **kw):
+        pk = pack or self.pack(led, {"checkpoint.note": note})
+        a = dict(pack_dir=pk, tsa_certs=[self.lab.j("ca.crt")], max_window_s=WIDE, checkpoint=note,
+                 log_vkeys=self.log, witness_vkeys=self.wit)
         a.update(kw)
         return run(led, **a)
 
     def test_many_values_one_witnessed(self):
+        """Athena's "many values": 20 variants after one pulse, each in its own pack; the witness cosigned the checkpoint
+        of one variant before the token, and it is in that variant's pack: only that one is fixed"""
         p = pulse(2030303)
         variants = []
         for i in range(20):
             d = payment_datas(p)
             d[1]["amount"] = f"{100 + i}.00"
             variants.append(chain(d, payment_ts(p)))
-        self.assertEqual(sum(run(v)["status"] == "verified" for v in variants), 20)   # every variant is "after T"
         note = witnessed_checkpoint(variants[7], self.keys)
-        results = [self.u(v, note) for v in variants]
+        results = []
+        for i, v in enumerate(variants):
+            results.append(self.u(v, note, pack=self.pack(v, {"checkpoint.note": note} if i == 7 else None)))
         self.assertEqual([r["status"] for r in results].count("verified"), 1)
         r = results[7]
         self.assertEqual((r["unique"]["status"], r["unique"]["witnesses"], r["unique"]["checkpoint_size"]),
                          ("witnessed", ["witness.example/a"], 3))
-        self.assertEqual([list(x)[0] for x in r["scope"]["proves"]], ["composed_after_pulse", "unique_under_pinned_witness"])
-        self.assertIn({"not_unique": B.SCOPE["not_unique"]}, r["scope"]["does_not_prove"])   # NEMESIS 16/11: a witness
-        # fixes the entry at its position; another entry of the same history can carry the same pulse (below)
-        self.assertIs(r["record_complete"], False)                      # no window without the pack
-        self.assertEqual({x["reason"] for i, x in enumerate(results) if i != 7}, {"checkpoint_root_mismatch"})
+        self.assertIn({"not_unique": B.SCOPE["not_unique"]}, r["scope"]["does_not_prove"])
+        self.assertEqual({x["reason"] for i, x in enumerate(results) if i != 7}, {"checkpoint_not_in_pack"})
+        r = self.u(variants[3], note, pack=self.pack(variants[3], {"checkpoint.note": note}))   # the note of another variant
+        self.assertEqual(r["reason"], "checkpoint_root_mismatch")
+
+    def test_cosigned_400_days_later_is_never_fixed(self):
+        """the independent review of 16/11/2026: 20 variants, each with its own pack and token; the witness cosigns, 400
+        days later, the variant chosen. v0.10 as reviewed reported all 20 as fixed. Now: the late note is not in any pack
+        (checkpoint_not_in_pack), and a pack that carries a note dated after its genTime is refused"""
+        p = pulse(2030303)
+        later = int(time.time()) + 400 * 86400
+        fixed = 0
+        for i in range(20):
+            d = payment_datas(p)
+            d[1]["amount"] = f"{200 + i}.00"
+            v = chain(d, payment_ts(p))
+            pk = self.pack(v)
+            note = witnessed_checkpoint(v, self.keys, cosigned_at=later)
+            r = self.u(v, note, pack=pk)
+            self.assertEqual((r["status"], r["reason"]), ("invalid", "checkpoint_not_in_pack"))
+            fixed += r["unique"]["status"] == "witnessed" or r["record_complete"]
+        self.assertEqual(fixed, 0)
+        v = build_payment_ledger()
+        note = witnessed_checkpoint(v, self.keys, cosigned_at=later)    # a witness clock 400 days ahead, inside the pack
+        r = self.u(v, note)
+        self.assertEqual((r["status"], r["reason"]), ("invalid", "checkpoint_cosigned_after_gen_time"))
+        r = self.u(v, witnessed_checkpoint(v, self.keys, cosigned_at=int(time.time()) + 3600))
+        self.assertEqual(r["reason"], "checkpoint_cosigned_after_gen_time")
 
     def test_same_pulse_twice_in_one_witnessed_history(self):
         """NEMESIS 16/11/2026: a witnessed checkpoint fixes each entry at its position, not that it is the only entry
         after the pulse: two payments of one witnessed history carry the same pulse, both verify, both keep not_unique"""
         p = pulse(2030303)
         d = payment_datas(p)
-        twin = dict(d[1], payment_id="PAY-2026-11-16-0002B", amount="9999.00")
+        twin = dict(d[1], payment_id=PIDS[2], amount="9999.00")
         led = chain(d + [twin], payment_ts(p) + [payment_ts(p)[2]])
         note = witnessed_checkpoint(led, self.keys)
+        pk = self.pack(led, {"checkpoint.note": note})
         for idx in (1, 3):
-            r = self.u(led, note, entry=idx)
+            r = self.u(led, note, pack=pk, entry=idx)
             self.assertEqual((r["status"], r["unique"]["status"]), ("verified", "witnessed"), idx)
             self.assertIn({"not_unique": B.SCOPE["not_unique"]}, r["scope"]["does_not_prove"], idx)
+
+    def test_witness_states_are_three(self):
+        """NEMESIS b28 (a branch for a state of verify_witnessed other than OK / NON_VALIDA / NON_VERIFICATA): such a state
+        does not exist, shown two more ways than reading: the literals the function assigns, and 300 notes flipped at
+        random bytes, valid and broken, whose states fall in the three"""
+        import inspect
+        import random
+        import re
+        import cryptovalid_witness as W
+        lits = re.findall(r'(?:stato\s*=\s*|"stato":\s*|\["stato"\]\s*=\s*)"([A-Z_]+)"', inspect.getsource(W.verify_witnessed))
+        self.assertEqual(set(lits), {"OK", "NON_VALIDA", "NON_VERIFICATA"})
+        led = build_payment_ledger()
+        note = witnessed_checkpoint(led, self.keys)
+        rnd = random.Random(16112026)
+        states = {W.verify_witnessed(note, self.log, self.wit)["stato"]}
+        for _ in range(300):
+            b = bytearray(note)
+            for _ in range(rnd.randint(1, 4)):
+                b[rnd.randrange(len(b))] = rnd.randrange(256)
+            states.add(W.verify_witnessed(bytes(b), self.log, self.wit)["stato"])
+        self.assertLessEqual(states, {"OK", "NON_VALIDA", "NON_VERIFICATA"})
+        self.assertIn("NON_VALIDA", states)
 
     def test_checkpoint_failures(self):
         led = build_payment_ledger()
         note = witnessed_checkpoint(led, self.keys)
-        self.assertEqual(self.u(led, note)["status"], "verified")
+        r = self.u(led, note)
+        self.assertEqual((r["status"], r["unique"]["as_of"]), ("verified", r["window"]["gen_time"]))
         self.assertEqual(self.u(led, witnessed_checkpoint(led, self.keys, size=1))["reason"], "checkpoint_not_covering_entry")
         self.assertEqual(self.u(led, witnessed_checkpoint(led, self.keys, size=2))["status"], "verified")   # a prefix
+        self.assertEqual(self.u(led, witnessed_checkpoint(led, self.keys, size=5, leaves_upto=3))["reason"],
+                         "checkpoint_root_mismatch")                    # a size beyond the ledger (NEMESIS b07)
         self.assertEqual(self.u(led, witnessed_checkpoint(led, self.keys, witnesses=()))["reason"], "checkpoint_not_witnessed")
         self.assertEqual(self.u(led, witnessed_checkpoint(led, self.keys, witnesses=("witness.example/b",)))["reason"],
                          "checkpoint_not_witnessed")                    # cosigned, but not by the pinned witness
-        self.assertEqual(self.u(led, note, min_witnesses=2)["reason"], "checkpoint_not_witnessed")
+        pk = self.pack(led, {"checkpoint.note": note})
+        self.assertEqual(self.u(led, note, pack=pk, min_witnesses=2)["reason"], "checkpoint_not_witnessed")
         both = witnessed_checkpoint(led, self.keys, witnesses=("witness.example/a", "witness.example/b"))
         r = self.u(led, both, witness_vkeys=self.wit + [self.keys["witness.example/b"][1]], min_witnesses=2)
         self.assertEqual(r["unique"]["witnesses"], ["witness.example/a", "witness.example/b"])
@@ -1248,53 +1399,48 @@ class Uniqueness(unittest.TestCase):
                          "checkpoint_not_witnessed")                    # another origin than the pinned log's
         self.assertEqual(self.u(led, note.replace(b"example.org/payments\n", b"example.org/paymentz\n", 1))["reason"],
                          "checkpoint_not_witnessed")
-        longer = led + led.split(b"\n")[2] + b"\n"                   # not a ledger that passes
-        self.assertEqual(self.u(longer, note)["reason"], "ledger_invalid")
-        for bad in (b"", b"not a note", note + b"\x00"):
+        for bad in (b"not a note", note + b"\x00"):
             self.assertEqual(self.u(led, bad)["reason"], "checkpoint_not_witnessed")   # verify_witnessed: NON_VALIDA
-        self.assertEqual(self.u(led, note, log_vkeys=self.wit)["reason"], "checkpoint_malformed")   # a witness key as log key
-        self.assertEqual(self.u(led, note, witness_vkeys=["nonsense"])["reason"], "checkpoint_malformed")
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(self.u(led, write(td, "cp", note))["status"], "verified")
-            self.assertEqual(self.u(led, td)["reason"], "checkpoint_malformed")
+        self.assertEqual(self.u(led, note, pack=pk, log_vkeys=self.wit)["reason"], "checkpoint_malformed")
+        self.assertEqual(self.u(led, note, pack=pk, witness_vkeys=["nonsense"])["reason"], "checkpoint_malformed")
+        self.assertEqual(self.u(led, self.td, pack=pk)["reason"], "checkpoint_malformed")   # a directory
+        self.assertEqual(self.u(led, note, pack=self.pack(led))["reason"], "checkpoint_not_in_pack")
+        cp = write(self.td, "cp.note", note)
+        self.assertEqual(self.u(led, cp, pack=pk)["status"], "verified")   # a path to the same bytes
+        with self.assertRaises(ValueError):
+            run(led, checkpoint=note, log_vkeys=self.log, witness_vkeys=self.wit)   # without a pack
 
 
 @NEEDS_CRYPTO
 @NEEDS_OPENSSL
 class Complete(unittest.TestCase):
-    """window + witnessed checkpoint = record_complete; the TSA's revocation with a pinned CRL (SPEC §11 step 8)"""
+    """record_complete = window + revocation checked + witnessed checkpoint in the pack; qualification through a pinned
+    Trusted List at genTime (SPEC §19 rules 5-7)"""
 
     def test_complete_record_and_revocation(self):
         from test_tsa_revocation_20261116 import Lab
+        from test_lotl import _QC, _QTST, _svc, _tl
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
         with tempfile.TemporaryDirectory() as td:
             lab = Lab(td)
-            led_path = write(td, "payments.jsonl", build_payment_ledger())
-            pack = os.path.join(td, "pack")
-            import contextlib
-            import io
-            with contextlib.redirect_stdout(io.StringIO()):
-                EP.build_pack([led_path], pack, subject="beacon test")
-            with open(os.path.join(pack, "MANIFEST.json")) as f:
-                m = json.load(f)
-            tok = lab.token(bytes.fromhex(m["manifest_digest_sha256"]))
-            m["rfc3161_timestamp"] = {"anchored": True, "tsa": "local", "tsr_b64": base64.b64encode(tok).decode()}
-            with open(os.path.join(pack, "MANIFEST.json"), "w") as f:
-                json.dump(m, f)
-            keys = witness_material(td)
-            note = witnessed_checkpoint(build_payment_ledger(), keys)
+            keys = witness_material()
+            led = build_payment_ledger()
+            note = witnessed_checkpoint(led, keys)
+            pack = make_pack(td, "pack", led, lab, {"checkpoint.note": note})
             full = dict(pack_dir=pack, tsa_certs=[lab.j("ca.crt")], max_window_s=WIDE, checkpoint=note,
                         log_vkeys=[keys["example.org/payments"][1]], witness_vkeys=[keys["witness.example/a"][1]])
-            r = run(led_path, tsa_crls=[lab.crl()], **full)
+            crl = lab.crl()   # issued after the token: it can speak for genTime
+            r = run(led, tsa_crls=[crl], **full)
             self.assertEqual((r["status"], r["record_complete"], r["window"]["tsa_revocation"]["status"],
                               r["window"]["tsa_qualification"]), ("verified", True, "not_revoked", "not_checked"), r)
             self.assertEqual([list(x)[0] for x in r["scope"]["proves"]],
                              ["composed_after_pulse", "stamped_before_gen_time", "unique_under_pinned_witness"])
             self.assertEqual([list(x)[0] for x in r["scope"]["does_not_prove"]],
-                             ["not_execution", "not_unique", "not_ownership", "not_operator", "not_qualified", "not_legal_beacon"])
-            # eIDAS Art. 41(2): "qualified" only through a pinned Trusted List snapshot (cryptovalid_lotl, SPEC §19 rule 5)
-            from test_lotl import _QC, _QTST, _svc, _tl
-            from cryptography import x509
-            from cryptography.hazmat.primitives import serialization
+                             ["not_execution", "not_unique", "not_ownership", "commitments_not_opened", "not_operator",
+                              "not_qualified", "not_legal_beacon"])
+            r = run(led, **full)                                            # revocation not checked: not complete
+            self.assertEqual((r["status"], r["record_complete"], r["window"]["tsa_revocation"]), ("verified", False, "not_checked"))
             with open(lab.j("tsa.crt"), "rb") as f:
                 tsa_b64 = base64.b64encode(x509.load_pem_x509_certificate(f.read()).public_bytes(
                     serialization.Encoding.DER)).decode()
@@ -1302,64 +1448,232 @@ class Complete(unittest.TestCase):
                              (_tl(_svc(_QTST, "withdrawn", "2020-01-01T00:00:00Z", tsa_b64)), "not_qualified"),
                              (_tl(_svc(_QC, "granted", "2020-01-01T00:00:00Z", tsa_b64)), "not_qualified"),
                              (_tl(_svc(_QTST, "granted", "2099-01-01T00:00:00Z", tsa_b64)), "not_qualified")):
-                r = run(led_path, tsa_trusted_list=tl, **full)
+                r = run(led, tsa_trusted_list=tl, **full)
                 self.assertEqual((r["status"], r["window"]["tsa_qualification"]), ("verified", want), r)
                 q = {"stamped_by_qualified_tsa": B.SCOPE["stamped_by_qualified_tsa"]}
                 self.assertEqual(q in r["scope"]["proves"], want == "qualified")
                 self.assertEqual({"not_qualified": B.SCOPE["not_qualified"]} in r["scope"]["does_not_prove"],
                                  want != "qualified")
-            r = run(led_path, tsa_trusted_list=b"<not a trusted list", **full)
+            # at genTime, not now (NEMESIS b27): granted until 2 s after the token, withdrawn afterwards
+            g = B.gen_time_instant(r["window"]["gen_time"])
+            stop = datetime.fromtimestamp(int(g) + 2, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            tl = _tl(_svc(_QTST, "withdrawn", stop, tsa_b64, history=[(_QTST, "granted", "2020-01-01T00:00:00Z", None)]))
+            time.sleep(max(0.0, float(int(g) + 3 - time.time())))
+            self.assertEqual(run(led, tsa_trusted_list=tl, **full)["window"]["tsa_qualification"], "qualified")
+            r = run(led, tsa_trusted_list=b"<not a trusted list", **full)
             self.assertEqual((r["status"], r["reason"]), ("refused", "trusted_list_malformed"))
             with self.assertRaises(ValueError):
-                run(led_path, tsa_trusted_list=b"<x/>")             # without a pack
-            for s in r["scope"]["proves"] + r["scope"]["does_not_prove"]:
-                (k, v), = s.items()
-                self.assertEqual(B.SCOPE[k], v)
-            self.assertEqual(run(led_path, **full)["window"]["tsa_revocation"], "not_checked")
-            self.assertEqual(run(led_path, **dict(full, max_window_s=60))["reason"], "window_too_wide")
-            tick_s = 1.2
-            time.sleep(tick_s)
+                run(led, tsa_trusted_list=b"<x/>")                   # without a pack
+            self.assertEqual(run(led, **dict(full, max_window_s=60))["reason"], "window_too_wide")
+            time.sleep(1.2)
             lab.revoke("keyCompromise")
-            r = run(led_path, tsa_crls=[lab.crl()], **full)
+            r = run(led, tsa_crls=[lab.crl()], **full)
             self.assertEqual((r["status"], r["reason"], r["record_complete"]), ("invalid", "time_anchor_not_verified", False))
             with self.assertRaises(ValueError):
-                run(led_path, tsa_crls=[b"not a crl"], **full)
+                run(led, tsa_crls=[b"not a crl"], **full)
+
+    def test_crl_older_than_gen_time_is_unknown(self):
+        from test_tsa_revocation_20261116 import Lab
+        with tempfile.TemporaryDirectory() as td:
+            lab = Lab(td)
+            with open(lab.crl(), "rb") as f:
+                old = f.read()                                           # issued before the token
+            time.sleep(1.2)
+            led = build_payment_ledger()
+            pack = make_pack(td, "pack", led, lab)
+            r = run(led, pack_dir=pack, tsa_certs=[lab.j("ca.crt")], max_window_s=WIDE, tsa_crls=[old])
+            self.assertEqual((r["status"], r["reason"]), ("invalid", "time_anchor_not_verified"), r)
+            self.assertIn("tsa_revocation_unknown", r["detail"])
+
+
+@NEEDS_CRYPTO
+class MultiBeacon(unittest.TestCase):
+    """SPEC §19 rule 1: `beacons` is a list; every value is checked; the lower bound is the latest pulse"""
+
+    def ledger(self, values):
+        p = pulse(2030303)
+        d = payment_datas(p)
+        d[1]["beacons"] = values
+        return chain(d, payment_ts(p))
+
+    def test_latest_pulse_is_the_bound(self):
+        b2, b3 = beacon_of(pulse(2030302)), beacon_of(pulse(2030303))
+        for values, ps, qs in (([b2, b3], [raw(2030302), raw(2030303)], [raw(2030301), raw(2030302)]),
+                               ([b3, b2], [raw(2030303), raw(2030302)], [raw(2030302), raw(2030301)])):
+            r = run(self.ledger(values), p=ps, prev=qs)
+            self.assertEqual((r["status"], r["bounds"]["not_before"]), ("verified", "2026-11-16T13:04:00.000Z"), r)
+            self.assertEqual(len(r["pulses"]), 2)
+        led = self.ledger([b2, b3])
+        r = run(led, p=[raw(2030302), raw(2030303)], prev=[raw(2030301), raw(2030301)])
+        self.assertEqual(r["reason"], "pulse_mismatch")                 # the second pair is checked too
+        r = run(led, p=[raw(2030303), raw(2030302)], prev=[raw(2030302), raw(2030301)])
+        self.assertEqual(r["reason"], "pulse_mismatch")                 # pairs in the order of `beacons`
+        for ps, qs in (([raw(2030302)], [raw(2030301)]), ([raw(2030302)] * 3, [raw(2030301)] * 3),
+                       ([raw(2030302), raw(2030303)], [raw(2030301)])):
+            with self.assertRaises(ValueError):
+                run(led, p=ps, prev=qs)
+
+
+# ───────────────────────── double faults: the code is the one of the earliest step of SPEC §19 rule 8
+
+def _faults():
+    """(name, step key, expected code, detail prefix, mutate(state)) — state: datas, extra kw, files; every fault alone
+    gives its code, and any two give the code of the earlier step"""
+    def data(f):
+        def m(st):
+            f(st["datas"])
+        return m
+
+    def kw(**k):
+        def m(st):
+            st["kw"].update(k)
+        return m
+    return [
+        ("tampered_chain", "ledger_invalid", None, lambda st: st.__setitem__("tamper", True)),
+        ("payment_id", "payment_malformed", "payment_id", data(lambda d: d[1].__setitem__("payment_id", "NOTPROVIDED"))),
+        ("currency", "payment_malformed", "currency", data(lambda d: d[1].__setitem__("currency", "XAU"))),
+        ("amount", "payment_malformed", "amount", data(lambda d: d[1].__setitem__("amount", "99.9"))),
+        ("record_salt", "payment_malformed", "record_salt", data(lambda d: d[1].__setitem__("record_salt", "00" * 15))),
+        ("commitment", "payment_malformed", "payer_iban_commitment",
+         data(lambda d: d[1].__setitem__("payer_iban_commitment", d[1]["payer_iban_commitment"].upper()))),
+        ("source", "source_not_supported", None, data(lambda d: d[1]["beacons"][0].__setitem__("source", "drand"))),
+        ("pid_twice", "payment_id_not_unique", None, data(lambda d: d[0].__setitem__("payment_id", PIDS[1]))),
+        ("disclosure_bad", "disclosure_malformed", None, lambda st: st["disc"].insert(0, b"[]")),
+        ("disclosure_other", "disclosure_mismatch", None, lambda st: st["disc"].append(json.dumps(
+            {"member": "payer_iban_commitment", "salt": "00" * 16, "value": EXAMPLE_IBANS[1]}).encode())),
+        ("pulse_unknown_key", "pulse_malformed", None, lambda st: st["pobj"]["pulse"].__setitem__("zz", 1)),
+        ("status", "status_not_supported", None, lambda st: st["pobj"]["pulse"].__setitem__("statusCode", 1)),
+        ("previous_other", "pulse_mismatch", None, lambda st: st.__setitem__("prev_other", True)),
+        ("certificate_other", "certificate_mismatch", None, lambda st: st.__setitem__("cert", own().pem)),
+        ("window_zero", "window_too_wide", None, kw(max_window_s=0)),
+    ]
+
+
+@NEEDS_CRYPTO
+@NEEDS_OPENSSL
+class DoubleFaults(unittest.TestCase):
+    """SPEC §19 rule 8 is a closed order: every pair of faults gives the code of the earlier one (independent review,
+    16/11/2026: the order written before did not match the code)"""
+
+    @classmethod
+    def setUpClass(cls):
+        from test_tsa_revocation_20261116 import Lab
+        cls.td = tempfile.mkdtemp()
+        cls.lab = Lab(cls.td)
+        cls.n = 0
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.td)
+
+    def outcome(self, faults):
+        p = pulse(2030303)
+        st = {"datas": payment_datas(p), "kw": {}, "disc": [], "pobj": {"pulse": pulse(2030303)}, "prev": raw(2030302),
+              "cert": CERT}
+        for f in faults:
+            f[3](st)
+        st["p"] = json.dumps(st["pobj"]).encode()
+        led = chain(st["datas"], payment_ts(p))
+        if st.get("tamper"):
+            led = led.replace(b'"not a payment"', b'"not a paymenT"', 1)
+        if st.get("prev_other"):
+            st["prev"] = raw(2030301)
+        kw = dict(st["kw"])
+        if "max_window_s" in kw:
+            type(self).n += 1
+            kw.update(pack_dir=make_pack(self.td, f"p{self.n}", led, self.lab), tsa_certs=[self.lab.j("ca.crt")])
+        return run(led, p=st["p"], prev=st["prev"], cert=st["cert"], disclosures=st["disc"] or None, **kw)
+
+    def test_every_single_and_every_pair(self):
+        fs = _faults()
+        n = 0
+        for i, f in enumerate(fs):
+            r = self.outcome([f])
+            self.assertEqual(r["reason"], f[1], f[0])
+            if f[2]:
+                self.assertTrue(r["detail"].startswith(f[2]), (f[0], r["detail"]))
+            for g in fs[i + 1:]:
+                r = self.outcome([f, g])
+                self.assertEqual(r["reason"], f[1], (f[0], g[0], r["detail"]))
+                if f[2]:
+                    self.assertTrue(r["detail"].startswith(f[2]), (f[0], g[0], r["detail"]))
+                n += 1
+        self.assertEqual(n, len(fs) * (len(fs) - 1) // 2)
+
+
+# every result code of SPEC §19 rule 8 (backend_missing excepted: it is the absence of cryptography, not an input)
+CODES = {"input_unreadable", "input_too_large", "ledger_invalid", "entry_not_found", "entry_not_a_payment",
+         "payment_malformed", "source_not_supported", "payment_id_not_unique", "disclosure_malformed",
+         "disclosure_iban_invalid", "disclosure_mismatch", "pulse_malformed", "version_not_supported",
+         "cipher_suite_not_supported", "status_not_supported", "pulse_mismatch", "chain_inconsistent",
+         "certificate_malformed", "certificate_mismatch", "certificate_key_not_supported",
+         "certificate_not_valid_at_pulse_time", "signature_invalid", "output_value_mismatch", "previous_mismatch",
+         "period_mismatch", "commitment_mismatch", "beacon_value_mismatch", "pack_not_valid", "time_anchor_not_verified",
+         "ledger_not_in_pack", "window_inverted", "window_too_wide", "trusted_list_malformed", "checkpoint_malformed",
+         "checkpoint_not_in_pack", "checkpoint_not_witnessed", "checkpoint_cosigned_after_gen_time",
+         "checkpoint_not_covering_entry", "checkpoint_root_mismatch"}
+CASE_KEYS = {"name", "ledger", "entry", "pulses", "certificates", "expected", "disclosures", "pack", "tsa_certs",
+             "tsa_crls", "tsa_trusted_list", "max_window_s", "clock_tolerance_s", "checkpoint", "log_vkeys",
+             "witness_vkeys", "min_witnesses"}
+
+
+def conformance_run(c):
+    """one case of conformance.json through the library, with the case's paths (relative to spec/vectors/beacon/)"""
+    j = lambda x: os.path.join(VB, x)   # noqa: E731
+    kw = {k: c[k] for k in ("log_vkeys", "witness_vkeys", "min_witnesses", "max_window_s", "clock_tolerance_s") if k in c}
+    for k in ("tsa_certs", "tsa_crls", "disclosures"):
+        if k in c:
+            kw[k] = [j(x) for x in c[k]]
+    for k, a in (("pack", "pack_dir"), ("checkpoint", "checkpoint"), ("tsa_trusted_list", "tsa_trusted_list")):
+        if k in c:
+            kw[a] = j(c[k])
+    return B.verify_beacon_entry(j(c["ledger"]), c["entry"], [j(p) for p, _ in c["pulses"]],
+                                 [j(q) for _, q in c["pulses"]], [j(x) for x in c["certificates"]], **kw)
 
 
 class Conformance(unittest.TestCase):
-    """spec/vectors/beacon/conformance.json: the expected status and reason of every case, for any implementation"""
+    """spec/vectors/beacon/conformance.json: status, reason and record_complete of every case, for any implementation;
+    a complete record and every result code of SPEC §19 rule 8"""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(VB, "conformance.json"), encoding="utf-8") as f:
+            cls.doc = json.load(f)
+
+    def test_format_and_coverage(self):
+        self.assertEqual(set(self.doc), {"format", "spec", "paths", "cases", "window_cases"})
+        self.assertEqual(self.doc["format"], "cryptovalid-beacon-conformance/2")
+        for c in self.doc["cases"]:
+            self.assertLessEqual(set(c), CASE_KEYS, c["name"])
+            self.assertEqual(set(c["expected"]), {"status", "reason", "record_complete"}, c["name"])
+        self.assertEqual({c["expected"]["reason"] for c in self.doc["cases"]} - {None}, CODES)
+        self.assertTrue(any(c["expected"]["record_complete"] for c in self.doc["cases"]))
+        self.assertEqual(len({c["name"] for c in self.doc["cases"]}), len(self.doc["cases"]))
 
     def test_cases(self):
-        with open(os.path.join(VB, "conformance.json"), encoding="utf-8") as f:
-            doc = json.load(f)
-        self.assertEqual(set(doc), {"format", "spec", "paths", "cases", "window_cases"})
-        self.assertEqual(doc["format"], "cryptovalid-beacon-conformance/1")
-        keys = {"name", "ledger", "entry", "pulse", "previous", "certificate", "expected", "disclosures", "checkpoint",
-                "log_vkeys", "witness_vkeys"}
-        seen = {"verified": 0, "invalid": 0, "refused": 0}
-        for c in doc["cases"]:
-            self.assertLessEqual(set(c), keys, c["name"])
-            kw = {k: c[k] for k in ("log_vkeys", "witness_vkeys") if k in c}
-            if "checkpoint" in c:
-                kw["checkpoint"] = os.path.join(VB, c["checkpoint"])
-            if "disclosures" in c:
-                kw["disclosures"] = [os.path.join(VB, d) for d in c["disclosures"]]
-            if not HAVE_CRYPTO and c["expected"]["status"] != "refused":
+        seen = 0
+        for c in self.doc["cases"]:
+            if not HAVE_CRYPTO and (c["expected"]["status"] != "refused" or c["expected"]["reason"] in (
+                    "certificate_malformed", "checkpoint_malformed", "trusted_list_malformed")):
+                continue   # these are read after the RSA checks, which need cryptography (SPEC §19 rule 8 step 4)
+            if ("pack" in c or c["expected"]["reason"] == "checkpoint_malformed") and shutil.which("openssl") is None:
                 continue
-            r = B.verify_beacon_entry(os.path.join(VB, c["ledger"]), c["entry"], os.path.join(VB, c["pulse"]),
-                                      os.path.join(VB, c["previous"]), os.path.join(VB, c["certificate"]), **kw)
-            self.assertEqual({"status": r["status"], "reason": r["reason"]}, c["expected"], c["name"])
-            seen[r["status"]] += 1
-        if HAVE_CRYPTO:
-            self.assertEqual(sum(seen.values()), len(doc["cases"]))
-            self.assertTrue(all(seen.values()), seen)
-        for w in doc["window_cases"]:
+            r = conformance_run(c)
+            got = {"status": r["status"], "reason": r["reason"], "record_complete": r["record_complete"]}
+            self.assertEqual(got, c["expected"], (c["name"], r["detail"]))
+            seen += 1
+        if HAVE_CRYPTO and shutil.which("openssl"):
+            self.assertEqual(seen, len(self.doc["cases"]))
+
+    def test_window_cases(self):
+        for w in self.doc["window_cases"]:
             t = B.pulse_time(w["t"])
             if w["expected"] is None:
-                self.assertEqual(B.window(t, w["period_ms"], w["gen_time"], w["max_window_s"])["not_after"], w["gen_time"])
+                self.assertEqual(B.window(t, w["period_ms"], w["gen_time"], w["max_window_s"], w["clock_tolerance_s"])[
+                    "gen_time"], w["gen_time"])
             else:
                 with self.assertRaises(B.Invalid) as e:
-                    B.window(t, w["period_ms"], w["gen_time"], w["max_window_s"])
+                    B.window(t, w["period_ms"], w["gen_time"], w["max_window_s"], w["clock_tolerance_s"])
                 self.assertEqual(e.exception.reason, w["expected"])
 
 
@@ -1420,7 +1734,10 @@ class Command(unittest.TestCase):
                          self.base(**{"--certificate": ""}), self.base(**{"--entry": None}),
                          self.base(**{"--pack": td}), self.base(**{"--tsa-cert": pem}), self.base(**{"--pack": ""}),
                          self.base() + ["--entry", "1"], self.base() + ["--pulse", pf(2030302)],
-                         self.base() + ["--certificate", CERT], self.base() + ["--previous", pf(2030302)],
+                         self.base() + ["--previous", pf(2030302)],
+                         self.base() + ["--pulse", pf(2030303), "--previous", pf(2030302)],   # two pairs, one value
+                         self.base() + ["--clock-tolerance", "1"],
+                         self.base() + ["--pack", td, "--tsa-cert", pem, "--max-window", "60", "--clock-tolerance", "-1"],
                          self.base() + ["--pack", td, "--pack", td, "--tsa-cert", pem],
                          self.base() + ["--unknown"], self.base() + ["--ent", "1"],
                          self.base(**{"--tsa-cert": os.path.join(td, "absent"), "--pack": td}),
@@ -1432,9 +1749,18 @@ class Command(unittest.TestCase):
                          self.base() + ["--checkpoint", pem], self.base() + ["--log-vkey", "a", "--witness-vkey", "b"],
                          self.base() + ["--min-witnesses", "1"],
                          self.base() + ["--checkpoint", pem, "--log-vkey", "a", "--witness-vkey", "b", "--min-witnesses", "0"],
+                         self.base() + ["--pack", td, "--tsa-cert", pem, "--max-window", "60", "--checkpoint", pem],
                          self.base() + ["--pack", td, "--tsa-cert", pem, "--max-window", "60", "--tsa-crl", pem]):
+                if not HAVE_CRYPTO and "--tsa-crl" in args:
+                    continue   # a CRL is read with cryptography: without it the check is not_evaluated (SPEC §11 step 8)
                 r = self.cli(*args)
                 self.assertEqual((r.returncode, r.stdout), (2, ""), (args, r.stderr))
+
+    @NEEDS_CRYPTO
+    def test_two_pinned_certificates(self):
+        with tempfile.TemporaryDirectory() as td:
+            r = self.cli(*self.base(), "--certificate", write(td, "own.pem", own().pem))
+        self.assertEqual((r.returncode, json.loads(r.stdout)["status"]), (0, "verified"), r.stderr)
 
     def test_help_and_listing(self):
         r = self.cli("--help")

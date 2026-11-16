@@ -133,6 +133,40 @@ class Revocation(unittest.TestCase):
         v = self.check(lab, tok, [crl])
         self.assertEqual((v["status"], v["reason"], v["counts_as_timestamp"]), ("invalid", "tsa_certificate_revoked", False))
 
+    def test_defect_of_0_25_1_through_public_behaviour(self):
+        """the real positive control (coordinator, after NEMESIS: not a TypeError): the public answer for a token issued
+        after a keyCompromise revocation, with the CRL the caller has, must not be "verified". On 0.25.1 verify_token
+        takes no CRL, so the caller can only ask without it, and gets "verified": this test FAILS there by assertion"""
+        import inspect
+        lab = Lab(self.td)
+        lab.revoke("keyCompromise")
+        tick()
+        tok = lab.token()
+        crl = lab.crl()
+        kw = {"crls": [crl]} if "crls" in inspect.signature(T.verify_token).parameters else {}
+        v = T.verify_token(tok, DIGEST, "sha256", [lab.j("ca.crt")], **kw)
+        self.assertNotEqual(v["status"], "verified", "a token signed after its key was revoked is reported as verified")
+        self.assertFalse(lab.openssl_crl_check(tok))
+
+    def test_fractional_gen_time_is_equivalent_here(self):
+        """NEMESIS t13 (the fraction of genTime ignored in the comparison with the revocation date): equivalent, shown
+        three ways. (1) RFC 5280 §5.1.2.4/§4.1.2.5: a CRL's times have whole seconds, so for a whole-second revocation
+        date r and a genTime g, g < r iff floor(g) < r. (2) Exhaustive on fractions: below. (3) A token with a fractional
+        genTime (openssl clock_precision_digits = 3) against a revocation in the same second: same answer either way"""
+        from datetime import datetime, timedelta, timezone
+        r = datetime(2026, 11, 16, 13, 0, 0, tzinfo=timezone.utc)
+        for sec in (-2, -1, 0, 1):
+            for us in range(0, 1000000, 999):
+                g = r + timedelta(seconds=sec, microseconds=us)
+                self.assertEqual(g < r, g.replace(microsecond=0) < r, g)
+        lab = Lab(self.td)
+        with open(lab.j("tsa.cnf"), "a") as f:
+            f.write("clock_precision_digits = 3\n")
+        tok = lab.token()
+        v = self.check(lab, tok)
+        self.assertEqual(v["status"], "verified")
+        self.assertRegex(v["tst_info"]["gen_time"], r"\.[0-9]{1,3}Z$|:[0-9]{2}Z$")
+
     def test_not_revoked(self):
         lab = Lab(self.td)
         tok = lab.token()

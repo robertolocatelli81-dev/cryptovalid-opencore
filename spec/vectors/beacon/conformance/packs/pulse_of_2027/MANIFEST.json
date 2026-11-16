@@ -1,0 +1,25 @@
+{
+ "created_utc": "2026-11-16T18:16:45Z",
+ "file_digests_sha256": {
+  "payments.jsonl": "20f2273cf6b634ac537d1cb9313d21f2e6e96b956db72db0c4b89a05dffcd7d8"
+ },
+ "honest_scope": "Proves what/when/order/who-signed + non-alteration + entry count & head per ledger (so truncation is detectable when the manifest is signed). Not the truth of the facts. An UNSIGNED manifest is integrity-checked, NOT authenticated: its metadata (e.g. subject) is trustworthy only if manifest_signature verifies.",
+ "ledgers": [
+  {
+   "chain_integrity": true,
+   "entries": 3,
+   "file": "payments.jsonl",
+   "hash_verdict": "PASS",
+   "head_self_hash": "1b4e95dc20f4437fa3f9933a02670c02a1b61c4c8dc657a67866b869ba7d36f7"
+  }
+ ],
+ "manifest_digest_sha256": "231383e937c16365cd3231fd2d79cd146d7e694686bcd080cfe632c173341c22",
+ "pack_format": "cryptovalid-evidence-pack/1.1",
+ "rfc3161_timestamp": {
+  "anchored": true,
+  "tsa": "local",
+  "tsr_b64": "MIIE9jADAgEAMIIE7QYJKoZIhvcNAQcCoIIE3jCCBNoCAQMxDzANBglghkgBZQMEAgEFADB2BgsqhkiG9w0BCRABBKBnBGUwYwIBAQYEKgMEATAxMA0GCWCGSAFlAwQCAQUABCAjE4PpN8FjZc0yMf0tec0UbX5pRoa80IDP5jLBczQcIgIBAxgPMjAyNjExMTYxODE2NDVaMAMCAQEBAf8CCQD2okpkU+k8CaCCAwkwggGKMIIBMKADAgECAhRuA4Ca37du3wFEsV7y/NMxYcp/LTAKBggqhkjOPQQDAjARMQ8wDQYDVQQDDAZ0c2EtY2EwHhcNMjYxMTE2MTgxNjQzWhcNMjYxMTE4MTgxNjQzWjASMRAwDgYDVQQDDAd0c2EtdHNhMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7/CN3RCEVj1CNcQ3p2mvRtLvl8/gOLcwuc5XlMN1xh18K/kBthkTo2jG3pKoUb1HkEweZr1MqHb0BrOUlKT+BaNlMGMwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwgwCQYDVR0TBAIwADAdBgNVHQ4EFgQUvwxF6kx2DI+sDiKPmrO5yRDGfjswHwYDVR0jBBgwFoAU+Rj4ck29uLKHJuYxj9WFOCtCJMowCgYIKoZIzj0EAwIDSAAwRQIgW+PLWtmQdsNIOLtkGIILzuF75hyBTiLNKlAVo8VIIGQCIQCd5wcWw677hwDEyMzEV4Ppqp9ROR7YiMbEi2JbOsZH6zCCAXcwggEdoAMCAQICFFHSFxxv6SHhkLISAZlOhY8EnIYmMAoGCCqGSM49BAMCMBExDzANBgNVBAMMBnRzYS1jYTAeFw0yNjExMTYxODE2NDNaFw0yNjExMTgxODE2NDNaMBExDzANBgNVBAMMBnRzYS1jYTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABMw8vpTpiFAdabohNTHCCUUxXdBtVIzuVvA/2L0NObZ56n9Re5CiST9dIgVYvYrWT6BqlBzAPyafLmVeIOvrDeKjUzBRMB0GA1UdDgQWBBT5GPhyTb24socm5jGP1YU4K0IkyjAfBgNVHSMEGDAWgBT5GPhyTb24socm5jGP1YU4K0IkyjAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQDm6le/hkYXZn/LjjQPo5ttgAY3dlmnWEMsfHCDZeCiDgIgVW+fkQQuulBinNhyD+Ubmwm/tV5SAmQ0qoKJFjiTkDoxggE9MIIBOQIBATApMBExDzANBgNVBAMMBnRzYS1jYQIUbgOAmt+3bt8BRLFe8vzTMWHKfy0wDQYJYIZIAWUDBAIBBQCggaQwGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMBwGCSqGSIb3DQEJBTEPFw0yNjExMTYxODE2NDVaMC8GCSqGSIb3DQEJBDEiBCD11HdGkYKtd79Dp/F0mbxzdWpSSVGHOVQ4T7J6X7WB2zA3BgsqhkiG9w0BCRACLzEoMCYwJDAiBCBNjnpu0IQ8ChME75lK2TssCByLetyC0YL81MTsi72acDAKBggqhkjOPQQDAgRHMEUCIFtuas3KXfy1bJMO1rq4uuboY26eJReVXGfirVAmFkytAiEA2uX2jafb+s/OgbP0xfOh1QdPK33x2iVlbg8O5m+U/EI="
+ },
+ "signer_pubkeys": [],
+ "subject": "beacon test"
+}

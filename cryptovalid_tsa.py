@@ -524,6 +524,12 @@ def _revocation(token_der: bytes, signer_sha256: str, pins_pem: bytes, crls: lis
             return "tsa_revocation_unknown", {"status": "unknown", "detail": "a pinned CRL carries an extension this check "
                                               f"does not process ({', '.join(sorted(set(other)))[:120]}): not a complete CRL"}
     this_update = max(c.last_update_utc for c in applicable).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # genTime with its fraction (whole microseconds, truncated: a CRL's times are whole seconds, RFC 5280 §5.1.2.4)
+    m = gen_time[:19] + "." + (gen_time[20:-1] + "000000")[:6] if "." in gen_time else gen_time[:19] + ".000000"
+    gt = datetime.strptime(m, "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc)
+    if max(c.last_update_utc for c in applicable) < gt:   # SPEC v0.10 §11 step 8: CRLs older than genTime cannot speak
+        return "tsa_revocation_unknown", {"status": "unknown", "crl_this_update": this_update,   # for genTime
+                                          "detail": f"the latest pinned CRL was issued before genTime {gen_time}"}
     found = []
     for c in applicable:
         e = c.get_revoked_certificate_by_serial_number(cert.serial_number)
@@ -547,8 +553,6 @@ def _revocation(token_der: bytes, signer_sha256: str, pins_pem: bytes, crls: lis
         return "tsa_revocation_unknown", dict(rev, status="unknown", detail=f"{reason} in a CRL")
     if reason not in KEEPS_EARLIER_TOKENS:   # RFC 3161 §4: no reason code, a compromise, or a reason outside its list
         return "tsa_certificate_revoked", dict(rev, status="revoked")
-    m = gen_time[:19] + "." + (gen_time[20:-1] + "000000")[:6] if "." in gen_time else gen_time[:19] + ".000000"
-    gt = datetime.strptime(m, "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc)
     if gt < when:
         return None, dict(rev, status="revoked_after_gen_time")
     return "tsa_certificate_revoked", dict(rev, status="revoked")

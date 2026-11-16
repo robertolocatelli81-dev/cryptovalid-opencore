@@ -33,14 +33,19 @@ writer's claim, not used by the check.
 
 ## `conformance.json` and `conformance/`
 
-The conformance cases of SPEC §19 rule 8: for each case the inputs (paths relative to this folder) and the expected
-`status` and `reason`, positive and negative, plus the window of rule 5 as data (`window_cases`). Built by
-`make_conformance.py` from the files above (run once on 2026-11-16; outputs committed): pulses with one member changed
-or added; ledgers with one member changed and every hash recomputed; three pairs of pulses re-signed with a key made on
-the spot so that the change reaches the check behind the signature (its certificate is `conformance/other/certificate.pem`,
-the private key was not kept); checkpoints signed and cosigned with Ed25519 keys derived from fixed labels (log
-`example.org/payments`, witnesses `witness.example/a` and `/b`, cosigned at 2026-11-16T13:00:00Z). An implementation
-agrees with this format when it gives the expected status and reason for every case.
+The conformance cases of SPEC §19 rule 8, format `cryptovalid-beacon-conformance/2`: for each case the inputs (paths
+relative to this folder: ledger, entry, one pulse pair per beacon value, the pinned beacon certificates, and when the case
+needs them the evidence pack, the pinned TSA certificates, CRLs and trusted list, the maximum width, the checkpoint with
+the pinned log and witness keys, disclosures) and the expected `status`, `reason` and `record_complete`. There is a
+complete record (window, CRL issued after the token, witnessed checkpoint inside the pack, qualified TSA) and at least one
+case for every result code of rule 8; `window_cases` gives the window of rule 5 as data. Built by `make_conformance.py`
+(run on 2026-11-16; outputs committed): pulses with one member changed or added; ledgers with one member changed and
+every hash recomputed; pulse pairs re-signed with RSA keys made on the spot so that the change reaches the check behind
+the signature (their certificates are in `conformance/other/`, the private keys were not kept); evidence packs stamped
+by TSAs made on the spot with openssl (CA certificates and CRLs in `conformance/tsa/`, private keys not kept); checkpoints
+signed and cosigned with Ed25519 keys derived from fixed labels (log `example.org/payments`, witnesses
+`witness.example/a` and `/b`). An implementation agrees with this format when it gives the expected status, reason and
+`record_complete` for every case.
 
 ## SHA-256
 
@@ -52,5 +57,5 @@ bbb5f5e66c6623f639baa9a1745fdc416c5466549d5133c242c4ea1f96b76f0d  nist/pulse_203
 f3868640bc47ce395b595549dc44c69cb50b0231f3dd971a204834fdd4b1ba0a  nist/pulse_2030301.json
 a86820a5b4ebeb8da24147fe2a4df6c490f109e3a615a8625afc754efa659ef3  nist/pulse_2030302.json
 88bac288140df522909f46931670183789700d1e2f4b1fd36bd73b066b99f31b  nist/pulse_2030303.json
-45354196549c0b554428ec629a8d84e2ef250f1971ef40bd84bbc20fa0ba7ef2  payment_ledger.jsonl
+21dd97c602d2ff5bb5b8d6f4fac35cd87c09970674e59705329ec9efe243a347  payment_ledger.jsonl
 ```
