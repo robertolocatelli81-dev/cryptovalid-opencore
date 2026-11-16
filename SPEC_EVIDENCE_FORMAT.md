@@ -426,11 +426,32 @@ first that fails gives the outcome:
    against the eContent, with the certificate the SignerInfo names, looked up in the token and among the pinned
    certificates (a token requested with certReq FALSE carries none, RFC 3161 §2.4.1) (`signature_invalid` if not). The signer
    certificate's SHA-256 is returned (`signer_sha256`).
-7. **Anchor.** With `tsa_certs` (certificates the verifier pins: the TSA certificate or a CA above it), openssl
-   `ts -verify` checks the token against them: signer certificate, ESS signing-certificate attribute, extended key
-   usage timeStamping, the `tsa` field against the signer's name, chain to a pinned certificate (`-partial_chain`;
-   the pinned certificates are also given as `-untrusted`), validity at genTime (`-attime`); it passes on exit 0 with
-   `Verification: OK` on stdout. Failure is `not_issued_by_pinned_tsa`. Without `tsa_certs` there is no anchor (step 8).
+7. **Anchor.** With `tsa_certs` (certificates the verifier pins: the TSA certificate or a CA above it), the token is
+   checked against them. How depends on how the SignerInfo names its signer (`sid`, RFC 5652 §5.3: both forms are
+   allowed, the SignedData version is 3 in both):
+   - **issuerAndSerialNumber**: openssl `ts -verify` checks the token against them: signer certificate, ESS
+     signing-certificate attribute, extended key usage timeStamping, the `tsa` field against the signer's name, chain to
+     a pinned certificate (`-partial_chain`; the pinned certificates are also given as `-untrusted`), validity at genTime
+     (`-attime`); it passes on exit 0 with `Verification: OK` on stdout.
+   - **subjectKeyIdentifier** (since v0.10): openssl's TS code reads the token as PKCS #7, whose SignerInfo has only
+     issuerAndSerialNumber, and refuses such a token with an ASN.1 error. Measured on 2026-11-16 with OpenSSL 3.0.22:
+     the TSTInfo of a valid token re-signed by `openssl cms -sign -keyid -cades` with the same TSA key and certificate
+     verifies at step 6 and was `not_issued_by_pinned_tsa` here until v0.10 (in a pack, `tsa_unresolved`): a valid token
+     reported as not established. The same checks are made one by one on the signer certificate of step 6: (a) a signed
+     attribute signingCertificate (RFC 2634 §5.4, SHA-1) or signingCertificateV2 (RFC 5035, its `hashAlgorithm`, SHA-256
+     when absent), each one present checked and at least one present, with exactly one ESSCertID whose `certHash` is the
+     hash of the signer certificate and whose `issuerSerial`, when present, is exactly one directoryName byte-equal to the
+     certificate's issuer and its serial number (more than one ESSCertID is not evaluated here and fails); (b) the
+     TSTInfo `tsa` field, when present, byte-equal to a directoryName of the signer's subject or to one of the names of
+     its subjectAltName; (c) openssl `verify -purpose timestampsign -partial_chain -attime <genTime> -CAfile <pinned>
+     -no-CApath -no-CAstore -untrusted <pinned and the token's certificates>` over the signer certificate, exit 0: the
+     extended key usage timeStamping (OpenSSL's purpose: present, critical, the only one), the chain to a pinned
+     certificate and the validity at genTime, with the same OpenSSL chain building as `ts -verify`.
+   Failure is `not_issued_by_pinned_tsa`. Without `tsa_certs` there is no anchor (step 8). In both forms, a pinned leaf
+   (the TSA certificate itself) does not end the chain: OpenSSL continues it with the certificates the token carries and
+   checks the CA above the leaf too (a CA expired at genTime, not a CA, or without keyCertSign makes the token refused),
+   measured on 2026-11-16 on generated tokens by the extraction of this profile into a separate repository; a verifier
+   that stops at the pinned leaf accepts tokens this one refuses.
 
 Outcome `status`, a closed set:
 
@@ -1270,6 +1291,9 @@ marks what could not be checked against its issuer today.
 | EDPB Guidelines 02/2025 | version 2.0 adopted 2026-07-07 (its version history: 1.1 of 2025-04-08, 2.0 after public consultation); no later version found | edpb.europa.eu, PDF sha256 e90cc80ef9ba6c26… |
 | NIST IR 8213 | Initial Public Draft, May 2019, never finalised; NIST planning note of 2025-01-23: "NIST continues to develop this publication" | csrc.nist.gov |
 | RFC 3161 | Proposed Standard (2001), updated by RFC 5816 (ESSCertIDv2); not obsoleted | rfc-editor.org |
+| RFC 5652 (§11 step 7) | Internet Standard (2009), updated by RFC 8933 and RFC 9629; not obsoleted | rfc-editor.org |
+| RFC 2634 (§11 step 7) | Proposed Standard (1999), updated by RFC 5035; not obsoleted | rfc-editor.org |
+| RFC 5035 (§11 step 7) | Proposed Standard (2007); not updated, not obsoleted | rfc-editor.org |
 | RFC 5280 | Proposed Standard (2008), updated by RFC 6818, 8398, 8399, 9549, 9598, 9608, 9618, 9925, 10007; not obsoleted | rfc-editor.org |
 | RFC 6962 | Experimental (2013), obsoleted by RFC 9162: cited only for the Merkle tree hash that C2SP tlog-checkpoint and this format's §9 use | rfc-editor.org |
 | RFC 9562 (UUID) | Proposed Standard (May 2024), obsoletes RFC 4122 | rfc-editor.org |
