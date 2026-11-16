@@ -115,7 +115,8 @@ _SIG = re.compile(r"(?:[0-9a-fA-F]{2}){1,1024}")
 _TIME = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})\.([0-9]{3})Z")
 _GEN_TIME = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.([0-9]+))?Z")
 _AMOUNT = re.compile(r"(0|[1-9][0-9]{0,17})(?:\.([0-9]+))?")
-_PAYMENT_ID = re.compile(r"[\x21-\x7e]{1,64}")
+# SPEC §18: ISO 20022 Max35Text with the Latin set used for EndToEndId (to be re-read against the EPC guidance)
+_PAYMENT_ID = re.compile(r"[A-Za-z0-9/?:().,'+-](?:[A-Za-z0-9/?:().,'+ -]{0,33}[A-Za-z0-9/?:().,'+-])?")
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 _SALT_HEX = re.compile(r"[0-9a-f]{32}")
 _RECORD_SALT = re.compile(r"(?:[0-9a-f]{2}){16,64}")   # SPEC §18: 16 to 64 bytes, at least 128 bits
@@ -175,7 +176,7 @@ def check_payment(data) -> Dict:
     if missing:
         bad(",".join(missing), "member_missing")
     if not (isinstance(data["payment_id"], str) and _PAYMENT_ID.fullmatch(data["payment_id"])):
-        bad("payment_id", "not 1 to 64 printable ASCII characters without space")
+        bad("payment_id", "not 1 to 35 characters of the Max35Text Latin set, no leading or trailing space")
     c = data["currency"]
     if not isinstance(c, str) or c not in MINOR_UNITS:
         bad("currency", "currency_unknown")
@@ -211,13 +212,33 @@ def check_payment(data) -> Dict:
     return data
 
 
-def commitment(salt: bytes, value: str) -> str:
-    """SPEC §18: SHA-256(salt || UTF-8(value)), salt 16 bytes (128 bits), value as recorded (no normalisation)"""
-    if not (isinstance(salt, (bytes, bytearray)) and len(salt) == SALT_BYTES):
-        raise ValueError(f"salt: {SALT_BYTES} bytes")
+COMMITMENT_DOMAIN = b"cryptovalid-payment/1/"
+
+
+def normalised(member: str, value: str) -> str:
+    """SPEC §18: an IBAN without spaces, in upper case, and passing the IBAN rule (ValueError('iban_...') otherwise); a
+    name or details string in Unicode NFC"""
+    if member not in COMMITMENTS:
+        raise ValueError(f"member: one of {', '.join(COMMITMENTS)}")
     if not (isinstance(value, str) and 1 <= len(value) <= 1024):
         raise ValueError("value: a string of 1 to 1024 characters")
-    return hashlib.sha256(bytes(salt) + value.encode("utf-8")).hexdigest()
+    if member in IBAN_COMMITMENTS:
+        if not value.isascii():   # "ß".upper() is "SS": upper case only after the value is known to be ASCII
+            raise ValueError("iban_charset")
+        v = value.replace(" ", "").upper()
+        why = iban_problem(v)
+        if why:
+            raise ValueError(why)
+        return v
+    return unicodedata.normalize("NFC", value)
+
+
+def commitment(member: str, salt: bytes, value: str) -> str:
+    """SPEC §18: SHA-256("cryptovalid-payment/1/" || member || 0x00 || salt (16 bytes) || UTF-8(normalised value))"""
+    if not (isinstance(salt, (bytes, bytearray)) and len(salt) == SALT_BYTES):
+        raise ValueError(f"salt: {SALT_BYTES} bytes")
+    v = normalised(member, value)
+    return hashlib.sha256(COMMITMENT_DOMAIN + member.encode("ascii") + b"\x00" + bytes(salt) + v.encode("utf-8")).hexdigest()
 
 
 def parse_disclosure(src) -> Dict:
@@ -618,10 +639,12 @@ def verify_beacon_entry(ledger, entry_idx: int, pulse, previous, certificate,
         out["entry"] = {"idx": entry_idx, "self_hash": e["self_hash"], "covers": [k for k in PAYMENT_KEYS if k in data],
                         "payment": {k: data[k] for k in ("payment_id", "amount", "currency")}}
         for d in ds:
-            if data.get(d["member"]) != commitment(bytes.fromhex(d["salt"]), d["value"]):
+            try:
+                c = commitment(d["member"], bytes.fromhex(d["salt"]), d["value"])
+            except ValueError as e:   # parse_disclosure checked member, salt and value: only the IBAN rule is left
+                raise Invalid("disclosure_iban_invalid", f"{d['member']}: {e}") from None
+            if data.get(d["member"]) != c:
                 raise Invalid("disclosure_mismatch", f"{d['member']}: the disclosed salt and value do not give the entry's commitment")
-            if d["member"] in IBAN_COMMITMENTS and iban_problem(d["value"]):
-                raise Invalid("disclosure_iban_invalid", f"{d['member']}: {iban_problem(d['value'])}")
             out["disclosed"].append(d["member"])
         p = parse_pulse(pulse, "pulse")
         q = parse_pulse(previous, "previous")

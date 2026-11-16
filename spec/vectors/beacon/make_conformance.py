@@ -149,7 +149,8 @@ def main():
             "payer_iban_commitment")[:8].hex(), "value": names["payer_iban_commitment"]}))], **e0)
     bad_iban = "GB83WEST12345698765432"
     bad_led = mutated_ledger("committed_bad_iban", lambda d: d[1].__setitem__(
-        "payee_iban_commitment", B.commitment(salt("payee_iban_commitment", "bad"), bad_iban)))
+        "payee_iban_commitment", hashlib.sha256(b"cryptovalid-payment/1/payee_iban_commitment\x00" + salt(
+            "payee_iban_commitment", "bad") + bad_iban.encode()).hexdigest()))   # a writer that skipped the IBAN rule
     case("committed_bad_iban_undisclosed", "verified", None, ledger=bad_led)
     case("committed_bad_iban_disclosed", "invalid", "disclosure_iban_invalid", ledger=bad_led, disclosures=[put(
         "disclosures/payee_iban_bad.json", json.dumps({"member": "payee_iban_commitment", "salt": salt(
@@ -210,8 +211,18 @@ def main():
             ("beacon_other_source", lambda d: d[1]["beacon"].__setitem__("source", "curby-twine"), "refused", "source_not_supported"),
             ("beacon_value_other_pulse", lambda d: d[1]["beacon"].__setitem__("output_value", pulse(2030302)["outputValue"]),
              "invalid", "beacon_value_mismatch"),
+            ("payment_id_36_characters", lambda d: d[1].__setitem__("payment_id", "P" * 36), "refused", "payment_malformed"),
+            ("payment_id_trailing_space", lambda d: d[1].__setitem__("payment_id", "PAY-1 "), "refused", "payment_malformed"),
+            ("commitments_swapped", lambda d: d[1].update(payer_iban_commitment=d[1]["payee_iban_commitment"],
+                                                          payee_iban_commitment=d[1]["payer_iban_commitment"]),
+             "verified", None),
             ("payment_id_twice", lambda d: d[1].__setitem__("payment_id", d[0]["payment_id"]), "invalid", "payment_id_not_unique")):
         case(f"ledger_{name}", exp, why, ledger=mutated_ledger(name, fn))
+    # a commitment moved to the other member cannot be opened there: the member name is in the hashed bytes
+    case("commitment_moved_disclosed", "invalid", "disclosure_mismatch", ledger="conformance/ledgers/commitments_swapped.jsonl",
+         disclosures=[put("disclosures/payee_iban_as_payer.json", json.dumps({
+             "member": "payer_iban_commitment", "salt": salt("payee_iban_commitment", "e1").hex(),
+             "value": "GB82WEST12345698765432"}))])
     with open(os.path.join(HERE, "payment_ledger.jsonl"), "rb") as f:
         raw = f.read()
     case("ledger_changed_hash_not_recomputed", "invalid", "ledger_invalid",

@@ -94,6 +94,11 @@ def salt_of(member, label="v1"):
     return hashlib.sha256(f"test salt {label} {member}".encode()).digest()[:16]   # 128 bits (SPEC §18)
 
 
+def raw_commitment(member, salt, value):
+    """the bytes of SPEC §18 without the normalisation: what a writer that skipped the IBAN rule would commit"""
+    return hashlib.sha256(b"cryptovalid-payment/1/" + member.encode() + b"\x00" + salt + value.encode()).hexdigest()
+
+
 def record_salt_of(i):
     return hashlib.sha256(f"test record salt {i}".encode()).hexdigest()[:32]   # 16 bytes, derived: the vector is rebuilt
 
@@ -111,12 +116,12 @@ def payment_datas(p):
     first = {"profile": B.PAYMENT_PROFILE, "payment_id": "PAY-2026-11-16-0001", "amount": "1250.00", "currency": "EUR",
              "beacon": beacon_of(pulse(2030302)), "record_salt": record_salt_of(1)}
     for m, v in NAMES.items():
-        first[m] = B.commitment(salt_of(m), v)
+        first[m] = B.commitment(m, salt_of(m), v)
     return [
         first,
         {"profile": B.PAYMENT_PROFILE, "payment_id": "PAY-2026-11-16-0002", "amount": "99.95", "currency": "EUR",
-         "payer_iban_commitment": B.commitment(salt_of("payer_iban_commitment", "e1"), de),
-         "payee_iban_commitment": B.commitment(salt_of("payee_iban_commitment", "e1"), gb),
+         "payer_iban_commitment": B.commitment("payer_iban_commitment", salt_of("payer_iban_commitment", "e1"), de),
+         "payee_iban_commitment": B.commitment("payee_iban_commitment", salt_of("payee_iban_commitment", "e1"), gb),
          "beacon": beacon_of(p), "record_salt": record_salt_of(2)},
         {"event": "note", "text": "not a payment"},
     ]
@@ -759,37 +764,57 @@ class Payment(unittest.TestCase):
 
     def test_payment_ids(self):
         base = payment_datas(pulse(2030303))[1]
-        for v in ("a", "!", "~" * 64, "E2E/2026-11-16:0001"):
+        for v in ("a", "E2E/2026-11-16:0001", "x" * 35, "A b", "O'Neil (+1), ref. 7?", "a  b", "-"):
             d = dict(base, payment_id=v)
             self.assertIs(B.check_payment(d), d)
-        for v in ("", "a b", "x" * 65, "é", "a\n", "\x7f", 1, None):
+        for v in ("", " a", "a ", " ", "x" * 36, "é", "a\n", "\x7f", "~", "!", "_", "a_b", "#1", "a\tb", 1, None):
             self.assertMalformed(dict(base, payment_id=v), "payment_id")
 
 
 class Commitments(unittest.TestCase):
-    """SPEC §18: SHA-256(salt || UTF-8(value)), 16-byte salt, no normalisation"""
+    """SPEC §18: SHA-256("cryptovalid-payment/1/" || member || 0x00 || 16-byte salt || normalised value)"""
 
     def test_encoding_against_openssl(self):
+        """the bytes of the SPEC, hashed by openssl as an independent SHA-256"""
         if shutil.which("openssl") is None:
             self.skipTest("needs openssl as an independent SHA-256")
         for m, v in NAMES.items():
-            r = subprocess.run(["openssl", "dgst", "-sha256", "-r"], input=salt_of(m) + v.encode("utf-8"),
-                               capture_output=True, check=True)
-            self.assertEqual(B.commitment(salt_of(m), v), r.stdout.split()[0].decode())
+            data = b"cryptovalid-payment/1/" + m.encode() + b"\x00" + salt_of(m) + v.encode("utf-8")
+            r = subprocess.run(["openssl", "dgst", "-sha256", "-r"], input=data, capture_output=True, check=True)
+            self.assertEqual(B.commitment(m, salt_of(m), v), r.stdout.split()[0].decode())
 
-    def test_salt_and_value(self):
-        name = "Maria Example"
-        a, b = B.commitment(salt_of("x", "1"), name), B.commitment(salt_of("x", "2"), name)
-        self.assertNotEqual(a, b)                                     # same name, another salt
-        self.assertNotEqual(a, B.commitment(salt_of("x", "1"), "Maria Exampl"))
-        self.assertNotEqual(B.commitment(salt_of("x", "1"), "Mária"), B.commitment(salt_of("x", "1"), "Mária"))
+    def test_member_salt_and_value(self):
+        name, iban, s1 = "Maria Example", EXAMPLE_IBANS[0], salt_of("x", "1")
+        self.assertNotEqual(B.commitment("payer_name_commitment", s1, name),
+                            B.commitment("payee_name_commitment", s1, name))           # same value, another member
+        self.assertNotEqual(B.commitment("payer_iban_commitment", s1, iban),
+                            B.commitment("payee_iban_commitment", s1, iban))
+        self.assertNotEqual(B.commitment("payer_name_commitment", s1, name),
+                            B.commitment("payer_name_commitment", salt_of("x", "2"), name))   # another salt
+        self.assertNotEqual(B.commitment("payer_name_commitment", s1, name),
+                            B.commitment("payer_name_commitment", s1, "Maria Exampl"))
+        for nfd, nfc in (("Jose\u0301", "Jos\u00e9"), ("Ma\u0301ria", "M\u00e1ria"), ("\u212b", "\u00c5")):
+            for m in B.NAME_COMMITMENTS:
+                self.assertEqual(B.commitment(m, s1, nfd), B.commitment(m, s1, nfc))     # NFC and NFD: one commitment
+        for form in ("gb82west12345698765432", "GB82 WEST 1234 5698 7654 32", " gb82WEST12345698765432 "):
+            self.assertEqual(B.commitment("payer_iban_commitment", s1, form), B.commitment("payer_iban_commitment", s1, iban))
+        for bad, why in (("GB83WEST12345698765432", "iban_checksum"), ("GB82WEST1234569876543\u00df", "iban_charset"),
+                         ("GB82\tWEST12345698765432", "iban_charset"), ("GB82", "iban_length")):
+            with self.assertRaises(ValueError) as c:
+                B.commitment("payer_iban_commitment", s1, bad)                   # never committed
+            self.assertEqual(str(c.exception), why)
+        self.assertEqual(B.commitment("payer_name_commitment", s1, "GB83WEST12345698765432"),
+                         B.commitment("payer_name_commitment", s1, "GB83WEST12345698765432"))   # a name is not an IBAN
         for salt in (b"", b"\x00" * 15, b"\x00" * 17, b"\x00" * 32, "00" * 16, None):
             with self.assertRaises(ValueError):
-                B.commitment(salt, name)
+                B.commitment("payer_name_commitment", salt, name)
         for v in ("", "x" * 1025, None, b"Maria"):
             with self.assertRaises(ValueError):
-                B.commitment(b"\x00" * 16, v)
-        self.assertEqual(len(B.commitment(b"\x00" * 16, "x" * 1024)), 64)
+                B.commitment("payer_name_commitment", b"\x00" * 16, v)
+        for m in ("payer_iban", "payment_id", "", None):
+            with self.assertRaises(ValueError):
+                B.commitment(m, b"\x00" * 16, name)
+        self.assertEqual(len(B.commitment("payer_name_commitment", b"\x00" * 16, "x" * 1024)), 64)
 
     def test_commitment_forms_in_the_entry(self):
         base = payment_datas(pulse(2030303))[0]
@@ -903,7 +928,7 @@ class Binding(unittest.TestCase):
         for k in B.IBAN_COMMITMENTS:
             d = payment_datas(p)
             bad = "GB83WEST12345698765432"
-            d[1][k] = B.commitment(salt_of(k, "bad"), bad)
+            d[1][k] = raw_commitment(k, salt_of(k, "bad"), bad)   # a writer that did not check the IBAN
             with tempfile.TemporaryDirectory() as td:
                 led = write(td, "l", chain(d, payment_ts(p)))
                 self.assertReason(run(led), "verified", None)
@@ -921,8 +946,8 @@ class Binding(unittest.TestCase):
             c = json.loads(f.read().split("\n")[0])["data"]["payer_iban_commitment"]
         guesses = [bytes(16), b"\xff" * 16] + [i.to_bytes(16, "big") for i in range(1000)] + \
                   [hashlib.sha256(str(i).encode()).digest()[:16] for i in range(1000)]
-        self.assertFalse(any(B.commitment(g, iban) == c for g in guesses for iban in EXAMPLE_IBANS))
-        self.assertEqual(B.commitment(salt_of("payer_iban_commitment"), EXAMPLE_IBANS[0]), c)   # control: the kept salt opens it
+        self.assertFalse(any(B.commitment("payer_iban_commitment", g, iban) == c for g in guesses for iban in EXAMPLE_IBANS))
+        self.assertEqual(B.commitment("payer_iban_commitment", salt_of("payer_iban_commitment"), EXAMPLE_IBANS[0]), c)   # control: the kept salt opens it
 
 
 @NEEDS_CRYPTO
@@ -983,7 +1008,8 @@ class Window(unittest.TestCase):
         the upper bound is what catches it, because the pack's token binds the head of the original ledger"""
         p = pulse(2030303)
         for k, v in (("amount", "99.96"), ("currency", "USD"),
-                     ("payee_iban_commitment", B.commitment(salt_of("payee_iban_commitment", "e9"), "FR1420041010050500013M02606"))):
+                     ("payee_iban_commitment", B.commitment("payee_iban_commitment", salt_of("payee_iban_commitment", "e9"),
+                                                            "FR1420041010050500013M02606"))):
             d = payment_datas(p)
             d[1][k] = v
             led = chain(d, payment_ts(p))

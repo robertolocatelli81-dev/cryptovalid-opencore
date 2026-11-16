@@ -27,7 +27,8 @@ DE89370400440532013000, payee GB82WEST12345698765432); entry 2 not a payment. Ea
 SHA-256("test salt <label> <member>") with label `v1` for entry 0 and `e1` for entry 1, and each record salt the first 32
 hex characters of SHA-256("test record salt <n>"): derived so that the file is rebuilt byte for byte; a real provider
 draws them at random. The IBANs are published examples, the amounts and names fictitious; no real account or person.
-No IBAN or name is in clear in the ledger. The `ts` of each entry is derived from the pulse's timeStamp and is a
+No IBAN or name is in clear in the ledger; each commitment is SHA-256("cryptovalid-payment/1/" || member || 0x00 ||
+salt || normalised value), SPEC §18. The `ts` of each entry is derived from the pulse's timeStamp and is a
 writer's claim, not used by the check.
 
 ## `conformance.json` and `conformance/`
@@ -51,5 +52,5 @@ bbb5f5e66c6623f639baa9a1745fdc416c5466549d5133c242c4ea1f96b76f0d  nist/pulse_203
 f3868640bc47ce395b595549dc44c69cb50b0231f3dd971a204834fdd4b1ba0a  nist/pulse_2030301.json
 a86820a5b4ebeb8da24147fe2a4df6c490f109e3a615a8625afc754efa659ef3  nist/pulse_2030302.json
 88bac288140df522909f46931670183789700d1e2f4b1fd36bd73b066b99f31b  nist/pulse_2030303.json
-63147c3296976ad24980a749dac4778bdac3d14d4e993e50362b563cd8c2c1a8  payment_ledger.jsonl
+45354196549c0b554428ec629a8d84e2ef250f1971ef40bd84bbc20fa0ba7ef2  payment_ledger.jsonl
 ```

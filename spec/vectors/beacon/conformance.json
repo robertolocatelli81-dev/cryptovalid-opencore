@@ -455,6 +455,42 @@
    }
   },
   {
+   "name": "ledger_payment_id_36_characters",
+   "ledger": "conformance/ledgers/payment_id_36_characters.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_payment_id_trailing_space",
+   "ledger": "conformance/ledgers/payment_id_trailing_space.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "refused",
+    "reason": "payment_malformed"
+   }
+  },
+  {
+   "name": "ledger_commitments_swapped",
+   "ledger": "conformance/ledgers/commitments_swapped.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "expected": {
+    "status": "verified",
+    "reason": null
+   }
+  },
+  {
    "name": "ledger_payment_id_twice",
    "ledger": "conformance/ledgers/payment_id_twice.jsonl",
    "entry": 1,
@@ -464,6 +500,21 @@
    "expected": {
     "status": "invalid",
     "reason": "payment_id_not_unique"
+   }
+  },
+  {
+   "name": "commitment_moved_disclosed",
+   "ledger": "conformance/ledgers/commitments_swapped.jsonl",
+   "entry": 1,
+   "pulse": "nist/pulse_2030303.json",
+   "previous": "nist/pulse_2030302.json",
+   "certificate": "nist/certificate_5b6386e6ac8a993b.pem",
+   "disclosures": [
+    "conformance/disclosures/payee_iban_as_payer.json"
+   ],
+   "expected": {
+    "status": "invalid",
+    "reason": "disclosure_mismatch"
    }
   },
   {

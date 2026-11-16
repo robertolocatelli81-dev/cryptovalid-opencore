@@ -16,13 +16,16 @@ run by the same author, not by a third party.
   signed tip, a checkpoint): nothing showed that a record was not prepared in advance. `cryptovalid_beacon.py` and
   `cryptovalid-verify beacon <ledger> --entry <idx> --pulse <f> --previous <f> --certificate <f>` (options: `--help`)
   check, offline:
-  - a closed payment entry profile, `cryptovalid-payment/1` (§18): `payment_id` (unique in the ledger), `amount` as a
+  - a closed payment entry profile, `cryptovalid-payment/1` (§18): `payment_id` (1 to 35 characters after ISO 20022
+    Max35Text, the Latin set used for EndToEndId, no leading or trailing space; unique in the ledger), `amount` as a
     decimal string within the minor units of its currency, `currency` from ISO 4217 list one (165 codes, published
     2026-09-17), the `beacon` value, a `record_salt` of at least 128 bits, and the parties' personal data only as
-    commitments, SHA-256(16-byte salt || UTF-8 value): `payer_iban_commitment`, `payee_iban_commitment` (required),
-    `payer_name_commitment`, `payer_details_commitment`, `payee_name_commitment` (optional). The provider keeps values
-    and salts outside the ledger; a disclosure (`--disclosure`) opens a commitment, and a disclosed IBAN must pass ISO
-    7064 MOD 97-10 (check digits 02-98); destroying values and salts erases the personal data and leaves the chain
+    commitments, SHA-256("cryptovalid-payment/1/" || member || 0x00 || 16-byte salt || normalised value), the IBAN
+    without spaces, in upper case and checked by ISO 7064 MOD 97-10 (check digits 02-98) before it is committed, a name
+    in Unicode NFC: `payer_iban_commitment`, `payee_iban_commitment` (required), `payer_name_commitment`,
+    `payer_details_commitment`, `payee_name_commitment` (optional). The member name in the hashed bytes keeps a
+    commitment from being moved to another member. The provider keeps values and salts outside the ledger; a disclosure
+    (`--disclosure`) opens a commitment; destroying values and salts erases the personal data and leaves the chain
     intact;
   - the two NIST pulses in their closed grammar, against the certificate the caller pins (SHA-512 of its DER =
     `certificateId`, RSA of at least 2048 bits, valid at both pulses): signature (RSA PKCS#1 v1.5 SHA-512), outputValue,
@@ -54,15 +57,15 @@ run by the same author, not by a third party.
   `verified`; `openssl ts -verify -crl_check` with the CRL refuses it.
 - `spec/vectors/beacon/`: six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on 2026-11-16;
   a payment ledger rebuilt from them by the tests (published example IBANs and fictitious names, both only as
-  commitments; fictitious amounts); `conformance.json` with 45 cases (inputs under `conformance/`, expected status and
+  commitments; fictitious amounts); `conformance.json` with 49 cases (inputs under `conformance/`, expected status and
   reason, positive and negative, built by `make_conformance.py`) and 6 window cases, for independent implementations.
 - `bench/beacon_cost/`: the cost of one check, measured (below).
 - `test_beacon_20261116.py`: 69 tests (the module is absent at 0.25.1: the file fails there at its import, and
   `cryptovalid-verify beacon` exits 2 there). Every refused or invalid input is derived from the real files by code,
   re-signed with a key made in the test when the check under test sits behind the signature.
   `test_tsa_revocation_20261116.py`: 10 tests on a CA, TSA and CRLs made with openssl (`openssl ca -revoke`,
-  `-gencrl`); all 10 fail on 0.25.1 (measured). 131 hand mutants of the new lines (`cryptovalid_beacon.py`, `cryptovalid_tsa.py`, `evidence_pack.py`):
-  130 detected (one of them by a 180 s timeout: a FIFO read that blocks), 1 equivalent (an entry looked up by `idx >=`
+  `-gencrl`); all 10 fail on 0.25.1 (measured). 140 hand mutants of the new lines (`cryptovalid_beacon.py`, `cryptovalid_tsa.py`, `evidence_pack.py`):
+  139 detected (one of them by a 180 s timeout: a FIFO read that blocks), 1 equivalent (an entry looked up by `idx >=`
   instead of `==` on a ledger whose `idx` equals its position, SPEC §5 step 4).
 
 ### Measured
@@ -71,9 +74,9 @@ run by the same author, not by a third party.
   not 8; `external.statusCode` in 4 bytes, not 8; outputValue over the raw signature. On the six pulses of the vectors
   the draft's rules verify 0 signatures and 0 output values, the deployed rules 6 and 6.
 
-- Cost of one check (`bench/beacon_cost/README.md`, Intel Core i3-N305, Python 3.13): about 2.5 ms for one entry with
-  its two pulses read from disk (0.5 ms of it the two RSA-4096 signatures and the commitment), 3.4 ms with a witnessed
-  checkpoint, 55 ms with the evidence pack's window (pack verify and two openssl processes).
+- Cost of one check (`bench/beacon_cost/README.md`, Intel Core i3-N305, Python 3.13): about 2.2 ms for one entry with
+  its two pulses read from disk (0.5 ms of it the two RSA-4096 signatures and the commitment), 3.1 ms with a witnessed
+  checkpoint, 54 ms with the evidence pack's window (pack verify and two openssl processes).
 
 ### Changed
 

@@ -50,7 +50,8 @@ def main():
     ibans = ("GB82WEST12345698765432", "DE89370400440532013000")
     salt = bytes(16)
     m["iban_check_x2"] = median_ms(lambda: [B.iban_problem(i) for i in ibans])
-    m["commitment_x5"] = median_ms(lambda: [B.commitment(salt, v) for v in ibans + ("a name", "an address", "a name")])
+    m["commitment_x5"] = median_ms(lambda: [B.commitment(k, salt, v) for k, v in zip(
+        B.COMMITMENTS, ibans + ("a name", "an address", "a name"))])
     m["payment_profile"] = median_ms(lambda: B.check_payment(data))
     m["parse_two_pulses"] = median_ms(lambda: (B.parse_pulse(p3), B.parse_pulse(p2)))
     m["pulse_checks_two_rsa4096_signatures_commitment"] = median_ms(lambda: B.check_pulses(data["beacon"], P, Q, cert))
