@@ -850,7 +850,7 @@ alignment with their element names is claimed):
 where `"cryptovalid-payment/1/"` and `member` (the member's name, e.g. `payer_iban_commitment`) are ASCII, 0x00 is one
 zero byte, salt is exactly 16 bytes (128 bits) the provider draws at random for this member of this entry and keeps
 outside the ledger, and the normalised value is: for the two IBAN members, the IBAN with every space (U+0020) removed and
-the letters in upper case, which MUST then pass the IBAN rule below before it is committed (a provider does not commit
+the letters in upper case (a value with a character outside ASCII is refused first: "ß" in upper case is "SS"), which MUST then pass the IBAN rule below before it is committed (a provider does not commit
 to an IBAN that fails it); for the three name and details members, the string in Unicode NFC; then UTF-8. The member
 name in the hashed bytes keeps a commitment from being moved to another member (the same value under two members gives
 two commitments), the zero byte ends the name (no member name contains it), and the salt's fixed length leaves one way
