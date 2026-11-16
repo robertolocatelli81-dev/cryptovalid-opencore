@@ -258,6 +258,9 @@ parties' names and the payer's details), and §19, a "not before" bound from the
 2.0 carried inside that entry, with the window it gives together with the RFC 3161 token of an evidence pack. Additive:
 a new command (`cryptovalid-verify beacon`) and a new module; the ledger verifiers, `auto`, the pack and their receipts do
 not change. The ledger format (§2–§5), its hashes and its vectors do not change.
+v0.10 also adds to §11 step 8, the TSA certificate's revocation checked against CRLs the caller pins (`crls`, new reasons
+`tsa_certificate_revoked`, `tsa_revocation_unknown`), and to §10 the library parameter `tsa_crls`. Additive: without
+CRLs the outcome is the outcome of v0.9.
 
 ## 7. Conformance (normative)
 
@@ -387,7 +390,7 @@ signature removed those of an unsigned pack. Only a pinned manifest signer or a 
 ## 11. RFC 3161 token check (NORMATIVE since v0.6, 2026-11-13)
 
 One function checks a token's structure, imprint, signature and anchor in this repository:
-`cryptovalid_tsa.verify_token(token_der, digest, hash_alg=None, tsa_certs=None)`. `evidence_pack.py verify` reads a
+`cryptovalid_tsa.verify_token(token_der, digest, hash_alg=None, tsa_certs=None, crls=None)`. `evidence_pack.py verify` reads a
 pack's token for its status and imprint only (§10, `tsa_not_checked`), and with this function when its caller pins TSA
 certificates (§10, v0.8); the pack's report (`cryptovalid_report.py`) shows
 the outcome of this function for that token, with no TSA pinned. Its input is a TimeStampToken (a CMS ContentInfo, RFC 3161 §2.4.2) or a whole TimeStampResp, whose
@@ -434,8 +437,8 @@ Outcome `status`, a closed set:
 |---|---|---|
 | `verified` | steps 1–7 pass with pinned certificates | yes |
 | `signature_only` | steps 1–6 pass, nothing pinned: "signature valid with the certificate contained in the token, chain not established" | no |
-| `invalid` | a step fails; `reason` names it (`malformed`, `not_signed_data`, `response_not_granted`, `econtent_type_not_tstinfo`, `tstinfo_unknown_element`, `hash_algorithm_not_allowed`, `hash_algorithm_mismatch`, `imprint_mismatch`, `signature_invalid`, `not_issued_by_pinned_tsa`), `detail` says where | no |
-| `not_evaluated` | steps 1–5 pass and openssl is absent | no |
+| `invalid` | a step fails; `reason` names it (`malformed`, `not_signed_data`, `response_not_granted`, `econtent_type_not_tstinfo`, `tstinfo_unknown_element`, `hash_algorithm_not_allowed`, `hash_algorithm_mismatch`, `imprint_mismatch`, `signature_invalid`, `not_issued_by_pinned_tsa`; with `crls`, v0.10: `tsa_certificate_revoked`, `tsa_revocation_unknown`), `detail` says where | no |
+| `not_evaluated` | steps 1–5 pass and openssl is absent; or, with `crls` (v0.10), `cryptography` is absent (`crl_backend_missing`) | no |
 
 openssl present that cannot start, does not answer in time or is ended by a signal is a check not run here
 (`CheckNotRun`, exit 74 in a command), as in §10. The outcome carries the parsed `tst_info` (policy, hash algorithm,
@@ -464,7 +467,29 @@ carries does not count (until v0.5 any of them did). In `cryptovalid_ingest veri
 QTST certificate counts as a timestamp even without `--tsa-cert`: the trusted list is the anchor. The trusted-list status
 is the status now, not at genTime (unchanged).
 
-**Not checked here.** Revocation of the TSA certificate (no CRL or OCSP is fetched); the TSA's `accuracy` against `ts`;
+**Revocation, with CRLs the caller pins (v0.10).** `verify_token(..., crls=[...])` (paths or bytes, PEM or DER, each
+one X.509 CRL) adds step 8 after step 7, and only when steps 1–7 gave `verified`. Measured on 2026-11-16 (Athena's
+bench, re-measured in `test_tsa_revocation_20261116.py`): without it, a token issued by a TSA certificate after the
+certificate was revoked for key compromise is `verified`; `openssl ts -verify -crl_check` with the CRL refuses it.
+
+8. **Revocation.** The signer certificate (step 6) is taken from the token or the pinned certificates. A pinned CRL
+   applies when its issuer is the signer certificate's issuer and its signature verifies under a pinned certificate of
+   that name. No applicable CRL, or two that disagree, is `invalid` / `tsa_revocation_unknown` (the caller asked for a
+   revocation check that cannot be made). Not listed: `verified`, with `revocation` = `{"status": "not_revoked",
+   "crl_this_update"}`. Listed: with the reason keyCompromise, cACompromise or aACompromise (RFC 5280 §5.3.1), no token
+   of that certificate is valid, whatever its genTime: `invalid` / `tsa_certificate_revoked`; with any other reason or
+   none, a token whose genTime is before the revocation date stays `verified` (`revocation.status`
+   `revoked_after_gen_time`), one at or after it is `tsa_certificate_revoked`; removeFromCRL is `tsa_revocation_unknown`.
+   `cryptography` absent: `not_evaluated`, reason `crl_backend_missing`.
+
+The CRL is the caller's: this function does not fetch one and does not judge whether it is recent enough (its
+`thisUpdate` is returned). Without `crls` nothing changes and the outcome has no `revocation` member: revocation is not
+checked, and a caller that reports to a person says so (the beacon window of §19 writes `tsa_revocation:
+"not_checked"`). `evidence_pack.verify_pack(..., tsa_crls=[...])` passes them to this function (library only; the
+command line of the pack is unchanged); a `tsa_certificate_revoked` or `tsa_revocation_unknown` there is `contradicted /
+token_invalid`, as the other refusals of §11 after step 5.
+
+**Not checked here.** Revocation of the TSA certificate without `crls` (no CRL or OCSP is fetched); the TSA's `accuracy` against `ts`;
 whether genTime is consistent with `ts` (§5 step 6: genTime is returned for the caller to compare); the content-type
 signed attribute against eContentType (RFC 5652 §11.1; openssl does not compare them). Without `tsa_certs` the ESS
 signing-certificate attribute, the extended key usage, the `tsa` field and the content of `accuracy` are not checked
@@ -803,12 +828,22 @@ alignment with their element names is claimed):
 | `payer_iban` | yes | the payer's IBAN, rule below |
 | `payee_iban` | yes | the payee's IBAN, rule below |
 | `beacon` | yes | the beacon value of §19: an object of exactly `source`, `chain_index`, `pulse_index`, `output_value` |
+| `record_salt` | yes | 32 to 128 lowercase hexadecimal characters, an even number (16 to 64 bytes: at least 128 bits) the payment service provider draws at random for this entry; shorter is refused |
 | `payer_name_commitment` | no | commitment to the payer's name (Art. 4(1)(a)), rule below |
 | `payer_details_commitment` | no | commitment to the payer's address, document or birth data (Art. 4(1)(c)) as the provider records them |
 | `payee_name_commitment` | no | commitment to the payee's name (Art. 4(2)(a)) |
 
+**Why a record salt.** The ledger holder keeps the entries; what leaves its hands are hashes: an entry's `self_hash`, a
+signed tip, a checkpoint's root, a manifest digest. Every other member of a payment is guessable (a public beacon value,
+an amount, a currency, IBANs from a list, a sequential identifier), so a hash of them alone can be searched: Athena
+measured on 2026-11-16 the last five digits of an account recovered from such a hash in 2.4 s, and a 16-bit salt still
+searchable over a dictionary of names. `record_salt` puts at least 128 bits the searcher does not know under the same
+`self_hash`. The entry is hashed as canonical JSON (§3), never
+as concatenated fields: two free fields joined without lengths collide (`INV-1` + `0.50` and `INV-` + `10.50`, measured).
+
 The RFC 3161 token that gives the upper bound is not a member: it binds the ledger through an evidence pack (§19 rule 5).
-A payment record is complete in this format when its entry is valid here and a window of §19 is verified for it.
+A payment record is complete in this format when its entry is valid here, a window of §19 is verified for it, and
+the entry is under a checkpoint a pinned witness cosigned (§19 rule 7).
 
 **IBAN** (ISO 13616-1, electronic format): two capital letters (the country code), two digits (the check digits), then 11
 to 30 capital letters or digits; 15 to 34 characters in all, no space, no lower case. Its check is ISO 7064 MOD 97-10:
@@ -823,8 +858,8 @@ does not read.
 
 **Commitment.** 64 lowercase hexadecimal characters: SHA-256(salt || UTF-8(value)), where salt is 32 bytes the payment
 service provider draws at random and keeps, and value is the text it will disclose, exactly as recorded (no Unicode
-normalisation, no trimming: the provider discloses the string it committed to). The salt's fixed length leaves one way
-to split the hashed bytes; a value is a non-empty string of at most 1024 characters. A disclosure is `{"member": <one of
+normalisation, no trimming: the provider discloses the string it committed to; "José" in NFC and in NFD are two
+commitments). The salt's fixed length leaves one way to split the hashed bytes (one fixed-length part, one free part); a value is a non-empty string of at most 1024 characters. A disclosure is `{"member": <one of
 the three commitment members>, "salt": <64 lowercase hex>, "value": <string>}`, exactly these members; it matches when
 the commitment recomputed from it equals the entry's member byte for byte. Anyone holding the disclosure checks that
 the name is the one bound in the entry; without it, the commitment shows nothing about the name, provided the salt
@@ -972,12 +1007,57 @@ party are not added (§11 does not read `accuracy`; the draft NIST IR 8213 asks 
 tenth of the period): a reader who needs them widens the window by them. The entry's own `ts` is a claim of its writer
 and is not used.
 
+*Width.* The window is "fresh" when genTime − T is at most a maximum width the verifier's caller gives
+(`max_window_s`, `--max-window <seconds>`, an integer ≥ 0, required with a pack): wider is `window_too_wide`. The
+caller chooses it, by its own policy (a relying party that expects a payment to be stamped within minutes of its
+composition gives minutes); this format gives no default, because a default would decide for the caller what "fresh"
+means. Without a maximum, a pulse of last year and a token of today would be a window of a year, true and useless.
+
+*Pins.* The beacon's certificate, the TSA's certificates and CRLs, and the witness and log keys of rule 7 are given by
+the verifier's caller, never read from the evidence: a beacon certificate carried with the proof lets its author run a
+beacon of its own (Athena's bench: `pulse_certificate_id_mismatch` or `pulse_signature_invalid` only when pinned). The
+TSA's revocation is checked with the CRLs the caller pins (§11 step 8, `--tsa-crl`); without them the receipt's window
+says `tsa_revocation: "not_checked"`.
+
+**7. One window, not one of many.** A window proves when the entry was composed, not that it is the only entry composed.
+After one pulse an author can compose N ledgers with N different amounts and cover them all with one token (a Merkle
+root, or N tokens): every one gives a valid window (Athena measured 100 of 100 on 2026-11-16). A signed tip does not
+close this when its signer is the author, who signs a tip for each variant (100 of 100 again); it closes it only when the
+tip or checkpoint was held by a third party before the question was asked (1 of 100). This format uses the witnessed
+checkpoints it already verifies (§16, `cryptovalid_witness.verify_witnessed`): with `--checkpoint <note> --log-vkey
+<vkey> --witness-vkey <vkey> ...`, the note MUST verify under a pinned log key and carry at least one cosignature of a
+pinned witness (§16 rules); its size N MUST cover the entry (N > idx), and its root MUST be the RFC 6962 root of the
+first N entries of this ledger (`cryptovalid_merkle`, leaves = the canonical entries, as `cryptovalid_checkpoint.py`
+signs a ledger). Then `unique` = `{"status": "witnessed", "witnesses", "checkpoint_size"}`: a witness cosigns one
+append-only history per log (it refuses a checkpoint inconsistent with the last it cosigned, c2sp.org/tlog-witness), so
+another ledger with another entry at that position would need another cosignature of that witness for that origin and
+size. Failures: `checkpoint_not_witnessed` (the note does not verify under the pinned keys or lacks a witness),
+`checkpoint_not_covering_entry`, `checkpoint_root_mismatch`. Without `--checkpoint`, `unique` = `{"status":
+"not_established"}` and the scope says so. A witness that cosigns two histories (a dishonest or compromised witness) is
+outside what this proves; several pinned witnesses (`--min-witnesses`) narrow it.
+
+**8. Scope, closed.** The receipt carries `scope` = `{"proves": [...], "does_not_prove": [...]}`, sentences taken from
+this closed list, never composed:
+
+- proves `composed_after_pulse`: "the entry's bytes, with every member of the payment, were put together after the
+  pulse's timeStamp, for anyone but the beacon's operator";
+- proves `stamped_before_gen_time` (with a window): "the same bytes existed at the TSA's genTime";
+- proves `unique_under_pinned_witness` (with `unique.status` `witnessed`): "the entry is the one at its position in the
+  history the pinned witnesses cosigned";
+- does not prove `not_execution`: "that a payment service provider executed the payment";
+- does not prove `not_unique` (without a witnessed checkpoint): "that this is the only entry composed after that pulse";
+- does not prove `not_ownership`: "that the IBANs belong to the parties";
+- does not prove `not_operator`: "anything against the beacon's operator beyond its freshness promise".
+
 **6. Command.** `cryptovalid-verify beacon <ledger> --entry <idx> --pulse <file> --previous <file> --certificate <file>
-[--pack <dir> --tsa-cert <pem> ...] [--disclosure <file> ...]`. Each `--disclosure` is a JSON file holding one
+[--pack <dir> --tsa-cert <pem> ... --max-window <s> [--tsa-crl <crl> ...]] [--checkpoint <note> --log-vkey <vkey>
+--witness-vkey <vkey> ... [--min-witnesses <n>]] [--disclosure <file> ...]`. Each `--disclosure` is a JSON file holding one
 disclosure of §18 (read as the pulses are, at most 64 KiB); it is checked against the entry's member it names
 (`disclosure_mismatch` when it does not match or the entry has no such member; two disclosures for one member, or a
 malformed one, are refused, `disclosure_malformed`); the receipt lists the members disclosed and
-matched, never the values. The receipt's `record_complete` is true only with a verified window. `--pack` without `--tsa-cert`, or `--tsa-cert` without `--pack`, is a usage
+matched, never the values. The receipt's `record_complete` is true only with a verified window and a witnessed
+checkpoint. `--max-window` and `--tsa-crl` without `--pack`, `--log-vkey` and `--witness-vkey` without `--checkpoint`, and
+the reverse, are usage errors. `--pack` without `--tsa-cert`, or `--tsa-cert` without `--pack`, is a usage
 error; so is a value option given twice or given empty (§17); `--tsa-cert` is repeatable, as in the evidence pack's
 verify. The receipt is one JSON object on stdout. Exit 0 `verified` (with the window when `--pack` is given), 1
 `invalid` or `not_evaluated`, 2 a usage error or a `refused` input, 74 a receipt not written whole or a check that could
