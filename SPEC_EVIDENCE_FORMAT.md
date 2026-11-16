@@ -476,10 +476,16 @@ certificate was revoked for key compromise is `verified`; `openssl ts -verify -c
    applies when its issuer is the signer certificate's issuer and its signature verifies under a pinned certificate of
    that name. No applicable CRL, or two that disagree, is `invalid` / `tsa_revocation_unknown` (the caller asked for a
    revocation check that cannot be made). Not listed: `verified`, with `revocation` = `{"status": "not_revoked",
-   "crl_this_update"}`. Listed: with the reason keyCompromise, cACompromise or aACompromise (RFC 5280 §5.3.1), no token
-   of that certificate is valid, whatever its genTime: `invalid` / `tsa_certificate_revoked`; with any other reason or
-   none, a token whose genTime is before the revocation date stays `verified` (`revocation.status`
-   `revoked_after_gen_time`), one at or after it is `tsa_certificate_revoked`; removeFromCRL is `tsa_revocation_unknown`.
+   "crl_this_update"}`. Listed, after RFC 3161 §4 item 1: with the reason unspecified, affiliationChanged, superseded or
+   cessationOfOperation (RFC 5280 §5.3.1), a token whose genTime is before the revocation date stays `verified`
+   (`revocation.status` `revoked_after_gen_time`) and one at or after it is `tsa_certificate_revoked`; without a reason
+   code ("all the tokens that have been signed with the corresponding key SHALL be considered as invalid"), with
+   keyCompromise, cACompromise, aACompromise or any other reason, no token of that certificate is valid, whatever its
+   genTime: `invalid` / `tsa_certificate_revoked`; certificateHold and removeFromCRL are `tsa_revocation_unknown`. A
+   pinned CRL that carries an extension other than cRLNumber, authorityKeyIdentifier, authorityInfoAccess and
+   freshestCRL (a delta CRL, an issuing distribution point), or an entry extension other than reasonCode and
+   invalidityDate, is not processed here and gives `tsa_revocation_unknown` (RFC 5280 §5.2, §6.3.3: such a CRL may not
+   cover every certificate and reason).
    `cryptography` absent: `not_evaluated`, reason `crl_backend_missing`.
 
 `crls` without `tsa_certs`, or a pinned item that is not one CRL, is a `ValueError` (exit 2 in a command). The CRL is
@@ -822,8 +828,10 @@ chain, and the law asks that personal data be deleted after a retention period. 
 as salted commitments; their clear values and salts are kept by the payment service provider outside the ledger. To
 disclose, the provider gives the value and its salt and anyone checks it against the commitment (and, for an IBAN, its
 MOD 97-10 check). To delete, the provider destroys the values and salts (crypto-shredding): the chain stays intact and
-the commitments can no longer be opened. Amount, currency, payment identifier and beacon value are not personal data
-and stay in clear.
+the commitments can no longer be opened. Amount, currency, payment identifier and beacon value stay in clear: they are
+not the identifying data of Regulation (EU) 2023/1113 Art. 4, but linked to a person through the provider's records they
+can be personal data under Regulation (EU) 2016/679, and destroying the salts does not erase them; a provider writes no
+personal data into `payment_id` (this profile cannot check it).
 
 A `data` object whose member `profile` is the string `cryptovalid-payment/1` is a payment entry and has exactly these
 members (plain names: the ISO 20022 message definitions could not be read on 2026-11-16, the site answered 403, so no
@@ -1036,7 +1044,7 @@ means. Without a maximum, a pulse of last year and a token of today would be a w
 
 *Pins.* The beacon's certificate, the TSA's certificates and CRLs, and the witness and log keys of rule 6 are given by
 the verifier's caller, never read from the evidence: a beacon certificate carried with the proof lets its author run a
-beacon of its own (Athena's bench: `pulse_certificate_id_mismatch` or `pulse_signature_invalid` only when pinned). The
+beacon of its own (with the certificate pinned, such a pulse is `certificate_mismatch` or `signature_invalid`). The
 TSA's revocation is checked with the CRLs the caller pins (§11 step 8, `--tsa-crl`); without them the receipt's window
 says `tsa_revocation: "not_checked"`.
 
@@ -1069,7 +1077,8 @@ append-only history per log (it refuses a checkpoint inconsistent with the last 
 another ledger with another entry at that position would need another cosignature of that witness for that origin and
 size. Failures: `checkpoint_not_witnessed` (the note does not verify under the pinned keys or lacks a witness),
 `checkpoint_not_covering_entry`, `checkpoint_root_mismatch`. Without `--checkpoint`, `unique` = `{"status":
-"not_established"}` and the scope says so. A witness that cosigns two histories (a dishonest or compromised witness) is
+"not_established"}`. With it, the entry is fixed at its position in the history the witness cosigned; other entries of
+that history may carry the same pulse, so the scope keeps `not_unique` in both cases (rule 7). A witness that cosigns two histories (a dishonest or compromised witness) is
 outside what this proves; several pinned witnesses (`--min-witnesses`) narrow it.
 
 **7. Scope, closed.** The receipt carries `scope` = `{"proves": [...], "does_not_prove": [...]}`, sentences taken from
@@ -1083,7 +1092,10 @@ this closed list, never composed:
 - proves `unique_under_pinned_witness` (with `unique.status` `witnessed`): "the entry is the one at its position in the
   history the pinned witnesses cosigned";
 - does not prove `not_execution`: "that a payment service provider executed the payment";
-- does not prove `not_unique` (without a witnessed checkpoint): "that this is the only entry composed after that pulse";
+- does not prove `not_unique` (always, a witnessed checkpoint included): "that this is the only entry composed after that
+  pulse (a witness fixes the entry at its position, not the other entries that carry the same pulse)". Measured by
+  NEMESIS on 2026-11-16: two payments of one witnessed history carrying the same pulse, with different amounts, both
+  verify with `unique.status` `witnessed`;
 - does not prove `not_ownership`: "that the IBANs belong to the parties";
 - does not prove `not_operator`: "anything against the beacon's operator beyond its freshness promise";
 - does not prove `not_qualified` (unless `stamped_by_qualified_tsa`): "that the upper bound is a qualified electronic
@@ -1145,9 +1157,9 @@ combines existing standards (the NIST beacon, RFC 3161, C2SP checkpoints and wit
 Chainpoint put the value of the NIST beacon into every proof so that a proof was created after the beacon's timestamp,
 and replaced the NIST beacon with drand (a beacon run by several operators, the League of Entropy) on 2020-07-09, citing
 the NIST beacon's single operator, its once-a-minute cadence and intermittent reliability; Tierion's own account of 2020
-dates the first announcement to May 2017
-(medium.com/tierion, "Tierion Joins the League of Entropy", read on 2026-11-16 through a search index: the page answered
-403 to a direct read, and the 2017 announcement itself was not found). The formal treatment of timestamping that
+dates the first announcement to May 2017 (W. Vaughan, "Tierion Joins the League of Entropy — Replaces NIST Randomness
+Beacon with Drand in Chainpoint Proofs", medium.com/tierion, 2020-08-10, read on 2026-11-16 in the Internet Archive's
+copy of 2020-09-25: the page answered 403 to a direct read; the 2017 announcement itself was not found). A formal treatment of timestamping that
 separates security against postdating and against backdating is Abadi, Ciampi, Kiayias, Zikas, "Timed Signatures and
 Zero-Knowledge Proofs — Timestamping in the Blockchain Era", IACR ePrint 2019/644 (read on 2026-11-16).
 
