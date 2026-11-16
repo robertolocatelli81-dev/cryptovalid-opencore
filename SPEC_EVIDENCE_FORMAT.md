@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.9 (2026-11-16; v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
+# CryptoValid Evidence Format — candidate standard v0.10 (2026-11-16; v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -252,6 +252,11 @@ gives. Not additive: until v0.8 the expected ledger identity (`--expect-ledger-i
 trusted log key, a ledger other than the one expected, or a ledger whose tip could not be dated, was PASS, exit 0, and
 the receipt did not name the option (measured on 2026-11-16 with `verifier.py` 0.25.0 and the JS, Go and Java
 verifiers). From v0.9 such a ledger is FAIL. The ledger format (§2–§5), its hashes and its vectors do not change.
+v0.10 (2026-11-16) adds §18, a closed payment entry profile (`cryptovalid-payment/1`: amount, currency, the two IBANs
+checked by ISO 7064 MOD 97-10, an optional beacon value), and §19, a "not before" bound from the NIST Randomness Beacon
+2.0 carried inside that entry, with the window it gives together with the RFC 3161 token of an evidence pack. Additive:
+a new command (`cryptovalid-verify beacon`) and a new module; the ledger verifiers, `auto`, the pack and their receipts do
+not change. The ledger format (§2–§5), its hashes and its vectors do not change.
 
 ## 7. Conformance (normative)
 
@@ -771,3 +776,170 @@ its code, `main.swift` takes only `--algo` and `--pubkey`).
 Measured on 2026-11-16 (`test_expect_applied_20261116.py`): on 0.25.0 `verifier.py examples/sample_ledger.jsonl
 --expect-ledger-id <another ledger's id>` is PASS, exit 0, and so is `--tip-not-before 2099-01-01T00:00:00Z`; the JS, Go
 and Java verifiers answer the same; from 0.25.1 the four answer FAIL, exit 1, and refuse a malformed identity with exit 2.
+
+## 18. Payment entry profile `cryptovalid-payment/1` (NORMATIVE since v0.10, 2026-11-16)
+
+The `data` of an entry is free-form (§4) and the ledger verifiers do not read it (§2.1). This section defines one closed
+payload, the smallest a payment needs, so that a bound of §19 can cover a payment's value and its parties and not sit
+next to them. A `data` object whose member `profile` is the string `cryptovalid-payment/1` is a payment entry and has
+exactly these members:
+
+| member | value |
+|---|---|
+| `profile` | `"cryptovalid-payment/1"` |
+| `amount` | a string, a decimal number without sign, exponent or leading zeros: `0` or 1 to 18 digits not starting with 0, then optionally `.` and 1 to 4 digits; greater than zero. A string, never a JSON number (§3) |
+| `currency` | three capital letters A–Z (the form of an ISO 4217 alphabetic code; membership of the ISO 4217 list is not checked) |
+| `payer_iban` | the payer's IBAN, rule below |
+| `payee_iban` | the payee's IBAN, rule below |
+| `beacon` | optional: the beacon value of §19, an object of exactly `source`, `chain_index`, `pulse_index`, `output_value` |
+
+**IBAN** (ISO 13616-1, electronic format): two capital letters (the country code), two digits (the check digits), then 11
+to 30 capital letters or digits; 15 to 34 characters in all, no space, no lower case. Its check is ISO 7064 MOD 97-10:
+move the first four characters to the end, replace each letter by two digits (A = 10 … Z = 35), and the number read in
+decimal MUST be 1 modulo 97. The check digits MUST be in 02–98, the only values the MOD 97-10 computation produces (00,
+01 and 99 pass the modulo exactly when 97, 98 and 02 do). Not checked: that the country code is a country of the IBAN
+registry, and the length and the BBAN structure the registry gives each country.
+
+A member missing, a member not in the table, a member of another type, or a value of another form is refused with the
+member named (`payment_malformed`: `payer_iban` with the reason `iban_checksum`, `iban_check_digits`, `iban_length` or
+`iban_charset`, and so on). Who applies the profile: `cryptovalid_beacon.check_payment(data)` and `cryptovalid-verify
+beacon` (§19), on the entry it dates. `verifier.py` and the other ledger verifiers do not: a ledger whose payment entry
+holds a malformed IBAN is still PASS for steps 1–4 of §5 (unchanged).
+
+Vectors: `spec/vectors/beacon/payment_ledger.jsonl` uses only IBANs published as examples (GB82WEST12345698765432,
+DE89370400440532013000) and fictitious amounts, never a real account.
+
+## 19. A "not before" bound from a public randomness beacon (NORMATIVE since v0.10, 2026-11-16)
+
+Every time proof this format verified until v0.9 is an upper bound: an RFC 3161 token (§11), a signed tip or a
+checkpoint says that something existed no later than an instant. None says "not earlier": a record can be prepared in
+advance and stamped later. A value that a public randomness beacon published at an instant T, and that nobody outside
+the beacon could know before T, gives the other bound: the bytes that carry it were put together after T. This section
+defines where the value is carried, how a verifier checks the beacon's pulse offline, the bounds it may then state, and
+how the bound combines with an RFC 3161 token into a window. The module is `cryptovalid_beacon.py`, the command
+`cryptovalid-verify beacon`.
+
+**Sources, a closed list.**
+
+| `source` | Beacon | Status |
+|---|---|---|
+| `nist-beacon-2.0` | NIST Randomness Beacon, format 2.0 (https://beacon.nist.gov/beacon/2.0/), any chain | supported |
+
+Any other value is refused (`source_not_supported`). CURBy (random.colorado.edu, Twine protocol: pulses in DAG-CBOR
+linked by CID, a compact JWS signature, an RNG payload `{salt, pre, timestamp}`) is not supported yet: on 2026-11-16 its
+data path was not measured end to end here (the API that serves the pulses, the CID and payload versions in
+production), its RNG sub-specification is a 0.1 crate whose API is declared unstable, and its client libraries carry no
+licence and cannot be reused. Its quantum certification (the Bell test of its DIRNG chain) needs the raw data and the
+extractor and would stay out of scope even when the chain is supported: a verifier of this format checks a chain, its
+signatures and its commitments, never "quantum certified".
+
+**1. Where the value is: inside the entry it dates.** The value is the member `beacon` of a payment entry (§18):
+`{"source", "chain_index" (integer ≥ 0), "pulse_index" (integer ≥ 1), "output_value" (128 hexadecimal characters, the
+pulse's `outputValue`, either case)}`, exactly these members. It is inside `data`, so the entry's `self_hash` (§3)
+covers it together with `amount`, `currency`, `payer_iban` and `payee_iban`: the bound is a bound on the bytes that put
+the value and these fields together, and the receipt names the fields it covers. The caller names the entry (`--entry
+<idx>`); the ledger MUST pass steps 1–4 of §5 (`ledger_invalid`); an entry that is not a payment entry is
+`entry_not_a_payment`, a payment entry without `beacon` is `no_beacon_in_entry`, a malformed one `payment_malformed`.
+
+What the bound does not cover. An entry before the one that carries the value gets no bound from it. An entry after it
+holds, through `prev_hash`, a hash that depends on the value, so its bytes too were put together after T; this
+verifier reports the window only for the entry whose own payload carries the value, and names only that entry's fields.
+A "not before" bound dates the binding of the fields, never the decision behind them: the same amount and IBANs may have
+been agreed earlier.
+
+**2. A NIST pulse, closed.** The caller supplies the pulse of `pulse_index` and the pulse before it, each as the beacon
+serves them (`/beacon/2.0/chain/<chain>/pulse/<index>`): a UTF-8 JSON document of at most 64 KiB, read as a ledger line
+is (§3: a key twice in one object, a number with a fraction or exponent, an integer outside ±(2^53−1), NaN or Infinity,
+a lone surrogate, nesting deeper than the bound are refused), whose value is `{"pulse": P}`. P has exactly the members
+`uri`, `version`, `cipherSuite`, `period`, `certificateId`, `chainIndex`, `pulseIndex`, `timeStamp`, `localRandomValue`,
+`external`, `listValues`, `precommitmentValue`, `statusCode`, `signatureValue`, `outputValue`; `external` exactly
+`sourceId`, `statusCode`, `value`; `listValues` is a list of exactly five objects of exactly `uri`, `type`, `value`,
+whose `type` is `previous`, `hour`, `day`, `month`, `year` in this order. `uri`, `version` and the `uri` of each list
+value are strings of 1 to 2048 characters without control characters; `cipherSuite`, `period`, `statusCode` and
+`external.statusCode` are integers in [0, 2^32−1] (a boolean is not an integer); `chainIndex` and `pulseIndex` integers
+≥ 0; `timeStamp` is `YYYY-MM-DDThh:mm:ss.sssZ` and a real calendar time; `certificateId` and every other value are 128
+hexadecimal characters (64 bytes), either case; `signatureValue` is hexadecimal, 2 to 2048 characters, an even number.
+Anything else is refused with the member named. The `uri` of the list values is not signed by the beacon and is not used.
+
+**3. The checks,** in order; the first that fails gives the outcome:
+
+1. `version` is `2.0` and `cipherSuite` is 0 (RSA PKCS#1 v1.5 with SHA-512, hash SHA-512); cipher suite 1 (RSA-PSS with
+   a delay function) is `cipher_suite_not_supported`, another version `version_not_supported`.
+2. `statusCode` is 0 in both pulses (NIST IR 8213 draft, §4.3.4: a normal transition, no gap, no change of certificate,
+   the local random value related to the previous commitment, not the end of the chain); any other value is
+   `status_not_supported`: the flags of a gap, a lost commitment, a new certificate or an end of chain are not
+   evaluated here.
+3. The pulses are the one the entry names and its predecessor in one chain: `chainIndex` equal to the entry's
+   `chain_index` in both, `pulseIndex` equal to `pulse_index` and to `pulse_index − 1`, and the `uri` of each exactly
+   `https://beacon.nist.gov/beacon/2.0/chain/<chainIndex>/pulse/<pulseIndex>` (`pulse_mismatch`); equal `period` and
+   `certificateId` in both (`chain_inconsistent`).
+4. **Certificate.** The caller pins the beacon's certificate (a PEM file holding exactly one certificate, or DER). Its
+   SHA-512 over the DER MUST equal `certificateId` (`certificate_mismatch`); its key MUST be RSA of at least 2048 bits
+   (`certificate_key_not_supported`); both `timeStamp`s MUST lie within its validity
+   (`certificate_not_valid_at_pulse_time`). The certificate's chain to a CA and its revocation are not checked: the pin
+   is the trust.
+5. **Signature** of each pulse: RSA PKCS#1 v1.5 with SHA-512 over the signed message M below, with the pinned key
+   (`signature_invalid`). M is the concatenation, in this order, of: `uri` and `version` (UTF-8, each after its length
+   in 4 bytes big-endian); `cipherSuite` and `period` (4 bytes big-endian each); `certificateId` (the bytes, after their
+   length in 4 bytes); `chainIndex` and `pulseIndex` (8 bytes big-endian each); `timeStamp` (UTF-8, after its length in
+   4 bytes); `localRandomValue`, `external.sourceId` (bytes, each after its length in 4 bytes); `external.statusCode`
+   (4 bytes big-endian); `external.value`, the five list values in the order of rule 2, `precommitmentValue` (bytes,
+   each after its length in 4 bytes); `statusCode` (4 bytes big-endian).
+6. **Output value** of each pulse: `outputValue` = SHA-512(M || the signature's bytes, without a length)
+   (`output_value_mismatch`).
+7. **Chain.** The `previous` list value of the named pulse equals the predecessor's `outputValue` (`previous_mismatch`);
+   its `timeStamp` is the predecessor's plus `period` milliseconds, exactly (`period_mismatch`).
+8. **Commitment.** SHA-512 of the named pulse's `localRandomValue` equals the predecessor's `precommitmentValue`
+   (`commitment_mismatch`).
+9. **The entry's value.** The entry's `beacon.output_value` equals the named pulse's `outputValue` as bytes
+   (`beacon_value_mismatch`).
+
+The serialization of step 5 is the one the service deploys, not the one of the draft NIST IR 8213 (May 2019, Algorithms
+1 to 3): the draft prefixes every length with 8 bytes (a uint64), gives `external.statusCode` 8 bytes, and hashes the
+signature with its length prefix into `outputValue`. Measured on 2026-11-16 on six consecutive pulses of chain 2
+(2030298–2030303, `spec/vectors/beacon/nist/`): with the draft's rules neither the signature nor `outputValue` verifies;
+with the rules above all six verify (the format of clcert/beacon-verifier, MIT, `scripts/chain_consistency_version2.py`,
+agrees). A pulse served in the draft's form would be refused at step 5.
+
+**4. The verdict and its two bounds.** The outcome is `verified` when the entry and steps 1–9 pass, `invalid` with the
+reason of the first that fails, `refused` when an input breaks rule 2, a pin cannot be read or the arguments are
+malformed, and `not_evaluated` (`backend_missing`) when the RSA and X.509 checks cannot run because `cryptography` is
+absent. Only `verified` states bounds, with T the named pulse's `timeStamp` and π its `period`:
+
+- `not_before` = T, **against anyone but the beacon's operator.** The draft NIST IR 8213 (§3.3, promises 1 and 2)
+  promises that `outputValue` stays unpredictable to outsiders until T. An entry that carries it was put together after
+  T, unless the operator, or whoever controls its engine, disclosed the value early.
+- `not_before_operator_promise` = T − π, **against the operator, only if it kept its freshness promise** (§3.3,
+  promise 3: `outputValue` depends on randomness sampled less than one period before T). This is a promise of the
+  operator, not something a verifier checks.
+- **Against an operator that breaks its promises there is no bound.** Every input of `outputValue` is in the
+  operator's hands (its local random values, the timestamps, an external value that is all zeros on chain 2 on
+  2026-11-16) and the signature is deterministic, so it can compute the value of a future pulse long before T. The
+  commitment of step 8 proves that the local random value of the pulse was fixed when the predecessor was published,
+  at T − π: it bounds when the operator could still change that value, not when it first knew it.
+
+**5. The window.** A "not before" and a "not after" bound over the same bytes give the interval in which they were put
+together. The upper bound is the RFC 3161 token of an evidence pack, checked by §11 with pinned TSA certificates as the
+pack's verify does it (§10, v0.8): the ledger is one of the pack's ledgers (`ledgers[i].file`, the same bytes), the pack
+is `valid`, and `sealed_content` and `time_anchor` are `verified`. The token binds the manifest, the manifest binds the
+ledger's head (`head_self_hash`) and the head binds every entry through `prev_hash`: the token's genTime
+(`rfc3161.tsa_check.gen_time`) is an upper bound for the entry. Anything else gives no window, and the outcome says
+why (`pack_not_valid`, `time_anchor_not_verified`, `ledger_not_in_pack`). The window is [T, genTime] against anyone but
+the operator, [T − π, genTime] under the operator's freshness promise. A window whose lower bound is after its upper
+bound, genTime < T, is refused as `window_inverted`: one of the two time sources is wrong or was subverted, and the
+evidence proves no interval. genTime = T is a window of one instant. The TSA's `accuracy` and the clock skew of either
+party are not added (§11 does not read `accuracy`; the draft NIST IR 8213 asks the beacon to keep its skew below one
+tenth of the period): a reader who needs them widens the window by them. The entry's own `ts` is a claim of its writer
+and is not used.
+
+**6. Command.** `cryptovalid-verify beacon <ledger> --entry <idx> --pulse <file> --previous <file> --certificate <file>
+[--pack <dir> --tsa-cert <pem> ...]`. `--pack` without `--tsa-cert`, or `--tsa-cert` without `--pack`, is a usage
+error; so is a value option given twice or given empty (§17); `--tsa-cert` is repeatable, as in the evidence pack's
+verify. The receipt is one JSON object on stdout. Exit 0 `verified` (with the window when `--pack` is given), 1
+`invalid` or `not_evaluated`, 2 a usage error or a `refused` input, 74 a receipt not written whole or a check that could
+not run (§10). `auto` (§12) does not change: a ledger carrying a payment entry is a ledger.
+
+Vectors: `spec/vectors/beacon/` — six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on
+2026-11-16 with their URLs and hashes (`README.md`), and a payment ledger derived from them by code
+(`test_beacon_20261116.py` rebuilds it and compares). Every refused or invalid input of the tests is derived from these
+by code, never written by hand.
