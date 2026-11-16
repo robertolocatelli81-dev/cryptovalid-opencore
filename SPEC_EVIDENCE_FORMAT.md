@@ -832,7 +832,7 @@ alignment with their element names is claimed):
 | member | required | value |
 |---|---|---|
 | `profile` | yes | `"cryptovalid-payment/1"` |
-| `payment_id` | yes | the payment's unique identifier: 1 to 64 characters U+0021–U+007E (printable ASCII, no space); no two payment entries of one ledger carry the same value (`payment_id_not_unique`) |
+| `payment_id` | yes | the payment's unique identifier, after ISO 20022 Max35Text as used for EndToEndId: 1 to 35 characters of the Latin set `a-z A-Z 0-9 / - ? : ( ) . , ' +` and space, not starting or ending with a space; no two payment entries of one ledger carry the same value (`payment_id_not_unique`). The set is the one commonly published for SEPA; the EPC guidance that fixes it could not be read on 2026-11-16 and must be re-read before this row is final |
 | `amount` | yes | a string (never a JSON number, §3): `0` or 1 to 18 digits not starting with 0, then optionally `.` and 1 to N digits, N the minor units of the currency (none when N = 0); greater than zero |
 | `currency` | yes | an ISO 4217 alphabetic code with numeric minor units, from list one as published by the maintenance agency on 2026-09-17 (165 codes; the 13 codes whose minor units are "N.A.", such as XAU and XDR, are not accepted) |
 | `payer_iban_commitment` | yes | commitment to the payer's IBAN, rule below |
@@ -843,17 +843,25 @@ alignment with their element names is claimed):
 | `payer_details_commitment` | no | commitment to the payer's address, document or birth data, as the provider records them |
 | `payee_name_commitment` | no | commitment to the payee's name |
 
-**Commitment.** 64 lowercase hexadecimal characters: SHA-256(salt || UTF-8(value)), where salt is exactly 16 bytes (128
-bits) the provider draws at random for this member of this entry and keeps outside the ledger, and value is the text it
-will disclose, exactly as recorded: for an IBAN its electronic format (rule below), for a name the string as recorded
-(no Unicode normalisation, no trimming: "José" in NFC and in NFD are two commitments). The salt's fixed length leaves
-one way to split the hashed bytes (one fixed-length part, one free part). A value is a non-empty string of at most 1024
-characters. A disclosure is `{"member": <one of the five commitment members>, "salt": <32 lowercase hex>, "value":
-<string>}`, exactly these members; it matches when the commitment recomputed from it equals the entry's member byte for
-byte, and a disclosure of an IBAN commitment must then also pass the IBAN rule (`disclosure_iban_invalid`). Without the
-salt a commitment shows nothing about its value, provided the salt stays secret and random: 128 bits make a search over
-a list of IBANs or names hopeless, where Athena measured on 2026-11-16 the last five digits of an account recovered in
-2.4 s from an unsalted hash and a 16-bit salt still searchable over a dictionary of names.
+**Commitment.** 64 lowercase hexadecimal characters:
+
+    SHA-256( "cryptovalid-payment/1/" || member || 0x00 || salt || normalised value )
+
+where `"cryptovalid-payment/1/"` and `member` (the member's name, e.g. `payer_iban_commitment`) are ASCII, 0x00 is one
+zero byte, salt is exactly 16 bytes (128 bits) the provider draws at random for this member of this entry and keeps
+outside the ledger, and the normalised value is: for the two IBAN members, the IBAN with every space (U+0020) removed and
+the letters in upper case, which MUST then pass the IBAN rule below before it is committed (a provider does not commit
+to an IBAN that fails it); for the three name and details members, the string in Unicode NFC; then UTF-8. The member
+name in the hashed bytes keeps a commitment from being moved to another member (the same value under two members gives
+two commitments), the zero byte ends the name (no member name contains it), and the salt's fixed length leaves one way
+to split what follows. A value is a non-empty string of at most 1024 characters before normalisation. A disclosure is
+`{"member": <one of the five commitment members>, "salt": <32 lowercase hex>, "value": <string>}`, exactly these
+members; the verifier normalises the value as above (for an IBAN member, a value that fails the IBAN rule is
+`disclosure_iban_invalid`) and the disclosure matches when the recomputed commitment equals the entry's member byte for
+byte (`disclosure_mismatch` otherwise). Without the salt a commitment shows nothing about its value, provided the salt
+stays secret and random: 128 bits make a search over a list of IBANs or names hopeless, where Athena measured on
+2026-11-16 the last five digits of an account recovered in 2.4 s from an unsalted hash and a 16-bit salt still
+searchable over a dictionary of names.
 
 **Why also a record salt.** What leaves the provider's hands are hashes: an entry's `self_hash`, a signed tip, a
 checkpoint's root, a manifest digest. `record_salt` puts at least 128 bits under the same `self_hash`, so that the
@@ -1134,8 +1142,10 @@ expected status and reason of each case: `spec/vectors/beacon/conformance.json`.
 
 **10. Prior art.** The idea is not new, and this section does not present it as new: it is a profile for payments that
 combines existing standards (the NIST beacon, RFC 3161, C2SP checkpoints and witnesses, ISO 13616, ISO 4217). Tierion's
-Chainpoint put the value of the NIST beacon into every proof so that a proof was created after the beacon's timestamp;
-Tierion's own account of 2020 dates that announcement to May 2017 and describes its replacement by drand on 2020-07-09
+Chainpoint put the value of the NIST beacon into every proof so that a proof was created after the beacon's timestamp,
+and replaced the NIST beacon with drand (a beacon run by several operators, the League of Entropy) on 2020-07-09, citing
+the NIST beacon's single operator, its once-a-minute cadence and intermittent reliability; Tierion's own account of 2020
+dates the first announcement to May 2017
 (medium.com/tierion, "Tierion Joins the League of Entropy", read on 2026-11-16 through a search index: the page answered
 403 to a direct read, and the 2017 announcement itself was not found). The formal treatment of timestamping that
 separates security against postdating and against backdating is Abadi, Ciampi, Kiayias, Zikas, "Timed Signatures and
