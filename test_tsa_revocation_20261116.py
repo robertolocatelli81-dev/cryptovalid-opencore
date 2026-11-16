@@ -283,6 +283,9 @@ class Revocation(unittest.TestCase):
         v = self.check(lab, tok, [self._crl(lab, last=old), self._crl(lab)])
         self.assertEqual(v["revocation"]["status"], "not_revoked")
         self.assertNotEqual(v["revocation"]["crl_this_update"], "2026-01-01T00:00:00Z")   # the latest is reported
+        v = self.check(lab, tok, [self._crl(lab, last=old)])           # every pinned CRL issued before genTime
+        self.assertEqual((v["status"], v["reason"], v["revocation"]["status"]),
+                         ("invalid", "tsa_revocation_unknown", "unknown"))
         forged = self._crl(lab, issuer_key=other.j("ca.key"))           # issuer name of lab's CA, signed by other's CA
         v = T.verify_token(tok, DIGEST, "sha256", [lab.j("ca.crt"), other.j("ca.crt")], [forged])
         self.assertEqual((v["status"], v["reason"]), ("invalid", "tsa_revocation_unknown"))

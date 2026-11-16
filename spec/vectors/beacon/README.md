@@ -20,9 +20,11 @@ copyright protection in the United States (17 U.S.C. §105). The values are publ
 
 Three entries made by `build_payment_ledger()` of `test_beacon_20261116.py` from `nist/pulse_2030302.json` and
 `nist/pulse_2030303.json` (the test rebuilds it and compares the bytes), in the profile of SPEC §18: entry 0 a payment
-carrying the outputValue of pulse 2030302, with five commitments (payer IBAN GB82WEST12345698765432, payee IBAN
-DE89370400440532013000, payer name "Maria Example", payer details "Via Esempio 1, 00100 Roma, IT", payee name "Example
-Supplies Ltd"); entry 1 a payment carrying the outputValue of pulse 2030303 with its two IBAN commitments (payer
+carrying the outputValue of pulse 2030302 with every optional member of the profile: in clear `execution_date`
+2026-11-16, `payee_entity_id` EXAMPLE0001 and `psp_id` EXAMPLEPSPXXX, and the thirteen commitments (payer IBAN
+GB82WEST12345698765432, payee IBAN DE89370400440532013000, payer name "Maria Example", payer details "Via Esempio 1, 00100
+Roma, IT", payee name "Example Supplies Ltd", EndToEndId "INV-2026-0001", and the fictitious values of `NAMES` in the test
+for the tax ids, debtor, notice code, purpose, receipt id and RRN); entry 1 a payment carrying the outputValue of pulse 2030303 with its two IBAN commitments (payer
 DE89370400440532013000, payee GB82WEST12345698765432); entry 2 not a payment. Each salt is the first 16 bytes of
 SHA-256("test salt <label> <member>") with label `v1` for entry 0 and `e1` for entry 1, and each record salt the first 32
 hex characters of SHA-256("test record salt <n>"): derived so that the file is rebuilt byte for byte; a real provider
@@ -33,10 +35,11 @@ writer's claim, not used by the check.
 
 ## `conformance.json` and `conformance/`
 
-The conformance cases of SPEC §19 rule 8, format `cryptovalid-beacon-conformance/2`: for each case the inputs (paths
-relative to this folder: ledger, entry, one pulse pair per beacon value, the pinned beacon certificates, and when the case
+The conformance cases of SPEC §19 rule 8, format `cryptovalid-beacon-conformance/3`: for each case the inputs (paths
+relative to this folder: ledger and entry, or for rule 14 an `entry_file` and its `proof` without the ledger; one pulse
+pair per beacon value, the pinned beacon certificates, and when the case
 needs them the evidence pack, the pinned TSA certificates, CRLs and trusted list, the maximum width, the checkpoint with
-the pinned log and witness keys, disclosures) and the expected `status`, `reason` and `record_complete`. There is a
+the pinned log and witness keys, disclosures, `required_disclosures` of rule 15) and the expected `status`, `reason` and `record_complete`. There is a
 complete record (window, CRL issued after the token, witnessed checkpoint inside the pack, qualified TSA) and at least one
 case for every result code of rule 8; `window_cases` gives the window of rule 5 as data. Built by `make_conformance.py`
 (run on 2026-11-16; outputs committed): pulses with one member changed or added; ledgers with one member changed and
@@ -57,5 +60,5 @@ bbb5f5e66c6623f639baa9a1745fdc416c5466549d5133c242c4ea1f96b76f0d  nist/pulse_203
 f3868640bc47ce395b595549dc44c69cb50b0231f3dd971a204834fdd4b1ba0a  nist/pulse_2030301.json
 a86820a5b4ebeb8da24147fe2a4df6c490f109e3a615a8625afc754efa659ef3  nist/pulse_2030302.json
 88bac288140df522909f46931670183789700d1e2f4b1fd36bd73b066b99f31b  nist/pulse_2030303.json
-21dd97c602d2ff5bb5b8d6f4fac35cd87c09970674e59705329ec9efe243a347  payment_ledger.jsonl
+af32e472aba5b091feb122eda81f74b0fb3d4f3ee552b6a546f9e767f5d53dc3  payment_ledger.jsonl
 ```

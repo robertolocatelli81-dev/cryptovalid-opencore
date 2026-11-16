@@ -59,13 +59,17 @@ SOURCES = ("nist-beacon-2.0",)                     # SPEC §19: a closed list (d
 NIST_CHAIN = 2                                      # SPEC §19: only chain 2, version "2.0", is measured and accepted
 MAX_BEACONS = 8
 # SPEC §18, in the order of its table: required, then the optional commitments
-PAYMENT_REQUIRED = ("profile", "payment_id", "amount", "currency", "payer_iban_commitment", "payee_iban_commitment",
-                    "beacons", "record_salt")
+PAYMENT_REQUIRED = ("profile", "payment_id", "amount", "currency", "beacons", "record_salt")
+CLEAR_OPTIONAL = ("execution_date", "payee_entity_id", "psp_id")   # SPEC §18: not identifying a natural person
 IBAN_COMMITMENTS = ("payer_iban_commitment", "payee_iban_commitment")
-NAME_COMMITMENTS = ("payer_name_commitment", "payer_details_commitment", "payee_name_commitment",
-                    "end_to_end_id_commitment")
-COMMITMENTS = IBAN_COMMITMENTS + NAME_COMMITMENTS
-PAYMENT_KEYS = PAYMENT_REQUIRED + NAME_COMMITMENTS
+COMMITMENTS = ("payer_iban_commitment", "payee_iban_commitment", "payer_name_commitment", "payer_tax_id_commitment",
+               "payer_details_commitment", "debtor_name_commitment", "debtor_tax_id_commitment", "payee_name_commitment",
+               "end_to_end_id_commitment", "notice_code_commitment", "purpose_commitment", "receipt_id_commitment",
+               "rrn_commitment")
+NAME_COMMITMENTS = tuple(k for k in COMMITMENTS if k not in IBAN_COMMITMENTS)   # normalised in NFC, not as IBANs
+PAYMENT_KEYS = PAYMENT_REQUIRED + CLEAR_OPTIONAL + COMMITMENTS
+PARTY_IDENTIFIERS = ("payer_iban_commitment", "payee_iban_commitment", "payer_tax_id_commitment",
+                     "debtor_tax_id_commitment", "payee_entity_id")
 SALT_BYTES = 16   # SPEC §18: every commitment's salt is exactly 128 bits
 BEACON_KEYS = frozenset({"source", "chain_index", "pulse_index", "output_value"})
 DISCLOSURE_KEYS = frozenset({"member", "salt", "value"})
@@ -83,6 +87,7 @@ SCOPE = {
                   "not the other entries that carry the same pulse)",
     "not_ownership": "that the IBANs belong to the parties",
     "commitments_not_opened": "that a commitment not disclosed here opens to an IBAN, a name or an identifier",
+    "payment_id_uniqueness": "that no other entry of the ledger carries the same payment_id",
     "not_operator": "anything against the beacon's operator beyond its freshness promise",
     "not_qualified": "that the upper bound is a qualified electronic time stamp",
     "not_legal_beacon": "that the beacon value is a legal timestamp: it is technical evidence of not before",
@@ -111,6 +116,10 @@ NIST_URI = "https://beacon.nist.gov/beacon/2.0/chain/{c}/pulse/{p}"
 MAX_PULSE = 64 * 1024
 MAX_CERT = 64 * 1024
 MAX_LEDGER = 64 * 1024 * 1024
+MAX_ENTRY = 1024 * 1024        # SPEC §19 rule 14
+MAX_PROOF = 64 * 1024
+MAX_PROOF_HASHES = 64
+PROOF_FORMAT = "cryptovalid-inclusion-proof/1"
 U32 = 2 ** 32 - 1
 
 _HEX128 = re.compile(r"[0-9a-fA-F]{128}")
@@ -125,6 +134,8 @@ _SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 _SALT_HEX = re.compile(r"[0-9a-f]{32}")
 _RECORD_SALT = re.compile(r"(?:[0-9a-f]{2}){16,64}")   # SPEC §18: 16 to 64 bytes, at least 128 bits
 _IBAN_CHARS = re.compile(r"[A-Z0-9]+")
+_CLEAR_ID = re.compile(r"[A-Za-z0-9]{1,35}")   # SPEC §18: payee_entity_id, psp_id
+_DATE = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})")
 _IBAN_SHAPE = re.compile(r"[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}")
 _DIGITS = re.compile(r"0|[1-9][0-9]*")
 
@@ -194,9 +205,22 @@ def check_payment(data) -> Dict:
         bad("amount", "not greater than zero")
     if not (isinstance(data["record_salt"], str) and _RECORD_SALT.fullmatch(data["record_salt"])):   # (7)
         bad("record_salt", "not 32 to 128 lowercase hexadecimal characters, an even number (at least 128 bits)")
+    if "execution_date" in data:                                                          # (7a)
+        dm = _DATE.fullmatch(data["execution_date"]) if isinstance(data["execution_date"], str) else None
+        try:
+            datetime(*(int(g) for g in dm.groups())) if dm else None
+        except ValueError:
+            dm = None
+        if dm is None:
+            bad("execution_date", "not a calendar date YYYY-MM-DD")
+    for k in ("payee_entity_id", "psp_id"):
+        if k in data and not (isinstance(data[k], str) and _CLEAR_ID.fullmatch(data[k])):
+            bad(k, "not 1 to 35 characters A-Z a-z 0-9")
     for k in COMMITMENTS:                                                                 # (8)
         if k in data and not (isinstance(data[k], str) and _SHA256_HEX.fullmatch(data[k])):
             bad(k, "not 64 lowercase hexadecimal characters")
+    if not any(k in data for k in PARTY_IDENTIFIERS):                                     # (8a)
+        bad("party_identifier_missing", "none of " + ", ".join(PARTY_IDENTIFIERS))
     bs = data["beacons"]                                                                  # (9)
     if not (isinstance(bs, list) and 1 <= len(bs) <= MAX_BEACONS):
         bad("beacons", f"not a list of 1 to {MAX_BEACONS} beacon values")
@@ -541,10 +565,13 @@ def _pack_window(pack_dir: str, tsa_certs, tsa_crls, max_window_s: int, clock_to
         raise Invalid("pack_not_valid", "the pack's verify answers valid: false")
     man = verifier._loads_strict(_read(os.path.join(pack_dir, "MANIFEST.json"), "MANIFEST.json", MAX_LEDGER).decode("utf-8"))
     digests = man["file_digests_sha256"]   # a valid pack: every listed file has its digest (files_ok)
-    digest = hashlib.sha256(ledger_bytes).hexdigest()
-    names = sorted(n for n, d in digests.items() if d == digest)
-    if not names:
-        raise Invalid("ledger_not_in_pack", "no file of the pack has these bytes")
+    if ledger_bytes is None:   # SPEC §19 rule 14: one entry, under the checkpoint of the pack (step 6)
+        names = [None]
+    else:
+        digest = hashlib.sha256(ledger_bytes).hexdigest()
+        names = sorted(n for n, d in digests.items() if d == digest)
+        if not names:
+            raise Invalid("ledger_not_in_pack", "no file of the pack has these bytes")
     gt = (r.get("rfc3161") or {}).get("tsa_check", {}).get("gen_time")
     w = window(beacon["_t"], beacon["period_ms"], gt, max_window_s, clock_tolerance_s)
     chk = r["rfc3161"]["tsa_check"]
@@ -556,7 +583,8 @@ def _pack_window(pack_dir: str, tsa_certs, tsa_crls, max_window_s: int, clock_to
 
 
 def _witnessed(checkpoint, log_vkeys: List[str], witness_vkeys: List[str], min_witnesses: int, entries: List[Dict],
-               entry_idx: int, pack_digests: Dict, gen_time: str) -> Dict:
+               entry_idx: int, pack_digests: Dict, gen_time: str, entry: Optional[Dict] = None,
+               proof: Optional[Dict] = None) -> Dict:
     """SPEC §19 rule 6: the entry under a checkpoint inside the pack, signed by a pinned log key and cosigned by pinned
     witnesses no later than the token's genTime"""
     import base64
@@ -577,24 +605,117 @@ def _witnessed(checkpoint, log_vkeys: List[str], witness_vkeys: List[str], min_w
         raise Refused("checkpoint_malformed", str(e)[:160]) from None
     if v["stato"] == "NON_VERIFICATA":
         raise ImportError(v["motivo"])
-    if v["stato"] != "OK":
+    if v["stato"] != "OK":   # SPEC §19 rule 6: the log's signature and origin first, then the witnesses
+        lg = C.verify_note(note, log_vkeys)
+        names = {C.parse_vkey(k)[0] for k in log_vkeys}
+        origin = None
+        if lg["stato"] == "OK":
+            try:
+                origin = C.parse_checkpoint(lg["text"])["origin"]
+            except C.NoteError:
+                origin = None
+        if lg["stato"] != "OK" or origin not in names:
+            raise Invalid("checkpoint_log_not_trusted", str(lg.get("motivo") or v["motivo"])[:160])
         raise Invalid("checkpoint_not_witnessed", str(v["motivo"])[:160])
     if vt["stato"] != "OK":
         raise Invalid("checkpoint_cosigned_after_gen_time", f"cosigned after {gen_time}: {vt['future_witnesses']}"[:160])
     size, root = v["checkpoint"]["size"], base64.b64decode(v["checkpoint"]["root"])
     if size <= entry_idx:
         raise Invalid("checkpoint_not_covering_entry", f"checkpoint size {size}, entry {entry_idx}")
-    leaves = [M.canonical(e) for e in entries]
-    if size > len(leaves) or M.mth(leaves[:size]) != root:
-        raise Invalid("checkpoint_root_mismatch", f"the root of the first {size} entries of this ledger is not the checkpoint's")
+    if proof is not None:   # SPEC §19 rule 14 item 4
+        if proof["tree_size"] != size:
+            raise Invalid("proof_mismatch", f"proof for a tree of {proof['tree_size']}, checkpoint of {size}")
+        if not M.verify_inclusion(proof["leaf_index"], size, M.canonical(entry),
+                                  [bytes.fromhex(h) for h in proof["hashes"]], root):
+            raise Invalid("inclusion_proof_invalid", f"the proof does not lead from entry {entry_idx} to the checkpoint's root")
+    else:
+        leaves = [M.canonical(e) for e in entries]
+        if size > len(leaves) or M.mth(leaves[:size]) != root:
+            raise Invalid("checkpoint_root_mismatch",
+                          f"the root of the first {size} entries of this ledger is not the checkpoint's")
     return {"status": "witnessed", "witnesses": v["witnesses"], "checkpoint_size": size,
             "origin": v["checkpoint"]["origin"], "as_of": gen_time}
 
 
-def _scope(window_ok: bool, unique_ok: bool, qualified: bool = False, unopened: bool = True) -> Dict:
+def _doc(b: bytes, what: str, code: str):
+    """a UTF-8 JSON document read as a ledger line (SPEC §3): one final line feed allowed"""
+    try:
+        text = b.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused(code, f"{what}: not UTF-8") from None
+    if text.endswith("\n"):
+        text = text[:-1]
+    if text != text.strip(" \t\r\n"):
+        raise Refused(code, f"{what}: white space around the document (one final line feed only)")
+    try:
+        return verifier._loads_strict(text)
+    except (ValueError, RecursionError) as e:
+        raise Refused(code, f"{what}: {str(e)[:120]}") from None
+
+
+def _int(v) -> bool:
+    return type(v) is int and v >= 0
+
+
+def read_entry(src) -> Dict:
+    """SPEC §19 rule 14 item 1: one entry of SPEC §2 with the closed members of §2.1, and its self_hash"""
+    e = _doc(_read(src, "entry", MAX_ENTRY), "entry", "entry_malformed")
+    if not isinstance(e, dict):
+        raise Refused("entry_malformed", "not a JSON object")
+    unknown = sorted(set(e) - verifier.ENTRY_KEYS)
+    if unknown:
+        raise Refused("entry_malformed", "unknown_field:" + ",".join(unknown))
+    for k in ("idx", "ts", "data", "prev_hash", "self_hash"):
+        if k not in e:
+            raise Refused("entry_malformed", f"{k}: missing")
+    if not _int(e["idx"]):
+        raise Refused("entry_malformed", "idx: not an integer >= 0")
+    if not isinstance(e["ts"], str) or not isinstance(e["data"], dict):
+        raise Refused("entry_malformed", "ts: not a string, or data: not an object")
+    for k in ("prev_hash", "self_hash"):
+        if not (isinstance(e[k], str) and _SHA256_HEX.fullmatch(e[k])):
+            raise Refused("entry_malformed", f"{k}: not 64 lowercase hexadecimal characters")
+    payload = verifier.canonical_payload(e)
+    if e["self_hash"] not in {verifier.hash_with(a, payload) for a in ("sha256", "sha3_256")}:
+        raise Invalid("entry_hash_mismatch", "self_hash is neither the SHA-256 nor the SHA3-256 of the canonical form")
+    return e
+
+
+def read_proof(src) -> Dict:
+    """SPEC §19 rule 14 item 2: the closed inclusion proof"""
+    p = _doc(_read(src, "proof", MAX_PROOF), "proof", "proof_malformed")
+    keys = ("format", "leaf_index", "tree_size", "hashes")
+    if not isinstance(p, dict) or set(p) != set(keys):
+        raise Refused("proof_malformed", f"not an object of exactly {', '.join(keys)}")
+    if p["format"] != PROOF_FORMAT:
+        raise Refused("proof_malformed", f"format: not {PROOF_FORMAT}")
+    if not _int(p["leaf_index"]) or not _int(p["tree_size"]) or p["tree_size"] < 1 or p["leaf_index"] >= p["tree_size"]:
+        raise Refused("proof_malformed", "leaf_index, tree_size: integers with 0 <= leaf_index < tree_size")
+    h = p["hashes"]
+    if not (isinstance(h, list) and len(h) <= MAX_PROOF_HASHES
+            and all(isinstance(x, str) and _SHA256_HEX.fullmatch(x) for x in h)):
+        raise Refused("proof_malformed", f"hashes: a list of at most {MAX_PROOF_HASHES} values of 64 lowercase hex")
+    return p
+
+
+def inclusion_proof(ledger, idx: int, tree_size: int) -> Dict:
+    """for a provider: the proof of SPEC §19 rule 14 for entry `idx` of `ledger` (path or bytes) in its first
+    `tree_size` entries, the size of the checkpoint it will give"""
+    import cryptovalid_merkle as M
+    entries = _entries(_read(ledger, "ledger", MAX_LEDGER))
+    if not (_int(idx) and _int(tree_size) and idx < tree_size <= len(entries)):
+        raise ValueError("0 <= idx < tree_size <= the number of entries")
+    leaves = [M.canonical(e) for e in entries[:tree_size]]
+    return {"format": PROOF_FORMAT, "leaf_index": idx, "tree_size": tree_size,
+            "hashes": [h.hex() for h in M.inclusion_proof(idx, leaves)]}
+
+
+def _scope(window_ok: bool, unique_ok: bool, qualified: bool = False, unopened: bool = True,
+           id_checked: bool = True) -> Dict:
     proves = ["composed_after_pulse"] + (["stamped_before_gen_time"] if window_ok else []) \
         + (["stamped_by_qualified_tsa"] if qualified else []) + (["unique_under_pinned_witness"] if unique_ok else [])
     not_proved = ["not_execution", "not_unique", "not_ownership"] + (["commitments_not_opened"] if unopened else []) \
+        + ([] if id_checked else ["payment_id_uniqueness"]) \
         + ["not_operator"] + ([] if qualified else ["not_qualified"]) + ["not_legal_beacon"]
     return {"proves": [{k: SCOPE[k]} for k in proves], "does_not_prove": [{k: SCOPE[k]} for k in not_proved]}
 
@@ -616,7 +737,8 @@ def verify_beacon_entry(ledger, entry_idx: int, pulse, previous, certificate,
                         disclosures: Optional[List] = None, max_window_s: Optional[int] = None,
                         tsa_crls: Optional[List] = None, checkpoint=None, log_vkeys: Optional[List[str]] = None,
                         witness_vkeys: Optional[List[str]] = None, min_witnesses: Optional[int] = None,
-                        tsa_trusted_list=None, clock_tolerance_s: Optional[int] = None) -> Dict:
+                        tsa_trusted_list=None, clock_tolerance_s: Optional[int] = None,
+                        required_disclosures: Optional[List[str]] = None) -> Dict:
     """SPEC §19: the receipt for entry `entry_idx` of `ledger` (path or bytes), in the order of SPEC §19 rule 8.
     `pulse`, `previous`: the pulse pair of each element of `beacons`, a path or bytes, or lists of them in the order of
     `beacons`; `certificate`: the pinned beacon certificates (one, or a list). With `pack_dir` (and `tsa_certs`,
@@ -624,9 +746,37 @@ def verify_beacon_entry(ledger, entry_idx: int, pulse, previous, certificate,
     `checkpoint` (path or bytes, a file of the pack) with `log_vkeys` and `witness_vkeys` (and `min_witnesses`, default
     1): SPEC §19 rule 6. `disclosures`: paths or bytes of SPEC §18 disclosures.
     Never raises on the evidence: status refused / invalid / not_evaluated / verified. Arguments that do not go together
-    are a ValueError; a check that cannot run here (openssl, SPEC §10) raises verifier.CheckNotRun."""
+    are a ValueError; a check that cannot run here (openssl, SPEC §10) raises verifier.CheckNotRun.
+    `required_disclosures`: commitment members that must be disclosed and match (SPEC §19 rule 15)."""
     if type(entry_idx) is not int or entry_idx < 0:
         raise ValueError("entry_idx: an integer >= 0")
+    return _verify(ledger, entry_idx, None, pulse, previous, certificate, pack_dir, tsa_certs, disclosures, max_window_s,
+                   tsa_crls, checkpoint, log_vkeys, witness_vkeys, min_witnesses, tsa_trusted_list, clock_tolerance_s,
+                   required_disclosures)
+
+
+def verify_beacon_entry_proof(entry, proof, pulse, previous, certificate, pack_dir: str, tsa_certs: List,
+                              max_window_s: int, checkpoint, log_vkeys: List[str], witness_vkeys: List[str],
+                              disclosures: Optional[List] = None, tsa_crls: Optional[List] = None,
+                              min_witnesses: Optional[int] = None, tsa_trusted_list=None,
+                              clock_tolerance_s: Optional[int] = None,
+                              required_disclosures: Optional[List[str]] = None) -> Dict:
+    """SPEC §19 rule 14: the receipt for one entry (path or bytes) and its inclusion proof under the witnessed
+    checkpoint of the pack, without the ledger. The other arguments as in verify_beacon_entry."""
+    if pack_dir is None or checkpoint is None:
+        raise ValueError("one entry needs pack_dir and checkpoint: the inclusion is under the checkpoint of the pack")
+    return _verify(entry, None, proof, pulse, previous, certificate, pack_dir, tsa_certs, disclosures, max_window_s,
+                   tsa_crls, checkpoint, log_vkeys, witness_vkeys, min_witnesses, tsa_trusted_list, clock_tolerance_s,
+                   required_disclosures)
+
+
+def _verify(ledger, entry_idx, proof, pulse, previous, certificate, pack_dir, tsa_certs, disclosures, max_window_s,
+            tsa_crls, checkpoint, log_vkeys, witness_vkeys, min_witnesses, tsa_trusted_list, clock_tolerance_s,
+            required_disclosures) -> Dict:
+    if required_disclosures is not None:
+        req = list(required_disclosures)
+        if not all(isinstance(m, str) and m in COMMITMENTS for m in req) or len(set(req)) != len(req):
+            raise ValueError("required_disclosures: distinct commitment members of SPEC §18")
     if (pack_dir is None) != (tsa_certs is None):
         raise ValueError("pack_dir and tsa_certs go together: the window needs a token checked with pinned certificates")
     if (pack_dir is None) != (max_window_s is None):
@@ -658,17 +808,27 @@ def verify_beacon_entry(ledger, entry_idx: int, pulse, previous, certificate,
            "entry": None, "pulse": None, "pulses": [], "bounds": None, "window": None,
            "unique": {"status": "not_established"}, "disclosed": [], "scope": None}
     try:
-        lb = _read(ledger, "ledger", MAX_LEDGER)                                    # step 1
-        entries = _entries(lb)   # bytes that are not UTF-8 FAIL verify_ledger (SPEC §3): ledger_invalid
-        found = [x for x in entries if x.get("idx") == entry_idx]
-        if not found:
-            raise Invalid("entry_not_found", f"no entry {entry_idx}")
-        e = found[0]
+        if proof is None:
+            lb = _read(ledger, "ledger", MAX_LEDGER)                                # step 1
+            entries = _entries(lb)   # bytes that are not UTF-8 FAIL verify_ledger (SPEC §3): ledger_invalid
+            found = [x for x in entries if x.get("idx") == entry_idx]
+            if not found:
+                raise Invalid("entry_not_found", f"no entry {entry_idx}")
+            e, pr = found[0], None
+        else:                                                                       # SPEC §19 rule 14 items 1-2
+            lb, entries = None, None
+            e = read_entry(ledger)
+            pr = read_proof(proof)
+            if pr["leaf_index"] != e["idx"]:
+                raise Invalid("proof_mismatch", f"proof for leaf {pr['leaf_index']}, entry {e['idx']}")
+            entry_idx = e["idx"]
         data = check_payment(e.get("data"))                                         # step 2
-        same = [x["idx"] for x in entries if isinstance(x.get("data"), dict)
-                and x["data"].get("profile") == PAYMENT_PROFILE and x["data"].get("payment_id") == data["payment_id"]]
-        if len(same) > 1:
-            raise Invalid("payment_id_not_unique", f"payment_id also in entries {[i for i in same if i != entry_idx][:10]}")
+        if entries is not None:
+            same = [x["idx"] for x in entries if isinstance(x.get("data"), dict)
+                    and x["data"].get("profile") == PAYMENT_PROFILE and x["data"].get("payment_id") == data["payment_id"]]
+            if len(same) > 1:
+                raise Invalid("payment_id_not_unique",
+                              f"payment_id also in entries {[i for i in same if i != entry_idx][:10]}")
         if len(pulses) != len(data["beacons"]):
             raise ValueError(f"{len(data['beacons'])} beacon value(s) in the entry, {len(pulses)} pulse pair(s) given")
         ds = [parse_disclosure(d) for d in (disclosures or [])]                    # step 3
@@ -684,6 +844,9 @@ def verify_beacon_entry(ledger, entry_idx: int, pulse, previous, certificate,
             if data.get(d["member"]) != c:
                 raise Invalid("disclosure_mismatch", f"{d['member']}: the disclosed salt and value do not give the entry's commitment")
             out["disclosed"].append(d["member"])
+        missing = [m for m in (required_disclosures or []) if m not in out["disclosed"]]   # SPEC §19 rule 15
+        if missing:
+            raise Invalid("required_disclosure_missing", "required and not disclosed: " + ", ".join(missing))
         summaries = []
         for i, (bv, ps, qs) in enumerate(zip(data["beacons"], pulses, previouses)):   # step 4
             p = parse_pulse(ps, f"pulse[{i}]")
@@ -698,20 +861,21 @@ def verify_beacon_entry(ledger, entry_idx: int, pulse, previous, certificate,
         out["pulse"] = {k: v for k, v in b.items() if not k.startswith("_")}
         out["bounds"] = _bounds(b)
         unopened = any(k in data and k not in out["disclosed"] for k in COMMITMENTS)
-        out["scope"] = _scope(False, False, False, unopened)
+        out["scope"] = _scope(False, False, False, unopened, proof is None)
         if pack_dir is not None:                                                    # step 5
             out["window"], digests, gt = _pack_window(pack_dir, tsa_certs, tsa_crls, max_window_s, clock_tolerance_s or 0,
                                                       lb, b, tsa_trusted_list)
             if checkpoint is not None:                                              # step 6
                 try:
                     out["unique"] = _witnessed(checkpoint, list(log_vkeys), list(witness_vkeys), min_witnesses or 1,
-                                               entries, entry_idx, digests, gt)
+                                               entries, entry_idx, digests, gt, e, pr)
                 except ImportError as ie:
                     out.update(status="not_evaluated", reason="backend_missing", detail=f"checkpoint: {ie}"[:160])
                     return out
         unique = out["unique"]["status"] == "witnessed"
         w = out["window"] or {}
-        out["scope"] = _scope(out["window"] is not None, unique, w.get("tsa_qualification") == "qualified", unopened)
+        out["scope"] = _scope(out["window"] is not None, unique, w.get("tsa_qualification") == "qualified", unopened,
+                              proof is None)
         out.update(status="verified", valid=True,
                    record_complete=bool(w) and unique and w.get("tsa_revocation") != "not_checked")
     except Refused as x:
@@ -743,8 +907,15 @@ def main(argv=None, prog=None, cmd_name=None) -> int:
     ap = Parser(prog=f"{prog} {cmd_name}" if prog and cmd_name else prog, allow_abbrev=False,
                 description="A 'not before' bound from the NIST Randomness Beacon 2.0, inside a payment entry of a "
                             "ledger, and its window with the RFC 3161 token of an evidence pack (SPEC §18-§19).")
-    ap.add_argument("ledger", type=_nonempty, help="the ledger (.jsonl) holding the payment entry")
-    ap.add_argument("--entry", required=True, action=_Once, type=_entry_arg, help="idx of the payment entry to date")
+    ap.add_argument("ledger", nargs="?", default=None, type=_nonempty,
+                    help="the ledger (.jsonl) holding the payment entry (with --entry)")
+    ap.add_argument("--entry", action=_Once, type=_entry_arg, help="idx of the payment entry to date (with the ledger)")
+    ap.add_argument("--entry-file", action=_Once, type=_nonempty,
+                    help="one entry without its ledger (SPEC §19 rule 14; with --proof, --pack and --checkpoint)")
+    ap.add_argument("--proof", action=_Once, type=_nonempty,
+                    help="the inclusion proof of --entry-file under the checkpoint (cryptovalid-inclusion-proof/1)")
+    ap.add_argument("--require-disclosure", action="append", default=None, metavar="MEMBER", type=_nonempty,
+                    help="a commitment member that must be disclosed and match (repeatable, SPEC §19 rule 15)")
     ap.add_argument("--pulse", required=True, action="append", type=_nonempty,
                     help="the pulse of a beacon value, as served by /beacon/2.0/chain/2/pulse/<i> (one per value, in order)")
     ap.add_argument("--previous", required=True, action="append", type=_nonempty,
@@ -773,10 +944,20 @@ def main(argv=None, prog=None, cmd_name=None) -> int:
     ap.add_argument("--disclosure", action="append", default=None, metavar="JSON", type=_nonempty,
                     help="a disclosure {member, salt, value} to check against the entry's commitment (repeatable)")
     a = ap.parse_args(argv)
+    if a.entry_file is None and (a.ledger is None or a.entry is None or a.proof is not None):
+        ap.error("give the ledger and --entry, or --entry-file and --proof")
+    if a.entry_file is not None and (a.ledger is not None or a.entry is not None or a.proof is None):
+        ap.error("--entry-file goes with --proof, without a ledger or --entry")
     try:   # the library refuses options that do not go together, and a pinned CRL it cannot read: a usage error
-        r = verify_beacon_entry(a.ledger, a.entry, a.pulse, a.previous, a.certificate, a.pack, a.tsa_cert, a.disclosure,
-                                a.max_window, a.tsa_crl, a.checkpoint, a.log_vkey, a.witness_vkey, a.min_witnesses,
-                                a.tsa_trusted_list, a.clock_tolerance)
+        if a.entry_file is None:
+            r = verify_beacon_entry(a.ledger, a.entry, a.pulse, a.previous, a.certificate, a.pack, a.tsa_cert,
+                                    a.disclosure, a.max_window, a.tsa_crl, a.checkpoint, a.log_vkey, a.witness_vkey,
+                                    a.min_witnesses, a.tsa_trusted_list, a.clock_tolerance, a.require_disclosure)
+        else:
+            r = verify_beacon_entry_proof(a.entry_file, a.proof, a.pulse, a.previous, a.certificate, a.pack, a.tsa_cert,
+                                          a.max_window, a.checkpoint, a.log_vkey, a.witness_vkey, a.disclosure,
+                                          a.tsa_crl, a.min_witnesses, a.tsa_trusted_list, a.clock_tolerance,
+                                          a.require_disclosure)
     except ValueError as e:
         ap.error(str(e)[:200])
     emit(json.dumps(r, ensure_ascii=False, indent=1))

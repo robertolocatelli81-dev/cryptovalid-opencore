@@ -1,0 +1,26 @@
+{
+ "created_utc": "2026-11-16T19:28:54Z",
+ "file_digests_sha256": {
+  "checkpoint.note": "534ae28192176456ad90b65a26e20d4c168ee16358108bafc29349788b19447e",
+  "payments.jsonl": "7dcc10114168e83c4b45b127cc2fcc153d70f20364c3c92271e815c1dbcbb818"
+ },
+ "honest_scope": "Proves what/when/order/who-signed + non-alteration + entry count & head per ledger (so truncation is detectable when the manifest is signed). Not the truth of the facts. An UNSIGNED manifest is integrity-checked, NOT authenticated: its metadata (e.g. subject) is trustworthy only if manifest_signature verifies.",
+ "ledgers": [
+  {
+   "chain_integrity": true,
+   "entries": 1,
+   "file": "payments.jsonl",
+   "hash_verdict": "PASS",
+   "head_self_hash": "01616f9b06af95060dc32a0d522158ff96bf8c45f7667305629c2fa6f25a39cc"
+  }
+ ],
+ "manifest_digest_sha256": "f3396ed0f39fd693ede2d785eca38354d236939e0ba27dce27c4514fc1a052ed",
+ "pack_format": "cryptovalid-evidence-pack/1.1",
+ "rfc3161_timestamp": {
+  "anchored": true,
+  "tsa": "local",
+  "tsr_b64": "MIIE9jADAgEAMIIE7QYJKoZIhvcNAQcCoIIE3jCCBNoCAQMxDzANBglghkgBZQMEAgEFADB1BgsqhkiG9w0BCRABBKBmBGQwYgIBAQYEKgMEATAxMA0GCWCGSAFlAwQCAQUABCDzOW7Q85/Wk+3i14Xso4NU0jaTnguifc4nxFFPwaBS7QIBAxgPMjAyNjExMTYxOTI4NTRaMAMCAQEBAf8CCBPL/bz0U4ypoIIDCTCCAYowggEwoAMCAQICFAh8yJHGqICH+53oh/z25MfxvF9DMAoGCCqGSM49BAMCMBExDzANBgNVBAMMBnRzYS1jYTAeFw0yNjExMTYxOTI4NTRaFw0yNjExMTgxOTI4NTRaMBIxEDAOBgNVBAMMB3RzYS10c2EwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARtmNP5xdlY3eGuu4WLYmpLETcHuzd5ZJYCDx0friOcrmeqDeNQ0iR5Vak5H2gGmJfNd/A9NhjHk6Ru3D5rZLUco2UwYzAWBgNVHSUBAf8EDDAKBggrBgEFBQcDCDAJBgNVHRMEAjAAMB0GA1UdDgQWBBSUmpoxdIRf1dqfN/JW1iUWB1xHdjAfBgNVHSMEGDAWgBR66tiVIGU9uIseOqziAvlqvrtBVTAKBggqhkjOPQQDAgNIADBFAiEA8Iu9WAk/crLR5m7vakecdddIK99JB/1iuRZHtx/78dQCICIEjidZ58RZN7TvhvVp4kbRB01WnBc1Jp/0D89W3B1LMIIBdzCCAR2gAwIBAgIULruzDyyIVHSSBh2ExEXEwAnFxSgwCgYIKoZIzj0EAwIwETEPMA0GA1UEAwwGdHNhLWNhMB4XDTI2MTExNjE5Mjg1NFoXDTI2MTExODE5Mjg1NFowETEPMA0GA1UEAwwGdHNhLWNhMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkLpYxkKxjCXUhIYMXaii8hmRZCKtk0RDjbyKXFw0oSghfpIPOitmygtRJE3ztHe4XXWOt1c3NhC7lKmT7hcweKNTMFEwHQYDVR0OBBYEFHrq2JUgZT24ix46rOIC+Wq+u0FVMB8GA1UdIwQYMBaAFHrq2JUgZT24ix46rOIC+Wq+u0FVMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIhAM5FfhKiymLxDCHwLX0ak5cRnAGkUGsH10E7lUPwIrxcAiBhQ0W+EotvYmn4/GF3GOOkYJ1r8xsWZvA1pwlIll5cbjGCAT4wggE6AgEBMCkwETEPMA0GA1UEAwwGdHNhLWNhAhQIfMiRxqiAh/ud6If89uTH8bxfQzANBglghkgBZQMEAgEFAKCBpDAaBgkqhkiG9w0BCQMxDQYLKoZIhvcNAQkQAQQwHAYJKoZIhvcNAQkFMQ8XDTI2MTExNjE5Mjg1NFowLwYJKoZIhvcNAQkEMSIEIPo9zg7Q0H5QieVNP0LAI79Z3i5frf82Z7Zbs9tNPwjRMDcGCyqGSIb3DQEJEAIvMSgwJjAkMCIEIAfX3903FgxIkE7zFJCSQQRA6SjepiOu3tvvwZZFkiBQMAoGCCqGSM49BAMCBEgwRgIhAPXeozT20vlMi2ckqVKoJ62cjSPxGa8ie/6Obk90vcrcAiEA9/PfCx/3WCi2F9H+Wb0WJdM2h7qXB9fNhmOVrpxfqME="
+ },
+ "signer_pubkeys": [],
+ "subject": "beacon test"
+}

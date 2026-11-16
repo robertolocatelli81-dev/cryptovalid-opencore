@@ -1,6 +1,6 @@
 # Evidence pack — beacon test
 
-- Format: `cryptovalid-evidence-pack/1.1` · created 2026-11-16T18:16:44Z
+- Format: `cryptovalid-evidence-pack/1.1` · created 2026-11-16T19:28:55Z
 - Signers: 0
 - RFC 3161: not anchored
 

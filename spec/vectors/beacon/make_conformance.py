@@ -12,7 +12,6 @@ fixed labels. A new run gives other bytes for the packs and re-signed pulses and
 openssl and cryptography. Usage, from the repository root:
     python3 spec/vectors/beacon/make_conformance.py"""
 import base64
-import copy
 import datetime
 import hashlib
 import json
@@ -93,6 +92,8 @@ def main():
              certificates=(CERT,), **extra):
         c = {"name": name, "ledger": ledger, "entry": entry, "pulses": [list(x) for x in pulses],
              "certificates": list(certificates)}
+        if "entry_file" in extra:   # SPEC §19 rule 14: one entry and its proof, no ledger
+            del c["ledger"], c["entry"]
         c.update({k: v for k, v in extra.items() if v is not None})
         c["expected"] = {"status": status, "reason": reason, "record_complete": complete}
         cases.append(c)
@@ -105,7 +106,6 @@ def main():
         wk = {"log_vkeys": [keys[LOG][1]], "witness_vkeys": [keys["witness.example/a"][1]]}
         pins = {"tsa_certs": [put("tsa/ca.crt", open(lab.j("ca.crt"), "rb").read())]}
         led = TB.build_payment_ledger()
-        led_rel = "payment_ledger.jsonl"
 
         def pack(name, ledger_bytes, extra=None, with_lab=lab):
             d = TB.make_pack(work, name, ledger_bytes, with_lab, extra)
@@ -116,6 +116,8 @@ def main():
         # the complete record: window, CRL after the token, witnessed checkpoint inside the pack, qualified TSA
         note = TB.witnessed_checkpoint(led, keys)
         full_pack = pack("complete", led, {"checkpoint.note": note})
+        # SPEC §19 rule 14: the pack of one entry holds the checkpoint and no payment (stamped before the CRL is issued)
+        epack = pack("entry_only", TB.checkpoint_ledger(note), {"checkpoint.note": note})
         note_rel = put("checkpoints/witnessed.note", note)
         crl = put("tsa/crl.pem", open(lab.crl(), "rb").read())
         from cryptography import x509
@@ -141,7 +143,8 @@ def main():
         # step 2, the profile, one case per check in its order
         for name, fn, why in (
                 ("unknown_member", lambda d: d[1].__setitem__("note", "x"), "payment_malformed"),
-                ("missing_payee_iban_commitment", lambda d: d[1].pop("payee_iban_commitment"), "payment_malformed"),
+                ("no_party_identifier", lambda d: (d[1].pop("payee_iban_commitment"), d[1].pop("payer_iban_commitment")),
+                 "payment_malformed"),
                 ("payment_id_not_uuid4", lambda d: d[1].__setitem__("payment_id", "NOTPROVIDED"), "payment_malformed"),
                 ("currency_unknown", lambda d: d[1].__setitem__("currency", "XAU"), "payment_malformed"),
                 ("amount_not_canonical", lambda d: d[1].__setitem__("amount", "99.9"), "payment_malformed"),
@@ -168,7 +171,9 @@ def main():
         e0 = dict(entry=0, pulses=((P2, P1),))
         discl = [put(f"disclosures/{m}.json", json.dumps({"member": m, "salt": salt(m).hex(), "value": v}))
                  for m, v in TB.NAMES.items()]
-        case("entry_0_six_disclosures", "verified", None, disclosures=discl, **e0)
+        case("entry_0_every_disclosure", "verified", None, disclosures=discl, required_disclosures=list(TB.NAMES), **e0)
+        case("required_disclosure_missing", "invalid", "required_disclosure_missing",
+             required_disclosures=["payer_tax_id_commitment"], disclosures=discl[:1], **e0)
         case("disclosure_malformed", "refused", "disclosure_malformed",
              disclosures=[put("disclosures/short_salt.json", json.dumps({"member": "payer_iban_commitment",
                           "salt": salt("payer_iban_commitment")[:8].hex(), "value": TB.EXAMPLE_IBANS[0]}))], **e0)
@@ -271,6 +276,28 @@ def main():
                 TB.witnessed_checkpoint(led, keys, cosigned_at=int(time.time()) + 365 * 86400))
         cp_case("size_1", "checkpoint_not_covering_entry", TB.witnessed_checkpoint(led, keys, size=1))
         cp_case("size_beyond_ledger", "checkpoint_root_mismatch", TB.witnessed_checkpoint(led, keys, size=5, leaves_upto=3))
+        other_log = dict(keys, **{LOG: (hashlib.sha256(b"another log").digest(), None)})
+        cp_case("another_log_key", "checkpoint_log_not_trusted", TB.witnessed_checkpoint(led, other_log))
+
+        # SPEC §19 rule 14: one entry and its inclusion proof, the pack holding the checkpoint and no payment
+        line = TB.entry_line(led, 1)
+        good_proof = B.inclusion_proof(led, 1, 3)
+        ent = dict(pack=epack, max_window_s=30 * 86400, checkpoint=note_rel, tsa_crls=[crl], **pins, **wk)
+        e_rel, p_rel = put("entries/entry_1.json", line), put("entries/proof_1.json", json.dumps(good_proof))
+        case("entry_alone_complete", "verified", None, True, entry_file=e_rel, proof=p_rel, **ent)
+        e = json.loads(line)
+        case("entry_unknown_member", "refused", "entry_malformed", entry_file=put("entries/unknown_member.json",
+             json.dumps(dict(e, note="x"))), proof=p_rel, **ent)
+        case("entry_hash_mismatch", "invalid", "entry_hash_mismatch", entry_file=put("entries/amount_changed.json",
+             json.dumps(dict(e, data=dict(e["data"], amount="199.95")))), proof=p_rel, **ent)
+        case("proof_malformed", "refused", "proof_malformed", entry_file=e_rel,
+             proof=put("entries/proof_unknown_member.json", json.dumps(dict(good_proof, note="x"))), **ent)
+        case("proof_other_leaf", "invalid", "proof_mismatch", entry_file=e_rel,
+             proof=put("entries/proof_leaf_0.json", json.dumps(B.inclusion_proof(led, 0, 3))), **ent)
+        case("proof_wrong_path", "invalid", "inclusion_proof_invalid", entry_file=e_rel,
+             proof=put("entries/proof_reversed.json", json.dumps(dict(good_proof, hashes=good_proof["hashes"][::-1]))),
+             **ent)
+
         case("checkpoint_unreadable", "refused", "checkpoint_malformed", pack=full_pack, max_window_s=30 * 86400,
              checkpoint="nist", **pins, **wk)
 
@@ -284,7 +311,7 @@ def main():
                                         ("2026-11-16T13:03:58.999999Z", 3600, 1, "window_inverted"),
                                         ("2026-11-13T09:00:00Z", 10 ** 9, 0, "window_inverted"),
                                         ("2026-11-16T14:04:00Z", 3600, 0, None))]
-        doc = {"format": "cryptovalid-beacon-conformance/2", "spec": "SPEC_EVIDENCE_FORMAT.md v0.10 §18-§19",
+        doc = {"format": "cryptovalid-beacon-conformance/3", "spec": "SPEC_EVIDENCE_FORMAT.md v0.10 §18-§19",
                "paths": "relative to spec/vectors/beacon/", "cases": cases, "window_cases": windows}
         with open(os.path.join(HERE, "conformance.json"), "w", encoding="utf-8") as f:
             f.write(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")

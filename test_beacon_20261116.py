@@ -87,7 +87,12 @@ def chain(datas, ts, algo="sha256"):
 # fictitious parties: the salts are derived from a label, so the vector is rebuilt byte for byte
 NAMES = {"payer_iban_commitment": EXAMPLE_IBANS[0], "payee_iban_commitment": EXAMPLE_IBANS[1],
          "payer_name_commitment": "Maria Example", "payer_details_commitment": "Via Esempio 1, 00100 Roma, IT",
-         "payee_name_commitment": "Example Supplies Ltd", "end_to_end_id_commitment": "INV-2026-0001"}
+         "payee_name_commitment": "Example Supplies Ltd", "end_to_end_id_commitment": "INV-2026-0001",
+         "payer_tax_id_commitment": "TAXID-EXAMPLE-0001", "debtor_name_commitment": "Luca Example",
+         "debtor_tax_id_commitment": "TAXID-EXAMPLE-0002", "notice_code_commitment": "NOTICE-EXAMPLE-0001",
+         "purpose_commitment": "Example fee 2026", "receipt_id_commitment": "RCPT-EXAMPLE-0001",
+         "rrn_commitment": "000000000001"}
+CLEAR = {"execution_date": "2026-11-16", "payee_entity_id": "EXAMPLE0001", "psp_id": "EXAMPLEPSPXXX"}
 # random identifiers of SPEC §18 (version 4 UUIDs), fixed so that the vector is rebuilt byte for byte
 PIDS = ("0f8b6c2e-4a71-4d3b-9c55-1e2f3a4b5c6d", "7d1e9a40-2b6c-4f8e-a3d2-5c6b7a8e9f01", "c3a9e5d1-8f2b-4e6c-b7a1-0d9e8f7a6b5c")
 
@@ -111,12 +116,12 @@ def beacon_of(p):
 
 
 def payment_datas(p):
-    """entry 0: a payment carrying pulse 2030302, with the five commitments of NAMES; entry 1: a payment carrying the
+    """entry 0: a payment carrying pulse 2030302, with every optional member (CLEAR, and the commitments of NAMES); entry 1: a payment carrying the
     value of pulse p, with its two IBAN commitments only (payer DE89..., payee GB82..., salts labelled e1); entry 2: not a
     payment"""
     gb, de = EXAMPLE_IBANS
     first = {"profile": B.PAYMENT_PROFILE, "payment_id": PIDS[0], "amount": "1250.00", "currency": "EUR",
-             "beacons": [beacon_of(pulse(2030302))], "record_salt": record_salt_of(1)}
+             "beacons": [beacon_of(pulse(2030302))], "record_salt": record_salt_of(1), **CLEAR}
     for m, v in NAMES.items():
         first[m] = B.commitment(m, salt_of(m), v)
     return [
@@ -285,8 +290,8 @@ class RealPulses(unittest.TestCase):
         self.assertEqual(r["bounds"]["not_before"], "2026-11-16T13:04:00.000Z")
         self.assertEqual(r["bounds"]["not_before_operator_promise"], "2026-11-16T13:03:00.000Z")
         self.assertIsNone(r["bounds"]["against_an_operator_breaking_its_promises"])
-        self.assertEqual(r["entry"]["covers"], ["profile", "payment_id", "amount", "currency", "payer_iban_commitment",
-                                                "payee_iban_commitment", "beacons", "record_salt"])
+        self.assertEqual(r["entry"]["covers"], ["profile", "payment_id", "amount", "currency", "beacons", "record_salt",
+                                                "payer_iban_commitment", "payee_iban_commitment"])
         self.assertEqual([list(x)[0] for x in r["scope"]["proves"]], ["composed_after_pulse"])
         self.assertEqual(r["entry"]["payment"], {"payment_id": PIDS[1], "amount": "99.95", "currency": "EUR"})
         self.assertNotIn(EXAMPLE_IBANS[0], json.dumps(r))             # no IBAN in clear, in the ledger or the receipt
@@ -499,6 +504,16 @@ class PulseChecks(unittest.TestCase):
                 (p if which == "pulse" else q)[k] = v
                 self.assertInvalid(run(LEDGER, p=doc(p), prev=doc(q)), why)
 
+    def test_chain_of_the_pulses(self):
+        """a signed pair of chain 3 with its own consistent uri: the entry names chain 2 (mutant step3_chainidx)"""
+        def to3(x):
+            x["chainIndex"] = 3
+            x["uri"] = x["uri"].replace("/chain/2/", "/chain/3/")
+        q, p, _ = resigned_pair(mutate_prev=to3, mutate_pulse=to3)
+        d = payment_datas(p)
+        d[1]["beacons"][0]["chain_index"] = 2                          # the entry names chain 2, as it must
+        self.assertInvalid(self.with_own(q, p, chain(d, payment_ts(p))), "pulse_mismatch")
+
     def test_version_exactly_2_0(self):
         """NEMESIS b26: a pulse re-signed with version "2.0.1" (or "2.00", "2.0 ") is not version 2.0"""
         for v in ("2.0.1", "2.00", "2.0 ", "Version 2.0", "2"):
@@ -687,8 +702,8 @@ class Payment(unittest.TestCase):
             d = copy.deepcopy(base)
             del d[k]
             n += 1
-            if k in B.NAME_COMMITMENTS:
-                self.assertIs(B.check_payment(d), d)        # a name commitment is optional
+            if k in B.COMMITMENTS or k in B.CLEAR_OPTIONAL:
+                self.assertIs(B.check_payment(d), d)        # optional: entry 0 keeps other party identifiers
             elif k == "profile":
                 with self.assertRaises(B.Refused) as c:
                     B.check_payment(d)
@@ -696,6 +711,8 @@ class Payment(unittest.TestCase):
             else:
                 self.assertMalformed(d, k)
             for w in (None, True, 0, 1.5, [], {}, "", "x"):
+                if w == "x" and k in ("payee_entity_id", "psp_id"):
+                    continue                                    # "x" is a valid identifier there
                 d = copy.deepcopy(base)
                 d[k] = w
                 n += 1
@@ -736,7 +753,15 @@ class Payment(unittest.TestCase):
             with self.assertRaises(B.Refused) as c:
                 B.check_payment(d)
             self.assertEqual(c.exception.reason, "source_not_supported")
-        self.assertEqual(n, 12 * 9)
+        self.assertEqual(n, 22 * 9 - 2)                 # 22 members; "x" is a valid payee_entity_id and psp_id
+
+    def test_library_values_of_another_type(self):
+        """check_payment can be called with Python values that the strict JSON reader never yields: 2.0 equals 2"""
+        base = payment_datas(pulse(2030303))[1]
+        for k, v in (("chain_index", 2.0), ("chain_index", True), ("pulse_index", 2030303.0)):
+            d = copy.deepcopy(base)
+            d["beacons"][0][k] = v
+            self.assertMalformed(d, "beacons[0]." + k)
 
     def test_beacons_list(self):
         base = payment_datas(pulse(2030303))[1]
@@ -751,12 +776,37 @@ class Payment(unittest.TestCase):
             B.check_payment(dict(base, beacons=[b, dict(other, source="drand")]))
         self.assertEqual((c.exception.reason, c.exception.detail[:21]), ("source_not_supported", "beacons[1].source 'dr"))
 
+    def test_clear_members(self):
+        """execution_date a real calendar date; payee_entity_id and psp_id 1 to 35 of A-Z a-z 0-9 (SPEC §18)"""
+        base = payment_datas(pulse(2030303))[0]
+        for good in ("2024-02-29", "2026-12-31", "0001-01-01"):
+            d = dict(base, execution_date=good)
+            self.assertIs(B.check_payment(d), d)
+        for bad in ("2026-02-29", "2026-13-01", "2026-11-16T00:00:00Z", "2026-1-16", "20261116", " 2026-11-16",
+                    "2026-11-16\n", "２０２６-11-16", "0000-01-01"):
+            self.assertMalformed(dict(base, execution_date=bad), "execution_date")
+        for k in ("payee_entity_id", "psp_id"):
+            for good in ("A", "a" * 35, "IT01234567890"):
+                B.check_payment(dict(base, **{k: good}))
+            for bad in ("a" * 36, "IT 0123", "IT-0123", "Ｉ", "é", "x\n"):
+                self.assertMalformed(dict(base, **{k: bad}), k)
+
     def test_missing_iban(self):
+        """the accounts are optional (a card payment, a creditor's receipt); at least one party identifier is required"""
         base = payment_datas(pulse(2030303))[1]
         for k in ("payer_iban_commitment", "payee_iban_commitment"):
             d = dict(base)
             del d[k]
-            self.assertMalformed(d, k)
+            self.assertIs(B.check_payment(d), d)
+        d = {k: v for k, v in base.items() if k not in B.IBAN_COMMITMENTS}
+        self.assertMalformed(d, "party_identifier_missing")
+        for k in B.PARTY_IDENTIFIERS:
+            v = "EXAMPLE0001" if k == "payee_entity_id" else B.commitment(k, salt_of(k), NAMES[k] if k in NAMES else "x")
+            d2 = dict(d, **{k: v})
+            self.assertIs(B.check_payment(d2), d2)
+        for k in ("payer_name_commitment", "psp_id", "execution_date"):   # not party identifiers
+            v = {"psp_id": "EXAMPLEPSPXXX", "execution_date": "2026-11-16"}.get(k) or B.commitment(k, salt_of(k), "x")
+            self.assertMalformed(dict(d, **{k: v}), "party_identifier_missing")
         for k, v in (("payer_iban", EXAMPLE_IBANS[0]), ("payee_iban", EXAMPLE_IBANS[1])):   # an IBAN in clear is refused
             self.assertMalformed(dict(base, **{k: v}), k)
 
@@ -871,6 +921,24 @@ class Commitments(unittest.TestCase):
         r = run(LEDGER, disclosures=[self.disclosure(m) for m in B.COMMITMENTS], **run0)
         self.assertEqual((r["status"], r["disclosed"]), ("verified", list(B.COMMITMENTS)), r)
         self.assertNotIn("Maria", json.dumps(r))                       # the receipt names members, never values
+        for m in B.COMMITMENTS:                                          # SPEC §19 rule 15
+            self.assertEqual(run(LEDGER, disclosures=[self.disclosure(m)], required_disclosures=[m], **run0)["status"],
+                             "verified", m)
+            r2 = run(LEDGER, disclosures=[self.disclosure(x) for x in B.COMMITMENTS if x != m],
+                     required_disclosures=[m], **run0)
+            self.assertEqual((r2["status"], r2["reason"]), ("invalid", "required_disclosure_missing"), m)
+        r2 = run(LEDGER, required_disclosures=["payer_name_commitment"])  # entry 1 has no such member
+        self.assertEqual((r2["status"], r2["reason"]), ("invalid", "required_disclosure_missing"))
+        bad = self.disclosure("payer_tax_id_commitment", "TAXID-EXAMPLE-9999")
+        r2 = run(LEDGER, disclosures=[bad], required_disclosures=["payer_tax_id_commitment"], **run0)
+        self.assertEqual(r2["reason"], "disclosure_mismatch")           # a wrong opening fails before the requirement
+        for req in (["payer_iban"], ["profile"], ["psp_id"], ["payer_name_commitment"] * 2, [None]):
+            with self.assertRaises(ValueError):
+                run(LEDGER, required_disclosures=req, **run0)
+        opened = {"commitments_not_opened": B.SCOPE["commitments_not_opened"]}
+        self.assertNotIn(opened, r["scope"]["does_not_prove"])            # every commitment of the entry disclosed
+        r = run(LEDGER, disclosures=[self.disclosure(m) for m in B.COMMITMENTS[:-1]], **run0)
+        self.assertIn(opened, r["scope"]["does_not_prove"])               # one left closed
         for d, why in ((self.disclosure("payer_name_commitment", "Maria Exampel"), "another name"),
                        (self.disclosure("payer_name_commitment", salt=salt_of("payer_name_commitment", "v2")), "another salt"),
                        (self.disclosure("payee_name_commitment", NAMES["payer_name_commitment"],
@@ -1396,11 +1464,14 @@ class Uniqueness(unittest.TestCase):
         r = self.u(led, both, witness_vkeys=self.wit + [self.keys["witness.example/b"][1]], min_witnesses=2)
         self.assertEqual(r["unique"]["witnesses"], ["witness.example/a", "witness.example/b"])
         self.assertEqual(self.u(led, witnessed_checkpoint(led, self.keys, origin="other.example"))["reason"],
-                         "checkpoint_not_witnessed")                    # another origin than the pinned log's
+                         "checkpoint_log_not_trusted")                  # another origin than the pinned log's
         self.assertEqual(self.u(led, note.replace(b"example.org/payments\n", b"example.org/paymentz\n", 1))["reason"],
-                         "checkpoint_not_witnessed")
+                         "checkpoint_log_not_trusted")                  # the log's signature no longer holds
+        other_log = dict(self.keys, **{"example.org/payments": (hashlib.sha256(b"another log").digest(), None)})
+        self.assertEqual(self.u(led, witnessed_checkpoint(led, other_log))["reason"],
+                         "checkpoint_log_not_trusted")                  # same log name, another key: another provider
         for bad in (b"not a note", note + b"\x00"):
-            self.assertEqual(self.u(led, bad)["reason"], "checkpoint_not_witnessed")   # verify_witnessed: NON_VALIDA
+            self.assertEqual(self.u(led, bad)["reason"], "checkpoint_log_not_trusted")   # not a note signed by the log
         self.assertEqual(self.u(led, note, pack=pk, log_vkeys=self.wit)["reason"], "checkpoint_malformed")
         self.assertEqual(self.u(led, note, pack=pk, witness_vkeys=["nonsense"])["reason"], "checkpoint_malformed")
         self.assertEqual(self.u(led, self.td, pack=pk)["reason"], "checkpoint_malformed")   # a directory
@@ -1602,6 +1673,170 @@ class DoubleFaults(unittest.TestCase):
 
 
 # every result code of SPEC §19 rule 8 (backend_missing excepted: it is the absence of cryptography, not an input)
+def entry_line(ledger_bytes, idx):
+    """the line of entry `idx`, as the provider gives it alone (SPEC §19 rule 14)"""
+    return [x for x in ledger_bytes.split(b"\n") if x.strip()][idx] + b"\n"
+
+
+def checkpoint_ledger(note):
+    """the ledger a provider puts in the pack of rule 14: one entry recording the checkpoint, no payment"""
+    return chain([{"event": "checkpoint", "note_sha256": hashlib.sha256(note).hexdigest()}], ["2026-11-16T13:05:00Z"])
+
+
+@NEEDS_CRYPTO
+class EntryProof(unittest.TestCase):
+    """SPEC §19 rule 14: one entry and its inclusion proof under the witnessed checkpoint of the pack, without the
+    ledger: the third party never receives another payer's entry"""
+
+    @classmethod
+    def setUpClass(cls):
+        from test_tsa_revocation_20261116 import Lab
+        cls.td = tempfile.mkdtemp()
+        cls.lab = Lab(cls.td)
+        cls.keys = witness_material()
+        cls.led = build_payment_ledger()
+        cls.note = witnessed_checkpoint(cls.led, cls.keys)
+        cls.pk = make_pack(cls.td, "entry_pack", checkpoint_ledger(cls.note), cls.lab, {"checkpoint.note": cls.note})
+        cls.entry = write(cls.td, "entry.json", entry_line(cls.led, 1))
+        cls.proof = write(cls.td, "proof.json", json.dumps(B.inclusion_proof(cls.led, 1, 3)).encode())
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.td)
+
+    def v(self, entry=None, proof=None, **kw):
+        a = dict(pack_dir=self.pk, tsa_certs=[self.lab.j("ca.crt")], max_window_s=WIDE, checkpoint=self.note,
+                 log_vkeys=[self.keys["example.org/payments"][1]], witness_vkeys=[self.keys["witness.example/a"][1]])
+        a.update(kw)
+        return B.verify_beacon_entry_proof(entry or self.entry, proof or self.proof, raw(2030303), raw(2030302), CERT, **a)
+
+    def test_verified_and_nothing_of_the_others(self):
+        r = self.v(tsa_crls=[self.lab.crl()])
+        self.assertEqual((r["status"], r["unique"]["status"], r["record_complete"]), ("verified", "witnessed", True), r)
+        self.assertIsNone(r["window"]["pack_ledger"])
+        self.assertIn({"payment_id_uniqueness": B.SCOPE["payment_id_uniqueness"]}, r["scope"]["does_not_prove"])
+        self.assertNotIn({"payment_id_uniqueness": B.SCOPE["payment_id_uniqueness"]},
+                         run(LEDGER)["scope"]["does_not_prove"])
+        others = payment_datas(pulse(2030303))[0]
+        secrets = [others["payment_id"], others["amount"], others["record_salt"], "not a payment"] + \
+            [others[k] for k in B.COMMITMENTS]
+
+        def given(paths):
+            out = b""
+            for p in paths:
+                if os.path.isdir(p):
+                    for n in sorted(os.listdir(p)):
+                        with open(os.path.join(p, n), "rb") as f:
+                            out += f.read()
+                else:
+                    with open(p, "rb") as f:
+                        out += f.read()
+            return out
+        seen = given([self.entry, self.proof, self.pk])
+        for x in secrets:
+            self.assertNotIn(x.encode(), seen, x)                        # absent from all the third party receives
+        full = make_pack(self.td, "ledger_pack", self.led, self.lab, {"checkpoint.note": self.note})
+        self.assertTrue(all(x.encode() in given([full]) for x in secrets))   # control: the ledger's pack carries them
+
+    def test_entry_failures(self):
+        e = json.loads(entry_line(self.led, 1))
+        for bad, why in ((b"not json", "entry_malformed"), (b"[]", "entry_malformed"),
+                         (json.dumps(dict(e, extra=1)).encode(), "entry_malformed"),
+                         (json.dumps({k: v for k, v in e.items() if k != "ts"}).encode(), "entry_malformed"),
+                         (json.dumps(dict(e, idx=True)).encode(), "entry_malformed"),
+                         (json.dumps(dict(e, idx=-1)).encode(), "entry_malformed"),
+                         (json.dumps(dict(e, self_hash=e["self_hash"].upper())).encode(), "entry_malformed"),
+                         (json.dumps(dict(e, prev_hash="0" * 63)).encode(), "entry_malformed"),
+                         (json.dumps(dict(e, data=[])).encode(), "entry_malformed"),
+                         (b"\xff" + entry_line(self.led, 1), "entry_malformed"),
+                         (entry_line(self.led, 1) + b"\n", "entry_malformed"),
+                         (b" " * (B.MAX_ENTRY + 1), "input_too_large"),
+                         (json.dumps(dict(e, data=dict(e["data"], amount="199.95"))).encode(), "entry_hash_mismatch")):
+            r = self.v(entry=bad)
+            self.assertEqual(r["reason"], why, bad[:60])
+        f = dict(e, data=dict(e["data"], amount="199.95"))              # rehashed: a valid entry, not the logged one
+        f["self_hash"] = verifier.hash_with("sha256", verifier.canonical_payload(f))
+        self.assertEqual(self.v(entry=json.dumps(f).encode())["reason"], "inclusion_proof_invalid")
+        g = dict(e, ts="2026-11-16T13:05:00Z")                            # outside data, still in the leaf
+        g["self_hash"] = verifier.hash_with("sha3_256", verifier.canonical_payload(g))
+        self.assertEqual(self.v(entry=json.dumps(g).encode())["reason"], "inclusion_proof_invalid")
+
+    def test_proof_failures(self):
+        p = B.inclusion_proof(self.led, 1, 3)
+        h = p["hashes"]
+        for bad, why in ((b"{}", "proof_malformed"), (json.dumps(dict(p, extra=1)).encode(), "proof_malformed"),
+                         (json.dumps(dict(p, format="cryptovalid-inclusion-proof/2")).encode(), "proof_malformed"),
+                         (json.dumps(dict(p, leaf_index=3)).encode(), "proof_malformed"),
+                         (json.dumps(dict(p, tree_size=0)).encode(), "proof_malformed"),
+                         (json.dumps(dict(p, leaf_index=True)).encode(), "proof_malformed"),
+                         (json.dumps(dict(p, tree_size=3.0)).encode(), "proof_malformed"),
+                         (json.dumps(dict(p, hashes=[x.upper() for x in h])).encode(), "proof_malformed"),
+                         (json.dumps(dict(p, hashes=h[0])).encode(), "proof_malformed"),
+                         (json.dumps(dict(p, hashes=h * 33)).encode(), "proof_malformed"),
+                         (b" " * (B.MAX_PROOF + 1), "input_too_large"),
+                         (json.dumps(dict(p, leaf_index=0)).encode(), "proof_mismatch"),
+                         (json.dumps(B.inclusion_proof(self.led, 1, 2)).encode(), "proof_mismatch"),
+                         (json.dumps(dict(p, hashes=h[::-1])).encode(), "inclusion_proof_invalid"),
+                         (json.dumps(dict(p, hashes=h + [h[0]])).encode(), "inclusion_proof_invalid"),
+                         (json.dumps(dict(p, hashes=h[:-1])).encode(), "inclusion_proof_invalid"),
+                         (json.dumps(dict(p, hashes=[("1" if h[0][0] == "0" else "0") + h[0][1:]] + h[1:])).encode(),
+                          "inclusion_proof_invalid")):
+            self.assertEqual(self.v(proof=bad)["reason"], why, bad[:80])
+        self.assertEqual(self.v(proof=json.dumps(p, indent=1).encode() + b"\n")["status"], "verified")
+
+    def test_order_and_arguments(self):
+        r = self.v(entry=b"not json", proof=b"{}")
+        self.assertEqual(r["reason"], "entry_malformed")                 # the entry before the proof
+        r = self.v(proof=json.dumps(dict(B.inclusion_proof(self.led, 1, 3), leaf_index=0)).encode(),
+                   checkpoint=b"not a note")
+        self.assertEqual(r["reason"], "proof_mismatch")                  # leaf against idx before the checkpoint
+        r = self.v(checkpoint=witnessed_checkpoint(self.led, self.keys, witnesses=()))
+        self.assertEqual(r["reason"], "checkpoint_not_in_pack")
+        for kw in ({"pack_dir": None}, {"checkpoint": None}):
+            with self.assertRaises(ValueError):
+                self.v(**kw)
+        with self.assertRaises(ValueError):
+            B.inclusion_proof(self.led, 3, 3)
+        r = self.v(required_disclosures=["payer_iban_commitment"])
+        self.assertEqual(r["reason"], "required_disclosure_missing")
+
+    def test_proofs_of_every_leaf(self):
+        """the provider's helper against the verifier, every leaf of every tree size 1..9"""
+        import cryptovalid_merkle as M
+        datas = [{"n": i} for i in range(9)]
+        led = chain(datas, ["2026-11-16T13:05:00Z"] * 9)
+        es = [json.loads(x) for x in led.decode().split("\n") if x]
+        for n in range(1, 10):
+            root = M.mth([M.canonical(x) for x in es[:n]])
+            for m in range(n):
+                pr = B.inclusion_proof(led, m, n)
+                self.assertTrue(M.verify_inclusion(m, n, M.canonical(es[m]), [bytes.fromhex(x) for x in pr["hashes"]],
+                                                   root), (m, n))
+                if n > 1:
+                    self.assertFalse(M.verify_inclusion(m, n, M.canonical(es[(m + 1) % n]),
+                                                        [bytes.fromhex(x) for x in pr["hashes"]], root), (m, n))
+
+    def test_command_line(self):
+        a = ["beacon", "--entry-file", self.entry, "--proof", self.proof, "--pulse", pf(2030303),
+             "--previous", pf(2030302), "--certificate", CERT, "--pack", self.pk,
+             "--tsa-cert", self.lab.j("ca.crt"), "--max-window", str(WIDE), "--checkpoint",
+             write(self.td, "cp.note", self.note), "--log-vkey", self.keys["example.org/payments"][1],
+             "--witness-vkey", self.keys["witness.example/a"][1]]
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py")] + a, capture_output=True,
+                           text=True, timeout=300)
+        self.assertEqual(r.returncode, 0, r.stdout[-400:] + r.stderr[-400:])
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py")] + a + ["--require-disclosure",
+                           "payer_iban_commitment"], capture_output=True, text=True, timeout=300)
+        self.assertEqual((r.returncode, json.loads(r.stdout)["reason"]), (1, "required_disclosure_missing"))
+        for extra in ([LEDGER], ["--entry", "1"]):
+            r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py")] + a + extra,
+                               capture_output=True, text=True, timeout=300)
+            self.assertEqual(r.returncode, 2, extra)
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py")] + a + ["--require-disclosure",
+                           "payer_iban"], capture_output=True, text=True, timeout=300)
+        self.assertEqual(r.returncode, 2)
+
+
 CODES = {"input_unreadable", "input_too_large", "ledger_invalid", "entry_not_found", "entry_not_a_payment",
          "payment_malformed", "source_not_supported", "payment_id_not_unique", "disclosure_malformed",
          "disclosure_iban_invalid", "disclosure_mismatch", "pulse_malformed", "version_not_supported",
@@ -1611,10 +1846,12 @@ CODES = {"input_unreadable", "input_too_large", "ledger_invalid", "entry_not_fou
          "period_mismatch", "commitment_mismatch", "beacon_value_mismatch", "pack_not_valid", "time_anchor_not_verified",
          "ledger_not_in_pack", "window_inverted", "window_too_wide", "trusted_list_malformed", "checkpoint_malformed",
          "checkpoint_not_in_pack", "checkpoint_not_witnessed", "checkpoint_cosigned_after_gen_time",
-         "checkpoint_not_covering_entry", "checkpoint_root_mismatch"}
+         "checkpoint_not_covering_entry", "checkpoint_root_mismatch", "checkpoint_log_not_trusted",
+         "required_disclosure_missing", "entry_malformed", "entry_hash_mismatch", "proof_malformed", "proof_mismatch",
+         "inclusion_proof_invalid"}
 CASE_KEYS = {"name", "ledger", "entry", "pulses", "certificates", "expected", "disclosures", "pack", "tsa_certs",
              "tsa_crls", "tsa_trusted_list", "max_window_s", "clock_tolerance_s", "checkpoint", "log_vkeys",
-             "witness_vkeys", "min_witnesses"}
+             "witness_vkeys", "min_witnesses", "entry_file", "proof", "required_disclosures"}
 
 
 def conformance_run(c):
@@ -1627,8 +1864,12 @@ def conformance_run(c):
     for k, a in (("pack", "pack_dir"), ("checkpoint", "checkpoint"), ("tsa_trusted_list", "tsa_trusted_list")):
         if k in c:
             kw[a] = j(c[k])
-    return B.verify_beacon_entry(j(c["ledger"]), c["entry"], [j(p) for p, _ in c["pulses"]],
-                                 [j(q) for _, q in c["pulses"]], [j(x) for x in c["certificates"]], **kw)
+    if "required_disclosures" in c:
+        kw["required_disclosures"] = c["required_disclosures"]
+    pulses = ([j(p) for p, _ in c["pulses"]], [j(q) for _, q in c["pulses"]], [j(x) for x in c["certificates"]])
+    if "entry_file" in c:   # SPEC §19 rule 14: one entry and its proof, no ledger
+        return B.verify_beacon_entry_proof(j(c["entry_file"]), j(c["proof"]), *pulses, **kw)
+    return B.verify_beacon_entry(j(c["ledger"]), c["entry"], *pulses, **kw)
 
 
 class Conformance(unittest.TestCase):
@@ -1642,7 +1883,7 @@ class Conformance(unittest.TestCase):
 
     def test_format_and_coverage(self):
         self.assertEqual(set(self.doc), {"format", "spec", "paths", "cases", "window_cases"})
-        self.assertEqual(self.doc["format"], "cryptovalid-beacon-conformance/2")
+        self.assertEqual(self.doc["format"], "cryptovalid-beacon-conformance/3")
         for c in self.doc["cases"]:
             self.assertLessEqual(set(c), CASE_KEYS, c["name"])
             self.assertEqual(set(c["expected"]), {"status", "reason", "record_complete"}, c["name"])
