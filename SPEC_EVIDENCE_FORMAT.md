@@ -852,20 +852,43 @@ alignment with their element names is claimed):
 | `payment_id` | yes | a random identifier the provider draws for the payment, never a reference of the payer: a version 4 UUID (RFC 9562) in its lowercase canonical form, 36 characters `xxxxxxxx-xxxx-4xxx-Yxxx-xxxxxxxxxxxx` with `x` in `0-9a-f` and `Y` in `8 9 a b` (the form of an ISO 20022 UETR); no two payment entries of the prefix of the ledger the verifier receives carry the same value (`payment_id_not_unique`) |
 | `amount` | yes | a string (never a JSON number, §3), in one canonical form: the integer part `0` or 1 to 18 digits not starting with 0; then, when the currency has N > 0 minor units, `.` and exactly N digits (`1.50`, never `1.5`), and when N = 0 nothing; greater than zero |
 | `currency` | yes | an ISO 4217 alphabetic code with numeric minor units, from list one as published by the maintenance agency on 2026-09-17 (165 codes; the 13 codes whose minor units are "N.A.", such as XAU and XDR, are not accepted) |
-| `payer_iban_commitment` | yes | commitment to the payer's IBAN, rule below |
-| `payee_iban_commitment` | yes | commitment to the payee's IBAN |
 | `beacons` | yes | a list of 1 to 8 beacon values of §19 rule 1, each an object of exactly `source`, `chain_index`, `pulse_index`, `output_value` |
 | `record_salt` | yes | 32 to 128 lowercase hexadecimal characters, an even number (16 to 64 bytes: at least 128 bits) the provider draws at random for this entry |
+| `execution_date` | no | the date the payment service provider executed the payment, `YYYY-MM-DD` and a real calendar date, as the provider records it (a claim of the provider: the window dates the entry, not the execution) |
+| `payee_entity_id` | no | in clear, only for a payee that is not a natural person (a public body, a company): its identifier as the provider records it (for example a tax code), 1 to 35 characters `A-Z a-z 0-9`; for a natural person use `payee_name_commitment` |
+| `psp_id` | no | in clear: an identifier of the payment service provider that executed the payment (for example a BIC or a registry code), 1 to 35 characters `A-Z a-z 0-9` |
+| `payer_iban_commitment` | no | commitment to the payer's IBAN, rule below |
+| `payee_iban_commitment` | no | commitment to the payee's IBAN |
 | `payer_name_commitment` | no | commitment to the payer's name |
+| `payer_tax_id_commitment` | no | commitment to the payer's tax identifier (for example an Italian codice fiscale) |
 | `payer_details_commitment` | no | commitment to the payer's address, document or birth data, as the provider records them |
+| `debtor_name_commitment` | no | commitment to the name of the debtor, when another person than the payer |
+| `debtor_tax_id_commitment` | no | commitment to the debtor's tax identifier |
 | `payee_name_commitment` | no | commitment to the payee's name |
-| `end_to_end_id_commitment` | no | commitment to the EndToEndId the payer gave, when the provider keeps it |
+| `end_to_end_id_commitment` | no | commitment to the EndToEndId the payer gave |
+| `notice_code_commitment` | no | commitment to the creditor's payment reference (for example a pagoPA notice code or IUV) |
+| `purpose_commitment` | no | commitment to the purpose text (causale) |
+| `receipt_id_commitment` | no | commitment to the provider's receipt identifier |
+| `rrn_commitment` | no | commitment to a card payment's retrieval reference number |
+
+At least one **party identifier** is present: `payer_iban_commitment`, `payee_iban_commitment`, `payer_tax_id_commitment`,
+`debtor_tax_id_commitment` or `payee_entity_id` (`payment_malformed`, `party_identifier_missing`). Which identifiers a
+payment needs depends on the instrument and the law: Regulation (EU) 2023/1113 Art. 5(1) asks, for a transfer of funds
+whose providers are all in the Union, at least the payment account numbers of payer and payee (or the unique transaction
+identifier where Art. 4(3) applies); a card payment has no payer IBAN, and a creditor that issues a receipt may not know
+it; this profile records what the provider has and does not judge which law applies. **In clear or committed** (after
+EDPB Guidelines 02/2025 v2.0 §52, rule 13 of §19): what identifies or can single out a natural person, or a payment of
+one (names, tax identifiers, IBANs, the payer's details, the creditor's reference, the purpose text, the receipt
+identifier, the RRN), is a commitment; in clear only what identifies a payment service provider or a payee that is not a
+natural person, the amount, the currency, the execution date and the random identifier, which may still be personal data
+in the hands of whoever can link them (§18 "Personal data").
 
 **Order of the profile's checks** (closed: the first that fails gives the outcome, and its detail names the member):
 (1) `profile` is this profile's, else `entry_not_a_payment`; (2) no member outside the table (all unknown members named,
 in code-point order); (3) no required member missing (named in the order of the table); (4) `payment_id`; (5)
-`currency`; (6) `amount` (its decimals by the currency of step 5); (7) `record_salt`; (8) each commitment present, in
-the order of the table; (9) `beacons`: a list of 1 to 8 elements, then each element in list order: its members, then
+`currency`; (6) `amount` (its decimals by the currency of step 5); (7) `record_salt`; (7a) `execution_date`,
+`payee_entity_id`, `psp_id` when present, in this order; (8) each commitment present, in the order of the table; (8a) at
+least one party identifier; (9) `beacons`: a list of 1 to 8 elements, then each element in list order: its members, then
 `source` (a string; a value outside the closed list of §19 is `source_not_supported`), `chain_index`, `pulse_index`,
 `output_value`; then no two elements with the same `source` and `pulse_index`. Every failure of (2)-(9) other than
 `source_not_supported` is `payment_malformed`.
@@ -883,7 +906,7 @@ name that normalises to the same NFC string opens the same commitment: the provi
 discloses, and the verifier normalises it); then UTF-8. The member name in the hashed bytes keeps a commitment from being
 moved to another member, the zero byte ends the name (no member name contains it), and the salt's fixed length leaves
 one way to split what follows. A value is 1 to 1024 characters before normalisation. A disclosure is `{"member": <one of
-the six commitment members>, "salt": <32 lowercase hex>, "value": <string>}`, exactly these members; the verifier
+the commitment members of the table>, "salt": <32 lowercase hex>, "value": <string>}`, exactly these members; the verifier
 normalises the value as above (for an IBAN member, a value that fails the IBAN rule is `disclosure_iban_invalid`) and
 the disclosure matches when the recomputed commitment equals the entry's member byte for byte (`disclosure_mismatch`
 otherwise, and when the entry has no such member). 128 bits of salt make a search over a list of IBANs or names hopeless,
@@ -1098,10 +1121,11 @@ its own pack, and a witness cosignature added 400 days later on the variant chos
 v0.10 as it was. So the entry is fixed in one history only when the witnessed checkpoint is **inside the evidence pack**
 and therefore under the token: `--checkpoint <file>`, `--log-vkey <vkey>`, `--witness-vkey <vkey> ...` (needs `--pack`).
 Checks, in order: the checkpoint file is read (a regular file of at most 1 MiB, else `checkpoint_malformed`); its
-SHA-256 is the value `file_digests_sha256` of the pack gives to one of its files (`checkpoint_not_in_pack`); the note
-verifies under a pinned log key and carries at least `--min-witnesses` (default 1) cosignatures of pinned witnesses, by
-the rules of §16 (`checkpoint_malformed` when a pinned key cannot be parsed or the keys break §16's rules on roles,
-`checkpoint_not_witnessed` otherwise, a note that is not a signed note included); no counted cosignature carries a timestamp after genTime
+SHA-256 is the value `file_digests_sha256` of the pack gives to one of its files (`checkpoint_not_in_pack`); the
+pinned keys can be parsed and keep §16's rules on roles (`checkpoint_malformed`); the note is a signed note, signed by a
+pinned log key, whose origin is the pinned log's (`checkpoint_log_not_trusted`: the checkpoint does not come from that
+log); it carries at least `--min-witnesses` (default 1) cosignatures of pinned witnesses, by the rules of §16
+(`checkpoint_not_witnessed`); no counted cosignature carries a timestamp after genTime
 (`checkpoint_cosigned_after_gen_time`: the witness's clock and the TSA's contradict each other); its size N covers the
 entry (N > idx, `checkpoint_not_covering_entry`); its root is the RFC 6962 root of the first N entries of this ledger
 (`cryptovalid_merkle`, leaves = the canonical entries; a size larger than the ledger is `checkpoint_root_mismatch`).
@@ -1134,6 +1158,8 @@ this closed list, never composed:
 - does not prove `not_ownership`: "that the IBANs belong to the parties";
 - does not prove `commitments_not_opened` (while a commitment of the entry is not in `disclosed`): "that a commitment not
   disclosed here opens to an IBAN, a name or an identifier";
+- does not prove `payment_id_uniqueness` (one entry verified without its ledger, rule 14): "that no other entry of the
+  ledger carries the same payment_id";
 - does not prove `not_operator`: "anything against the beacon's operator beyond its freshness promise";
 - does not prove `not_qualified` (unless `stamped_by_qualified_tsa`): "that the upper bound is a qualified electronic
   time stamp";
@@ -1156,21 +1182,25 @@ checkpoint with its pinned log and witness keys; disclosures. Steps, in this ord
    `source_not_supported`); then `payment_id` unique among the ledger's payment entries (`payment_id_not_unique`).
 3. Disclosures: each read in the order given (`input_unreadable`, `input_too_large`, `disclosure_malformed`), two for one
    member `disclosure_malformed`; then each checked in the order given (`disclosure_iban_invalid`,
-   `disclosure_mismatch`).
+   `disclosure_mismatch`); then the required disclosures of rule 15 (`required_disclosure_missing`).
 4. Pulses, pair by pair in the order of `beacons`: the named pulse then its predecessor read by rule 2
    (`input_unreadable`, `input_too_large`, `pulse_malformed`); then rule 3 steps 1–9 for that pair, step 4 reading the
    pinned certificates (`certificate_malformed`). `cryptography` absent: `not_evaluated` / `backend_missing`.
 5. Window, rule 5, in the order written there (`pack_not_valid`, `time_anchor_not_verified`, `pack_not_valid`,
    `ledger_not_in_pack`, `window_inverted`, `window_too_wide`, `trusted_list_malformed`).
 6. Fixed in one history, rule 6, in the order written there (`checkpoint_malformed`, `checkpoint_not_in_pack`,
-   `checkpoint_malformed`, `checkpoint_not_witnessed`, `checkpoint_cosigned_after_gen_time`, `checkpoint_not_covering_entry`,
+   `checkpoint_malformed`, `checkpoint_log_not_trusted`, `checkpoint_not_witnessed`, `checkpoint_cosigned_after_gen_time`, `checkpoint_not_covering_entry`,
    `checkpoint_root_mismatch`).
 7. Receipt: `status` (`verified` | `invalid` | `refused` | `not_evaluated`), `reason` (one code above or null), `bounds`
    (rule 4), `window`, `unique`, `disclosed`, `scope` (rule 7), `record_complete`.
 
+With one entry and a proof (rule 14), step 1 is rule 14's items 1-2 (`input_unreadable`, `input_too_large`,
+`entry_malformed`, `entry_hash_mismatch`, `proof_malformed`, `proof_mismatch`) and step 6 ends with rule 14's item 4
+(`proof_mismatch`, `inclusion_proof_invalid`).
+
 Status `refused` (malformed input, exit 2) has exactly the codes `input_unreadable`, `input_too_large`,
 `entry_not_a_payment`, `payment_malformed`, `source_not_supported`, `disclosure_malformed`, `pulse_malformed`,
-`certificate_malformed`, `checkpoint_malformed`, `trusted_list_malformed`; every other code is `invalid` (exit 1).
+`certificate_malformed`, `checkpoint_malformed`, `trusted_list_malformed`, `entry_malformed`, `proof_malformed`; every other code is `invalid` (exit 1).
 Conformance vectors: `spec/vectors/beacon/conformance.json`, at least one case for every code of this rule and a
 complete record.
 
@@ -1240,11 +1270,53 @@ marks what could not be checked against its issuer today.
 | ETSI TS 119 612, TS 119 615, EN 319 102-1 | not confirmed: versions not re-read; the rules applied are the ones written in rule 5 | — |
 | C2SP tlog-checkpoint, tlog-witness | as in §16 (C2SP commit 09f3e519fe79, read 2026-11-15) | github.com/C2SP |
 
+**14. One entry without the ledger.** Rule 5 binds the token to the whole ledger file, so a third party that verifies
+one payment receives every other payment of that ledger, with their amounts and identifiers in clear (found on
+2026-11-16 by a sample built for a public-sector receipt). A provider can instead give one entry and an inclusion proof:
+`cryptovalid-verify beacon-entry <entry> --proof <proof> ...` (library `verify_beacon_entry_proof`), with `--pack`,
+`--checkpoint`, `--log-vkey` and `--witness-vkey` required. The pack need not hold the ledger: it holds the witnessed
+checkpoint (rule 6), whose RFC 6962 root covers every entry up to its size, and the token over the pack is the upper bound
+for all of them. The third party receives the entry, the proof, the pack with the checkpoint, the pulses and the
+disclosures; no other entry of the ledger, and the test of this rule checks that the other entries are absent from
+everything it is given. Checks, replacing step 1 of rule 8 and completing step 6:
+
+1. **The entry**: a UTF-8 JSON document of at most 1 MiB, read as a ledger line (§3), whose value is one entry of §2 with
+   the closed members of §2.1 (`entry_malformed`); its `self_hash` is the SHA-256 or SHA3-256 of its canonical form (§3;
+   `entry_hash_mismatch`).
+2. **The proof**: a UTF-8 JSON document of at most 64 KiB, read the same way, whose value is exactly `{"format":
+   "cryptovalid-inclusion-proof/1", "leaf_index": <integer ≥ 0>, "tree_size": <integer ≥ 1>, "hashes": [<64 lowercase
+   hex>, ...]}` with `leaf_index` < `tree_size` and at most 64 hashes (`proof_malformed`); `leaf_index` equals the entry's
+   `idx` (`proof_mismatch`).
+3. Steps 2-5 of rule 8, without the uniqueness of `payment_id` (the ledger is not given: the scope says
+   `payment_id_uniqueness`) and without `ledger_not_in_pack`.
+4. Rule 6 on the checkpoint, then: `tree_size` equals the checkpoint's size (`proof_mismatch`), and the Merkle audit path
+   of RFC 6962 §2.1.1 for the leaf = the entry's canonical form at `leaf_index` gives the checkpoint's root
+   (`inclusion_proof_invalid`).
+
+The entry's `prev_hash` is not checked (its predecessor is not given): the chain is shown by the inclusion under a
+checkpoint the log signed and the witnesses cosigned, not by `prev_hash`. A provider makes the proof with
+`cryptovalid_beacon.inclusion_proof(ledger, idx, tree_size)`.
+
+**15. Required disclosures.** A verifier's caller can require that named commitment members be opened:
+`required_disclosures=[...]`, `--require-disclosure <member>` (repeatable; a name outside the commitment members of §18 is
+a usage error). After the disclosures of step 3 of rule 8, each required member that is not in `disclosed` is
+`required_disclosure_missing` (invalid): the entry has no such member, or no disclosure of it was given. Without the
+option nothing is required, and the scope says which commitments stay closed (`commitments_not_opened`).
+
 **12. Limits of this version, stated** (each with its reason): the trust profile file (rule 9); the token's renewal
 (rule 5); `accuracy` (rule 5: read by §11 only as part of the token, not used); the verification of the payee's outcome
 (§18: its codes not read on the primary text); drand (no grammar measured yet); the beacon certificate's revocation (no
 CRL of the beacon's TLS certificate is meaningful for its signatures); the test suite of this section run without
-`cryptography` skips the checks that need RSA and X.509 (they cannot run) and runs the rest.
+`cryptography` skips the checks that need RSA and X.509 (they cannot run) and runs the rest. **Origin by a qualified
+signature or seal**: the checkpoint of rule 6 is signed with the log's Ed25519 key (§13, §16), not with an advanced
+electronic signature or seal based on a qualified certificate. For a printed mark on an analogue copy of an
+administrative document, Italian law (D.Lgs. 82/2005, CAD, art. 23 c. 2-bis, text in force read on normattiva.it on
+2026-11-16) refers to criteria set by AgID guidelines and asks whoever affixes the mark to publish free means to verify
+it; the AgID Circolare n. 62/2013 (§6.1-6.3, as read by an internal review on 2026-11-16, not re-read here; whether a
+later AgID guideline replaces it was not confirmed) asks a qualified or digital signature on the mark's content when the
+original is not signed. A CAdES/JAdES signature or qualified seal over the checkpoint is a planned extension, not part of
+v0.10; this format's output is not such a mark. **A paper pointer** (the text of a printed code that points to the
+evidence) is out of scope in v0.10: its fields, alphabet and comparison rule are not defined here.
 
 Vectors: `spec/vectors/beacon/` — six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on
 2026-11-16 with their URLs and hashes (`README.md`), a payment ledger derived from them by code (`test_beacon_20261116.py`
