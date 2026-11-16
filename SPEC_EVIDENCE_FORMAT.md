@@ -486,8 +486,9 @@ certificate was revoked for key compromise is `verified`; `openssl ts -verify -c
    pinned CRL that carries an extension other than cRLNumber, authorityKeyIdentifier, authorityInfoAccess and
    freshestCRL (a delta CRL, an issuing distribution point), or an entry extension other than reasonCode and
    invalidityDate, is not processed here and gives `tsa_revocation_unknown` (RFC 5280 §5.2, §6.3.3: such a CRL may not
-   cover every certificate and reason). An applicable CRL whose thisUpdate is before the token's genTime cannot show that
-   the certificate was not revoked at genTime: the outcome is `tsa_revocation_unknown` (whatever it lists or omits).
+   cover every certificate and reason). When the latest applicable CRL was issued (thisUpdate) before the token's
+   genTime, the CRLs cannot show that the certificate was not revoked at genTime: the outcome is
+   `tsa_revocation_unknown` (whatever they list or omit).
    `cryptography` absent: `not_evaluated`, reason `crl_backend_missing`.
 
 `crls` without `tsa_certs`, or a pinned item that is not one CRL, is a `ValueError` (exit 2 in a command). The CRL is
