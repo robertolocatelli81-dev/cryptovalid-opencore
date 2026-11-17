@@ -456,6 +456,17 @@ first that fails gives the outcome:
      -no-CApath -no-CAstore -untrusted <pinned and the token's certificates>` over the signer certificate, exit 0: the
      extended key usage timeStamping (OpenSSL's purpose: present, critical, the only one), the chain to a pinned
      certificate and the validity at genTime, with the same OpenSSL chain building as `ts -verify`.
+     Closed shapes (v0.10, measured on 2026-11-17 against the generative bench of omega-cra-evol's port of this step,
+     which found them): exactly one SignerInfo (step 1 asks it of the token; this step asks it again of what it reads);
+     every signed attribute is `Attribute ::= SEQUENCE { attrType OID, attrValues SET }` and nothing else; a
+     SigningCertificate or SigningCertificateV2 is `{certs SEQUENCE OF ESSCertID(v2), policies OPTIONAL}`, `policies` a
+     SEQUENCE OF PolicyInformation, each a SEQUENCE that starts with an OID (RFC 2634 §5.4.1, RFC 5035 §3); anything else
+     is `not_issued_by_pinned_tsa`. Until this correction the attribute's tag, elements after attrValues, the tag of
+     attrValues and the elements after `certs` were not read: 9 changes inside the ESS attribute and 8 attributes
+     retagged or extended were accepted by this step alone (the CMS signature of step 6 covers the signed attributes, so
+     no token was accepted by §11 for it). An openssl whose `verify` does not know an option this step gives (before
+     OpenSSL 3.0, `-no-CAstore`: it answers "Unknown option") is a check not run here (`CheckNotRun`, exit 74), not a
+     refusal: until this correction it was `not_issued_by_pinned_tsa`.
    Failure is `not_issued_by_pinned_tsa`. Without `tsa_certs` there is no anchor (step 8). In both forms, a pinned leaf
    (the TSA certificate itself) does not end the chain: OpenSSL continues it with the certificates the token carries and
    checks the CA above the leaf too (a CA expired at genTime, not a CA, or without keyCertSign makes the token refused),
