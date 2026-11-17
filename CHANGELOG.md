@@ -156,6 +156,19 @@ run by the same author, not by a third party.
   the new lines, 34 detected, 1 equivalent (the sid tag compared with `!= 0x30` instead of `== 0x80`: `parse_token`
   admits no other tag).
 
+- **The step for a signer named by subjectKeyIdentifier, closed by construction** (SPEC v0.10 §11 step 7 "Closed
+  shapes", written before the code). The port of this step to omega-cra-evol was stricter in three points; each was
+  measured here on 2026-11-17 with that port's generative bench (every DER element of a key-identified token dropped,
+  duplicated, retagged, given a stranger or flipped: 536 variants): (a) two SignerInfos: `verify_token` already refused
+  them at step 1 (`malformed`); the step's helper alone took the first, and now refuses; (b) the helper accepted 9
+  changes inside the ESS attribute and 8 signed attributes retagged or extended (the attribute's tag, elements after
+  attrValues, the SET tag, elements after `certs`, the ESSCertID's tag were not read; none of them made §11 accept a
+  token, the CMS signature of step 6 covering the signed attributes): now every signed attribute is {OID, SET}, a
+  SigningCertificate(V2) {certs, policies?} with `policies` a SEQUENCE OF PolicyInformation, the ESSCertID a SEQUENCE;
+  0 accepted, none raises; (c) an openssl whose `verify` does not know `-no-CAstore` (before OpenSSL 3.0) was
+  `not_issued_by_pinned_tsa`; it is now a check not run (`CheckNotRun`, exit 74 in a command).
+  `test_tsa_closed_shapes_20261117.py`: 5 tests, 4 of them fail on the code before. 14 hand mutants: 14 detected.
+
 ### Measured
 
 - The deployed NIST Beacon 2.0 does not serialize as the draft NIST IR 8213 (May 2019, still an initial public draft on

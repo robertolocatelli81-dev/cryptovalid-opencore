@@ -648,6 +648,17 @@ def _signer_named_by_key_id(token_der: bytes) -> bool:
     return _signer_info(token_der)[0][1][0] == 0x80
 
 
+def _policies_shape(el: tuple) -> bool:
+    """ESS `policies` (RFC 2634 §5.4.1): SEQUENCE OF PolicyInformation, each a SEQUENCE that starts with an OID"""
+    if el[0] != 0x30:
+        return False
+    for t, v in _der_items(el[1], "policies"):
+        pi = _der_items(v, "PolicyInformation") if t == 0x30 else []
+        if not pi or pi[0][0] != 0x06:
+            return False
+    return True
+
+
 def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int, tmp: str):
     """SPEC §11 step 7 for a signer named by subjectKeyIdentifier: None when the token is established under the pinned
     certificates, else why not. (a) ESS signing-certificate attribute(s), (b) the `tsa` field, (c) openssl verify with the
@@ -655,6 +666,10 @@ def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int
     import base64
     import hashlib
     try:
+        ci = _der_items(_der_one(token_der, "ContentInfo", 0x30), "ContentInfo")
+        sis = _der_items(_der_items(_der_one(ci[1][1], "SignedData", 0x30), "SignedData")[-1][1], "signerInfos")
+        if len(sis) != 1 or sis[0][0] != 0x30:   # SPEC §11 step 7, closed shapes (step 1 asks it of the token too)
+            return f"{len(sis)} SignerInfos (exactly one is evaluated here)"
         si, tst = _signer_info(token_der)
         cert = _der_items(_der_one(signer_der, "certificate", 0x30), "certificate")
         tbs = _der_items(cert[0][1], "tbsCertificate")
@@ -670,8 +685,10 @@ def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int
                                                                               "GeneralNames")]
         # (a) ESS
         attrs = {}
-        for _t, av in _der_items(si[3][1], "signedAttrs"):
-            a = _der_items(av, "Attribute")
+        for t, av in _der_items(si[3][1], "signedAttrs"):   # Attribute ::= SEQUENCE { attrType OID, attrValues SET }
+            a = _der_items(av, "Attribute") if t == 0x30 else []
+            if len(a) != 2 or a[0][0] != 0x06 or a[1][0] != 0x31:
+                return "a signed attribute is not {attrType, attrValues SET}"
             attrs.setdefault(_der_oid(a[0][1], "attrType"), []).append(a[1][1])
         found = [o for o in (OID_SIGNING_CERTIFICATE, OID_SIGNING_CERTIFICATE_V2) if o in attrs]
         if not found:
@@ -681,9 +698,13 @@ def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int
             if len(vals) != 1 or len(_der_items(vals[0], "attrValues")) != 1:
                 return f"ESS attribute {o}: not exactly one value"
             sc = _der_items(_der_one(vals[0], "SigningCertificate", 0x30), "SigningCertificate")
+            if not 1 <= len(sc) <= 2 or sc[0][0] != 0x30 or (len(sc) == 2 and not _policies_shape(sc[1])):
+                return f"ESS attribute {o}: not {{certs, policies?}}"   # RFC 2634 §5.4, RFC 5035 §3
             ids = _der_items(sc[0][1], "certs")
             if len(ids) != 1:
                 return f"ESS attribute {o}: {len(ids)} ESSCertIDs (exactly one is evaluated here)"
+            if ids[0][0] != 0x30:
+                return f"ESS attribute {o}: the ESSCertID is not a SEQUENCE"
             cid = _der_items(ids[0][1], "ESSCertID")
             alg = "sha1"
             if o == OID_SIGNING_CERTIFICATE_V2:
@@ -725,6 +746,9 @@ def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int
                       "-CAfile", cp, "-no-CApath", "-no-CAstore", "-untrusted", up, sp], capture_output=True, timeout=30)
     if p.returncode < 0:
         raise _not_run("cannot run openssl here", OSError(f"terminated by signal {-p.returncode}"))
+    if p.returncode != 0 and b"nknown option" in (p.stderr or b"") + (p.stdout or b""):   # SPEC §11 step 7: before 3.0
+        raise _not_run("this openssl does not know an option of `verify` (OpenSSL 3.0 or later is needed)",
+                       OSError(_last_line(p.stderr or p.stdout, "unknown option")))
     if p.returncode != 0:
         return _last_line(p.stderr or p.stdout, "openssl verify refused the signer certificate")
     return None
