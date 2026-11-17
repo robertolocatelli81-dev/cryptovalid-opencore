@@ -1426,11 +1426,15 @@ CRL of the beacon's TLS certificate is meaningful for its signatures); the test 
 `cryptography` skips the checks that need RSA and X.509 (they cannot run) and runs the rest. **Origin by a qualified
 signature or seal**: the checkpoint of rule 6 is signed with the log's Ed25519 key (§13, §16), not with an advanced
 electronic signature or seal based on a qualified certificate. For a printed mark on an analogue copy of an
-administrative document, Italian law (D.Lgs. 82/2005, CAD, art. 23 c. 2-bis, text in force read on normattiva.it on
-2026-11-16) refers to criteria set by AgID guidelines and asks whoever affixes the mark to publish free means to verify
-it; the AgID Circolare n. 62/2013 (§6.1-6.3, as read by an internal review on 2026-11-16, not re-read here; whether a
-later AgID guideline replaces it was not confirmed) asks a qualified or digital signature on the mark's content when the
-original is not signed. A CAdES/JAdES signature or qualified seal over the checkpoint is a planned extension, not part of
+administrative document, Italian law (D.Lgs. 82/2005, CAD, art. 23 c. 2-bis, text in force on 17/11/2026 as
+normattiva.it shows it, the act's last update published on 22/10/2026; read on 2026-11-17) refers to criteria set by
+AgID guidelines ("Linee guida") and asks whoever affixes the mark to make free verification means available on its
+institutional website; the AgID Circolare n. 62 of 30 April 2013, "Linee guida per il contrassegno generato
+elettronicamente" (the PDF AgID publishes, sha256 14024134256e5ac3…, read on 2026-11-17), asks a qualified electronic
+signature or a digital signature on the mark's content when the original is not signed (§6.1, §6.2). The Circolare
+still refers to "articolo 23-ter, comma 5" of the CAD, which normattiva.it shows as "COMMA ABROGATO DAL D.LGS. 26 AGOSTO
+2016, N. 179"; the printed mark is now in art. 23 c. 2-bis. Whether a later AgID guideline replaces the Circolare was
+not confirmed. A CAdES/JAdES signature or qualified seal over the checkpoint is a planned extension, not part of
 v0.10; this format's output is not such a mark. **A paper pointer** (the text of a printed code that points to the
 evidence) is out of scope in v0.10: its fields, alphabet and comparison rule are not defined here.
 
