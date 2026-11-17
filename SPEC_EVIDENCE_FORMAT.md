@@ -794,8 +794,9 @@ is the hybrid signature of this section: Ed25519 and ML-DSA-65 (FIPS 204) over t
 file or in AWS KMS (`signer.py --pq-kms`, KeySpec ML_DSA_65), the post-quantum layer required when the caller pins it or
 a pack's manifest claims it (§5, §10). A ledger, tip or pack with Ed25519 only verifies as before: no verdict here depends
 on the date; for an Ed25519-only ledger, the report of `signer.py` and of the Go and Java verifiers says `pq_protected:
-false` with a note that names IR 8547. A checkpoint of §13/§16 has no
-post-quantum layer of this format (tlog-checkpoint defines ML-DSA-44 cosignatures, §16). The RFC 3161 tokens of §11 are
+false` with a note that names IR 8547. A witnessed checkpoint (§16) can carry ML-DSA-44 (FIPS 204) cosignatures and
+log signatures of tlog-checkpoint, which this verifier checks; a checkpoint signed with Ed25519 or ECDSA only has no
+post-quantum layer. The RFC 3161 tokens of §11 are
 signed by the TSA with its own algorithm; this verifier does not refuse a classical one. Until v0.10 this repository
 cited IR 8547 as a draft (its initial public draft of 2024).
 
