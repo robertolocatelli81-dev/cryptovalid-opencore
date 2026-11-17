@@ -952,7 +952,7 @@ alignment with their element names is claimed):
 | `profile` | yes | `"cryptovalid-payment/1"` |
 | `payment_id` | yes | a random identifier the provider draws for the payment, never a reference of the payer: a version 4 UUID (RFC 9562) in its lowercase canonical form, 36 characters `xxxxxxxx-xxxx-4xxx-Yxxx-xxxxxxxxxxxx` with `x` in `0-9a-f` and `Y` in `8 9 a b` (the form of an ISO 20022 UETR); no two payment entries of the prefix of the ledger the verifier receives carry the same value (`payment_id_not_unique`) |
 | `amount` | yes | a string (never a JSON number, §3), in one canonical form: the integer part `0` or 1 to 18 digits not starting with 0; then, when the currency has N > 0 minor units, `.` and exactly N digits (`1.50`, never `1.5`), and when N = 0 nothing; greater than zero |
-| `currency` | yes | an ISO 4217 alphabetic code with numeric minor units, from list one as published by the maintenance agency on 2026-09-17 (165 codes; the 13 codes whose minor units are "N.A.", such as XAU and XDR, are not accepted) |
+| `currency` | yes | an ISO 4217 alphabetic code as Unicode CLDR 49 lists it (`common/validity/currency.xml`, `idStatus="regular"`: 153 codes), its minor units the `digits` of CLDR's `currencyData/fractions` (rule below, "Currencies") |
 | `beacons` | yes | a list of 1 to 8 beacon values of §19 rule 1, each an object of exactly `source`, `chain_index`, `pulse_index`, `output_value` |
 | `record_salt` | yes | 32 to 128 lowercase hexadecimal characters, an even number (16 to 64 bytes: at least 128 bits) the provider draws at random for this entry |
 | `execution_date` | no | the date the payment service provider executed the payment, `YYYY-MM-DD` and a real calendar date, as the provider records it (a claim of the provider: the window dates the entry, not the execution) |
@@ -1040,6 +1040,21 @@ does not read. The IBAN rule applies to a disclosed value: the ledger holds only
 outcome of the verification of the payee of Art. 5c of Regulation (EU) No 260/2012 (inserted by Regulation (EU)
 2024/886); a member for it is left to a later
 version, after its outcome codes are read on the primary text.
+
+**Currencies (v0.10).** The table of `currency` and of the minor units of `amount` is generated, not typed:
+`tools/currency_table_from_cldr.py` reads Unicode CLDR release 49 (tag `release-49`, commit
+96e54b273d2da4ec6fbad350ba19ff23fa24a588, 2026-10-21, the latest release on 2026-11-17), `common/validity/currency.xml`
+(sha256 b046c1fa146666f2…) and `common/supplemental/supplementalData.xml` (sha256 745150ec1408d50e…), checks both hashes,
+and takes the codes whose `idStatus` is `regular`, each with the `digits` of `currencyData/fractions` (the `DEFAULT`
+entry when the code has none). CLDR's data files are under the Unicode License v3 (read on 2026-11-17 in the
+repository's LICENSE: use, copy, modify, publish, distribute and sell, with the copyright and permission notice; see
+NOTICE). CLDR's `digits` are the decimals commonly used, not ISO 4217's minor units, and its currency list is not ISO's
+list one; the first draft of v0.10 used list one as published by its maintenance agency, whose website terms of use (read on
+2026-11-17) provide its content "exclusively for personal use as well as information purposes". Measured on 2026-11-17, the table changes in two ways: 12 codes of list one are not
+accepted (CLDR marks them deprecated: BOV, CHE, CHW, CLF, COU, MXV, SVC, USN, UYI, UYW, VED, XAD), and 15 codes take
+`digits` 0 where list one gives 2 (AFN, ALL, COP, HUF, IDR, IRR, KPW, LAK, LBP, MGA, MMK, SOS, SYP, YER) or 3 (IQD); no
+code is added. CLDR's `cashDigits` were not taken: they differ from list one in 28 codes. A payment in one of those
+currencies that the draft accepted is `payment_malformed` here; no published version accepted it.
 
 **Amount limits.** The 18 integer digits are this profile's bound; whether every such amount fits the ISO 20022 amount
 types (read from memory as 18 digits in all, not re-read) was not checked.
@@ -1388,7 +1403,7 @@ marks what could not be checked against its issuer today.
 | RFC 6962 | Experimental (2013), obsoleted by RFC 9162: cited only for the Merkle tree hash that C2SP tlog-checkpoint and this format's §9 use | rfc-editor.org |
 | RFC 9562 (UUID) | Proposed Standard (May 2024), obsoletes RFC 4122 | rfc-editor.org |
 | RFC 4998 | Proposed Standard (2007), not updated | rfc-editor.org |
-| ISO 4217 list one | published 2026-09-17 (attribute `Pblshd` of the file the maintenance agency serves, unchanged on 2026-11-16) | six-group.com |
+| Unicode CLDR (§18 currencies) | release 49, 2026-10-21 (tag release-49, commit 96e54b27…), the latest on 2026-11-17; data under the Unicode License v3 | github.com/unicode-org/cldr |
 | ISO 13616-1, ISO/IEC 7064 | not confirmed: the ISO catalogue was not read; the rule applied is the one stated in §18 | — |
 | ETSI TS 119 612, TS 119 615, EN 319 102-1 | not confirmed: versions not re-read; the rules applied are the ones written in rule 5 | — |
 | C2SP tlog-checkpoint, tlog-witness | as in §16 (C2SP commit 09f3e519fe79, read 2026-11-15) | github.com/C2SP |
