@@ -169,6 +169,31 @@ run by the same author, not by a third party.
 
 ### Changed
 
+- **"Qualified" needs the qualified statement of Commission Implementing Regulation (EU) 2025/1929** (SPEC v0.10 §11,
+  §19; written before the code). The Regulation (OJ L 30.9.2025, in force since 2025-10-20; read on CELLAR on
+  2026-11-17), Annex, adapting ETSI EN 319 422 V1.1.1 clause 9.1: a time stamp declared qualified "shall contain one
+  instance of the qcStatements extension" (RFC 3739 §3.2.6), holding one `esi4-qtstStatement-1` (0.4.0.19422.1.1),
+  "not ... marked as critical". Until 0.25.1 a token whose signer was a granted QTST certificate in the trusted lists
+  was `qualified` whatever it carried; now `cryptovalid_lotl.qualification` says `qualified` only when the token also
+  carries the statement, and otherwise `not_qualified` with the closed reason `qualified_statement_missing` or
+  `qualified_statement_malformed` (new `qualified_statement_problem`). Where it shows: the `cryptovalid_lotl` command
+  (`not_qualified_reason`; `indeterminate` stays for the trusted-list history only), `cryptovalid_ingest verify --lotl`
+  (such a token is not counted as qualified nor, without `--tsa-cert`, as a timestamp; warning
+  `tsa_qualified_statement_missing`; segment meta `eidas_not_qualified_reason`), `cryptovalid_report` (`reason`), the
+  beacon window (`tsa_qualification_reason`, null unless that reason applies; the `stamped_by_qualified_tsa` sentence
+  names the statement). `parse_token` returns the TSTInfo's non-critical extensions (`extensions`). §11 verdicts do not
+  change. Real tokens requested on 2026-11-17, now in `spec/vectors/rfc3161/` with their signer certificates: BOSA
+  (`tsa.belgium.be/connect`), Izenpe and ACCV carry the statement; Sectigo's qualified endpoint writes the DEFAULT
+  `critical` FALSE in its Extension, which DER leaves out, so §11 refuses that token as `malformed` (RFC 3161 §2.4.2;
+  unchanged, reported); the tokens of 2026-11-13 carry none. `test_tsa_qualified_statement_20261117.py`: 8 tests, 17
+  generated shapes in both forms of `sid` (made by re-signing an `openssl ts` TSTInfo with `openssl cms -cades`); the
+  tests of the lotl, the ingest, the 2026-11-13 tokens and the beacon window updated to the rule (each fails on the
+  code before this change; 6 of the 8 new ones too). 19 hand mutants of the changed lines: 19 detected.
+- **NIST IR 8547 is final (October 2026)**: the limit is stated in SPEC §15 (Table 2: ECDSA, EdDSA and RSA "Deprecated
+  after 2030", "Disallowed after 2035"; the hybrid Ed25519 + ML-DSA-65 path this format has), `docs/KEY_LIFECYCLE.md`,
+  `docs/THREAT_MODEL.md`, and the `pq_note` of an Ed25519-only ledger in `signer.py`, the Go and the Java verifiers
+  ("NIST IR 8547 final, October 2026: EdDSA deprecated after 2030, disallowed after 2035"; until now "NIST IR 8547
+  draft"). A note of the result, not a verdict.
 - **Verdicts of 0.25.x that change in 0.26.0** (`cryptovalid_cose_receipts`, profiles `rfc9942` and `rfc9943`; rules in
   its docstring, decided on 2026-11-17 after a cross-verification matrix measured 0.25.1 on the scitt-cose public vectors,
   action-state-group/scitt-cose at commit e76bbfdf7a02, now in `spec/vectors/scitt-cose/` with their SHA-256 pinned).

@@ -1518,16 +1518,31 @@ class Complete(unittest.TestCase):
             with open(lab.j("tsa.crt"), "rb") as f:
                 tsa_b64 = base64.b64encode(x509.load_pem_x509_certificate(f.read()).public_bytes(
                     serialization.Encoding.DER)).decode()
-            for tl, want in ((_tl(_svc(_QTST, "granted", "2020-01-01T00:00:00Z", tsa_b64)), "qualified"),
+            self.assertIsNone(r["window"]["tsa_qualification_reason"])   # no list: not_checked, no reason
+            granted = _tl(_svc(_QTST, "granted", "2020-01-01T00:00:00Z", tsa_b64))
+            r = run(led, tsa_trusted_list=granted, **full)   # SPEC v0.10 §11: a granted QTST signer, no qualified statement
+            self.assertEqual((r["status"], r["window"]["tsa_qualification"], r["window"]["tsa_qualification_reason"]),
+                             ("verified", "not_qualified", "qualified_statement_missing"), r)
+            self.assertNotIn({"stamped_by_qualified_tsa": B.SCOPE["stamped_by_qualified_tsa"]}, r["scope"]["proves"])
+            lab.statement = True   # the same TSA, its tokens now carrying the statement: a pack of its own
+            pack = make_pack(td, "pack_qualified", led, lab, {"checkpoint.note": note})
+            full["pack_dir"] = pack
+            for tl, want in ((granted, "qualified"),
                              (_tl(_svc(_QTST, "withdrawn", "2020-01-01T00:00:00Z", tsa_b64)), "not_qualified"),
                              (_tl(_svc(_QC, "granted", "2020-01-01T00:00:00Z", tsa_b64)), "not_qualified"),
                              (_tl(_svc(_QTST, "granted", "2099-01-01T00:00:00Z", tsa_b64)), "not_qualified")):
                 r = run(led, tsa_trusted_list=tl, **full)
-                self.assertEqual((r["status"], r["window"]["tsa_qualification"]), ("verified", want), r)
+                self.assertEqual((r["status"], r["window"]["tsa_qualification"], r["window"]["tsa_qualification_reason"]),
+                                 ("verified", want, None), r)
                 q = {"stamped_by_qualified_tsa": B.SCOPE["stamped_by_qualified_tsa"]}
                 self.assertEqual(q in r["scope"]["proves"], want == "qualified")
                 self.assertEqual({"not_qualified": B.SCOPE["not_qualified"]} in r["scope"]["does_not_prove"],
                                  want != "qualified")
+            r = run(led, tsa_trusted_list=_tl(_svc(_QTST, "granted", "2020-01-01T00:00:00Z", tsa_b64,   # PRO-4.3.4-03A
+                                                    history=[(_QTST, "granted", "2019-01-01T00:00:00Z", None),
+                                                             (_QTST, "granted", "2019-06-01T00:00:00Z", None)])), **full)
+            self.assertEqual((r["window"]["tsa_qualification"], r["window"]["tsa_qualification_reason"]),
+                             ("indeterminate", None), r)   # v0.10: the reason is the qualified statement's only
             # at genTime, not now (NEMESIS b27): granted until 2 s after the token, withdrawn afterwards
             g = B.gen_time_instant(r["window"]["gen_time"])
             stop = datetime.fromtimestamp(int(g) + 2, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

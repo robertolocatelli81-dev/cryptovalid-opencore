@@ -308,8 +308,10 @@ class Ingestor:
                 verdict, why = lotl.qualification(token, fprs, herr,
                                                   signer_sha256=(chk or {}).get("signer_sha256"))
                 meta["eidas_qualified"] = verdict == "qualified"
-                if why:   # 0.21.0: TS 119 615 PRO-4.3.4-03A, neither qualified nor not
+                if verdict == "indeterminate":   # 0.21.0: TS 119 615 PRO-4.3.4-03A, neither qualified nor not
                     meta["eidas_indeterminate"] = why
+                elif why:                        # SPEC v0.10 §11: a QTST signer, the qualified statement missing
+                    meta["eidas_not_qualified_reason"] = why
             with self._lock:
                 self.last_anchor_error = None
         except Exception as e:  # noqa: BLE001 — l'ancora è best-effort, l'errore va nel receipt
@@ -539,8 +541,13 @@ def verify_archive(directory: str, prefix: str = "ledger",
             if undecided:   # 0.21.0: TS 119 615 PRO-4.3.4-03A
                 warnings.append(f"tsa_qualification_indeterminate: {len(undecided)} token(s) from a QTST service whose "
                                 f"trusted-list history is an error ({undecided[0]})"[:300])
-            if qualified_count + len(undecided) < len(signed_tokens):
-                warnings.append(f"tsa_not_qualified: {len(signed_tokens) - qualified_count - len(undecided)} "
+            no_statement = [w for _n, (v, w) in verdicts if v == "not_qualified" and w]
+            if no_statement:   # SPEC v0.10 §11, Regulation (EU) 2025/1929: the signer is listed, the token is not declared
+                warnings.append(f"tsa_qualified_statement_missing: {len(no_statement)} token(s) signed by a QTST certificate "
+                                f"of the EU Trusted Lists without the qcStatements esi4-qtstStatement-1 of Regulation (EU) "
+                                f"2025/1929 ({no_statement[0]}): not qualified"[:300])
+            if qualified_count + len(undecided) + len(no_statement) < len(signed_tokens):
+                warnings.append(f"tsa_not_qualified: {len(signed_tokens) - qualified_count - len(undecided) - len(no_statement)} "
                                 "token(s) from a TSA not in the EU Trusted Lists (QTST)")
     chain_open = [n for n, _t, c in checked if c["status"] == "signature_only" and n not in timestamped]
     if chain_open:

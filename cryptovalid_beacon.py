@@ -79,7 +79,8 @@ SCOPE = {
                             "timeStamp, for anyone but the beacon's operator",
     "stamped_before_gen_time": "the same bytes existed at the TSA's genTime",
     "stamped_by_qualified_tsa": "the TSA's certificate was a granted qualified timestamp service, at genTime, in the pinned "
-                                "EU Trusted List snapshot",
+                                "EU Trusted List snapshot, and the token carries the qualified statement of Regulation (EU) "
+                                "2025/1929",
     "unique_under_pinned_witness": "the entry is the one at its position in the history the pinned witnesses cosigned "
                                    "before the TSA's genTime",
     "not_execution": "that a payment service provider executed the payment",
@@ -615,7 +616,7 @@ def _entries(ledger_bytes: bytes) -> List[Dict]:
     return [verifier._loads_strict(line) for line in ledger_bytes.decode("utf-8").split("\n") if line.strip(" \t\r")]
 
 
-def _qualification(tsr_b64: str, signer_sha256: str, gen_time: str, trusted_list) -> str:
+def _qualification(tsr_b64: str, signer_sha256: str, gen_time: str, trusted_list) -> tuple:
     """SPEC §19 rule 5 "Qualified or not": the token's signer in the pinned Trusted List snapshot at genTime"""
     import base64
     import cryptovalid_lotl as L
@@ -627,7 +628,7 @@ def _qualification(tsr_b64: str, signer_sha256: str, gen_time: str, trusted_list
         raise
     except Exception as e:   # the snapshot is the caller's pin: one it cannot be read is its error
         raise Refused("trusted_list_malformed", f"{type(e).__name__}: {str(e)[:120]}") from None
-    return L.qualification(base64.b64decode(tsr_b64), st["granted"], st["errors"], signer_sha256)[0]
+    return L.qualification(base64.b64decode(tsr_b64), st["granted"], st["errors"], signer_sha256)
 
 
 def _pack_window(pack_dir: str, tsa_certs, tsa_crls, max_window_s: int, clock_tolerance_s: int, ledger_bytes: bytes,
@@ -658,8 +659,10 @@ def _pack_window(pack_dir: str, tsa_certs, tsa_crls, max_window_s: int, clock_to
     w.update({"max_window_s": max_window_s, "pack_ledger": names[0], "tsa_signer_sha256": chk.get("signer_sha256"),
               "tsa_sha1_signature_legacy": chk.get("sha1_signature_legacy"),
               "tsa_revocation": chk["revocation"] if tsa_crls is not None else "not_checked",
-              "tsa_qualification": "not_checked" if trusted_list is None else
-              _qualification(man["rfc3161_timestamp"]["tsr_b64"], chk.get("signer_sha256"), gt, trusted_list)})
+              "tsa_qualification": "not_checked", "tsa_qualification_reason": None})
+    if trusted_list is not None:   # SPEC §19 "Qualified or not"; v0.10: the qualified statement's reason too
+        q, why = _qualification(man["rfc3161_timestamp"]["tsr_b64"], chk.get("signer_sha256"), gt, trusted_list)
+        w.update({"tsa_qualification": q, "tsa_qualification_reason": why if q == "not_qualified" else None})
     return w, digests, gt
 
 

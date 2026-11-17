@@ -313,20 +313,62 @@ def signer_fingerprints(token_der: bytes):
         return None
     return {fpr} if state == "valid" else set()
 
+OID_QC_STATEMENTS = "1.3.6.1.5.5.7.1.3"   # RFC 3739 §3.2.6, id-pe-qcStatements
+OID_QTST_STATEMENT = "0.4.0.19422.1.1"    # ETSI EN 319 422 Annex B, esi4-qtstStatement-1 (id-etsi-tsts-EuQCompliance)
+
+
+def qualified_statement_problem(token_der: bytes):
+    """SPEC §11 "The qualified statement" (v0.10, Regulation (EU) 2025/1929, Annex, EN 319 422 clause 9.1): None when the
+    token's TSTInfo carries exactly one qcStatements extension (non-critical: step 3 refuses a critical one) holding exactly
+    one esi4-qtstStatement-1 without statementInfo; else "qualified_statement_missing" or "qualified_statement_malformed"."""
+    try:
+        import cryptovalid_tsa as tsa
+    except ImportError:   # imported as opencore.cryptovalid_lotl
+        from opencore import cryptovalid_tsa as tsa
+    try:
+        exts = tsa.parse_token(token_der)["extensions"]
+    except (tsa.TokenError, ValueError, TypeError):
+        return "qualified_statement_malformed"
+    qc = [v for oid, _crit, v in exts if oid == OID_QC_STATEMENTS]
+    if not qc:
+        return "qualified_statement_missing"
+    if len(qc) > 1:
+        return "qualified_statement_malformed"
+    try:
+        ids = []
+        for tag, sv in tsa._der_items(tsa._der_one(qc[0], "QCStatements", 0x30), "QCStatements"):
+            st = tsa._der_items(sv, "QCStatement")
+            if tag != 0x30 or not st or st[0][0] != 0x06 or len(st) > 2:
+                return "qualified_statement_malformed"
+            ids.append((tsa._der_oid(st[0][1], "statementId"), len(st)))
+    except (tsa.TokenError, ValueError, IndexError):
+        return "qualified_statement_malformed"
+    hits = [n for oid, n in ids if oid == OID_QTST_STATEMENT]
+    if not hits:
+        return "qualified_statement_missing"
+    if len(hits) > 1 or hits[0] != 1:
+        return "qualified_statement_malformed"
+    return None
+
+
 def is_qualified(token_der: bytes, qualified_fingerprints: set):
     """True iff the certificate that signed the token is a qualified-timestamp service in the EU LOTL."""
     return qualification(token_der, qualified_fingerprints)[0] == "qualified"
 
 def qualification(token_der: bytes, qualified_fingerprints: set, history_errors=None, signer_sha256=None):
-    """("qualified", None), ("not_qualified", None) or ("indeterminate", reason), on the certificate that signed the token
-    (SPEC §11): `signer_sha256` when the caller has it from `cryptovalid_tsa.verify_token`, else `signer_fingerprints`.
-    Indeterminate when the signer is not a qualified certificate and is one of a QTST service whose history TS 119 615
-    PRO-4.3.4-03A makes an error, or when openssl is absent (the signer is not established)."""
+    """("qualified", None), ("not_qualified", None), ("not_qualified", reason) or ("indeterminate", reason), on the
+    certificate that signed the token (SPEC §11): `signer_sha256` when the caller has it from
+    `cryptovalid_tsa.verify_token`, else `signer_fingerprints`. Since v0.10 a signer in the lists gives "qualified" only when
+    the token carries the qualified statement of Regulation (EU) 2025/1929, else ("not_qualified",
+    "qualified_statement_missing" | "qualified_statement_malformed"). Indeterminate when the signer is not a qualified
+    certificate and is one of a QTST service whose history TS 119 615 PRO-4.3.4-03A makes an error, or when openssl is
+    absent (the signer is not established)."""
     got = {signer_sha256} if signer_sha256 else signer_fingerprints(token_der)
     if got is None:
         return "indeterminate", "openssl absent: the token's signer is not established"
     if got & qualified_fingerprints:
-        return "qualified", None
+        why = qualified_statement_problem(token_der)
+        return ("qualified", None) if why is None else ("not_qualified", why)
     hit = sorted(f for f in got if f in (history_errors or {}))
     if hit:
         return "indeterminate", (history_errors or {})[hit[0]]
@@ -354,8 +396,10 @@ def main(argv=None):
     verdict, why = qualification(tok, fprs, errs)
     q = verdict == "qualified"
     out = {"qualified": q, "qualified_certs_in_lotl": len(fprs), "trusted_lists_covered": len(cov)}
-    if why:   # 0.21.0: only then, so every other output is the one of 0.20.3
+    if verdict == "indeterminate":   # 0.21.0: only then, so every other output is the one of 0.20.3
         out["indeterminate"] = why
+    elif why:                        # v0.10: a QTST signer whose token lacks the qualified statement
+        out["not_qualified_reason"] = why
     emit(json.dumps(out, indent=2))
     return 0 if q else 1
 

@@ -6,6 +6,7 @@
 Throughput is MEASURED and printed; the assertion is only a conservative floor."""
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -367,6 +368,17 @@ class TestAutoAnchorTSA(unittest.TestCase):
                 return True, f.read(), b""
 
     @classmethod
+    def _fake_tsa_qualified(cls, digest, url, timeout=30):
+        """SPEC v0.10 §11: the same token with the qualified statement of Regulation (EU) 2025/1929 (re-signed by openssl)"""
+        import cryptovalid_tsa as T
+        from test_tsa_qualified_statement_20261117 import resign_with_extensions, statement_ext
+        ok, tok, raw = cls._fake_tsa_ok(digest, url, timeout)
+        with cls._lock, tempfile.TemporaryDirectory(dir=cls.cms_dir) as t:
+            resp = resign_with_extensions(tok, [statement_ext()], f"{cls.cms_dir}/tsa.crt", f"{cls.cms_dir}/tsa.key",
+                                          f"{cls.cms_dir}/tsa.crt", t)
+        return ok, T._token_of(resp), raw
+
+    @classmethod
     def _forged_tsa(cls, digest, url, timeout=30):
         # the blob of the measurement of 2026-11-13: a CMS signed with a throwaway key, content = 04 20 || digest
         return True, cls._sign_cms(b"\x04\x20" + digest), b""
@@ -535,7 +547,7 @@ class TestAutoAnchorTSA(unittest.TestCase):
         import cryptovalid_lotl as lotl
         orig = lotl.load_qualified_status
         w = ing.Ingestor(self.d, batch_size=16, tsa_url="http://fake.tsa")
-        w._request_timestamp = self._fake_tsa_ok
+        w._request_timestamp = self._fake_tsa_qualified   # SPEC v0.10 §11: a qualified token carries the qualified statement
         for i in range(10):
             w.append({"i": i})
         w.seal(); w.close(seal=False)
@@ -548,6 +560,18 @@ class TestAutoAnchorTSA(unittest.TestCase):
             r = ing.verify_archive(self.d, lotl_check=True, lotl_member_states=["ES"])
             self.assertEqual((r["eidas_qualified_segments"], r["timestamped_segments"]), (0, 0))
             self.assertTrue(any(x.startswith("tsa_not_qualified: 1 ") for x in r["warnings"]), r["warnings"])
+            d2 = tempfile.mkdtemp()   # SPEC v0.10 §11: the signer listed, the token without the qualified statement
+            self.addCleanup(shutil.rmtree, d2, ignore_errors=True)
+            w = ing.Ingestor(d2, batch_size=16, tsa_url="http://fake.tsa")
+            w._request_timestamp = self._fake_tsa_ok
+            for i in range(10):
+                w.append({"i": i})
+            w.seal(); w.close(seal=False)
+            lotl.load_qualified_status = lambda ms, cache_path=None, **kw: ({self.tsa_sha256}, [], {})
+            r = ing.verify_archive(d2, lotl_check=True, lotl_member_states=["ES"])
+            self.assertEqual((r["eidas_qualified_segments"], r["timestamped_segments"]), (0, 0))
+            self.assertTrue(any(x.startswith("tsa_qualified_statement_missing: 1 ") for x in r["warnings"]), r["warnings"])
+            self.assertFalse(any(x.startswith("tsa_not_qualified") for x in r["warnings"]), r["warnings"])
         finally:
             lotl.load_qualified_status = orig
 

@@ -508,7 +508,7 @@ public class CvVerify {
         boolean allMissing = !pqFails.isEmpty() && pqFails.stream().allMatch(x -> x.endsWith("pq_missing"));
         if (allUnver) { prot = null; status = "unverifiable"; note = "post-quantum layer required but ML-DSA-65 cannot be verified here (JDK < 24): not a pass"; }
         else if (!pqFails.isEmpty()) { prot = false; status = allMissing ? "missing" : "invalid"; note = allMissing ? "post-quantum layer required but absent on some entries (stripped or never signed)" : "post-quantum layer invalid, foreign or malformed on some entries"; }
-        else if (pqPresent == 0) { prot = false; status = "absent"; note = "no post-quantum signatures (Ed25519 only: not quantum-resistant, NIST IR 8547 draft)"; }
+        else if (pqPresent == 0) { prot = false; status = "absent"; note = "no post-quantum signatures (Ed25519 only: not quantum-resistant; NIST IR 8547 final, October 2026: EdDSA deprecated after 2030, disallowed after 2035)"; }
         else if (pqUnver > 0) { prot = null; status = "unverifiable"; note = "ML-DSA-65 signatures present but NOT verified (this JDK has no ML-DSA: needs JDK 24+)"; }
         else if (pqVerified != entries.size() || entries.isEmpty()) { prot = false; status = "partial"; note = "post-quantum signatures on some entries only: not a protected ledger"; }
         else if (!fails.isEmpty()) { prot = false; status = "classical_broken"; note = "ML-DSA-65 signatures valid but an Ed25519 signature is not: hybrid means BOTH hold"; }

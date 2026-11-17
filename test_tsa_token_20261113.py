@@ -199,7 +199,7 @@ class TestTheDefectOf0220(unittest.TestCase):
         listed = {hashlib.sha256(base64.b64decode("".join(ln for ln in pem.splitlines() if "-----" not in ln))).hexdigest()}
         self.assertTrue(L.token_cert_fingerprints(self.forged) & listed)    # it carries the listed certificate
         self.assertEqual(L.qualification(self.forged, listed, {}), ("not_qualified", None))   # 0.22.0: qualified
-        self.assertEqual(L.qualification(token_of(_read("digicert.tsr")), listed, {}), ("qualified", None))                               # positive control: the real DigiCert token
+        self.assertEqual(L.qualification(token_of(_read("digicert.tsr")), listed, {}), ("not_qualified", "qualified_statement_missing"))   # v0.10: the signer matched (the reason shows it); its token carries no qualified statement (Regulation (EU) 2025/1929)                               # positive control: the real DigiCert token
 
     def test_inclusion_receipt_anchors_only_a_pinned_token(self):
         import cryptovalid_receipt as CR

@@ -71,7 +71,7 @@ stated as an operational requirement, not a cryptographic guarantee.*
 
 - **Now**: sign long-retention evidence packs with the **hybrid** block (classical + ML-DSA-65); a pack is `pq_protected` only when a VALID, pinned ML-DSA signature is present. The classical half is a hedge against ML-DSA implementation/algorithm risk — it provides **no** quantum resistance.
 - **Durable pre-quantum existence**: a PQ signature protects the PACK; proving a record *existed before* a CRQC still needs a trusted time anchor (RFC 3161 with a PQ/qualified TSA, or RFC 4998 renewal: `longterm_evidence.py`, non-public; `omega_evidence.preservation` in omega-evidence renews in RFC 4998 semantics, not its ASN.1 format).
-- **By 2030 / 2035** (NIST IR 8547): migrate long-retention records to PQ **before** short-lived ones; crypto-agility (`sig_alg`) is the migration mechanism; register SLH-DSA/ML-DSA backends behind the mandatory KAT gate.
+- **By 2030 / 2035** (NIST IR 8547, final, October 2026, §4.1.1 Table 2: ECDSA, EdDSA — Ed25519 included — and RSA "Deprecated after 2030", "Disallowed after 2035"; read on 2026-11-17): migrate long-retention records to PQ **before** short-lived ones; crypto-agility (`sig_alg`) is the migration mechanism; register SLH-DSA/ML-DSA backends behind the mandatory KAT gate.
 
 ## 9. Honest limits
 

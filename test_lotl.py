@@ -312,8 +312,9 @@ class TestHistoryOrder(unittest.TestCase):
     def test_qualification_is_three_valued(self):
         # since v0.6 of the spec (2026-11-13) the qualification looks at the certificate that SIGNED the token
         # (`signer_fingerprints`), not at every certificate it carries (`token_cert_fingerprints`, mocked here until then)
-        orig = L.signer_fingerprints
+        orig = L.signer_fingerprints, L.qualified_statement_problem
         L.signer_fingerprints = lambda tok: {"ab" * 32}
+        L.qualified_statement_problem = lambda tok: None   # v0.10: the statement is tested in test_tsa_qualified_statement_20261117
         try:
             self.assertEqual(L.qualification(b"t", {"ab" * 32}, {}), ("qualified", None))
             self.assertEqual(L.qualification(b"t", set(), {}), ("not_qualified", None))
@@ -326,7 +327,9 @@ class TestHistoryOrder(unittest.TestCase):
             L.signer_fingerprints = lambda tok: None                      # openssl absent: signer not established
             self.assertEqual(L.qualification(b"t", {"ab" * 32}, {})[0], "indeterminate")
         finally:
-            L.signer_fingerprints = orig
+            L.signer_fingerprints, L.qualified_statement_problem = orig
+        self.assertEqual(L.qualification(b"t", {"ab" * 32}, {}, signer_sha256="ab" * 32),
+                         ("not_qualified", "qualified_statement_malformed"))   # v0.10: b"t" has no TSTInfo to read
 
     def test_loader_names_the_errors_and_caches_them(self):
         import json

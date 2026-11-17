@@ -76,12 +76,18 @@ class Lab:
     def j(self, n):
         return os.path.join(self.d, n)
 
+    statement = False   # SPEC v0.10 §11: True = the token re-signed with the qualified statement (Regulation (EU) 2025/1929)
+
     def token(self, digest=None):
         _run("openssl", "ts", "-query", "-digest", (digest or DIGEST).hex(), "-sha256", "-cert", "-out", self.j("q.tsq"))
         _run("openssl", "ts", "-reply", "-queryfile", self.j("q.tsq"), "-config", self.j("tsa.cnf"), "-section", "t1",
              "-out", self.j("r.tsr"))
         with open(self.j("r.tsr"), "rb") as f:
-            return f.read()
+            tok = f.read()
+        if self.statement:
+            from test_tsa_qualified_statement_20261117 import resign_with_extensions, statement_ext
+            tok = resign_with_extensions(tok, [statement_ext()], self.j("tsa.crt"), self.j("tsa.key"), self.j("ca.crt"), self.d)
+        return tok
 
     def revoke(self, reason=None):
         _run("openssl", "ca", "-config", self.j("ca.cnf"), "-revoke", self.j("tsa.crt"),

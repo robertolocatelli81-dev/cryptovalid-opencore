@@ -255,7 +255,7 @@ def parse_token(der: bytes) -> dict:
     _check(len(tst) >= 5 and [t for t, _ in tst[:5]] == [0x02, 0x06, 0x30, 0x02, 0x18], "malformed",
            "TSTInfo does not start with version, policy, messageImprint, serialNumber, genTime")
     _check(_der_uint(tst[0][1], "TSTInfo.version") == 1, "malformed", "TSTInfo version is not 1")
-    optional, nonce, pos = (0x30, 0x01, 0x02, 0xA0, 0xA1), None, -1
+    optional, nonce, pos, extensions = (0x30, 0x01, 0x02, 0xA0, 0xA1), None, -1, []
     for t, v in tst[5:]:
         _check(t in optional and optional.index(t) > pos, "tstinfo_unknown_element",
                f"TSTInfo element of tag 0x{t:02x} unknown, repeated or out of order")
@@ -273,6 +273,7 @@ def parse_token(der: bytes) -> dict:
                        "malformed", "Extension is not {OID, critical TRUE (DER: absent when FALSE), OCTET STRING}")
                 if len(e) == 3:
                     raise TokenError("tstinfo_unknown_element", f"critical extension {_der_oid(e[0][1], 'extnID')} not understood")
+                extensions.append((_der_oid(e[0][1], "extnID"), False, e[-1][1]))   # v0.10: read by the qualified statement
     mi = _der_items(tst[2][1], "messageImprint")
     _check(len(mi) == 2 and mi[0][0] == 0x30 and mi[1][0] == 0x04, "malformed", "messageImprint is not {alg, OCTET STRING}")
     alg = _der_items(mi[0][1], "hashAlgorithm")
@@ -284,7 +285,7 @@ def parse_token(der: bytes) -> dict:
     _check(len(mi[1][1]) == size, "malformed", f"hashedMessage of {len(mi[1][1])} bytes for {name}")
     return {"token_der": tok, "policy": _der_oid(tst[1][1], "policy"), "hash_algorithm": name,
             "hashed_message": mi[1][1], "serial_number": _der_uint(tst[3][1], "serialNumber"),
-            "gen_time": _gen_time(tst[4][1]), "nonce": nonce}
+            "gen_time": _gen_time(tst[4][1]), "nonce": nonce, "extensions": extensions}
 
 def _not_run(what: str, e: BaseException):
     try:

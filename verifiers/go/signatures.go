@@ -144,7 +144,7 @@ func VerifySignatures(entries []*Object, expectedPubkeyHex, expectedPQPubkeyB64 
 		}
 	case pqPresent == 0:
 		sc.PQProtected, sc.PQStatus = &f, "absent"
-		sc.PQNote = "no post-quantum signatures (Ed25519 only: not quantum-resistant, NIST IR 8547 draft)"
+		sc.PQNote = "no post-quantum signatures (Ed25519 only: not quantum-resistant; NIST IR 8547 final, October 2026: EdDSA deprecated after 2030, disallowed after 2035)"
 	case pqUnverifiable > 0:
 		sc.PQProtected, sc.PQStatus = nil, "unverifiable"
 		sc.PQNote = "ML-DSA-65 signatures present but NOT verified (this verifier was built with Go < 1.27)"

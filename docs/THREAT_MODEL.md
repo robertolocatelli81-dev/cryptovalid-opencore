@@ -39,7 +39,7 @@ implemented in code cited by module; claims a 4-mind review could not verify are
 - **A3 — Malicious verifier input**: an attacker who controls the file/pack fed to a verifier (tampered ledger, dup-keys, non-portable numbers, oversized/deeply-nested JSON).
 - **A4 — Insider admin**: someone who can enroll devices or issue policy under the organisation root.
 - **A5 — Compromised organisation root**: the CA-equivalent key is stolen.
-- **A6 — Future quantum adversary (CRQC)**: appears within the retention window and can break classical signatures (Ed25519/ECDSA/RSA) — NIST IR 8547 deprecates classical ~2030, disallows ~2035.
+- **A6 — Future quantum adversary (CRQC)**: appears within the retention window and can break classical signatures (Ed25519/ECDSA/RSA) — NIST IR 8547 (final, October 2026, §4.1.1 Table 2): ECDSA, EdDSA and RSA deprecated after 2030, disallowed after 2035.
 - **A7 — Endpoint compromise**: the OS/app or the enclave host is fully compromised.
 
 ## 3. What is protected — mechanism → adversary

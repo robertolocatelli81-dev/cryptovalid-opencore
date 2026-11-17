@@ -133,8 +133,9 @@ def keygen(path: str) -> Dict:
 
 def keygen_pq(path: str) -> Dict:
     """ML-DSA-65 keypair (FIPS 204): private key as PKCS#8 DER base64 in `path` (chmod 600), public raw base64
-    returned — the post-quantum half of a HYBRID signature. NIST IR 8547 (draft) proposes disallowing Ed25519 after
-    2035: a ledger kept for the 10-year retention windows crosses that line."""
+    returned — the post-quantum half of a HYBRID signature. NIST IR 8547 (final, October 2026, §4.1.1 Table 2): EdDSA
+    (Ed25519) deprecated after 2030 and disallowed after 2035: a ledger kept for the 10-year retention windows crosses
+    that line."""
     m = _mldsa()
     if m is None:
         raise RuntimeError("ML-DSA-65 needs cryptography >= 50.0.1")
@@ -357,7 +358,7 @@ def verify_ledger_signatures(entries: List[Dict], expected_pubkey_hex: Optional[
                    "invalid": "post-quantum layer invalid, foreign or malformed on some entries"}[pq_status]
     elif pq_present == 0:
         pq_protected, pq_status = False, "absent"
-        pq_note = "no post-quantum signatures (Ed25519 only: not quantum-resistant, NIST IR 8547 draft)"
+        pq_note = "no post-quantum signatures (Ed25519 only: not quantum-resistant; NIST IR 8547 final, October 2026: EdDSA deprecated after 2030, disallowed after 2035)"
     elif m is None:
         pq_protected, pq_status = None, "unverifiable"
         pq_note = "ML-DSA-65 signatures present but NOT verified (cryptography >= 50 not available)"

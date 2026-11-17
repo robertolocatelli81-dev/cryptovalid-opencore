@@ -94,6 +94,9 @@ def lotl_status(manifest: Dict, member_states: Optional[List[str]] = None,
             return {"checked": True, "qualified": None,
                     "note": "no certificate extractable from token (inconclusive)"}
         verdict, why = lotl.qualification(token, fps, herr)
+        if verdict == "not_qualified" and why:   # SPEC v0.10 §11: the qualified statement of Regulation (EU) 2025/1929
+            return {"checked": True, "qualified": False, "tsa": ts.get("tsa"), "reason": why,
+                    "trusted_fingerprints": len(fps)}
         if why:   # 0.21.0: TS 119 615 PRO-4.3.4-03A
             return {"checked": True, "qualified": None, "tsa": ts.get("tsa"),
                     "note": f"inconclusive: the TSA's trusted-list history is an error ({why})"}
