@@ -8,7 +8,8 @@ See the LICENSE file in this directory for the full text.
 -------------------------------------------------------------------------------
 AUTHORSHIP & ORIGIN
 -------------------------------------------------------------------------------
-Author and sole copyright holder: Roberto Locatelli, 2026.
+Author and copyright holder: Roberto Locatelli, 2026, of everything in this
+repository except the third-party material listed under THIRD-PARTY FILES.
 
 This directory is the AGPL-3.0 carve-out of the OMEGA Ecosystem, relicensed by
 its author on 2026-08-08. Everything OUTSIDE this directory remains under the
@@ -24,8 +25,29 @@ full text in testdata/interop/LICENSE.torchwood). testdata/interop/README.md
 lists each file, its source commit and its license. spec/vectors/scitt-cose/
 holds the test vectors of action-state-group/scitt-cose (Copyright 2026 Action
 State Group, Inc., Apache License 2.0; full text in spec/vectors/scitt-cose/LICENSE,
-the project's notice in spec/vectors/scitt-cose/NOTICE). The sole-copyright
-statement above covers everything else in this repository.
+the project's notice in spec/vectors/scitt-cose/NOTICE).
+
+spec/vectors/beacon/nist/ holds pulses and the certificate of the NIST
+Randomness Beacon 2.0, the bytes beacon.nist.gov served on 2026-11-16. NIST is
+an agency of the U.S. federal government; works of the U.S. government are not
+subject to copyright protection in the United States (17 U.S.C. §105). The
+certificate was issued to NIST by DigiCert; it is public data.
+
+spec/vectors/rfc3161/ holds RFC 3161 time-stamp tokens issued for this
+repository's own data.txt by public time-stamping services (DigiCert,
+FreeTSA, GlobalSign, Sectigo) and the certificates they carry or publish
+(freetsa_cacert.pem from https://freetsa.org/files/cacert.pem); manifest.json
+says how each was obtained. They are the services' outputs, kept as received.
+
+DCO is the Developer Certificate of Origin, version 1.1, copyright The Linux
+Foundation and its contributors, kept verbatim as its licence asks.
+
+The ISO 4217 currency codes and minor units in cryptovalid_beacon.py and SPEC
+§18 are factual data read from list one as published by its maintenance agency,
+SIX Financial Information, on 2026-09-17 (six-group.com, list-one.xml, read on
+2026-11-16).
+
+The copyright statement above covers everything else in this repository.
 
 -------------------------------------------------------------------------------
 ATTRIBUTION REQUIREMENT (AGPL-3.0 §5, §7, §13)

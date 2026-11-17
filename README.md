@@ -251,6 +251,25 @@ ap2-evidence-pack >= 1.6.0, < 2 from PyPI; without it `cryptovalid-verify ap2` i
 listed in its `SHA256SUMS`; earlier releases are on GitHub and the index below only). An index that links only those release files, with `#sha256=` fragments that pip verifies, is at
 `https://robertolocatelli81-dev.github.io/pypi/` (`pip install --index-url … cryptovalid-opencore`). All documented `python3 <file>.py` commands also work from a clone.
 
+## Credits
+
+Other people's work this repository uses, each under its own licence:
+
+- **Test vectors copied here**, with their licence next to them: FiloSottile/sunlight (ISC) and FiloSottile/torchwood
+  (BSD-3-Clause) in `testdata/interop/`; action-state-group/scitt-cose at commit e76bbfdf7a02 (Apache-2.0, with its
+  NOTICE) in `spec/vectors/scitt-cose/`; NIST Randomness Beacon 2.0 pulses (U.S. government work, 17 U.S.C. §105) in
+  `spec/vectors/beacon/nist/`; tokens of public time-stamping services in `spec/vectors/rfc3161/`. See [NOTICE](NOTICE).
+- **Independent implementations used as oracles in the tests** (not part of the package): pycose 1.1.0 (BSD-3-Clause)
+  with cbor2 5.4 (MIT) for COSE_Sign1; golang.org/x/mod v0.41.0 (BSD-3-Clause), github.com/transparency-dev/formats at
+  v0.1.2-0.20260916152522-091ce41666c0 (Apache-2.0), filippo.io/sunlight and filippo.io/torchwood (ISC, BSD-3-Clause)
+  and filippo.io/mldsa (BSD-3-Clause) for notes, checkpoints and tiles (`verifiers/note_oracle`, `verifiers/tile_oracle`);
+  @veritasacta/verify 0.10.18 (Apache-2.0) for the Acta receipts.
+- **Libraries and tools at run time**: OpenSSL (Apache-2.0) for RFC 3161 tokens and certificate chains; pyca/cryptography
+  (Apache-2.0 or BSD-3-Clause).
+- **Formats and prior art** cited where they are used: the deployed NIST Beacon 2.0 serialization, cross-checked with
+  clcert/beacon-verifier (MIT, no code copied; SPEC §19); Tierion's Chainpoint and IACR ePrint 2019/644 (SPEC §19 rule 10);
+  the RFCs, C2SP specifications, W3C and IETF drafts named with their versions in the SPEC.
+
 ## Licence, contact, citation
 
 - **Licence:** AGPL-3.0-or-later, see [LICENSE](LICENSE). No commercial licence, paid pilot or support contract is
