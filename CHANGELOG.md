@@ -72,6 +72,30 @@ run by the same author, not by a third party.
   record of a ledger entry and of one entry alone, and at least one case for every one of the 46 result codes of §19
   rule 8, and 8 window cases, built by `make_conformance.py` with TSAs, CRLs, a trusted list and witnesses made for
   the purpose.
+- **`cryptovalid_sri`: SRI integrity metadata, closed** (experimental; e.g. the `vct#integrity` claims of SD-JWT VC,
+  draft -27 §6). `parse_integrity(value, grammar)` and `check_integrity(body, value, grammar)`, the grammar named by the
+  caller: `sri-2016` (W3C SRI Recommendation 2016-06-23 with CSP Level 2, what SD-JWT VC references) or `sri-l2` (SRI
+  Level 2 Working Draft 2026-03-20 with CSP Level 3, what https://www.w3.org/TR/SRI/ opens today); status read on
+  w3.org on 2026-11-17. A value outside the grammar, with no recognised algorithm, or with a digest of the wrong length
+  is refused with a closed code (`empty`, `grammar`, `alg_not_recognised`, `digest_length`); every refusal reports
+  `sri_match_would_accept: true` when the SRI matching algorithm (REC §3.3.3, §3.3.5) would have returned true for any
+  bytes. `test_sri_20261117.py`: 8 tests; the five real values of IT-Wallet (two `vct#integrity` examples) and EUDI TS12
+  v1.0.1 (lines 523-525), taken from the files saved by the reviews of 16-17/11, are all `grammar`, each one accepted by
+  a plain SRI matcher; the SRI Recommendation's own example and the SHA-256 of empty input verify; 8 000 generated
+  values agree with an oracle written apart (one regular expression of each ABNF). 14 hand mutants: 13 detected,
+  1 equivalent (the "-" made optional: the base64 part is then empty, which the grammar refuses).
+- **`cryptovalid_httpdigest`: HTTP message digests against the body** (experimental). `check_digest(field, body,
+  syntax)`, the syntax named by the caller: `rfc3230` (`Digest`, RFC 3230, obsoleted by RFC 9530 and still cited, e.g.
+  by the Italian ModI guidelines) or `rfc9530` (`Content-Digest` / `Repr-Digest`, Structured Fields of RFC 9651);
+  status read on rfc-editor.org on 2026-11-17. As both RFCs say ("A recipient MAY ignore any or all digests"), unknown
+  and deprecated algorithms are listed in `ignored`, not refused; a duplicated dictionary key keeps its last value and
+  base64 without padding or with non-zero pad bits is read (RFC 9651 §4.2.2, §4.2.7), both reported. Outcomes: `ok`,
+  `not_text`, `grammar`, `digest_length`, `mismatch`, `no_supported_alg`. `test_httpdigest_20261117.py`: 11 tests; the
+  ModI INTEGRITY_REST_01 example (the `Digest` is the SHA-256 of `{"testo": "ciao mondo"}`, not of the body shown with
+  "Ciao") gives `ok` and `mismatch`; the digests of RFC 9530 verify; 3 000 dictionaries serialized by RFC 9651 §4.1
+  apart from the parser and 3 000 mutated fields. 17 hand mutants: 14 detected, 3 equivalent (a first key character
+  outside `[a-z*]` is never consumed and the field fails anyway; ";" is consumed by the parameter parser before the
+  separator is read; a character outside base64 inside a Byte Sequence also fails the base64 decoding).
 - `bench/beacon_cost/`: the cost of one check, measured (below).
 - `test_beacon_review2_20261116.py`: 8 tests added after the second review (Unicode version of the commitments, a payee
   entity as the only party identifier, a CRL entry extension and a freshestCRL extension, the scope sentences against

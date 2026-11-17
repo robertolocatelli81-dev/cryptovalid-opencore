@@ -39,3 +39,79 @@ strongest algorithm present (sha512 > sha384 > sha256, as the matching algorithm
 when one matches, `mismatch` otherwise. It never raises on the value; a `grammar` argument outside the two is a
 ValueError.
 """
+import base64
+import hashlib
+import re
+from typing import Dict
+
+GRAMMARS = ("sri-2016", "sri-l2")
+ALGS = {"sha256": 32, "sha384": 48, "sha512": 64}
+STRENGTH = ("sha512", "sha384", "sha256")      # getPrioritizedHashFunction: the strongest first
+_B64 = {"sri-2016": re.compile(r"[A-Za-z0-9+/]+={0,2}"), "sri-l2": re.compile(r"[A-Za-z0-9+/_-]+={0,2}")}
+_ALG_TOKEN = re.compile(r"[A-Za-z0-9]+")
+_WSP = re.compile(r"[ \t]+")
+_VCHAR = re.compile(r"[\x21-\x7e]*")
+CODES = ("not_text", "empty", "grammar", "alg_not_recognised", "digest_length")
+
+
+def _grammar(grammar: str) -> None:
+    if grammar not in GRAMMARS:
+        raise ValueError(f"grammar: one of {GRAMMARS}, named by the caller (no default)")
+
+
+def parse_integrity(value, grammar: str) -> Dict:
+    """{"ok", "why", "expressions": [{"alg", "digest" (hex), "options"}], "sri_match_would_accept"}; never raises on
+    `value`. `sri_match_would_accept`: a plain SRI matcher would return true for any bytes (no expression it keeps)."""
+    _grammar(grammar)
+    out = {"ok": False, "why": None, "expressions": [], "sri_match_would_accept": True}
+    if not isinstance(value, str):
+        out["why"] = "not_text"
+        return out
+    tokens = [t for t in _WSP.split(value.strip(" \t")) if t] if value.strip(" \t") else []
+    if not tokens:
+        out["why"] = "empty"
+        return out
+    problems, kept = set(), []
+    for t in tokens:
+        expr, *options = t.split("?")
+        alg, dash, b64 = expr.partition("-")
+        if not dash or not _ALG_TOKEN.fullmatch(alg) or not _B64[grammar].fullmatch(b64) \
+                or not all(_VCHAR.fullmatch(o) for o in options):
+            problems.add("grammar")
+            continue
+        if alg.lower() not in ALGS:
+            problems.add("alg_not_recognised")
+            continue
+        out["sri_match_would_accept"] = False      # the matcher keeps this expression
+        raw = b64.rstrip("=").replace("-", "+").replace("_", "/")
+        try:
+            digest = base64.b64decode(raw + "=" * (-len(raw) % 4), validate=True)
+        except ValueError:
+            digest = None
+        if digest is None or len(digest) != ALGS[alg.lower()]:
+            problems.add("digest_length")
+            continue
+        kept.append({"alg": alg.lower(), "digest": digest.hex(), "options": options})
+    for code in CODES[2:]:                         # the closed order of the docstring
+        if code in problems:
+            out["why"] = code
+            return out
+    out.update(ok=True, expressions=kept)
+    return out
+
+
+def check_integrity(body: bytes, value, grammar: str) -> Dict:
+    """{"ok", "why" (a code of parse_integrity, or "mismatch"), "matched_alg", "sri_match_would_accept"}"""
+    p = parse_integrity(value, grammar)
+    out = {"ok": False, "why": p["why"], "matched_alg": None, "sri_match_would_accept": p["sri_match_would_accept"]}
+    if not p["ok"]:
+        return out
+    if not isinstance(body, (bytes, bytearray)):
+        raise ValueError("body: bytes")
+    alg = next(a for a in STRENGTH if any(e["alg"] == a for e in p["expressions"]))
+    digest = hashlib.new(alg, bytes(body)).hexdigest()
+    if any(e["alg"] == alg and e["digest"] == digest for e in p["expressions"]):
+        out.update(ok=True, why=None, matched_alg=alg)
+    else:
+        out["why"] = "mismatch"
+    return out

@@ -111,11 +111,12 @@ logs (SPEC §14); until that date they carried the same "no new scope" mark.
 | Confidential attestations (CLDMA, Pedersen commitments) | `cldma_confidential.py`, `pedersen_commit.py`, `verify_evidence.py cldma` |
 | Agent decision receipts of other formats (ACTA, APS, Cedulon, Vaara) | `cryptovalid_acta.py`, `cryptovalid_aps.py`, `cryptovalid_cedulon.py`, `cryptovalid_vaara_receipt.py` |
 | Domain records: DORA incidents, IRS 1099-DA transactions, fund metrics, microfinance | `dora_incident.py`, `tx_evidence.py`, `fundcert_canonical.py`, `fundcert_crosssource.py`, `microfinance.py` |
+| Integrity metadata (W3C SRI, as SD-JWT VC `#integrity` claims) and HTTP digests (RFC 3230, RFC 9530), since 0.26.0 | `cryptovalid_sri.py`, `cryptovalid_httpdigest.py` |
 | Auditor report (HTML/PDF) | `cryptovalid_report.py` |
 | Regulatory profiles (SPEC §8) | `refresh_regulatory.py`, `spec/regulatory_profiles.json` |
 | Development tooling | `mutation_runner.py` |
 
-Each experimental module documents its use in its docstring; 19 of the 31 also print their usage with `--help`. The
+Each experimental module documents its use in its docstring; 19 of the 33 also print their usage with `--help`. The
 release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ### What omega-cra-evol relies on
