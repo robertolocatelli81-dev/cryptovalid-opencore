@@ -1703,7 +1703,8 @@ certified devices — `eidas_ledger_check.py` tells you exactly which of those y
 ## README sections replaced on 2026-11-12
 
 The feature sections of the README of 0.22.0 that the rewrite replaced, kept here unchanged for reference. Commands,
-flags and file names in them still apply; dated statements are as of their dates.
+flags and file names in them still apply; dated statements are as of their dates. The offers they make of paid pilots
+and of a commercial licence are withdrawn (0.25.0, "No commercial offer"): none is offered.
 
 ### Licensing architecture (dual license, honest and explicit)
 

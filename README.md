@@ -15,7 +15,8 @@ and verifiers in six languages that agree on the same conformance vectors.
 ## Try it in 30 seconds
 
 On real public data shipped in this repository (NIST Randomness Beacon pulses, U.S. government work; RFC 3161 tokens of
-public time-stamping services, see [NOTICE](NOTICE)), offline after the install; the third command needs `openssl`:
+public time-stamping services, see [NOTICE](NOTICE)), offline once installed and cloned; the third command needs
+`openssl`:
 
 ```bash
 pip install 'cryptovalid-opencore[sign]==0.26.0'
