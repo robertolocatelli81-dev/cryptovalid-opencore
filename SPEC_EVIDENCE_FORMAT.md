@@ -532,10 +532,13 @@ signer that is a granted QTST certificate, otherwise: `not_qualified` with a clo
 extensions, a value that is not that DER, the statement twice or with `statementInfo`, a token whose TSTInfo this step
 cannot read). A token that carries the statement while its signer is not in the lists stays `not_qualified` without a
 reason: the statement is the TSA's claim, the list is the check. Until v0.10 the statement was not read, and a token of
-a QTST service without it was `qualified`. Measured on 2026-11-17: tokens requested that day from four public TSA
-endpoints (`timestamp.sectigo.com/qualified`, `tsa.belgium.be/connect`, `tsa.izenpe.com`, `tss.accv.es:8318/tsa`) carry
-the statement, and the token of `timestamp.apple.com/ts01` does not (`spec/vectors/rfc3161/`). Whether those four
-signers are granted QTST services is read from a trusted list the caller gives, not assumed here.
+a QTST service without it was `qualified`. Measured on 2026-11-17 on tokens requested that day
+(`spec/vectors/rfc3161/`): those of `tsa.belgium.be/connect`, `tsa.izenpe.com` and `tss.accv.es:8318/tsa` carry the
+statement as above; the one of `timestamp.sectigo.com/qualified` carries it in an Extension that writes `critical`
+FALSE, a DEFAULT value DER leaves out, so step 1 refuses that token as `malformed` (RFC 3161 §2.4.2: "The eContent
+SHALL be the DER-encoded value of TSTInfo"; a verdict this version does not change, and OpenSSL reads the token); the
+tokens of 2026-11-13 (freetsa, DigiCert, Sectigo, GlobalSign) carry no statement. Whether those signers are granted QTST
+services is read from a trusted list the caller gives, not assumed here.
 
 **Revocation, with CRLs the caller pins (v0.10).** `verify_token(..., crls=[...])` (paths or bytes, PEM or DER, each
 one X.509 CRL) adds step 8 after step 7, and only when steps 1–7 gave `verified`. Measured on 2026-11-16 (Athena's
