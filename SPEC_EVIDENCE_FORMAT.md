@@ -473,7 +473,9 @@ first that fails gives the outcome:
    issuer of a certificate already reached, a self-issued certificate (subject equal to issuer) excepted and not
    followed further, since OpenSSL does not check the signature of a trust anchor on itself. This path is read by names
    and not by the chain OpenSSL builds: when two certificates have the name of the issuer, both are read, and the
-   flag can say `true` for a chain that OpenSSL built through the other one (it reports more, never less). The
+   flag can say `true` for a chain that OpenSSL built through the other one (it reports more, never less). A pinned
+   certificate or a certificate of the token that this reader cannot read (signatureAlgorithm, issuer, subject) makes
+   the member `null` even after step 7 passed: the path is then not known, and nothing is read as absent. The
    token's own signature cannot use SHA-1 here: step 4 refuses it.
 
 Outcome `status`, a closed set:
