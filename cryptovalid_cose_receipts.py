@@ -14,10 +14,19 @@ preparation, 2026-10-03):
                      only, ES384 (-35) with a P-384 key only; vds (label 395) read from the PROTECTED header and equal
                      to 1; every RFC 9162 inclusion proof (vdp label 396, key -1) is well formed and rebuilds a root,
                      and one of them rebuilds the root the log signed (detached payload = that root).
-                     Also vds 2 = CCF_LEDGER_SHA256 (draft-ietf-scitt-receipts-ccf-profile-05 §2.2, §3.1, §3.2, §5):
-                     leaf HASH(internal-transaction-hash || HASH(internal-evidence) || data-hash), the path walked
-                     with its left bits, payload detached (MUST), every proof to the same root (MUST), and data-hash
-                     equal to the caller's entry.
+                     Also vds 2 = CCF_LEDGER_SHA256 (draft-ietf-scitt-receipts-ccf-profile-06, 2026-11-11, the
+                     revision current on datatracker on 2026-11-17; §2.2, §3, §3.1, §3.2, §5): the vdp map is
+                     exactly {-1: [+ proof]} or with -2 (Figure 11); each inclusion proof validated against Figures 6
+                     and 4 before compute_root (CBOR without duplicate keys, keys 1 and 2, 32-byte hashes,
+                     internal-evidence 1..1024 bytes of UTF-8, path [* [bool, bstr .size 32]], empty for a tree of
+                     size 1 whose root is the leaf hash); leaf HASH(internal-transaction-hash ||
+                     HASH(internal-evidence) || data-hash), the path walked with its left bits, payload detached
+                     (MUST), every proof to the same root (MUST), and EVERY proof's data-hash equal to the caller's
+                     entry, the statement digest of §2.2 (`ccf_statement_digest` computes it from the Signed
+                     Statement: SHA-256 of its COSE_Sign1 with tag 18 kept and the unprotected header made an empty
+                     map). Consistency proofs (-2, Figure 9) are not evaluated here: a receipt that carries them is
+                     `CONSISTENCY_NOT_EVALUATED` (§5: "A Verifier MUST reject a receipt in which any proof present in
+                     the vdp map recomputes a different root"; refusing them all never accepts one that does).
   profile "rfc9943"  the same, plus the header MUSTs of RFC 9943 §6 on BOTH the Signed Statement and the Receipt:
                      CWT Claims (15) with iss (1) and sub (2), iss of 1..8192 characters, kid (4) when neither x5t (34)
                      nor x5chain (33) is in the protected header.
@@ -39,6 +48,11 @@ action-state-group/scitt-cose e76bbfdf7a02; each turns a 0.25.x acceptance into 
              `MALFORMED_PROOF` (naming it); then one well-formed proof whose root the log signature covers suffices
              (a well-formed proof for another tree does not mask it, as the public vector valid-eddsa-multi-proof
              expects). 0.25.x skipped a malformed proof and accepted the receipt when another one verified.
+  CCF -06.   draft-ietf-scitt-receipts-ccf-profile-06 replaced -05 (cited until this version): an empty path is
+             valid (refused under -05's [+ ...]); every proof's data-hash must equal the entry (under -05 one bound
+             proof sufficed); a vdp map with another key, or with consistency proofs, is refused (-05 ignored them).
+             The public vector valid-ccf-vds2 (scitt-ccf-ledger v7.0.6) still verifies, and its leaf_entry is the
+             statement digest of -06 §2.2 computed from its statement.cose (measured on 2026-11-17).
   Payload.   RFC 9942 §4.4: "The payload in such definitions SHOULD be detached". A receipt whose payload is attached
              and equal to the rebuilt root is accepted, as the standard decides, and the result says so:
              `payload_attached: true` (false when detached). An attached payload that is not the root is refused.
@@ -58,7 +72,7 @@ from cryptovalid_scitt import (L_ALG, L_CWT, L_KID, L_VDP, L_VDS, CWT_ISS, CWT_S
                                VDS_RFC9162_SHA256, ScittError, _root_from_inclusion, _sig1, parse_cose_sign1)
 
 ALG_EDDSA, ALG_ES256, ALG_ES384 = -8, -7, -35
-VDS_CCF_LEDGER_SHA256 = 2        # draft-ietf-scitt-receipts-ccf-profile-05: TBD_1, "requested assignment 2" (not yet IANA)
+VDS_CCF_LEDGER_SHA256 = 2        # draft-ietf-scitt-receipts-ccf-profile-06 §5: TBD_1, "Requested assignment" 2 (not yet IANA)
 L_X5CHAIN, L_X5T = 33, 34
 PROFILES = ("rfc9942", "rfc9943")
 
