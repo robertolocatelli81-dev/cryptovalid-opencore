@@ -31,11 +31,24 @@ spec/vectors/beacon/nist/ holds pulses and the certificate of the NIST
 Randomness Beacon 2.0, the bytes beacon.nist.gov served on 2026-11-16. NIST is
 an agency of the U.S. federal government; works of the U.S. government are not
 subject to copyright protection in the United States (17 U.S.C. §105). The
-certificate was issued to NIST by DigiCert; it is public data.
+certificate was issued to NIST by DigiCert; it is public data. The statement
+NIST asks distributions of its data to include is in
+spec/vectors/beacon/nist/NIST-STATEMENT.txt (read on nist.gov/open/license on
+2026-11-17).
+
+examples/acta/autoresearch-safe.cedar and examples/acta/key-window/* are copied
+verbatim from ScopeBlind/agent-governance-testvectors (commits 49ad7c1 and
+1e24b5687): Copyright (c) ScopeBlind Contributors and agent-governance-testvectors
+contributors, Apache License 2.0, full text in
+examples/acta/LICENSE.agent-governance-testvectors (that repository has no
+NOTICE file). examples/acta/reference_protect-mcp/ holds receipts produced on
+2026-09-20 by protect-mcp 0.29.0 (MIT) from that repository's fixtures; no code
+of protect-mcp is included.
 
 spec/vectors/rfc3161/ holds RFC 3161 time-stamp tokens issued for this
 repository's own data.txt by public time-stamping services (DigiCert,
-FreeTSA, GlobalSign, Sectigo) and the certificates they carry or publish
+FreeTSA, GlobalSign, Sectigo; on 2026-11-17 also BOSA, Izenpe, ACCV and
+Sectigo's qualified service) and the certificates they carry or publish
 (freetsa_cacert.pem from https://freetsa.org/files/cacert.pem); manifest.json
 says how each was obtained. They are the services' outputs, kept as received.
 
