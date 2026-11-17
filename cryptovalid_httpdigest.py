@@ -22,11 +22,16 @@ default:
 Unknown algorithms. Both RFCs say "A recipient MAY ignore any or all digests" (RFC 3230 §4.3.2, RFC 9530 §2-§3): where
 the standard decides, it is followed and the report says what was ignored. An algorithm this module does not verify
 (an unknown one, or md5, sha, unixsum, unixcksum, adler, crc32c, "Deprecated" in RFC 9530 §5) is listed in `ignored`,
-never a refusal. The outcome, closed: `ok` when at least one supported digest was checked and every supported digest
-matches the body; otherwise `why` is one of `not_text`, `grammar` (the field is outside the syntax named, a key twice,
-a value that is not canonical base64, a parameter or member value of the wrong type), `digest_length` (a supported
-algorithm with a decoded length other than 32 or 64 bytes), `mismatch` (a supported digest does not match the body),
-`no_supported_alg` (nothing left to check after the ignored ones). A `syntax` outside the two is a ValueError.
+never a refusal. Also as the standards say, and reported: in "rfc9530" a key given twice keeps its last value (RFC 9651
+§4.2.2, listed in `duplicate_keys`), a Byte Sequence without "=" padding or with non-zero pad bits is read ("parsers
+SHOULD NOT fail", RFC 9651 §4.2.7; listed in `noncanonical`), and parameters are kept and not interpreted (RFC 9530
+defines none; listed in `parameters`). In "rfc3230" every instance-digest is checked, a repeated algorithm too, and its
+base64 must be canonical (RFC 3230 says nothing else; RFC 4648 §3.5 lets a decoder refuse non-canonical data). The
+outcome, closed: `ok` when at least one supported digest was checked and every supported digest matches the body;
+otherwise `why` is one of `not_text`, `grammar` (the field is outside the syntax named, or a member value is not a Byte
+Sequence), `digest_length` (a supported algorithm with a decoded length other than 32 or 64 bytes), `mismatch` (a
+supported digest does not match the body), `no_supported_alg` (nothing left to check after the ignored ones). A `syntax`
+outside the two is a ValueError.
 
 What this module does not do: it does not know which representation a Repr-Digest covers (the caller passes the bytes),
 does not read Want-*-Digest, and does not decode content codings.
