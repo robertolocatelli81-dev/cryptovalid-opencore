@@ -197,6 +197,12 @@ def verify_receipt(receipt: bytes, entry: bytes, log_key, profile: str = "rfc994
             if why:
                 return _refuse("HEADER_MUST", why)
         vdp = uh.get(L_VDP)
+        if vds == VDS_CCF_LEDGER_SHA256 and isinstance(vdp, dict):   # ccf-profile-06 §5, Figure 11
+            if not vdp or set(vdp) - {VDP_INCLUSION, -2}:
+                return _refuse("MALFORMED_PROOF", f"vdp map keys {sorted(vdp, key=repr)!r}: only -1 and -2 (Figure 11)")
+            if -2 in vdp:
+                return _refuse("CONSISTENCY_NOT_EVALUATED", "a CCF receipt with consistency proofs (vdp -2): they are "
+                               "not evaluated here, and every proof present MUST recompute the same root (-06 §5)")
         proofs = vdp.get(VDP_INCLUSION) if isinstance(vdp, dict) else None
         if not isinstance(proofs, list) or not proofs or not all(isinstance(p, bytes) for p in proofs):
             return _refuse("MALFORMED_PROOF", "no inclusion proof (vdp 396, key -1: [+ bstr .cbor proof])")
@@ -237,8 +243,59 @@ def verify_receipt(receipt: bytes, entry: bytes, log_key, profile: str = "rfc994
         return _refuse("MALFORMED_RECEIPT", f"{type(e).__name__}: {e}"[:200])
 
 
+def _cbor_end(b: bytes, i: int, depth: int = 0) -> int:
+    """the end of the definite-length CBOR item at `i` (major types 0-5, 6 for one tag, 7 simple values); ValueError else"""
+    if depth > 64 or i >= len(b):
+        raise ValueError("CBOR item cut short or nested too deep")
+    major, info = b[i] >> 5, b[i] & 0x1F
+    i += 1
+    if info < 24:
+        n = info
+    elif info <= 27:
+        k = 1 << (info - 24)
+        if i + k > len(b):
+            raise ValueError("CBOR head cut short")
+        n, i = int.from_bytes(b[i:i + k], "big"), i + k
+    else:
+        raise ValueError("indefinite length or reserved CBOR encoding")
+    if major in (0, 1, 7):
+        return i
+    if major in (2, 3):
+        if i + n > len(b):
+            raise ValueError("CBOR string cut short")
+        return i + n
+    if major == 6:
+        return _cbor_end(b, i, depth + 1)
+    for _ in range(n * (2 if major == 5 else 1)):
+        i = _cbor_end(b, i, depth + 1)
+    return i
+
+
+def ccf_statement_digest(statement: bytes) -> bytes:
+    """draft-ietf-scitt-receipts-ccf-profile-06 §2.2: the data-hash of a Signed Statement, SHA-256 of its COSE_Sign1
+    as registered: tag 18 kept, the unprotected header an empty map, the protected header, payload and signature as
+    received. ValueError for bytes that are not one tagged COSE_Sign1 (RFC 9943 §6.1: tag 18)."""
+    b = bytes(statement)
+    if b[:2] != b"\xd2\x84":
+        raise ValueError("not a tagged COSE_Sign1 (tag 18, array of 4)")
+    arr = R.cbor_decode(b[1:])            # the structure, strictly
+    if not (isinstance(arr, list) and len(arr) == 4 and isinstance(arr[0], bytes) and isinstance(arr[1], dict)
+            and (arr[2] is None or isinstance(arr[2], bytes)) and isinstance(arr[3], bytes)):
+        raise ValueError("COSE_Sign1 must be [bstr, map, bstr / nil, bstr]")
+    ends, i = [], 2
+    for _ in range(4):
+        j = _cbor_end(b, i)
+        ends.append((i, j))
+        i = j
+    if i != len(b):
+        raise ValueError("bytes after the COSE_Sign1")
+    (p0, p1), _u, (l0, l1), (s0, s1) = ends
+    return hashlib.sha256(b"\xd2\x84" + b[p0:p1] + b"\xa0" + b[l0:l1] + b[s0:s1]).digest()
+
+
 def _ccf_root(proof) -> bytes:
-    """compute_root of draft-ietf-scitt-receipts-ccf-profile-05 Figure 7; ValueError on any shape outside its CDDL."""
+    """compute_root of draft-ietf-scitt-receipts-ccf-profile-06 Figure 7, after the checks of its §3.2 (Figures 6 and
+    4); ValueError on any shape outside them. An empty path is a tree of size 1: the root is the leaf hash."""
     if not (isinstance(proof, dict) and set(proof) == {1, 2}):
         raise ValueError("ccf-inclusion-proof must be {1: leaf, 2: path}")
     leaf, path = proof[1], proof[2]
@@ -246,9 +303,9 @@ def _ccf_root(proof) -> bytes:
             and isinstance(leaf[1], str) and 1 <= len(leaf[1].encode("utf-8")) <= 1024
             and isinstance(leaf[2], bytes) and len(leaf[2]) == 32):
         raise ValueError("ccf-leaf must be [bstr .size 32, tstr .size (1..1024), bstr .size 32]")
-    if not (isinstance(path, list) and path and all(isinstance(e, list) and len(e) == 2 and isinstance(e[0], bool)
-                                                   and isinstance(e[1], bytes) and len(e[1]) == 32 for e in path)):
-        raise ValueError("path must be [+ [bool, bstr .size 32]]")
+    if not (isinstance(path, list) and all(isinstance(e, list) and len(e) == 2 and isinstance(e[0], bool)
+                                           and isinstance(e[1], bytes) and len(e[1]) == 32 for e in path)):
+        raise ValueError("path must be [* [bool, bstr .size 32]]")
     H = lambda b: hashlib.sha256(b).digest()  # noqa: E731
     h = H(leaf[0] + H(leaf[1].encode("utf-8")) + leaf[2])
     for left, x in path:
@@ -259,18 +316,19 @@ def _ccf_root(proof) -> bytes:
 def _verify_ccf(rp: bytes, rpl, sig: bytes, alg: int, pub, proofs: List[bytes], entry: bytes) -> Dict:
     if rpl is not None:
         return _refuse("PAYLOAD_NOT_DETACHED", "a CCF inclusion receipt's payload MUST be detached (§3.1)")
-    roots, bound = set(), False
+    roots, decoded = set(), []
     for i, pb in enumerate(proofs):
         try:
             dec = R.cbor_decode(pb)
             roots.add(_ccf_root(dec))
         except ValueError as e:
             return _refuse("MALFORMED_PROOF", f"proof {i}: {e}")
-        bound = bound or dec[1][2] == entry
+        decoded.append(dec)
+    for i, dec in enumerate(decoded):   # -06 §3.2: "Every proof in the receipt MUST have a data-hash equal to statement_digest"
+        if dec[1][2] != entry:
+            return _refuse("LEAF_NOT_THIS_STATEMENT", f"proof {i}: its data-hash is not the entry for this statement")
     if len(roots) != 1:
         return _refuse("PROOFS_DISAGREE", "the inclusion proofs do not compute the same root (§3.1 MUST)")
-    if not bound:
-        return _refuse("LEAF_NOT_THIS_STATEMENT", "no proof's data-hash equals the entry for this statement")
     root = roots.pop()
     if not _verify_sig(alg, pub, _sig1(rp, root), sig):
         return _refuse("INCLUSION_ROOT_SIGNATURE_INVALID", "the log signature does not verify over the rebuilt root")

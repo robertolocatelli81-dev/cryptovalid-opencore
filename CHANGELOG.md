@@ -194,6 +194,18 @@ run by the same author, not by a third party.
   `docs/THREAT_MODEL.md`, and the `pq_note` of an Ed25519-only ledger in `signer.py`, the Go and the Java verifiers
   ("NIST IR 8547 final, October 2026: EdDSA deprecated after 2030, disallowed after 2035"; until now "NIST IR 8547
   draft"). A note of the result, not a verdict.
+- **CCF receipts (vds 2) read after draft-ietf-scitt-receipts-ccf-profile-06** (2026-11-11, current on datatracker on
+  2026-11-17; -05 was cited until now; the module's docstring, its normative text, written before the code). Verdicts
+  that change: an inclusion proof with an empty path (a tree of size 1, root = leaf hash) verifies (refused under -05);
+  every proof's data-hash must equal the entry ("Every proof in the receipt MUST", §3.2), so a proof of another leaf
+  of the same tree beside a bound one is `LEAF_NOT_THIS_STATEMENT` (accepted until now); a vdp map with a key other
+  than -1 and -2 is `MALFORMED_PROOF` (ignored until now), and one with consistency proofs is
+  `CONSISTENCY_NOT_EVALUATED` (§5: every proof present MUST recompute the same root; consistency proofs are not
+  evaluated here). New: `ccf_statement_digest(statement)`, the data-hash of §2.2 (SHA-256 of the Signed Statement with
+  tag 18 kept and an empty unprotected header, the rest as received); on the public vector `valid-ccf-vds2` it equals
+  the recorded leaf entry. VDS 1 is unchanged. `test_ccf_profile06_20261117.py`: 7 tests, 6 of them fail on the -05
+  code. 10 hand mutants: 7 detected, 3 equivalent (trailing bytes, a wrong array head and indefinite lengths are
+  refused by the strict CBOR decoding that runs before the byte walk).
 - **Verdicts of 0.25.x that change in 0.26.0** (`cryptovalid_cose_receipts`, profiles `rfc9942` and `rfc9943`; rules in
   its docstring, decided on 2026-11-17 after a cross-verification matrix measured 0.25.1 on the scitt-cose public vectors,
   action-state-group/scitt-cose at commit e76bbfdf7a02, now in `spec/vectors/scitt-cose/` with their SHA-256 pinned).
