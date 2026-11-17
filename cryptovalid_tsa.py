@@ -729,12 +729,65 @@ def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int
     return None
 
 
+
+SHA1_SIGNATURE_OIDS = {"1.2.840.113549.1.1.5", "1.3.14.3.2.29", "1.2.840.10045.4.1", "1.2.840.10040.4.3", "1.3.14.3.2.27"}
+OID_RSASSA_PSS = "1.2.840.113549.1.1.10"
+
+
+def _cert_sig_names(der: bytes):
+    """(signed with SHA-1, issuer Name TLV, subject Name TLV) of one certificate (SPEC §11 step 7, SHA-1 legacy)"""
+    cert = _der_items(_der_one(der, "certificate", 0x30), "certificate")
+    if len(cert) != 3 or cert[0][0] != 0x30 or cert[1][0] != 0x30 or cert[2][0] != 0x03:
+        raise TokenError("malformed", "certificate is not {tbsCertificate, signatureAlgorithm, signature}")
+    tbs = _der_items(cert[0][1], "tbsCertificate")
+    k = 1 if tbs[0][0] == 0xA0 else 0
+    if tbs[k + 2][0] != 0x30 or tbs[k + 4][0] != 0x30:
+        raise TokenError("malformed", "certificate issuer or subject is not a Name")
+    alg = _der_items(cert[1][1], "signatureAlgorithm")
+    oid = _der_oid(_der_one(_tlv_bytes(*alg[0]), "signatureAlgorithm", 0x06), "signatureAlgorithm")
+    sha1 = oid in SHA1_SIGNATURE_OIDS
+    if oid == OID_RSASSA_PSS:   # RFC 4055 §3.1: hashAlgorithm [0] DEFAULT sha1
+        params = _der_items(alg[1][1], "RSASSA-PSS-params") if len(alg) > 1 and alg[1][0] == 0x30 else []
+        h = [v for t, v in params if t == 0xA0]
+        sha1 = not h or _der_oid(_der_items(_der_one(h[0], "hashAlgorithm", 0x30), "hashAlgorithm")[0][1],
+                                 "hashAlgorithm") == "1.3.14.3.2.26"
+    return sha1, _tlv_bytes(0x30, tbs[k + 2][1]), _tlv_bytes(0x30, tbs[k + 4][1])
+
+
+def _pem_ders(pem: bytes) -> list:
+    import base64
+    import re
+    return [base64.b64decode(b) for b in re.findall(rb"-----BEGIN CERTIFICATE-----([A-Za-z0-9+/=\s]+?)-----END CERTIFICATE-----",
+                                                    pem or b"")]
+
+
+def sha1_signature_legacy(signer_der: bytes, pins_pem: bytes, token_der: bytes):
+    """SPEC §11 step 7, SHA-1 legacy (v0.10): True when the signer certificate, or a certificate reached from it by names
+    among the pinned certificates and the token's (a self-issued one excepted and not followed), is signed with SHA-1;
+    None when one of them cannot be read here"""
+    try:
+        pool = [(d, *_cert_sig_names(d)) for d in _pem_ders(pins_pem) + _token_certificates(token_der)]
+        todo, seen, found = [(signer_der, *_cert_sig_names(signer_der))], set(), False
+    except (TokenError, IndexError, ValueError):
+        return None
+    while todo:
+        der, sha1, issuer, subject = todo.pop()
+        if der in seen or _names_equal(issuer, subject):
+            continue
+        seen.add(der)
+        found = found or sha1
+        todo.extend(c for c in pool if _names_equal(c[3], issuer))
+    return found
+
+
 def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_certs=None, crls=None) -> dict:
     """SPEC §11 (v0.6): the one check of an RFC 3161 token in this repository. `token_der` is a TimeStampToken or a granted
     TimeStampResp; `digest` the expected messageImprint.hashedMessage; `hash_alg` (optional) the algorithm it was stamped
     with ("sha256", ...); `tsa_certs` (optional) the TSA certificates the caller pins (paths or bytes, PEM or DER: the
     TSA certificate or a CA above it).
-    Returns {"status", "counts_as_timestamp", "reason", "detail", "tst_info", "imprint_ok", "signer_sha256", "note"}:
+    Returns {"status", "counts_as_timestamp", "reason", "detail", "tst_info", "imprint_ok", "signer_sha256", "note",
+    "sha1_signature_legacy"} (the last: None unless step 7 passed, then whether a certificate of the chain read by names
+    is signed with SHA-1, NIST SP 800-131A Rev. 2 legacy verification; None too when one cannot be read here):
     status `verified` (pinned TSA, the only one that counts), `signature_only` (no pin: signature valid with the certificate
     contained in the token, chain not established), `invalid` (a closed `reason`), `not_evaluated` (openssl absent).
     openssl present that cannot run here, does not answer, or is ended by a signal: CheckNotRun (SPEC §10, §11).
@@ -744,7 +797,7 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
     import shutil
     from datetime import datetime, timezone
     out = {"status": "invalid", "counts_as_timestamp": False, "reason": None, "detail": None, "tst_info": None,
-           "imprint_ok": False, "signer_sha256": None, "note": None}
+           "imprint_ok": False, "signer_sha256": None, "note": None, "sha1_signature_legacy": None}
     crl_objs = None
     if crls is not None:
         if not tsa_certs:
@@ -784,6 +837,7 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
         _tmp_write(tp, t["token_der"])
         _tmp_write(cp, pins)
         at = int(datetime.strptime(t["gen_time"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+        signer_der = None
         if _signer_named_by_key_id(t["token_der"]):   # SPEC §11 step 7, subjectKeyIdentifier: openssl ts cannot read it
             state6, signer_der, why = _token_signer(t["token_der"], pins)
             if state6 != "valid" or hashlib.sha256(signer_der).hexdigest() != signer:
@@ -803,6 +857,10 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
                 out.update(reason="not_issued_by_pinned_tsa", detail=_last_line(p.stderr, "openssl ts -verify refused it"))
                 return out
         out.update(status="verified", counts_as_timestamp=True, note="verified against the pinned TSA certificate(s)")
+        if signer_der is None:
+            state6, signer_der, _why = _token_signer(t["token_der"], pins)
+        out["sha1_signature_legacy"] = None if signer_der is None or hashlib.sha256(signer_der).hexdigest() != signer \
+            else sha1_signature_legacy(signer_der, pins, t["token_der"])
         if crl_objs is ImportError:
             out.update(status="not_evaluated", counts_as_timestamp=False, reason="crl_backend_missing",
                        note="cryptography absent: the pinned CRLs were not read")

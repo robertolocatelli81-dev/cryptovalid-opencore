@@ -96,6 +96,22 @@ run by the same author, not by a third party.
   apart from the parser and 3 000 mutated fields. 17 hand mutants: 14 detected, 3 equivalent (a first key character
   outside `[a-z*]` is never consumed and the field fails anyway; ";" is consumed by the parameter parser before the
   separator is read; a character outside base64 inside a Byte Sequence also fails the base64 decoding).
+- **`sha1_signature_legacy` in the outcome of `cryptovalid_tsa.verify_token`** (SPEC v0.10 §11 step 7, written
+  before the code): a certificate of the TSA chain signed with SHA-1 stays accepted, as in 0.25.1 (OpenSSL 3.0.22 accepts
+  it, in both forms of `sid`), and is now reported. NIST SP 800-131A Rev. 2 (§9 Table 8; Rev. 3 is an initial public
+  draft, not final on 2026-11-17) disallows SHA-1 for generating signatures and allows it for verifying them as legacy
+  use. A closed member: `null` unless step 7 passed (and when a certificate of the path cannot be read here), then
+  `true` or `false`; the path is read by names from the signer certificate among the pinned certificates and the
+  token's, a self-issued certificate excepted (OpenSSL does not check a trust anchor's signature on itself), so it can
+  report more than the chain OpenSSL built, never less. The evidence pack's `tsa_check` (§10) carries the same member
+  and the beacon window carries it as `tsa_sha1_signature_legacy` (§19). Verdicts do not change.
+  `test_tsa_sha1_legacy_20261117.py`: 14 tests, each case in both forms (a SHA-1 TSA certificate, a SHA-1 intermediate
+  carried only by the token, a SHA-1 self-signature of the root, two certificates with the issuer's name, a cycle of
+  cross certificates, RSASSA-PSS with SHA-1 or its default, each OID of the list, unreadable certificates, the pack's
+  `tsa_check`); on the code before this change 13 fail (the fourteenth checks the bench; on 0.25.1 the file fails at
+  its import); `test_beacon_20261116.py` checks the window's
+  member. 30 hand mutants of the new lines: 30 detected (one, the path without its record of certificates already
+  read, by a 60 s timeout on the cycle).
 - `bench/beacon_cost/`: the cost of one check, measured (below).
 - `test_review3_20261117.py`: 7 tests added after the third review, a control and six that each fail against a mutant
   of the new lines that the suite let live: an ESS attribute given twice, both ESS attributes present with the second

@@ -456,7 +456,8 @@ def _pinned_time_anchor(tsr_b64: str, digest_hex: str, tsa_certs, tsa_crls=None)
     v = _T.verify_token(base64.b64decode(tsr_b64), bytes.fromhex(digest_hex), "sha256", tsa_certs,
                         **({"crls": tsa_crls} if tsa_crls is not None else {}))   # without CRLs: the call of v0.9
     check = {"status": v["status"], "reason": v["reason"], "detail": v["detail"],
-             "gen_time": (v["tst_info"] or {}).get("gen_time"), "signer_sha256": v["signer_sha256"]}
+             "gen_time": (v["tst_info"] or {}).get("gen_time"), "signer_sha256": v["signer_sha256"],
+             "sha1_signature_legacy": v["sha1_signature_legacy"]}   # SPEC v0.10 §11 step 7
     if "revocation" in v:   # SPEC v0.10 §11 step 8: only with tsa_crls (a receipt without them is unchanged)
         check["revocation"] = v["revocation"]
     if v["status"] == "verified" and v["counts_as_timestamp"] is True:

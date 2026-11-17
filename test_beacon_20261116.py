@@ -1098,6 +1098,7 @@ class Window(unittest.TestCase):
         self.assertGreaterEqual(B.gen_time_instant(w["not_after"]), B.gen_time_instant("2026-11-16T13:04:00Z"))
         self.assertEqual(w["pack_ledger"], "payments.jsonl")
         self.assertEqual((w["max_window_s"], w["tsa_revocation"]), (WIDE, "not_checked"))
+        self.assertIs(w["tsa_sha1_signature_legacy"], False)         # SPEC §11 step 7 (17/11): a SHA-256 chain
         self.assertIs(r["record_complete"], False)                   # no witnessed checkpoint: not fixed in one history
         self.assertEqual(r["unique"], {"status": "not_established"})
         self.assertEqual([list(x)[0] for x in r["scope"]["proves"]], ["composed_after_pulse", "stamped_before_gen_time"])

@@ -656,6 +656,7 @@ def _pack_window(pack_dir: str, tsa_certs, tsa_crls, max_window_s: int, clock_to
     w = window(beacon["_t"], beacon["period_ms"], gt, max_window_s, clock_tolerance_s)
     chk = r["rfc3161"]["tsa_check"]
     w.update({"max_window_s": max_window_s, "pack_ledger": names[0], "tsa_signer_sha256": chk.get("signer_sha256"),
+              "tsa_sha1_signature_legacy": chk.get("sha1_signature_legacy"),
               "tsa_revocation": chk["revocation"] if tsa_crls is not None else "not_checked",
               "tsa_qualification": "not_checked" if trusted_list is None else
               _qualification(man["rfc3161_timestamp"]["tsr_b64"], chk.get("signer_sha256"), gt, trusted_list)})
