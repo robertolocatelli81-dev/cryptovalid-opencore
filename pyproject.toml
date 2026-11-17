@@ -7,7 +7,7 @@ name = "cryptovalid-opencore"
 version = "0.25.1"
 description = "Verifiable compliance evidence: hash-chained ledgers + standalone offline verifier (flat-layout modules, unchanged declared commands)"
 license = "AGPL-3.0-or-later"
-license-files = ["LICENSE", "NOTICE"]
+license-files = ["LICENSE", "NOTICE", "LICENSE-Unicode-3.0.txt"]
 requires-python = ">=3.9"
 authors = [{name = "Roberto Locatelli"}]
 readme = "README.md"
