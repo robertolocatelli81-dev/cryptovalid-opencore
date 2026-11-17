@@ -461,6 +461,20 @@ first that fails gives the outcome:
    checks the CA above the leaf too (a CA expired at genTime, not a CA, or without keyCertSign makes the token refused),
    measured on 2026-11-16 on generated tokens by the extraction of this profile into a separate repository; a verifier
    that stops at the pinned leaf accepts tokens this one refuses.
+   **SHA-1, legacy verification (v0.10).** A certificate of the chain signed with SHA-1 does not change the outcome
+   (OpenSSL 3.0.22 accepts it at its default security level, in both forms; measured on 2026-11-17). NIST SP 800-131A
+   Rev. 2 (March 2019, §9 Table 8; still in force on 2026-11-17: Rev. 3 is an initial public draft of October 2024)
+   disallows SHA-1 for generating digital signatures and allows it for verifying them as legacy use. The outcome
+   reports it: `sha1_signature_legacy`, a closed member, `null` unless step 7 passed, then `true` or `false`. It is
+   `true` when one of these certificates is signed with SHA-1 (sha1WithRSAEncryption 1.2.840.113549.1.1.5, its OIW form
+   1.3.14.3.2.29, ecdsa-with-SHA1 1.2.840.10045.4.1, dsa-with-sha1 1.2.840.10040.4.3 and its OIW form 1.3.14.3.2.27,
+   RSASSA-PSS 1.2.840.113549.1.1.10 whose hashAlgorithm is SHA-1 or absent, RFC 4055 §3.1): the signer certificate,
+   then, again and again, every pinned certificate or certificate of the token whose subject equals (as above) the
+   issuer of a certificate already reached, a self-issued certificate (subject equal to issuer) excepted and not
+   followed further, since OpenSSL does not check the signature of a trust anchor on itself. This path is read by names
+   and not by the chain OpenSSL builds: when two certificates have the name of the issuer, both are read, and the
+   flag can say `true` for a chain that OpenSSL built through the other one (it reports more, never less). The
+   token's own signature cannot use SHA-1 here: step 4 refuses it.
 
 Outcome `status`, a closed set:
 
@@ -1303,6 +1317,8 @@ marks what could not be checked against its issuer today.
 | RFC 5652 (§11 step 7) | Internet Standard (2009), updated by RFC 8933 and RFC 9629; not obsoleted | rfc-editor.org |
 | RFC 2634 (§11 step 7) | Proposed Standard (1999), updated by RFC 5035; not obsoleted | rfc-editor.org |
 | RFC 5035 (§11 step 7) | Proposed Standard (2007); not updated, not obsoleted | rfc-editor.org |
+| RFC 4055 (§11 step 7, RSASSA-PSS parameters) | Proposed Standard (June 2005), updated by RFC 5756; not obsoleted (checked on 2026-11-17) | rfc-editor.org |
+| NIST SP 800-131A (§11 step 7, SHA-1) | Rev. 2, March 2019, final; Rev. 3 initial public draft of 2024-10-21 (comments closed 2024-12-04), not final on 2026-11-17 | csrc.nist.gov |
 | RFC 5280 | Proposed Standard (2008), updated by RFC 6818, 8398, 8399, 9549, 9598, 9608, 9618, 9925, 10007; not obsoleted | rfc-editor.org |
 | RFC 6962 | Experimental (2013), obsoleted by RFC 9162: cited only for the Merkle tree hash that C2SP tlog-checkpoint and this format's §9 use | rfc-editor.org |
 | RFC 9562 (UUID) | Proposed Standard (May 2024), obsoletes RFC 4122 | rfc-editor.org |
