@@ -140,7 +140,9 @@ def main():
         case("entry_not_found", "invalid", "entry_not_found", entry=3)
         case("entry_not_a_payment", "refused", "entry_not_a_payment", entry=2)
 
-        # step 2, the profile, one case per check in its order
+        # step 2, the profile, one case per check in its order; SPEC §18 "Currencies" (cryptovalid-beacon-conformance/4):
+        # the currency cases need a pinned currency table, and without one the same ledgers pass the check of form only
+        ctab = put("currency_table.json", json.dumps({'format': 'cryptovalid-iso4217-table/1', 'source': 'the conformance vectors\' own table (SPEC §18 "Currencies"): three codes with their ISO 4217 minor units', 'currencies': {'EUR': 2, 'JPY': 0, 'USD': 2}}, indent=1) + "\n")
         for name, fn, why in (
                 ("unknown_member", lambda d: d[1].__setitem__("note", "x"), "payment_malformed"),
                 ("no_party_identifier", lambda d: (d[1].pop("payee_iban_commitment"), d[1].pop("payer_iban_commitment")),
@@ -163,7 +165,11 @@ def main():
                                                             d[1]["beacons"][0].__setitem__("source", "drand")),
                  "payment_malformed")):
             status = "invalid" if why == "payment_id_not_unique" else "refused"
-            case(f"profile_{name}", status, why, ledger=put(f"ledgers/{name}.jsonl", ledger_with(fn)))
+            table = ctab if name in ("currency_unknown", "amount_not_canonical") else None
+            case(f"profile_{name}", status, why, ledger=put(f"ledgers/{name}.jsonl", ledger_with(fn)), currency_table=table)
+        case("currency_table_pinned", "verified", None, currency_table=ctab)
+        for name in ("currency_unknown", "amount_not_canonical"):
+            case(f"profile_{name}_without_currency_table", "verified", None, ledger=f"conformance/ledgers/{name}.jsonl")
 
         # step 3, disclosures
         def salt(m, label="v1"):
@@ -311,7 +317,7 @@ def main():
                                         ("2026-11-16T13:03:58.999999Z", 3600, 1, "window_inverted"),
                                         ("2026-11-13T09:00:00Z", 10 ** 9, 0, "window_inverted"),
                                         ("2026-11-16T14:04:00Z", 3600, 0, None))]
-        doc = {"format": "cryptovalid-beacon-conformance/3", "spec": "SPEC_EVIDENCE_FORMAT.md v0.10 §18-§19",
+        doc = {"format": "cryptovalid-beacon-conformance/4", "spec": "SPEC_EVIDENCE_FORMAT.md v0.10 §18-§19",
                "paths": "relative to spec/vectors/beacon/", "cases": cases, "window_cases": windows}
         with open(os.path.join(HERE, "conformance.json"), "w", encoding="utf-8") as f:
             f.write(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")

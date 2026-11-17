@@ -35,7 +35,7 @@ writer's claim, not used by the check.
 
 ## `conformance.json` and `conformance/`
 
-The conformance cases of SPEC §19 rule 8, format `cryptovalid-beacon-conformance/3`: for each case the inputs (paths
+The conformance cases of SPEC §19 rule 8, format `cryptovalid-beacon-conformance/4`: for each case the inputs (paths
 relative to this folder: ledger and entry, or for rule 14 an `entry_file` and its `proof` without the ledger; one pulse
 pair per beacon value, the pinned beacon certificates, and when the case
 needs them the evidence pack, the pinned TSA certificates, CRLs and trusted list, the maximum width, the checkpoint with
@@ -48,7 +48,8 @@ the signature (their certificates are in `conformance/other/`, the private keys 
 by TSAs made on the spot with openssl (CA certificates and CRLs in `conformance/tsa/`, private keys not kept); checkpoints
 signed and cosigned with Ed25519 keys derived from fixed labels (log `example.org/payments`, witnesses
 `witness.example/a` and `/b`). An implementation agrees with this format when it gives the expected status, reason and
-`record_complete` for every case.
+`record_complete` for every case. The cases `profile_currency_unknown` and `profile_amount_not_canonical` pin `conformance/currency_table.json` (format
+/4, SPEC §18 "Currencies"); `currency_table_pinned` and the two `..._without_currency_table` cases give the other mode.
 
 ## SHA-256
 

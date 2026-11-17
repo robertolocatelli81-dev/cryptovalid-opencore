@@ -812,17 +812,24 @@ class Payment(unittest.TestCase):
         for k, v in (("payer_iban", EXAMPLE_IBANS[0]), ("payee_iban", EXAMPLE_IBANS[1])):   # an IBAN in clear is refused
             self.assertMalformed(dict(base, **{k: v}), k)
 
-    def test_amounts_by_currency_minor_units(self):
-        """one canonical form: exactly the currency's minor units after the point, no point when there are none"""
+    TABLE = {"EUR": 2, "JPY": 0, "BHD": 3, "CLF": 4, "HUF": 2, "IQD": 3, "USD": 2}   # a small table of this test's own
+
+    def table(self, currencies=None, **kw):
+        return json.dumps(dict({"format": B.CURRENCY_TABLE_FORMAT, "source": "test", "currencies":
+                                self.TABLE if currencies is None else currencies}, **kw)).encode()
+
+    def test_amounts_with_a_pinned_table(self):
+        """SPEC §18: with a pinned ISO 4217 table, one canonical form: exactly the currency's minor units"""
+        cur, _ = B.load_currency_table(self.table())
         base = payment_datas(pulse(2030303))[1]
         good = [("EUR", "1.00"), ("EUR", "0.01"), ("EUR", "1250.50"), ("EUR", "999999999999999999.99"), ("JPY", "1"),
-                ("JPY", "1000"), ("BHD", "0.001"), ("IQD", "250"), ("HUF", "1000"), ("USD", "10.00")]
+                ("JPY", "1000"), ("BHD", "0.001"), ("CLF", "0.0001"), ("HUF", "100.50"), ("IQD", "250.000"), ("USD", "10.00")]
         for c, a in good:
             d = dict(base, currency=c, amount=a)
-            self.assertIs(B.check_payment(d), d)
+            self.assertIs(B.check_payment(d, cur), d)
         bad = [("EUR", "1", "not_canonical"), ("EUR", "1.5", "not_canonical"), ("EUR", "1.001", "not_canonical"),
                ("JPY", "1.0", "not_canonical"), ("JPY", "1.", "not a decimal"), ("BHD", "0.0001", "not_canonical"),
-               ("BHD", "0.01", "not_canonical"), ("IQD", "250.000", "not_canonical"), ("HUF", "1000.00", "not_canonical"),
+               ("BHD", "0.01", "not_canonical"), ("CLF", "0.00001", "not_canonical"), ("HUF", "100", "not_canonical"),
                ("EUR", "0.00", "not greater"), ("JPY", "0", "not greater"), ("BHD", "0.000", "not greater"),
                ("EUR", "-1.00", "not a decimal"), ("EUR", "+1.00", "not a decimal"), ("EUR", "01.00", "not a decimal"),
                ("EUR", ".50", "not a decimal"), ("EUR", "1e3", "not a decimal"), ("EUR", " 1.00", "not a decimal"),
@@ -831,33 +838,94 @@ class Payment(unittest.TestCase):
         for c, a, why in bad:
             d = dict(base, currency=c, amount=a)
             with self.assertRaises(B.Refused) as e:
-                B.check_payment(d)
+                B.check_payment(d, cur)
             self.assertTrue(e.exception.detail.startswith("amount: " + why), (c, a, e.exception.detail))
+        for c in ("XAU", "GBP", "ABC"):                                   # three capital letters, not in the table
+            with self.assertRaises(B.Refused) as e:
+                B.check_payment(dict(base, currency=c, amount="1.00"), cur)
+            self.assertIn("currency_unknown", e.exception.detail)
+
+    def test_amounts_without_a_table(self):
+        """SPEC §18: without a pinned table, a check of form only: three capital letters, at most 4 decimals"""
+        base = payment_datas(pulse(2030303))[1]
+        for c, a in (("EUR", "1.00"), ("EUR", "1.5"), ("HUF", "100.50"), ("HUF", "100"), ("XAU", "0.0001"), ("ABC", "7")):
+            d = dict(base, currency=c, amount=a)
+            self.assertIs(B.check_payment(d), d)
+        for a, why in (("1.00001", "not_canonical"), ("0.0000", "not greater"), ("1.", "not a decimal"), ("1,5", "not a decimal")):
+            with self.assertRaises(B.Refused) as e:
+                B.check_payment(dict(base, amount=a))
+            self.assertTrue(e.exception.detail.startswith("amount: " + why), (a, e.exception.detail))
         for a in (1250, 12.5, None, True):
             self.assertMalformed(dict(base, amount=a), "amount")
 
     def test_currencies(self):
         base = payment_datas(pulse(2030303))[1]
-        self.assertEqual(len(B.MINOR_UNITS), 153)   # Unicode CLDR 49, regular codes (SPEC §18 "Currencies")
-        self.assertEqual({n: sum(1 for v in B.MINOR_UNITS.values() if v == n) for n in (0, 2, 3, 4)},
-                         {0: 31, 2: 116, 3: 6, 4: 0})
-        for c in ("XAU", "XDR", "XTS", "ABC", "eur", "EU", "EURO", "EUR ", "ÉUR", 978, None, "DEM", "ZWL",
-                  "CLF", "UYW", "BOV", "CHE", "CHW", "COU", "MXV", "SVC", "USN", "UYI", "VED", "XAD"):   # CLDR: deprecated
+        self.assertFalse(hasattr(B, "MINOR_UNITS"))   # no table is shipped (SPEC §18 "Currencies")
+        for c in ("eur", "EU", "EURO", "EUR ", "ÉUR", "ＥUR", 978, None, "", "E1R"):
             self.assertMalformed(dict(base, currency=c), "currency")
 
-    def test_currency_table_is_the_cldr_one(self):
-        """tools/currency_table_from_cldr.py on the CLDR 49 files gives the module's table, byte for byte (the files
-        are not in this repository: CV_CLDR_DIR names a directory holding supplementalData.xml and currency.xml)"""
-        d = os.environ.get("CV_CLDR_DIR")
-        if not d:
-            self.skipTest("CV_CLDR_DIR not set (the CLDR 49 files are not shipped)")
-        out = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "currency_table_from_cldr.py"),
-                              os.path.join(d, "supplementalData.xml"), os.path.join(d, "currency.xml")],
-                             capture_output=True, text=True, check=True).stdout.strip()
-        with open(os.path.join(ROOT, "cryptovalid_beacon.py"), encoding="utf-8") as f:
-            src = f.read()
-        i = src.index("_ISO4217 = ") + len("_ISO4217 = ")
-        self.assertEqual(src[i:src.index("\n}\n", i) + 2], out)
+    def test_currency_table_closed(self):
+        cur, info = B.load_currency_table(self.table())
+        self.assertEqual((cur, info["source"], len(info["sha256"])), (self.TABLE, "test", 64))
+        for bad in (self.table(extra=1), self.table(format="iso4217/1"), self.table(source=""), self.table(source=7),
+                    self.table(currencies={}), self.table(currencies={"eur": 2}), self.table(currencies={"EUR": 5}),
+                    self.table(currencies={"EUR": True}), self.table(currencies={"EUR": 2.0}), self.table(currencies={"EURO": 2}),
+                    b'{"format":"cryptovalid-iso4217-table/1","source":"s","currencies":{"EUR":2,"EUR":2}}', b"[]",
+                    b"\xff", b"{", b"x" * (B.MAX_CURRENCY_TABLE + 1)):
+            with self.assertRaises(ValueError, msg=bad[:60]):
+                B.load_currency_table(bad)
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "t.json")
+            with open(p, "wb") as f:
+                f.write(self.table())
+            self.assertEqual(B.load_currency_table(p)[0], self.TABLE)
+            with self.assertRaises(ValueError):
+                B.load_currency_table(os.path.join(td, "missing.json"))
+
+    def test_the_table_script(self):
+        """tools/iso4217_table.py on a list-one file written here (and, with CV_ISO4217_LIST, on your own download)"""
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import iso4217_table as S
+        xml = (b'<?xml version="1.0" encoding="UTF-8"?><ISO_4217 Pblshd="2026-09-17"><CcyTbl>'
+               b"<CcyNtry><CtryNm>A</CtryNm><CcyNm>Euro</CcyNm><Ccy>EUR</Ccy><CcyNbr>978</CcyNbr><CcyMnrUnts>2</CcyMnrUnts></CcyNtry>"
+               b"<CcyNtry><CtryNm>B</CtryNm><CcyNm>Euro</CcyNm><Ccy>EUR</Ccy><CcyNbr>978</CcyNbr><CcyMnrUnts>2</CcyMnrUnts></CcyNtry>"
+               b"<CcyNtry><CtryNm>C</CtryNm><CcyNm>Forint</CcyNm><Ccy>HUF</Ccy><CcyNbr>348</CcyNbr><CcyMnrUnts>2</CcyMnrUnts></CcyNtry>"
+               b"<CcyNtry><CtryNm>D</CtryNm><CcyNm>Gold</CcyNm><Ccy>XAU</Ccy><CcyNbr>959</CcyNbr><CcyMnrUnts>N.A.</CcyMnrUnts></CcyNtry>"
+               b"<CcyNtry><CtryNm>ANTARCTICA</CtryNm><CcyNm>No universal currency</CcyNm></CcyNtry>"
+               b"</CcyTbl></ISO_4217>")
+        t = S.table(xml)
+        self.assertEqual(t["currencies"], {"EUR": 2, "HUF": 2})
+        self.assertTrue(t["source"].startswith("ISO 4217 list one, published 2026-09-17, sha256 "))
+        self.assertEqual(B.load_currency_table(json.dumps(t).encode())[0], {"EUR": 2, "HUF": 2})
+        for bad in (xml.replace(b"<CcyMnrUnts>2</CcyMnrUnts></CcyNtry><CcyNtry><CtryNm>C", b"<CcyMnrUnts>0</CcyMnrUnts></CcyNtry><CcyNtry><CtryNm>C"),
+                    xml.replace(b"<Ccy>HUF</Ccy>", b"<Ccy>huf</Ccy>"), xml.replace(b' Pblshd="2026-09-17"', b""),
+                    xml.replace(b"ISO_4217", b"OTHER")):
+            with self.assertRaises(ValueError):
+                S.table(bad)
+        own = os.environ.get("CV_ISO4217_LIST")
+        if own:                                         # the caller's download, never shipped: measured, not copied
+            with open(own, "rb") as f:
+                cur = S.table(f.read())["currencies"]
+            self.assertEqual((cur["HUF"], cur["IDR"], cur["COP"], cur["IQD"], cur["JPY"], cur["CLF"]), (2, 2, 2, 3, 0, 4))
+
+    def test_currency_table_in_the_receipt(self):
+        """SPEC §18-§19: the receipt names the pinned table, and without one the scope says the currency was not checked"""
+        import hashlib
+        led = os.path.join(VB, "payment_ledger.jsonl")
+        r = run(led)
+        self.assertEqual((r["status"], r["currency_table"]), ("verified", None), r)
+        self.assertIn({"currency_not_checked": B.SCOPE["currency_not_checked"]}, r["scope"]["does_not_prove"])
+        t = self.table()
+        r = run(led, currency_table=t)
+        self.assertEqual((r["status"], r["currency_table"]), ("verified", {"source": "test", "sha256": hashlib.sha256(t).hexdigest()}), r)
+        self.assertNotIn("currency_not_checked", [list(x)[0] for x in r["scope"]["does_not_prove"]])
+        r = run(led, currency_table=self.table(currencies={"JPY": 0}))           # the entry's EUR is not in it
+        self.assertEqual((r["status"], r["reason"]), ("refused", "payment_malformed"), r)
+        with self.assertRaises(ValueError):
+            run(led, currency_table=b"{}")
+        self.assertEqual(B.main([led, "--entry", "1", "--pulse", os.path.join(VB, "nist", "pulse_2030303.json"), "--previous",
+                                 os.path.join(VB, "nist", "pulse_2030302.json"), "--certificate", CERT,
+                                 "--currency-table", os.path.join(VB, "conformance", "currency_table.json")]), 0)
 
     def test_payment_ids(self):
         """a version 4 UUID in lowercase canonical form (SPEC §18): a random identifier, never the payer's reference"""
@@ -1118,7 +1186,7 @@ class Window(unittest.TestCase):
         self.assertEqual(r["unique"], {"status": "not_established"})
         self.assertEqual([list(x)[0] for x in r["scope"]["proves"]], ["composed_after_pulse", "stamped_before_gen_time"])
         self.assertEqual([list(x)[0] for x in r["scope"]["does_not_prove"]],
-                         ["not_execution", "not_unique", "not_ownership", "commitments_not_opened", "not_operator",
+                         ["not_execution", "not_unique", "not_ownership", "commitments_not_opened", "currency_not_checked", "not_operator",
                           "not_qualified", "not_legal_beacon"])
 
     def test_window_with_the_ledger_given_from_outside_the_pack(self):
@@ -1526,7 +1594,7 @@ class Complete(unittest.TestCase):
             self.assertEqual([list(x)[0] for x in r["scope"]["proves"]],
                              ["composed_after_pulse", "stamped_before_gen_time", "unique_under_pinned_witness"])
             self.assertEqual([list(x)[0] for x in r["scope"]["does_not_prove"]],
-                             ["not_execution", "not_unique", "not_ownership", "commitments_not_opened", "not_operator",
+                             ["not_execution", "not_unique", "not_ownership", "commitments_not_opened", "currency_not_checked", "not_operator",
                               "not_qualified", "not_legal_beacon"])
             r = run(led, **full)                                            # revocation not checked: not complete
             self.assertEqual((r["status"], r["record_complete"], r["window"]["tsa_revocation"]), ("verified", False, "not_checked"))
@@ -1635,8 +1703,8 @@ def _faults():
     return [
         ("tampered_chain", "ledger_invalid", None, lambda st: st.__setitem__("tamper", True)),
         ("payment_id", "payment_malformed", "payment_id", data(lambda d: d[1].__setitem__("payment_id", "NOTPROVIDED"))),
-        ("currency", "payment_malformed", "currency", data(lambda d: d[1].__setitem__("currency", "XAU"))),
-        ("amount", "payment_malformed", "amount", data(lambda d: d[1].__setitem__("amount", "99.9"))),
+        ("currency", "payment_malformed", "currency", data(lambda d: d[1].__setitem__("currency", "eur"))),
+        ("amount", "payment_malformed", "amount", data(lambda d: d[1].__setitem__("amount", "99.90001"))),
         ("record_salt", "payment_malformed", "record_salt", data(lambda d: d[1].__setitem__("record_salt", "00" * 15))),
         ("commitment", "payment_malformed", "payer_iban_commitment",
          data(lambda d: d[1].__setitem__("payer_iban_commitment", d[1]["payer_iban_commitment"].upper()))),
@@ -1886,7 +1954,7 @@ CODES = {"input_unreadable", "input_too_large", "ledger_invalid", "entry_not_fou
          "inclusion_proof_invalid"}
 CASE_KEYS = {"name", "ledger", "entry", "pulses", "certificates", "expected", "disclosures", "pack", "tsa_certs",
              "tsa_crls", "tsa_trusted_list", "max_window_s", "clock_tolerance_s", "checkpoint", "log_vkeys",
-             "witness_vkeys", "min_witnesses", "entry_file", "proof", "required_disclosures"}
+             "witness_vkeys", "min_witnesses", "entry_file", "proof", "required_disclosures", "currency_table"}
 
 
 def conformance_run(c):
@@ -1896,7 +1964,8 @@ def conformance_run(c):
     for k in ("tsa_certs", "tsa_crls", "disclosures"):
         if k in c:
             kw[k] = [j(x) for x in c[k]]
-    for k, a in (("pack", "pack_dir"), ("checkpoint", "checkpoint"), ("tsa_trusted_list", "tsa_trusted_list")):
+    for k, a in (("pack", "pack_dir"), ("checkpoint", "checkpoint"), ("tsa_trusted_list", "tsa_trusted_list"),
+                 ("currency_table", "currency_table")):
         if k in c:
             kw[a] = j(c[k])
     if "required_disclosures" in c:
@@ -1918,7 +1987,7 @@ class Conformance(unittest.TestCase):
 
     def test_format_and_coverage(self):
         self.assertEqual(set(self.doc), {"format", "spec", "paths", "cases", "window_cases"})
-        self.assertEqual(self.doc["format"], "cryptovalid-beacon-conformance/3")
+        self.assertEqual(self.doc["format"], "cryptovalid-beacon-conformance/4")
         for c in self.doc["cases"]:
             self.assertLessEqual(set(c), CASE_KEYS, c["name"])
             self.assertEqual(set(c["expected"]), {"status", "reason", "record_complete"}, c["name"])

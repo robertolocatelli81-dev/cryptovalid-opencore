@@ -1,0 +1,9 @@
+{
+ "format": "cryptovalid-iso4217-table/1",
+ "source": "the conformance vectors' own table (SPEC \u00a718 \"Currencies\"): three codes with their ISO 4217 minor units",
+ "currencies": {
+  "EUR": 2,
+  "JPY": 0,
+  "USD": 2
+ }
+}

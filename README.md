@@ -262,8 +262,8 @@ Other people's work this repository uses, each under its own licence:
   services in `spec/vectors/rfc3161/`; the Cedar policy and key-window vectors of ScopeBlind/agent-governance-testvectors
   (Apache-2.0, licence text beside them) and receipts made with protect-mcp 0.29.0 (MIT) in `examples/acta/`. See
   [NOTICE](NOTICE).
-- **Data**: the currency codes and minor units of the payment entry (SPEC §18) are generated from Unicode CLDR release
-  49 (Unicode License v3, [LICENSE-Unicode-3.0.txt](LICENSE-Unicode-3.0.txt)) by `tools/currency_table_from_cldr.py`.
+- **Data not shipped**: no ISO 4217 table; `tools/iso4217_table.py` builds the one you pin (`--currency-table`) from your
+  own download of list one (SPEC §18 "Currencies").
 - **Independent implementations used as oracles in the tests** (not part of the package): pycose 1.1.0 (BSD-3-Clause)
   with cbor2 5.4 (MIT) for COSE_Sign1; golang.org/x/mod v0.41.0 (BSD-3-Clause), github.com/transparency-dev/formats at
   v0.1.2-0.20260916152522-091ce41666c0 (Apache-2.0), filippo.io/sunlight and filippo.io/torchwood (ISC, BSD-3-Clause)

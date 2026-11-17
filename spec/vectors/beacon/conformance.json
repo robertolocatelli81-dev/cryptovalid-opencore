@@ -1,5 +1,5 @@
 {
- "format": "cryptovalid-beacon-conformance/3",
+ "format": "cryptovalid-beacon-conformance/4",
  "spec": "SPEC_EVIDENCE_FORMAT.md v0.10 §18-§19",
  "paths": "relative to spec/vectors/beacon/",
  "cases": [
@@ -261,6 +261,7 @@
    "certificates": [
     "nist/certificate_5b6386e6ac8a993b.pem"
    ],
+   "currency_table": "conformance/currency_table.json",
    "expected": {
     "status": "refused",
     "reason": "payment_malformed",
@@ -280,6 +281,7 @@
    "certificates": [
     "nist/certificate_5b6386e6ac8a993b.pem"
    ],
+   "currency_table": "conformance/currency_table.json",
    "expected": {
     "status": "refused",
     "reason": "payment_malformed",
@@ -473,6 +475,64 @@
    "expected": {
     "status": "refused",
     "reason": "payment_malformed",
+    "record_complete": false
+   }
+  },
+  {
+   "name": "currency_table_pinned",
+   "ledger": "payment_ledger.jsonl",
+   "entry": 1,
+   "pulses": [
+    [
+     "nist/pulse_2030303.json",
+     "nist/pulse_2030302.json"
+    ]
+   ],
+   "certificates": [
+    "nist/certificate_5b6386e6ac8a993b.pem"
+   ],
+   "currency_table": "conformance/currency_table.json",
+   "expected": {
+    "status": "verified",
+    "reason": null,
+    "record_complete": false
+   }
+  },
+  {
+   "name": "profile_currency_unknown_without_currency_table",
+   "ledger": "conformance/ledgers/currency_unknown.jsonl",
+   "entry": 1,
+   "pulses": [
+    [
+     "nist/pulse_2030303.json",
+     "nist/pulse_2030302.json"
+    ]
+   ],
+   "certificates": [
+    "nist/certificate_5b6386e6ac8a993b.pem"
+   ],
+   "expected": {
+    "status": "verified",
+    "reason": null,
+    "record_complete": false
+   }
+  },
+  {
+   "name": "profile_amount_not_canonical_without_currency_table",
+   "ledger": "conformance/ledgers/amount_not_canonical.jsonl",
+   "entry": 1,
+   "pulses": [
+    [
+     "nist/pulse_2030303.json",
+     "nist/pulse_2030302.json"
+    ]
+   ],
+   "certificates": [
+    "nist/certificate_5b6386e6ac8a993b.pem"
+   ],
+   "expected": {
+    "status": "verified",
+    "reason": null,
     "record_complete": false
    }
   },
