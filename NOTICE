@@ -21,8 +21,11 @@ testdata/interop/ also holds test vectors of other projects, under their own
 licenses and not under the AGPL: files of FiloSottile/sunlight (ISC, full text
 in testdata/interop/LICENSE.sunlight) and of FiloSottile/torchwood (BSD-3-Clause,
 full text in testdata/interop/LICENSE.torchwood). testdata/interop/README.md
-lists each file, its source commit and its license. The sole-copyright statement
-above covers everything else in this repository.
+lists each file, its source commit and its license. spec/vectors/scitt-cose/
+holds the test vectors of action-state-group/scitt-cose (Copyright 2026 Action
+State Group, Inc., Apache License 2.0; full text in spec/vectors/scitt-cose/LICENSE,
+the project's notice in spec/vectors/scitt-cose/NOTICE). The sole-copyright
+statement above covers everything else in this repository.
 
 -------------------------------------------------------------------------------
 ATTRIBUTION REQUIREMENT (AGPL-3.0 §5, §7, §13)

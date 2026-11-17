@@ -1,4 +1,5 @@
 f5e885d3558f4504606b880db279b3956301243ef566085f27c9f272ebf13dd6  ./LICENSE
+30f38dc8b1b366db3760a1de92ec133b9f795c8152b54f25a9286aa12d03813c  ./NOTICE
 82fd70add518b3224b83431767ff233187a99354a8f9db02b733649a52289cb4  ./test-vectors/manifest.json
 608cdcba573b3e79e79455027e8d6a8e8926671eb560dc1c84dd53f441f7d52f  ./test-vectors/receipt-v1/fail-attached-payload/expected.json
 55602cc93cec964459dc1b1a7ce74f84185102b497b6e26ad00a731fc8abf07c  ./test-vectors/receipt-v1/fail-attached-payload/log-key.pub

@@ -437,13 +437,22 @@ first that fails gives the outcome:
      issuerAndSerialNumber, and refuses such a token with an ASN.1 error. Measured on 2026-11-16 with OpenSSL 3.0.22:
      the TSTInfo of a valid token re-signed by `openssl cms -sign -keyid -cades` with the same TSA key and certificate
      verifies at step 6 and was `not_issued_by_pinned_tsa` here until v0.10 (in a pack, `tsa_unresolved`): a valid token
-     reported as not established. The same checks are made one by one on the signer certificate of step 6: (a) a signed
+     reported as not established. The same checks are made one by one on the signer certificate of step 6, and two
+     names are compared as OpenSSL compares them (`X509_NAME_cmp`, its reading of RFC 5280 §7.1 name matching): each
+     attribute value of a string type (UTF8String, PrintableString, IA5String, VisibleString, T61String, BMPString,
+     UniversalString) is turned into UTF-8, its leading and trailing white space removed, each run of white space made
+     one space and its ASCII letters lowercased; values of other types are compared as encoded; the names are equal when
+     they have the same RDNs in the same order, each RDN the same attributes in any order. Until this correction (first
+     wording of v0.10) the names were compared byte for byte: measured on 2026-11-17, a `tsa` field that differs from
+     the signer's subject only in letter case was `verified` in the issuerAndSerialNumber form and
+     `not_issued_by_pinned_tsa` in this one. (a) a signed
      attribute signingCertificate (RFC 2634 §5.4, SHA-1) or signingCertificateV2 (RFC 5035, its `hashAlgorithm`, SHA-256
      when absent), each one present checked and at least one present, with exactly one ESSCertID whose `certHash` is the
-     hash of the signer certificate and whose `issuerSerial`, when present, is exactly one directoryName byte-equal to the
-     certificate's issuer and its serial number (more than one ESSCertID is not evaluated here and fails); (b) the
-     TSTInfo `tsa` field, when present, byte-equal to a directoryName of the signer's subject or to one of the names of
-     its subjectAltName; (c) openssl `verify -purpose timestampsign -partial_chain -attime <genTime> -CAfile <pinned>
+     hash of the signer certificate and whose `issuerSerial`, when present, is exactly one directoryName equal (as above) to the
+     certificate's issuer and whose serial number is the certificate's (compared as integers) (more than one ESSCertID
+     is not evaluated here and fails); (b) the TSTInfo `tsa` field, when present: a directoryName equal (as above) to the
+     signer's subject, or one of the names of its subjectAltName (a directoryName compared as above, another name of the
+     same type with the same bytes, as `GENERAL_NAME_cmp`); (c) openssl `verify -purpose timestampsign -partial_chain -attime <genTime> -CAfile <pinned>
      -no-CApath -no-CAstore -untrusted <pinned and the token's certificates>` over the signer certificate, exit 0: the
      extended key usage timeStamping (OpenSSL's purpose: present, critical, the only one), the chain to a pinned
      certificate and the validity at genTime, with the same OpenSSL chain building as `ts -verify`.

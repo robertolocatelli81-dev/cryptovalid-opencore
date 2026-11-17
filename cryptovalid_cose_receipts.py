@@ -27,8 +27,10 @@ action-state-group/scitt-cose e76bbfdf7a02; each turns a 0.25.x acceptance into 
 
   Curve.     ES256 and ES384 are "polymorphic" in COSE (RFC 9864 §2.1, Proposed Standard, October 2025, which updates
              RFC 9053 and marks them Deprecated in §4.2.2; status read on rfc-editor.org on 2026-11-17); RFC 9053 §2.1
-             (Informational, August 2022, updated by RFC 9864): "it is suggested that SHA-256 be used only with curve
-             P-256, SHA-384 be used only with curve P-384". Here ES256 is P-256 only and ES384 P-384 only, for a Signed
+             (Informational, August 2022, updated by RFC 9864) "defines ECDSA as working only with the curves P-256,
+             P-384, and P-521" ("Implementations need to check that the key type and curve are correct"; secp256k1 is
+             ES256K, RFC 8812) and adds: "it is suggested that SHA-256 be used only with curve P-256, SHA-384 be used
+             only with curve P-384". Here ES256 is P-256 only and ES384 P-384 only, for a Signed
              Statement and a Receipt: another curve is `KEY_CURVE_MISMATCH`, never a signature check (0.25.x checked
              the key type, not the curve: ES256 over secp256k1 and ES384 over P-256 verified). The fully-specified
              ESP256 (-9) and ESP384 (-51) of RFC 9864 are not supported (`UNSUPPORTED_ALG`).

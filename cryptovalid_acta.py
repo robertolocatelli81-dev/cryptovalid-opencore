@@ -38,8 +38,9 @@ problem, never a pass; the chain check does not know whether a receipt without p
 unchained (§2.2 says the format does not distinguish).
 
 Ambiguity of -03, stated (2026-11-17): §2.2 says the first receipt of a chain "MUST omit the member entirely rather than
-carrying null" — a rule for the issuer; -03 gives no rule for a verifier that receives `"previousReceiptHash": null`.
-This module refuses it (a member present must be "sha256:<64 lowercase hex>"); a public vector set expects it read as
+carrying null" — a rule for the issuer; -03 says nothing to a verifier about null, but a member that is present "MUST
+be computed as specified in Section 6.7" (§2.2) and §6.7 says it "MUST be the string \"sha256:\" followed by" the hex
+digest, which null is not. This module refuses it (a member present must be "sha256:<64 lowercase hex>"); a public vector set expects it read as
 absent, citing a revision -04 that is not on the IETF datatracker (checked on 2026-11-17: the current revision is -03,
 of 2026-09-04). Unchanged until a revision of the draft decides it.
 """

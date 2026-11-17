@@ -4,7 +4,7 @@
 Copied unchanged from [action-state-group/scitt-cose](https://github.com/action-state-group/scitt-cose) at commit
 `e76bbfdf7a02b23c8fe18656cbe8502f33e2a711`: `test-vectors/manifest.json`, `test-vectors/v1/` (8 vectors: Signed
 Statement + Receipt) and `test-vectors/receipt-v1/` (17 receipt-only vectors), with the project's `LICENSE` (Apache
-License 2.0, which allows copying with the licence kept). The bytes are the ones a cross-verification matrix fetched on
+License 2.0) and its `NOTICE` (Copyright 2026 Action State Group, Inc.), kept as Apache-2.0 §4 asks. The bytes are the ones a cross-verification matrix fetched on
 2026-11-16 at that commit and pinned by SHA-256; every file matched its pin when copied on 2026-11-17. `SHA256SUMS`
 lists them; `test_scitt_cose_vectors_20261117.py` checks it before any vector is used.
 

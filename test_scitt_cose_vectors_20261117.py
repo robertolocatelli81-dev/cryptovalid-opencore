@@ -81,7 +81,7 @@ def run(name):
 class Pinned(unittest.TestCase):
     def test_sha256_of_every_file(self):
         lines = _read(VD, "SHA256SUMS").decode().splitlines()
-        self.assertEqual(len(lines), 102)
+        self.assertEqual(len(lines), 103)            # 102 files the matrix pinned, and the project's NOTICE (2026-11-17)
         for line in lines:
             h, name = line.split("  ", 1)
             self.assertEqual(hashlib.sha256(_read(VD, name)).hexdigest(), h, name)
