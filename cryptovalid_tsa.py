@@ -572,6 +572,66 @@ def _tlv_bytes(tag: int, v: bytes) -> bytes:
     return bytes([tag]) + ln + v
 
 
+# OpenSSL's canonical form of a Name (crypto/x509/x_name.c x509_name_canon, asn1_string_canon), the comparison
+# X509_NAME_cmp makes and `openssl ts -verify` uses for the tsa field and the ESS issuerSerial (SPEC §11 step 7)
+_CANON_STRING = {0x0C: "utf-8", 0x13: "latin-1", 0x14: "latin-1", 0x16: "latin-1", 0x1A: "latin-1",
+                 0x1E: "utf-16-be", 0x1C: "utf-32-be"}
+_C_SPACE = b" \t\n\v\f\r"
+
+
+def _canon_value(tag: int, value: bytes):
+    """a string type: UTF-8, white space trimmed and runs made one space, ASCII letters lowercased; other types as encoded"""
+    enc = _CANON_STRING.get(tag)
+    if enc is None:
+        return ("raw", tag, value)
+    b = value.decode(enc).encode("utf-8")                 # ValueError when not decodable: the names are not equal
+    b = b.strip(_C_SPACE)
+    out, i = bytearray(), 0
+    while i < len(b):
+        c = b[i]
+        if c >= 0x80:
+            out.append(c)
+            i += 1
+        elif c in _C_SPACE:
+            out.append(0x20)
+            while i < len(b) and b[i] in _C_SPACE:
+                i += 1
+        else:
+            out.append(c + 32 if 0x41 <= c <= 0x5A else c)
+            i += 1
+    return ("str", bytes(out))
+
+
+def _name_canon(name_tlv: bytes):
+    """the canonical form of a DER Name (SEQUENCE OF RDN): RDNs in order, each a sorted tuple of (OID, value)"""
+    rdns = []
+    for t, rdn in _der_items(_der_one(name_tlv, "Name", 0x30), "Name"):
+        if t != 0x31:
+            raise TokenError("malformed", "Name: an RDN is not a SET")
+        attrs = []
+        for t2, atv in _der_items(rdn, "RDN"):
+            a = _der_items(atv, "AttributeTypeAndValue")
+            if t2 != 0x30 or len(a) != 2 or a[0][0] != 0x06:
+                raise TokenError("malformed", "Name: AttributeTypeAndValue")
+            attrs.append((a[0][1], _canon_value(a[1][0], a[1][1])))
+        rdns.append(tuple(sorted(attrs, key=repr)))
+    return tuple(rdns)
+
+
+def _names_equal(a_tlv: bytes, b_tlv: bytes) -> bool:
+    try:
+        return _name_canon(a_tlv) == _name_canon(b_tlv)
+    except (TokenError, ValueError):
+        return False
+
+
+def _general_names_equal(a: tuple, b: tuple) -> bool:
+    """GENERAL_NAME_cmp: the same type; a directoryName compared as a Name, any other type by its bytes"""
+    if a[0] != b[0]:
+        return False
+    return _names_equal(a[1], b[1]) if a[0] == 0xA4 else a[1] == b[1]
+
+
 def _signer_info(token_der: bytes):
     """the SignerInfo and the TSTInfo elements of a token that passed parse_token: ([(tag, value)], [(tag, value)])"""
     ci = _der_items(_der_one(token_der, "ContentInfo", 0x30), "ContentInfo")
@@ -642,12 +702,16 @@ def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int
                 names = _der_items(_der_one(_tlv_bytes(0x30, iss[0][1]), "GeneralNames", 0x30), "GeneralNames") \
                     if iss and iss[0][0] == 0x30 else None
                 if not (len(iss) == 2 and iss[1][0] == 0x02 and names is not None and len(names) == 1
-                        and names[0] == (0xA4, issuer) and iss[1][1] == serial):
+                        and names[0][0] == 0xA4 and _names_equal(names[0][1], issuer)
+                        and int.from_bytes(iss[1][1], "big", signed=True) == int.from_bytes(serial, "big", signed=True)):
                     return "ESS issuerSerial does not name the signer certificate's issuer and serial number"
         # (b) the tsa field
         tsa = [v for tag, v in tst[5:] if tag == 0xA0]
-        if tsa and tsa[0] not in [_tlv_bytes(0xA4, subject)] + san:
-            return "the TSTInfo tsa field names neither the signer's subject nor one of its subjectAltName"
+        if tsa:   # ts_check_signer_name: the subject (a directoryName), then each name of the subjectAltName
+            gn = _der_items(tsa[0], "tsa")
+            if len(gn) != 1 or not (_general_names_equal(gn[0], (0xA4, subject))
+                                    or any(_general_names_equal(gn[0], _der_items(n, "GeneralName")[0]) for n in san)):
+                return "the TSTInfo tsa field names neither the signer's subject nor one of its subjectAltName"
     except (TokenError, IndexError, ValueError) as e:
         return f"signer certificate or attributes not read: {e}"[:160]
     # (c) chain, purpose, validity at genTime: the OpenSSL chain building of ts -verify

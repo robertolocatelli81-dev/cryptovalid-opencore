@@ -97,6 +97,11 @@ run by the same author, not by a third party.
   outside `[a-z*]` is never consumed and the field fails anyway; ";" is consumed by the parameter parser before the
   separator is read; a character outside base64 inside a Byte Sequence also fails the base64 decoding).
 - `bench/beacon_cost/`: the cost of one check, measured (below).
+- `test_review3_20261117.py`: 7 tests added after the third review, a control and six that each fail against a mutant
+  of the new lines that the suite let live: an ESS attribute given twice, both ESS attributes present with the second
+  wrong, an ESSCertID with a third element or with an issuerSerial that is not a SEQUENCE, an issuerSerial with two
+  names, a `tsa` field right after genTime (a TSTInfo without accuracy, ordering or nonce), a COSE receipt whose attached
+  payload is the root of its second proof.
 - `test_beacon_review2_20261116.py`: 8 tests added after the second review (Unicode version of the commitments, a payee
   entity as the only party identifier, a CRL entry extension and a freshestCRL extension, the scope sentences against
   this SPEC, `ts` of one entry, the 1 MiB bound of one entry); each fails against the mutant or the defect it was written
@@ -121,14 +126,18 @@ run by the same author, not by a third party.
   `not_issued_by_pinned_tsa` (in an evidence pack, `tsa_unresolved`) even when valid: openssl `ts -verify` reads the token
   as PKCS #7 and refuses that form with an ASN.1 error. Measured on 2026-11-16 with OpenSSL 3.0.22: the TSTInfo of a
   valid token re-signed by `openssl cms -sign -keyid -cades` with the same TSA key verified at §11 step 6 and failed
-  step 7. Step 7 (SPEC v0.10) now makes the same checks one by one for that form: the ESS signingCertificate or
+  step 7. Step 7 (SPEC v0.10) now makes the same checks one by one for that form, names compared as OpenSSL's
+  `X509_NAME_cmp` compares them (the first version of this fix compared them byte for byte: measured on 2026-11-17 by the
+  third review and again here, a `tsa` field differing from the subject only in case, spaces or string type was refused
+  in this form and verified in the other, 15 of 64 pairs on our bench, 0 now): the ESS signingCertificate or
   signingCertificateV2 attribute against the signer certificate, the TSTInfo `tsa` field against its subject or
   subjectAltName, and `openssl verify -purpose timestampsign -partial_chain -attime` against the pinned certificates
   only. Found while extracting the payment profile into a separate repository. `test_tsa_signer_key_id_20261116.py`:
   21 tests on CAs, TSAs and tokens made with openssl; the valid token is `not_issued_by_pinned_tsa` on 0.25.1 and verified now; another
   key identifier, another TSA's key, no ESS attribute, a certificate without timeStamping, a `tsa` field naming another
-  TSA, a system certificate directory and a CA without keyCertSign behind a pinned leaf are refused; 22 hand mutants of
-  the new lines, 21 detected, 1 equivalent (the sid tag compared with `!= 0x30` instead of `== 0x80`: `parse_token`
+  TSA, a system certificate directory and a CA without keyCertSign behind a pinned leaf are refused; names in another
+  case, with other spaces, as a PrintableString, and the rules of the comparison (22 tests in all); 35 hand mutants of
+  the new lines, 34 detected, 1 equivalent (the sid tag compared with `!= 0x30` instead of `== 0x80`: `parse_token`
   admits no other tag).
 
 ### Measured
@@ -154,11 +163,16 @@ run by the same author, not by a third party.
     `MALFORMED_PROOF` (0.25.x skipped a malformed proof when another one verified).
   ES256 is bound to P-256 and ES384 to P-384 for a Signed Statement too (a statement signed with ES256 over a secp256k1
   key passed in 0.25.x; no public vector, tested with keys made in the test). Basis: RFC 9053 §2.1 (Informational, 2022,
-  updated by RFC 9864): "it is suggested that SHA-256 be used only with curve P-256, SHA-384 be used only with curve
-  P-384"; RFC 9864 (Proposed Standard, October 2025) §2.1 calls these COSE algorithms polymorphic and §4.2.2 registers
+  updated by RFC 9864) "defines ECDSA as working only with the curves P-256, P-384, and P-521" and says that
+  "Implementations need to check that the key type and curve are correct when creating and verifying a signature"
+  (secp256k1 has its own algorithm, ES256K, RFC 8812), and "it is suggested that SHA-256 be used only with curve P-256,
+  SHA-384 be used only with curve P-384" (binding ES256 to P-256 and ES384 to P-384 follows this suggestion); RFC 9864 (Proposed Standard, October 2025) §2.1 calls these COSE algorithms polymorphic and §4.2.2 registers
   them as Deprecated (status read on rfc-editor.org on 2026-11-17). Refusals that keep their verdict and change only
-  their stage: `v1/fail-zero-size-proof` and `receipt-v1/fail-malformed-proof` (`INCLUSION_ROOT_SIGNATURE_INVALID` →
-  `MALFORMED_PROOF`), an ES256 header over an Ed25519 or P-384 key (`BAD_STATEMENT_SIGNATURE` → `KEY_CURVE_MISMATCH`).
+  their stage: a receipt with a malformed or unwalkable proof, as `v1/fail-zero-size-proof` and
+  `receipt-v1/fail-malformed-proof` (`INCLUSION_ROOT_SIGNATURE_INVALID` → `MALFORMED_PROOF`); an ES256 or ES384 header
+  over a key of another type or curve, in a Signed Statement (`BAD_STATEMENT_SIGNATURE` → `KEY_CURVE_MISMATCH`) or in a
+  Receipt (`INCLUSION_ROOT_SIGNATURE_INVALID` → `KEY_CURVE_MISMATCH`, measured on 0.25.1 and now with an Ed25519 and a
+  P-384 key under an ES256 header).
   Unchanged and now reported: a receipt whose payload is attached and equal to the rebuilt root stays accepted (RFC 9942
   §4.4: the payload "SHOULD be detached"; the vector `fail-attached-payload-root` expects a refusal, a declared
   difference) and its result carries `payload_attached: true`. Unchanged and stated: `cryptovalid_acta` keeps refusing

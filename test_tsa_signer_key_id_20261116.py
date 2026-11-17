@@ -356,6 +356,56 @@ class AnchorParts(unittest.TestCase):
             why = self.anchor(enc(t), pins=pins, leaf=leaf, at=now)
             self.assertEqual(why is None, ok, why)
 
+    def test_names_compared_as_openssl(self):
+        """SPEC §11 step 7: the tsa field and the ESS issuerSerial name are compared as X509_NAME_cmp compares names
+        (string values in UTF-8, white space trimmed and folded, ASCII letters lowercased), not byte for byte"""
+        from cryptography import x509
+        from cryptography.x509.name import _ASN1Type
+        from cryptography.x509.oid import NameOID
+        with open(self.lab.j("tsa.crt"), "rb") as f:
+            cn = x509.load_pem_x509_certificate(f.read()).subject.rfc4514_string()[3:]
+
+        def with_tsa(name):
+            t = tree(self.ski)
+            econtent = t[1][1][1][0][1][2][1][1][1][0]
+            tst = tree(econtent[1])
+            tst[1].append([0xA0, [[0xA4, [tree(name.public_bytes())]]]])
+            econtent[1] = enc(tst)
+            return enc(t)
+        for value, typ, ok in ((cn, None, True), (cn.upper(), None, True), ("  " + cn + " ", None, True),
+                               (cn, _ASN1Type.PrintableString, True), (cn.replace("-", " - "), None, False),
+                               (cn + "x", None, False)):
+            attr = x509.NameAttribute(NameOID.COMMON_NAME, value, typ) if typ else x509.NameAttribute(NameOID.COMMON_NAME, value)
+            why = self.anchor(with_tsa(x509.Name([attr])))
+            self.assertEqual(why is None, ok, (value, typ, why))
+        t = tree(self.ski)                                                # the issuerSerial name in other case
+        cid = ess_v2(signer_info(t))[0][1]
+        name = [x for x in cid if x[0] == 0x30 and x[1][0][0] == 0x30][0][1][0][1][0][1][0]
+        rdn = name[1][-1][1][0][1][1]
+        rdn[1] = rdn[1].upper()
+        self.assertIsNone(self.anchor(enc(t)))
+        self.assertTrue(T._names_equal(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "A\tB")]).public_bytes(),
+                                       x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "a b")]).public_bytes()))
+        self.assertFalse(T._names_equal(b"\x30\x00", b"\x31\x00"))      # not a Name: never equal
+        N, A_ = x509.Name, x509.NameAttribute
+        cn_o = N([A_(NameOID.COMMON_NAME, "x"), A_(NameOID.ORGANIZATION_NAME, "y")]).public_bytes()
+        o_cn = N([A_(NameOID.ORGANIZATION_NAME, "y"), A_(NameOID.COMMON_NAME, "x")]).public_bytes()
+        self.assertFalse(T._names_equal(cn_o, o_cn))                      # RDNs in order
+        multi1 = N([x509.RelativeDistinguishedName([A_(NameOID.COMMON_NAME, "x"), A_(NameOID.ORGANIZATION_NAME, "y")])])
+        multi2 = N([x509.RelativeDistinguishedName([A_(NameOID.ORGANIZATION_NAME, "y"), A_(NameOID.COMMON_NAME, "x")])])
+        self.assertTrue(T._names_equal(multi1.public_bytes(), multi2.public_bytes()))   # one RDN: any order
+        atv = [enc(x) for x in tree(multi1.public_bytes())[1][0][1]]      # the two attributes of the RDN, swapped by hand
+        swapped = der(0x30, der(0x31, atv[1] + atv[0]))
+        self.assertNotEqual(swapped, multi1.public_bytes())
+        self.assertTrue(T._names_equal(swapped, multi1.public_bytes()))
+        self.assertFalse(T._names_equal(N([A_(NameOID.COMMON_NAME, "\u00c9")]).public_bytes(),
+                                        N([A_(NameOID.COMMON_NAME, "\u00e9")]).public_bytes()))   # ASCII letters only
+        self.assertFalse(T._names_equal(N([A_(NameOID.COMMON_NAME, "x")]).public_bytes(),
+                                        N([A_(NameOID.ORGANIZATION_NAME, "x")]).public_bytes()))   # the OID counts
+        self.assertFalse(T._general_names_equal((0x82, cn_o), (0xA4, cn_o)))    # the GeneralName type counts
+        self.assertTrue(T._general_names_equal((0x82, b"tsa.example"), (0x82, b"tsa.example")))
+        self.assertFalse(T._general_names_equal((0x82, b"tsa.example"), (0x82, b"TSA.example")))   # bytes, not a Name
+
     def test_more_than_one_ess_cert_id(self):
         t = tree(self.ski)
         ids = ess_v2(signer_info(t))
