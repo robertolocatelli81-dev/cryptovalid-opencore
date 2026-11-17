@@ -703,8 +703,7 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
         out.update(reason=e.reason, detail=e.detail)
         return out
     pins = _pem_certs(tsa_certs) if tsa_certs else None
-    state, signer_der, why = _token_signer(t["token_der"], pins)
-    signer = None if signer_der is None else hashlib.sha256(signer_der).hexdigest()
+    state, signer, why = token_signer(t["token_der"], pins)   # the public step 6 (callers and tests replace it)
     if state == "not_evaluated":
         out.update(status="not_evaluated", reason="openssl_absent", note="openssl absent: signature not checked")
         return out
@@ -722,6 +721,10 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
         _tmp_write(cp, pins)
         at = int(datetime.strptime(t["gen_time"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
         if _signer_named_by_key_id(t["token_der"]):   # SPEC §11 step 7, subjectKeyIdentifier: openssl ts cannot read it
+            state6, signer_der, why = _token_signer(t["token_der"], pins)
+            if state6 != "valid" or hashlib.sha256(signer_der).hexdigest() != signer:
+                out.update(reason="not_issued_by_pinned_tsa", detail=f"signer certificate not read again: {why}"[:200])
+                return out
             why = _key_id_anchor(t["token_der"], signer_der, pins, at, d)
             if why is not None:
                 out.update(reason="not_issued_by_pinned_tsa", detail=why[:200])
