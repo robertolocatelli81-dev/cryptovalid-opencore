@@ -10,6 +10,8 @@ but the beacon's operator. The beacon value is technical evidence, not a legal t
 evidence pack that holds the ledger, the entry is dated inside a window [T, genTime]; with a witnessed checkpoint inside
 that pack, it is fixed at its position in one history as of genTime.
 
+Status: EXPERIMENTAL (README, "Core and experimental modules").
+
 Checked, offline, from the bytes the caller supplies, in the order of SPEC §19 rule 8: the ledger's chain (verifier.py,
 SPEC §5 steps 1-4); the payment entry's closed profile (§18); disclosures against the commitments (a disclosed IBAN by
 ISO 7064 MOD 97-10); for each beacon value the named pulse and its predecessor in their closed grammar, against the

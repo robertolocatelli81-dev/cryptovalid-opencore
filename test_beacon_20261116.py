@@ -882,6 +882,24 @@ class Payment(unittest.TestCase):
             with self.assertRaises(ValueError):
                 B.load_currency_table(os.path.join(td, "missing.json"))
 
+    def test_currency_table_bounds(self):
+        """SPEC §18 "Currencies" (final review, 17/11/2026): `source` has at most 200 characters; the script keeps only
+        minor units 0 to 4 and refuses a list with none (each line fails against a mutant the suite let live)"""
+        self.assertEqual(B.load_currency_table(self.table(source="s" * 200))[1]["source"], "s" * 200)
+        with self.assertRaises(ValueError):
+            B.load_currency_table(self.table(source="s" * 201))
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import iso4217_table as S
+        head = b'<?xml version="1.0" encoding="UTF-8"?><ISO_4217 Pblshd="2026-09-17"><CcyTbl>'
+        eur = b"<CcyNtry><CtryNm>A</CtryNm><CcyNm>Euro</CcyNm><Ccy>EUR</Ccy><CcyNbr>978</CcyNbr><CcyMnrUnts>2</CcyMnrUnts></CcyNtry>"
+        five = b"<CcyNtry><CtryNm>Z</CtryNm><CcyNm>Z</CcyNm><Ccy>ZZZ</Ccy><CcyNbr>999</CcyNbr><CcyMnrUnts>5</CcyMnrUnts></CcyNtry>"
+        gold = b"<CcyNtry><CtryNm>D</CtryNm><CcyNm>Gold</CcyNm><Ccy>XAU</Ccy><CcyNbr>959</CcyNbr><CcyMnrUnts>N.A.</CcyMnrUnts></CcyNtry>"
+        t = S.table(head + eur + five + b"</CcyTbl></ISO_4217>")
+        self.assertEqual(t["currencies"], {"EUR": 2})
+        B.load_currency_table(json.dumps(t).encode())          # what the script writes, the verifier reads
+        with self.assertRaises(ValueError):
+            S.table(head + gold + b"</CcyTbl></ISO_4217>")
+
     def test_the_table_script(self):
         """tools/iso4217_table.py on a list-one file written here (and, with CV_ISO4217_LIST, on your own download)"""
         sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -908,6 +926,7 @@ class Payment(unittest.TestCase):
                 cur = S.table(f.read())["currencies"]
             self.assertEqual((cur["HUF"], cur["IDR"], cur["COP"], cur["IQD"], cur["JPY"], cur["CLF"]), (2, 2, 2, 3, 0, 4))
 
+    @NEEDS_CRYPTO
     def test_currency_table_in_the_receipt(self):
         """SPEC §18-§19: the receipt names the pinned table, and without one the scope says the currency was not checked"""
         import hashlib

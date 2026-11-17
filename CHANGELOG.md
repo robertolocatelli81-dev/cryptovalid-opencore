@@ -11,8 +11,8 @@ run by the same author, not by a third party.
 
 ### Added
 
-- **A "not before" bound from the NIST Randomness Beacon 2.0, inside a payment entry** (SPEC v0.10 §18-§19, written
-  before the code; revised after two reviews and a sample built for a public-sector payment receipt, 16/11/2026).
+- **A "not before" bound from the NIST Randomness Beacon 2.0, inside a payment entry** (experimental; SPEC v0.10 §18-§19,
+  written before the code; revised after two reviews and a sample built for a public-sector payment receipt, 16/11/2026).
   Until 0.25.1 every time proof this repository verified was an upper bound (an RFC 3161 token, a signed tip, a
   checkpoint): nothing showed that a record was not prepared in advance. `cryptovalid_beacon.py` and
   `cryptovalid-verify beacon <ledger> --entry <idx> --pulse <f> --previous <f> --certificate <f>` (options: `--help`)
@@ -74,7 +74,7 @@ run by the same author, not by a third party.
   `openssl ts -verify -crl_check` with the CRL refuses it.
 - `spec/vectors/beacon/`: six consecutive pulses of NIST chain 2 and the beacon's certificate, fetched on 2026-11-16; a
   payment ledger rebuilt from them by the tests (published example IBANs and fictitious names and identifiers, only as
-  commitments); `conformance.json` (format `cryptovalid-beacon-conformance/3`) with 71 cases, among them a complete
+  commitments); `conformance.json` (format `cryptovalid-beacon-conformance/4`) with 74 cases, among them a complete
   record of a ledger entry and of one entry alone, and at least one case for every one of the 46 result codes of §19
   rule 8, and 8 window cases, built by `make_conformance.py` with TSAs, CRLs, a trusted list and witnesses made for
   the purpose.
@@ -128,10 +128,10 @@ run by the same author, not by a third party.
   entity as the only party identifier, a CRL entry extension and a freshestCRL extension, the scope sentences against
   this SPEC, `ts` of one entry, the 1 MiB bound of one entry); each fails against the mutant or the defect it was written
   for.
-- `test_beacon_20261116.py`: 90 tests, among them every pair of 15 faults of different steps (105 pairs: the code is
+- `test_beacon_20261116.py`: 95 tests, among them every pair of 15 faults of different steps (105 pairs: the code is
   always the earlier step's), the reviewer's 20-variants and 400-days case, one entry by its proof (and its control:
   the ledger's pack carries the other entries), the conformance cases; on 0.25.1 the file fails at its import (the
-  module is absent) and `cryptovalid-verify beacon` exits 2. Without `cryptography`: 38 run and pass, 52 skipped (the
+  module is absent) and `cryptovalid-verify beacon` exits 2. Without `cryptography`: 42 run and pass, 53 skipped (the
   RSA, X.509 and Ed25519 checks cannot run). `test_tsa_revocation_20261116.py`: 18 tests on CAs, TSAs and CRLs made
   with openssl and `cryptography`; on 0.25.1 `test_defect_of_0_25_1_through_public_behaviour` fails by assertion (the
   token after a keyCompromise revocation is `verified`), the others by the missing `crls` parameter. 206 hand mutants of the new lines (`cryptovalid_beacon.py`,

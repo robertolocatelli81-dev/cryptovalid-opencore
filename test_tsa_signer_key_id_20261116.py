@@ -28,6 +28,12 @@ sys.path.insert(0, ROOT)
 import cryptovalid_tsa as T  # noqa: E402
 
 NEEDS = unittest.skipUnless(shutil.which("openssl"), "needs openssl")
+try:
+    import cryptography  # noqa: F401
+    HAVE_CRYPTO = True
+except ImportError:   # the CI job without cryptography: this file must skip, not fail
+    HAVE_CRYPTO = False
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs cryptography (the names are built with it)")
 DIGEST = hashlib.sha256(b"a payment ledger head").digest()
 OID_TSTINFO = "1.2.840.113549.1.9.16.1.4"
 EXT = ("[ v3_ca ]\nbasicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign,cRLSign\n"
@@ -356,6 +362,7 @@ class AnchorParts(unittest.TestCase):
             why = self.anchor(enc(t), pins=pins, leaf=leaf, at=now)
             self.assertEqual(why is None, ok, why)
 
+    @NEEDS_CRYPTO
     def test_names_compared_as_openssl(self):
         """SPEC §11 step 7: the tsa field and the ESS issuerSerial name are compared as X509_NAME_cmp compares names
         (string values in UTF-8, white space trimmed and folded, ASCII letters lowercased), not byte for byte"""
