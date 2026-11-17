@@ -36,6 +36,12 @@ an earlier-revision `policy_digest` (16 hex, no prefix) is an opaque label the s
 binding refuses (§6.8 compatibility note); a receipt signed under an algorithm this host cannot verify is a
 problem, never a pass; the chain check does not know whether a receipt without previousReceiptHash is a genesis or
 unchained (§2.2 says the format does not distinguish).
+
+Ambiguity of -03, stated (2026-11-17): §2.2 says the first receipt of a chain "MUST omit the member entirely rather than
+carrying null" — a rule for the issuer; -03 gives no rule for a verifier that receives `"previousReceiptHash": null`.
+This module refuses it (a member present must be "sha256:<64 lowercase hex>"); a public vector set expects it read as
+absent, citing a revision -04 that is not on the IETF datatracker (checked on 2026-11-17: the current revision is -03,
+of 2026-09-04). Unchanged until a revision of the draft decides it.
 """
 from __future__ import annotations
 import sys as _sys_0203

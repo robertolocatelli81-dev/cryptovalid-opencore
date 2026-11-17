@@ -10,9 +10,10 @@ cryptovalid_scitt verifies what THIS repository's Transparency Service emits (Ed
 This module verifies receipts and statements produced elsewhere, as exchanged between implementers (IETF AUDIT BoF
 preparation, 2026-10-03):
 
-  profile "rfc9942"  the COSE Receipt layer only: alg EdDSA (-8), ES256 (-7) or ES384 (-35) with a key of the matching
-                     type; vds (label 395) read from the PROTECTED header and equal to 1; the RFC 9162 inclusion proof
-                     (vdp label 396, key -1) rebuilds the root the log signed (detached payload = that root).
+  profile "rfc9942"  the COSE Receipt layer only: alg EdDSA (-8) with an Ed25519 key, ES256 (-7) with a P-256 key
+                     only, ES384 (-35) with a P-384 key only; vds (label 395) read from the PROTECTED header and equal
+                     to 1; every RFC 9162 inclusion proof (vdp label 396, key -1) rebuilds the root the log signed
+                     (detached payload = that root).
                      Also vds 2 = CCF_LEDGER_SHA256 (draft-ietf-scitt-receipts-ccf-profile-05 §2.2, §3.1, §3.2, §5):
                      leaf HASH(internal-transaction-hash || HASH(internal-evidence) || data-hash), the path walked
                      with its left bits, payload detached (MUST), every proof to the same root (MUST), and data-hash
@@ -20,6 +21,24 @@ preparation, 2026-10-03):
   profile "rfc9943"  the same, plus the header MUSTs of RFC 9943 §6 on BOTH the Signed Statement and the Receipt:
                      CWT Claims (15) with iss (1) and sub (2), iss of 1..8192 characters, kid (4) when neither x5t (34)
                      nor x5chain (33) is in the protected header.
+
+Rules of 0.26.0 (decided 2026-11-17 after a cross-verification against the scitt-cose vectors, receipt-v1 at
+action-state-group/scitt-cose e76bbfdf7a02; each turns a 0.25.x acceptance into a refusal or a reported fact):
+
+  Curve.     ES256 and ES384 are "polymorphic" in COSE (RFC 9864 §2.1, Proposed Standard, October 2025, which updates
+             RFC 9053 and marks them Deprecated in §4.2.2; status read on rfc-editor.org on 2026-11-17); RFC 9053 §2.1
+             (Informational, August 2022, updated by RFC 9864): "it is suggested that SHA-256 be used only with curve
+             P-256, SHA-384 be used only with curve P-384". Here ES256 is P-256 only and ES384 P-384 only, for a Signed
+             Statement and a Receipt: another curve is `KEY_CURVE_MISMATCH`, never a signature check (0.25.x checked
+             the key type, not the curve: ES256 over secp256k1 and ES384 over P-256 verified). The fully-specified
+             ESP256 (-9) and ESP384 (-51) of RFC 9864 are not supported (`UNSUPPORTED_ALG`).
+  Proofs.    Every inclusion proof of a VDS 1 receipt is checked, none is skipped: one that is not
+             [uint tree-size, uint leaf-index, [* 32-byte bstr]] or whose path does not rebuild a root is
+             `MALFORMED_PROOF` (naming it), one whose root the log signature does not cover is
+             `INCLUSION_ROOT_SIGNATURE_INVALID` (0.25.x accepted the receipt when any one proof verified).
+  Payload.   RFC 9942 §4.4: "The payload in such definitions SHOULD be detached". A receipt whose payload is attached
+             and equal to the rebuilt root is accepted, as the standard decides, and the result says so:
+             `payload_attached: true` (false when detached). An attached payload that is not the root is refused.
 
 The leaf ENTRY is the Transparency Service's choice (RFC 9943 leaves it to the TS): the caller passes the entry bytes,
 the receipt never chooses them. Keys are the relying party's: a kid or a certificate inside a message is never trusted
