@@ -816,13 +816,13 @@ class Payment(unittest.TestCase):
         """one canonical form: exactly the currency's minor units after the point, no point when there are none"""
         base = payment_datas(pulse(2030303))[1]
         good = [("EUR", "1.00"), ("EUR", "0.01"), ("EUR", "1250.50"), ("EUR", "999999999999999999.99"), ("JPY", "1"),
-                ("JPY", "1000"), ("BHD", "0.001"), ("CLF", "0.0001"), ("USD", "10.00")]
+                ("JPY", "1000"), ("BHD", "0.001"), ("IQD", "250"), ("HUF", "1000"), ("USD", "10.00")]
         for c, a in good:
             d = dict(base, currency=c, amount=a)
             self.assertIs(B.check_payment(d), d)
         bad = [("EUR", "1", "not_canonical"), ("EUR", "1.5", "not_canonical"), ("EUR", "1.001", "not_canonical"),
                ("JPY", "1.0", "not_canonical"), ("JPY", "1.", "not a decimal"), ("BHD", "0.0001", "not_canonical"),
-               ("BHD", "0.01", "not_canonical"), ("CLF", "0.00001", "not_canonical"),
+               ("BHD", "0.01", "not_canonical"), ("IQD", "250.000", "not_canonical"), ("HUF", "1000.00", "not_canonical"),
                ("EUR", "0.00", "not greater"), ("JPY", "0", "not greater"), ("BHD", "0.000", "not greater"),
                ("EUR", "-1.00", "not a decimal"), ("EUR", "+1.00", "not a decimal"), ("EUR", "01.00", "not a decimal"),
                ("EUR", ".50", "not a decimal"), ("EUR", "1e3", "not a decimal"), ("EUR", " 1.00", "not a decimal"),
@@ -838,11 +838,26 @@ class Payment(unittest.TestCase):
 
     def test_currencies(self):
         base = payment_datas(pulse(2030303))[1]
-        self.assertEqual(len(B.MINOR_UNITS), 165)
+        self.assertEqual(len(B.MINOR_UNITS), 153)   # Unicode CLDR 49, regular codes (SPEC §18 "Currencies")
         self.assertEqual({n: sum(1 for v in B.MINOR_UNITS.values() if v == n) for n in (0, 2, 3, 4)},
-                         {0: 17, 2: 139, 3: 7, 4: 2})
-        for c in ("XAU", "XDR", "XTS", "ABC", "eur", "EU", "EURO", "EUR ", "ÉUR", 978, None, "DEM", "ZWL"):
+                         {0: 31, 2: 116, 3: 6, 4: 0})
+        for c in ("XAU", "XDR", "XTS", "ABC", "eur", "EU", "EURO", "EUR ", "ÉUR", 978, None, "DEM", "ZWL",
+                  "CLF", "UYW", "BOV", "CHE", "CHW", "COU", "MXV", "SVC", "USN", "UYI", "VED", "XAD"):   # CLDR: deprecated
             self.assertMalformed(dict(base, currency=c), "currency")
+
+    def test_currency_table_is_the_cldr_one(self):
+        """tools/currency_table_from_cldr.py on the CLDR 49 files gives the module's table, byte for byte (the files
+        are not in this repository: CV_CLDR_DIR names a directory holding supplementalData.xml and currency.xml)"""
+        d = os.environ.get("CV_CLDR_DIR")
+        if not d:
+            self.skipTest("CV_CLDR_DIR not set (the CLDR 49 files are not shipped)")
+        out = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "currency_table_from_cldr.py"),
+                              os.path.join(d, "supplementalData.xml"), os.path.join(d, "currency.xml")],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        with open(os.path.join(ROOT, "cryptovalid_beacon.py"), encoding="utf-8") as f:
+            src = f.read()
+        i = src.index("_ISO4217 = ") + len("_ISO4217 = ")
+        self.assertEqual(src[i:src.index("\n}\n", i) + 2], out)
 
     def test_payment_ids(self):
         """a version 4 UUID in lowercase canonical form (SPEC §18): a random identifier, never the payer's reference"""

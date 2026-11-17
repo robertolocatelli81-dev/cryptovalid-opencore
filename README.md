@@ -259,6 +259,8 @@ Other people's work this repository uses, each under its own licence:
   (BSD-3-Clause) in `testdata/interop/`; action-state-group/scitt-cose at commit e76bbfdf7a02 (Apache-2.0, with its
   NOTICE) in `spec/vectors/scitt-cose/`; NIST Randomness Beacon 2.0 pulses (U.S. government work, 17 U.S.C. §105) in
   `spec/vectors/beacon/nist/`; tokens of public time-stamping services in `spec/vectors/rfc3161/`. See [NOTICE](NOTICE).
+- **Data**: the currency codes and minor units of the payment entry (SPEC §18) are generated from Unicode CLDR release
+  49 (Unicode License v3, [LICENSE-Unicode-3.0.txt](LICENSE-Unicode-3.0.txt)) by `tools/currency_table_from_cldr.py`.
 - **Independent implementations used as oracles in the tests** (not part of the package): pycose 1.1.0 (BSD-3-Clause)
   with cbor2 5.4 (MIT) for COSE_Sign1; golang.org/x/mod v0.41.0 (BSD-3-Clause), github.com/transparency-dev/formats at
   v0.1.2-0.20260916152522-091ce41666c0 (Apache-2.0), filippo.io/sunlight and filippo.io/torchwood (ISC, BSD-3-Clause)
