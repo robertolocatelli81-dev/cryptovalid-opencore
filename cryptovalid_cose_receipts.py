@@ -12,8 +12,8 @@ preparation, 2026-10-03):
 
   profile "rfc9942"  the COSE Receipt layer only: alg EdDSA (-8) with an Ed25519 key, ES256 (-7) with a P-256 key
                      only, ES384 (-35) with a P-384 key only; vds (label 395) read from the PROTECTED header and equal
-                     to 1; every RFC 9162 inclusion proof (vdp label 396, key -1) rebuilds the root the log signed
-                     (detached payload = that root).
+                     to 1; every RFC 9162 inclusion proof (vdp label 396, key -1) is well formed and rebuilds a root,
+                     and one of them rebuilds the root the log signed (detached payload = that root).
                      Also vds 2 = CCF_LEDGER_SHA256 (draft-ietf-scitt-receipts-ccf-profile-05 §2.2, §3.1, §3.2, §5):
                      leaf HASH(internal-transaction-hash || HASH(internal-evidence) || data-hash), the path walked
                      with its left bits, payload detached (MUST), every proof to the same root (MUST), and data-hash
@@ -32,10 +32,11 @@ action-state-group/scitt-cose e76bbfdf7a02; each turns a 0.25.x acceptance into 
              Statement and a Receipt: another curve is `KEY_CURVE_MISMATCH`, never a signature check (0.25.x checked
              the key type, not the curve: ES256 over secp256k1 and ES384 over P-256 verified). The fully-specified
              ESP256 (-9) and ESP384 (-51) of RFC 9864 are not supported (`UNSUPPORTED_ALG`).
-  Proofs.    Every inclusion proof of a VDS 1 receipt is checked, none is skipped: one that is not
-             [uint tree-size, uint leaf-index, [* 32-byte bstr]] or whose path does not rebuild a root is
-             `MALFORMED_PROOF` (naming it), one whose root the log signature does not cover is
-             `INCLUSION_ROOT_SIGNATURE_INVALID` (0.25.x accepted the receipt when any one proof verified).
+  Proofs.    Every inclusion proof of a VDS 1 receipt is checked before any is used, none is skipped: one that is
+             not [uint tree-size, uint leaf-index, [* 32-byte bstr]] or whose path does not rebuild a root is
+             `MALFORMED_PROOF` (naming it); then one well-formed proof whose root the log signature covers suffices
+             (a well-formed proof for another tree does not mask it, as the public vector valid-eddsa-multi-proof
+             expects). 0.25.x skipped a malformed proof and accepted the receipt when another one verified.
   Payload.   RFC 9942 §4.4: "The payload in such definitions SHOULD be detached". A receipt whose payload is attached
              and equal to the rebuilt root is accepted, as the standard decides, and the result says so:
              `payload_attached: true` (false when detached). An attached payload that is not the root is refused.
