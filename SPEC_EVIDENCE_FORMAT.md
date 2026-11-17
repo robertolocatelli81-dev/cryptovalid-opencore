@@ -951,8 +951,8 @@ alignment with their element names is claimed):
 |---|---|---|
 | `profile` | yes | `"cryptovalid-payment/1"` |
 | `payment_id` | yes | a random identifier the provider draws for the payment, never a reference of the payer: a version 4 UUID (RFC 9562) in its lowercase canonical form, 36 characters `xxxxxxxx-xxxx-4xxx-Yxxx-xxxxxxxxxxxx` with `x` in `0-9a-f` and `Y` in `8 9 a b` (the form of an ISO 20022 UETR); no two payment entries of the prefix of the ledger the verifier receives carry the same value (`payment_id_not_unique`) |
-| `amount` | yes | a string (never a JSON number, §3), in one canonical form: the integer part `0` or 1 to 18 digits not starting with 0; then, when the currency has N > 0 minor units, `.` and exactly N digits (`1.50`, never `1.5`), and when N = 0 nothing; greater than zero |
-| `currency` | yes | an ISO 4217 alphabetic code as Unicode CLDR 49 lists it (`common/validity/currency.xml`, `idStatus="regular"`: 153 codes), its minor units the `digits` of CLDR's `currencyData/fractions` (rule below, "Currencies") |
+| `amount` | yes | a string (never a JSON number, §3): the integer part `0` or 1 to 18 digits not starting with 0, then optionally `.` and 1 to 4 digits; greater than zero. With a pinned currency table (rule below, "Currencies") one canonical form: when the currency has N > 0 minor units, `.` and exactly N digits (`1.50`, never `1.5`), and when N = 0 nothing |
+| `currency` | yes | three capital letters `A`-`Z`; with a pinned currency table, one of its codes (rule below, "Currencies") |
 | `beacons` | yes | a list of 1 to 8 beacon values of §19 rule 1, each an object of exactly `source`, `chain_index`, `pulse_index`, `output_value` |
 | `record_salt` | yes | 32 to 128 lowercase hexadecimal characters, an even number (16 to 64 bytes: at least 128 bits) the provider draws at random for this entry |
 | `execution_date` | no | the date the payment service provider executed the payment, `YYYY-MM-DD` and a real calendar date, as the provider records it (a claim of the provider: the window dates the entry, not the execution) |
@@ -1041,20 +1041,23 @@ outcome of the verification of the payee of Art. 5c of Regulation (EU) No 260/20
 2024/886); a member for it is left to a later
 version, after its outcome codes are read on the primary text.
 
-**Currencies (v0.10).** The table of `currency` and of the minor units of `amount` is generated, not typed:
-`tools/currency_table_from_cldr.py` reads Unicode CLDR release 49 (tag `release-49`, commit
-96e54b273d2da4ec6fbad350ba19ff23fa24a588, 2026-10-21, the latest release on 2026-11-17), `common/validity/currency.xml`
-(sha256 b046c1fa146666f2…) and `common/supplemental/supplementalData.xml` (sha256 745150ec1408d50e…), checks both hashes,
-and takes the codes whose `idStatus` is `regular`, each with the `digits` of `currencyData/fractions` (the `DEFAULT`
-entry when the code has none). CLDR's data files are under the Unicode License v3 (read on 2026-11-17 in the
-repository's LICENSE: use, copy, modify, publish, distribute and sell, with the copyright and permission notice; see
-NOTICE). CLDR's `digits` are the decimals commonly used, not ISO 4217's minor units, and its currency list is not ISO's
-list one; the first draft of v0.10 used list one as published by its maintenance agency, whose website terms of use (read on
-2026-11-17) provide its content "exclusively for personal use as well as information purposes". Measured on 2026-11-17, the table changes in two ways: 12 codes of list one are not
-accepted (CLDR marks them deprecated: BOV, CHE, CHW, CLF, COU, MXV, SVC, USN, UYI, UYW, VED, XAD), and 15 codes take
-`digits` 0 where list one gives 2 (AFN, ALL, COP, HUF, IDR, IRR, KPW, LAK, LBP, MGA, MMK, SOS, SYP, YER) or 3 (IQD); no
-code is added. CLDR's `cashDigits` were not taken: they differ from list one in 28 codes. A payment in one of those
-currencies that the draft accepted is `payment_malformed` here; no published version accepted it.
+**Currencies (v0.10).** This verifier ships no currency table. ISO 4217 is the standard payments and ISO 20022 use;
+its maintenance agency publishes list one with terms of use (read on 2026-11-17) that provide the content "exclusively
+for personal use as well as information purposes", so a copy of it is not distributed here. The two open sources
+measured on 2026-11-17 are not ISO 4217: Unicode CLDR 49's `digits` are a display convention (HUF, IDR, COP and IQD 0
+where ISO 4217 gives 2, 2, 2 and 3; 12 fund and other codes of list one absent) and the EU Publications Office's
+authority table "currency" gives `decimalPlace` 0 to COP, HUF, IDR and LAK where ISO 4217 gives 2, and has no XAD.
+The caller may pin a currency table (`currency_table`, `--currency-table <file>`), a JSON file of exactly
+`{"format": "cryptovalid-iso4217-table/1", "source": <string, 1 to 200 characters>, "currencies": {<three capital
+letters>: <integer 0 to 4>, ...}}` (at least one code; strict JSON, §3; at most 64 KiB); a file outside that form is
+the caller's error (`ValueError`, exit 2). `tools/iso4217_table.py <list-one.xml>` writes it from the caller's own
+download of list one (the codes whose `CcyMnrUnts` is a number; one code with two different minor units is an error):
+the caller accepts that source's terms, this repository does not redistribute it. With a table, `currency` must be one
+of its codes (`currency_unknown`) and `amount` has exactly its minor units (`not_canonical`); the receipt names the
+table (`currency_table`: `{"source", "sha256"}` of the file). Without one, the check is of form only (three capital
+letters; at most 4 decimals, else `not_canonical`), the receipt's `currency_table` is `null` and its scope does not
+prove `currency_not_checked`. Until this correction the first draft of v0.10 carried a table copied from list one, then
+one generated from CLDR 49; neither was published.
 
 **Amount limits.** The 18 integer digits are this profile's bound; whether every such amount fits the ISO 20022 amount
 types (read from memory as 18 digits in all, not re-read) was not checked.
@@ -1287,6 +1290,8 @@ this closed list, never composed:
   disclosed here opens to an IBAN, a name or an identifier";
 - does not prove `payment_id_uniqueness` (one entry verified without its ledger, rule 14): "that no other entry of the
   ledger carries the same payment_id";
+- does not prove `currency_not_checked` (no currency table pinned): "that the currency is an ISO 4217 code and the
+  amount carries exactly its minor units";
 - does not prove `not_operator`: "anything against the beacon's operator beyond its freshness promise";
 - does not prove `not_qualified` (unless `stamped_by_qualified_tsa`): "that the upper bound is a qualified electronic
   time stamp";
@@ -1365,7 +1370,8 @@ Zikas, "Timed Signatures and Zero-Knowledge Proofs — Timestamping in the Block
 **11. Command.** `cryptovalid-verify beacon <ledger> --entry <idx> --pulse <file> --previous <file> [--pulse <file>
 --previous <file> ...] --certificate <file> [--certificate <file> ...] [--pack <dir> --tsa-cert <pem> ... --max-window
 <s> [--clock-tolerance <s>] [--tsa-crl <crl> ...] [--tsa-trusted-list <xml>] [--checkpoint <note> --log-vkey <vkey>
---witness-vkey <vkey> ... [--min-witnesses <n>]]] [--disclosure <file> ...] [--require-disclosure <member> ...]`; for
+--witness-vkey <vkey> ... [--min-witnesses <n>]]] [--disclosure <file> ...] [--require-disclosure <member> ...]
+[--currency-table <file>]`; for
 one entry without its ledger (rule 14), `--entry-file <entry> --proof <proof>` in place of `<ledger> --entry <idx>`, with
 `--pack` and `--checkpoint`. The i-th `--pulse` and the i-th
 `--previous` are the pair of the i-th element of `beacons`. Each `--disclosure` is a JSON file holding one disclosure of
@@ -1403,7 +1409,7 @@ marks what could not be checked against its issuer today.
 | RFC 6962 | Experimental (2013), obsoleted by RFC 9162: cited only for the Merkle tree hash that C2SP tlog-checkpoint and this format's §9 use | rfc-editor.org |
 | RFC 9562 (UUID) | Proposed Standard (May 2024), obsoletes RFC 4122 | rfc-editor.org |
 | RFC 4998 | Proposed Standard (2007), not updated | rfc-editor.org |
-| Unicode CLDR (§18 currencies) | release 49, 2026-10-21 (tag release-49, commit 96e54b27…), the latest on 2026-11-17; data under the Unicode License v3 | github.com/unicode-org/cldr |
+| ISO 4217 list one (§18 currencies, the caller's pinned table) | published 2026-09-17 (attribute `Pblshd`), read on 2026-11-17; not distributed here | six-group.com |
 | ISO 13616-1, ISO/IEC 7064 | not confirmed: the ISO catalogue was not read; the rule applied is the one stated in §18 | — |
 | ETSI TS 119 612, TS 119 615, EN 319 102-1 | not confirmed: versions not re-read; the rules applied are the ones written in rule 5 | — |
 | C2SP tlog-checkpoint, tlog-witness | as in §16 (C2SP commit 09f3e519fe79, read 2026-11-15) | github.com/C2SP |
