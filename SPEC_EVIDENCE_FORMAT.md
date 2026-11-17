@@ -353,7 +353,7 @@ a token for which no chain to the pinned certificates is found
 (INDETERMINATE: NO_CERTIFICATE_CHAIN_FOUND, "no certificate chain has been found for the identified signing
 certificate") is `not_evaluated / tsa_unresolved`, as `key_unresolved` for the producer: a pin for another TSA does not
 make the pack false. The receipt's `rfc3161` object gains `tsa_check` = `{status, reason, detail, gen_time,
-signer_sha256}` of §11 whenever §11 ran; a receipt computed with a pin names `states_vocabulary:
+signer_sha256, sha1_signature_legacy}` of §11 whenever §11 ran (`sha1_signature_legacy` since v0.10, §11 step 7); a receipt computed with a pin names `states_vocabulary:
 "cryptovalid-evidence-pack/states-2"` (states-1 with `verified` and `tsa_unresolved` reachable on `time_anchor` and the
 wider `token_invalid` above); a receipt without a pin keeps `states-1` and does not change. ap2-evidence-pack 1.7.x
 (`states-1` of its §6.9) answers `not_evaluated / tsa_invalid` for "the TSA signature does not verify under the
@@ -1151,7 +1151,9 @@ part of this version.
 keys of rule 6 are given by the verifier's caller, never read from the evidence: a beacon certificate carried with the
 proof lets its author run a beacon of its own (with the certificate pinned, such a pulse is `certificate_mismatch` or
 `signature_invalid`). The TSA's revocation is checked with the CRLs the caller pins (§11 step 8, `--tsa-crl`); without
-them the receipt's window says `tsa_revocation: "not_checked"`.
+them the receipt's window says `tsa_revocation: "not_checked"`. The window's `tsa_sha1_signature_legacy` is the token's
+`sha1_signature_legacy` (§11 step 7): `true` when a certificate of the TSA chain is signed with SHA-1, accepted as
+legacy verification (NIST SP 800-131A Rev. 2) and not hidden from the person who reads the receipt.
 
 *Qualified or not.* Only a qualified electronic time stamp has the presumption of eIDAS Art. 41(2). The window says
 `tsa_qualification: "qualified"` only when the caller pins a trusted list of ETSI TS 119 612 (`--tsa-trusted-list
