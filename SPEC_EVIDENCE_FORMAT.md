@@ -514,6 +514,29 @@ carries does not count (until v0.5 any of them did). In `cryptovalid_ingest veri
 QTST certificate counts as a timestamp even without `--tsa-cert`: the trusted list is the anchor. The trusted-list status
 is the status now, not at genTime (unchanged).
 
+**The qualified statement (v0.10).** Commission Implementing Regulation (EU) 2025/1929 (OJ L, 30.9.2025; in force since
+2025-10-20; read on CELLAR on 2026-11-17, which lists no act amending it) sets in its Annex the reference standards for
+qualified electronic time stamps and adapts ETSI EN 319 422 V1.1.1 (2016-03) clause 9.1: "If a time-stamp token is
+declared by the TSA to be a qualified electronic time stamp in accordance with Regulation (EU) No 910/2014, it shall
+contain one instance of the qcStatements extension in the time stamp token extension field with the syntax as defined
+in IETF RFC 3739, clause 3.2.6. The qcStatements extension shall contain one instance of the statement
+'esi4-qtstStatement-1' as defined in Annex B. The extension qcStatements shall not be marked as critical." (EN 319 422
+itself said "should"; its Annex B: `id-etsi-tsts-EuQCompliance` = 0.4.0.19422.1.1.) Since v0.10
+`cryptovalid_lotl.qualification` says `qualified` only when both hold: the signer is a granted QTST certificate (as
+above), and the TSTInfo `extensions` (§11 step 3) carry exactly one extension `id-pe-qcStatements` (1.3.6.1.5.5.7.1.3,
+RFC 3739 §3.2.6) whose value is DER `QCStatements` (SEQUENCE OF `QCStatement` {`statementId` OID, `statementInfo`
+OPTIONAL}) holding exactly one statement 0.4.0.19422.1.1, without `statementInfo` (Annex B gives it none); other
+statements beside it are allowed. A critical one never gets here: step 3 refuses a critical TSTInfo extension. For a
+signer that is a granted QTST certificate, otherwise: `not_qualified` with a closed reason, `qualified_statement_missing`
+(no qcStatements extension, or one without that statement) or `qualified_statement_malformed` (two qcStatements
+extensions, a value that is not that DER, the statement twice or with `statementInfo`, a token whose TSTInfo this step
+cannot read). A token that carries the statement while its signer is not in the lists stays `not_qualified` without a
+reason: the statement is the TSA's claim, the list is the check. Until v0.10 the statement was not read, and a token of
+a QTST service without it was `qualified`. Measured on 2026-11-17: tokens requested that day from four public TSA
+endpoints (`timestamp.sectigo.com/qualified`, `tsa.belgium.be/connect`, `tsa.izenpe.com`, `tss.accv.es:8318/tsa`) carry
+the statement, and the token of `timestamp.apple.com/ts01` does not (`spec/vectors/rfc3161/`). Whether those four
+signers are granted QTST services is read from a trusted list the caller gives, not assumed here.
+
 **Revocation, with CRLs the caller pins (v0.10).** `verify_token(..., crls=[...])` (paths or bytes, PEM or DER, each
 one X.509 CRL) adds step 8 after step 7, and only when steps 1–7 gave `verified`. Measured on 2026-11-16 (Athena's
 bench, re-measured in `test_tsa_revocation_20261116.py`): without it, a token issued by a TSA certificate after the
@@ -759,6 +782,22 @@ Not claimed: that anything in this repository implements RFC 10073. The test bui
 of its own; with the RFC's text given (`CV_RFC10073_TXT=<path to rfc10073.txt>`) it also checks that helper against the
 two signatures of Appendix E for `id-MLDSA65-Ed25519-SHA512` (they verified on 2026-11-15); the vector is not shipped
 here.
+
+**Quantum-vulnerable signatures, a limit stated (v0.10).** NIST IR 8547, *Transition to Post-Quantum Cryptography
+Standards*, final, October 2026 (CSRC document history: draft 11/12/24, final 10/27/26; https://doi.org/10.6028/NIST.IR.8547;
+read on 2026-11-17), §4.1.1, Table 2: ECDSA, EdDSA and RSA signatures are "Deprecated after 2030" and "Disallowed after
+2035" under NIST standards and guidelines ("Organizations may continue using these algorithms and parameter sets as
+they migrate to the post-quantum signatures identified in Table 3"). Ed25519 is EdDSA. This format signs with Ed25519:
+ledger entries and tips (§2, this section), the evidence pack's manifest (§10), checkpoints and cosignatures (§13, §16),
+and the maintainer signs each release's evidence pack with an Ed25519 key held in AWS KMS. The path this repository has
+is the hybrid signature of this section: Ed25519 and ML-DSA-65 (FIPS 204) over the same bytes, the ML-DSA-65 key in a
+file or in AWS KMS (`signer.py --pq-kms`, KeySpec ML_DSA_65), the post-quantum layer required when the caller pins it or
+a pack's manifest claims it (§5, §10). A ledger, tip or pack with Ed25519 only verifies as before: no verdict here depends
+on the date; for an Ed25519-only ledger, the report of `signer.py` and of the Go and Java verifiers says `pq_protected:
+false` with a note that names IR 8547. A checkpoint of §13/§16 has no
+post-quantum layer of this format (tlog-checkpoint defines ML-DSA-44 cosignatures, §16). The RFC 3161 tokens of §11 are
+signed by the TSA with its own algorithm; this verifier does not refuse a classical one. Until v0.10 this repository
+cited IR 8547 as a draft (its initial public draft of 2024).
 
 ## 16. Roles of the keys of a witnessed checkpoint (NORMATIVE since v0.8, 2026-11-15)
 
@@ -1163,7 +1202,9 @@ genTime (among `ServiceInformation` and its `ServiceHistoryInstance` entries, th
 `StatusStartingTime` not after genTime) has `ServiceTypeIdentifier` `http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST` and
 `ServiceStatus` `http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted`. A QTST service whose history instances have
 two equal starting times or are not in descending order (ETSI TS 119 615 PRO-4.3.4-03A) is `indeterminate`; otherwise
-`not_qualified`. Without a list, `not_checked`, and the window is an upper bound from "an RFC 3161 TSA", nothing more. A
+`not_qualified`. Since v0.10 `qualified` also needs the token's qualified statement (§11, Regulation (EU) 2025/1929): a
+signer granted in the list whose token lacks it is `not_qualified`, and the window's `tsa_qualification_reason` says
+`qualified_statement_missing` or `qualified_statement_malformed` (`null` in every other case). Without a list, `not_checked`, and the window is an upper bound from "an RFC 3161 TSA", nothing more. A
 list that cannot be read as XML of that form is `trusted_list_malformed`. The list's own XML signature is not checked:
 the caller pins it as it pins a certificate.
 
@@ -1203,7 +1244,8 @@ this closed list, never composed:
   pulse's timeStamp, for anyone but the beacon's operator";
 - proves `stamped_before_gen_time` (with a window): "the same bytes existed at the TSA's genTime";
 - proves `stamped_by_qualified_tsa` (with `tsa_qualification` `qualified`): "the TSA's certificate was a granted qualified
-  timestamp service, at genTime, in the pinned EU Trusted List snapshot";
+  timestamp service, at genTime, in the pinned EU Trusted List snapshot, and the token carries the qualified statement
+  of Regulation (EU) 2025/1929";
 - proves `unique_under_pinned_witness` (with `unique.status` `witnessed`): "the entry is the one at its position in the
   history the pinned witnesses cosigned before the TSA's genTime";
 - does not prove `not_execution`: "that a payment service provider executed the payment";
@@ -1322,6 +1364,10 @@ marks what could not be checked against its issuer today.
 | RFC 2634 (§11 step 7) | Proposed Standard (1999), updated by RFC 5035; not obsoleted | rfc-editor.org |
 | RFC 5035 (§11 step 7) | Proposed Standard (2007); not updated, not obsoleted | rfc-editor.org |
 | RFC 4055 (§11 step 7, RSASSA-PSS parameters) | Proposed Standard (June 2005), updated by RFC 5756; not obsoleted (checked on 2026-11-17) | rfc-editor.org |
+| Commission Implementing Regulation (EU) 2025/1929 (§11, qualified statement) | OJ L 30.9.2025; in force since 2025-10-20; no amending act listed by CELLAR on 2026-11-17 (CELEX 32025R1929) | CELLAR, English OJ text |
+| ETSI EN 319 422 (§11, qualified statement) | V1.1.1 (2016-03), the version the Regulation names, as adapted by its Annex | etsi.org, PDF sha256 b8dce6e415c90687… |
+| RFC 3739 (§11, qcStatements) | Proposed Standard (March 2004); not updated, not obsoleted (checked on 2026-11-17) | rfc-editor.org |
+| NIST IR 8547 (§15) | final, October 2026 (document history: final 10/27/26; the 2024 initial public draft superseded) | csrc.nist.gov, PDF sha256 3049cdfdd7c20417… |
 | NIST SP 800-131A (§11 step 7, SHA-1) | Rev. 2, March 2019, final; Rev. 3 initial public draft of 2024-10-21 (comments closed 2024-12-04), not final on 2026-11-17 | csrc.nist.gov |
 | RFC 5280 | Proposed Standard (2008), updated by RFC 6818, 8398, 8399, 9549, 9598, 9608, 9618, 9925, 10007; not obsoleted | rfc-editor.org |
 | RFC 6962 | Experimental (2013), obsoleted by RFC 9162: cited only for the Merkle tree hash that C2SP tlog-checkpoint and this format's §9 use | rfc-editor.org |
