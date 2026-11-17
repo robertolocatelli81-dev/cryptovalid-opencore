@@ -188,6 +188,8 @@ run by the same author, not by a third party.
 
 ### Changed
 
+- README: "Try it in 30 seconds", three commands on the NIST pulses and public RFC 3161 tokens shipped in
+  `spec/vectors/`, with their output as measured; the beacon module is listed with the experimental ones.
 - **"Qualified" needs the qualified statement of Commission Implementing Regulation (EU) 2025/1929** (SPEC v0.10 §11,
   §19; written before the code). The Regulation (OJ L 30.9.2025, in force since 2025-10-20; read on CELLAR on
   2026-11-17), Annex, adapting ETSI EN 319 422 V1.1.1 clause 9.1: a time stamp declared qualified "shall contain one

@@ -12,6 +12,33 @@
 hash-chained JSONL ledgers, Ed25519 (optionally + ML-DSA-65) signatures, a signed chain tip, RFC 3161 timestamps,
 and verifiers in six languages that agree on the same conformance vectors.
 
+## Try it in 30 seconds
+
+On real public data shipped in this repository (NIST Randomness Beacon pulses, U.S. government work; RFC 3161 tokens of
+public time-stamping services, see [NOTICE](NOTICE)), offline after the install; the third command needs `openssl`:
+
+```bash
+pip install 'cryptovalid-opencore[sign]==0.26.0'
+git clone --depth 1 https://github.com/robertolocatelli81-dev/cryptovalid-opencore && cd cryptovalid-opencore/spec/vectors/beacon/nist
+cryptovalid-verify beacon ../payment_ledger.jsonl --entry 1 --pulse pulse_2030303.json --previous pulse_2030302.json --certificate certificate_5b6386e6ac8a993b.pem | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['status'], r['bounds']['not_before'], r['entry']['payment'])"
+cryptovalid-verify beacon ../payment_ledger.jsonl --entry 1 --pulse pulse_2030302.json --previous pulse_2030301.json --certificate certificate_5b6386e6ac8a993b.pem | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['status'], r['reason'])"
+cd ../../rfc3161 && python3 -c "import cryptovalid_tsa as T; d=bytes.fromhex('17d8b17f0f81486e20a5643d8c64e7491bd438b3c563d1fa8bd8d90560d5b2fd'); [print(f, T.verify_token(open(f+'.tsr','rb').read(), d, 'sha256', [f+'.signer.pem'])['status']) for f in ('freetsa','digicert','bosa_qualified')]"
+```
+
+Output (measured on 2026-11-17, Python 3.13, network off):
+
+```
+verified 2026-11-16T13:04:00.000Z {'payment_id': '7d1e9a40-2b6c-4f8e-a3d2-5c6b7a8e9f01', 'amount': '99.95', 'currency': 'EUR'}
+invalid pulse_mismatch
+freetsa verified
+digicert verified
+bosa_qualified verified
+```
+
+The first line: the ledger entry carrying a payment was put together after the NIST pulse of 13:04 UTC (against anyone
+but the beacon's operator). The second: the same entry checked against an earlier pulse is refused. The last three: three
+RFC 3161 tokens from public TSAs verify against the TSA certificate pinned by the caller.
+
 ## The problem
 
 Regulated records have to outlive the system that wrote them, and the reader is often someone who has no reason to
