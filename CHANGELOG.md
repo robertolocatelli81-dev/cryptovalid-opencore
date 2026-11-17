@@ -110,7 +110,7 @@ run by the same author, not by a third party.
   cross certificates, RSASSA-PSS with SHA-1 or its default, each OID of the list, unreadable certificates, the pack's
   `tsa_check`); on the code before this change 13 fail (the fourteenth checks the bench; on 0.25.1 the file fails at
   its import); `test_beacon_20261116.py` checks the window's
-  member. 30 hand mutants of the new lines: 30 detected (one, the path without its record of certificates already
+  member. 33 hand mutants of the new lines: 33 detected (one, the path without its record of certificates already
   read, by a 60 s timeout on the cycle).
 - `bench/beacon_cost/`: the cost of one check, measured (below).
 - `test_review3_20261117.py`: 7 tests added after the third review, a control and six that each fail against a mutant

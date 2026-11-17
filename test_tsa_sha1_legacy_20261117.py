@@ -218,6 +218,12 @@ class Sha1Legacy(unittest.TestCase):
         alg = T._tlv_bytes(0x30, T._tlv_bytes(0x06, bytes.fromhex("2a864886f70d01010a")) + T._tlv_bytes(0x30, b""))
         made = T._tlv_bytes(0x30, T._tlv_bytes(*cert[0]) + alg + T._tlv_bytes(*cert[2]))
         self.assertTrue(T._cert_sig_names(made)[0])
+        for params in (b"", T._tlv_bytes(0x05, b""), T._tlv_bytes(0x04, T._tlv_bytes(0xA0, b""))):   # absent, NULL,
+            alg = T._tlv_bytes(0x30, T._tlv_bytes(0x06, bytes.fromhex("2a864886f70d01010a")) + params)  # not a SEQUENCE
+            made = T._tlv_bytes(0x30, T._tlv_bytes(*cert[0]) + alg + T._tlv_bytes(*cert[2]))
+            with self.assertRaises(T.TokenError):                                   # RFC 4055 §3.1: MUST be present
+                T._cert_sig_names(made)
+            self.assertIsNone(T.sha1_signature_legacy(made, b"", T.parse_token(self.toks[self.plain]["issuer_serial"])["token_der"]))
 
     def test_other_signature_oids(self):
         """the closed list of SPEC §11 step 7, each OID with an empty certificate around it"""

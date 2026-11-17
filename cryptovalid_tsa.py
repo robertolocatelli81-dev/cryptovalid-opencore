@@ -746,8 +746,10 @@ def _cert_sig_names(der: bytes):
     alg = _der_items(cert[1][1], "signatureAlgorithm")
     oid = _der_oid(_der_one(_tlv_bytes(*alg[0]), "signatureAlgorithm", 0x06), "signatureAlgorithm")
     sha1 = oid in SHA1_SIGNATURE_OIDS
-    if oid == OID_RSASSA_PSS:   # RFC 4055 §3.1: hashAlgorithm [0] DEFAULT sha1
-        params = _der_items(alg[1][1], "RSASSA-PSS-params") if len(alg) > 1 and alg[1][0] == 0x30 else []
+    if oid == OID_RSASSA_PSS:   # RFC 4055 §3.1: hashAlgorithm [0] DEFAULT sha1; the parameters MUST be present
+        if len(alg) != 2 or alg[1][0] != 0x30:
+            raise TokenError("malformed", "RSASSA-PSS signatureAlgorithm without RSASSA-PSS-params (RFC 4055 §3.1)")
+        params = _der_items(alg[1][1], "RSASSA-PSS-params")
         h = [v for t, v in params if t == 0xA0]
         sha1 = not h or _der_oid(_der_items(_der_one(h[0], "hashAlgorithm", 0x30), "hashAlgorithm")[0][1],
                                  "hashAlgorithm") == "1.3.14.3.2.26"
