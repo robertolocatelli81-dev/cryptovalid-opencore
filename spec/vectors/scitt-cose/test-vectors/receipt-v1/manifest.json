@@ -1,0 +1,92 @@
+{
+  "version": "receipt-v1",
+  "stability": "append-only",
+  "scope": "Receipt-only vectors (no Signed Statement) exercising the iat (CWT claims label 15, claim 6) and private-use grade label -65537 in the receipt's PROTECTED header. See rust/scitt-cose (the receipt-only Rust verifier) and the TRACE registry's verify_witness_receipt.py, which independently converged on the same two labels.",
+  "vectors": [
+    {
+      "id": "trace-sept7-witness",
+      "dir": "receipt-v1/trace-sept7-witness",
+      "ok": true
+    },
+    {
+      "id": "synthetic-eddsa-iat-grade",
+      "dir": "receipt-v1/synthetic-eddsa-iat-grade",
+      "ok": true
+    },
+    {
+      "id": "synthetic-es256-iat-grade",
+      "dir": "receipt-v1/synthetic-es256-iat-grade",
+      "ok": true
+    },
+    {
+      "id": "synthetic-eddsa-iat-only",
+      "dir": "receipt-v1/synthetic-eddsa-iat-only",
+      "ok": true
+    },
+    {
+      "id": "fail-tampered-iat",
+      "dir": "receipt-v1/fail-tampered-iat",
+      "ok": false
+    },
+    {
+      "id": "fail-tampered-grade",
+      "dir": "receipt-v1/fail-tampered-grade",
+      "ok": false
+    },
+    {
+      "id": "synthetic-es256-iat-grade-observed-only",
+      "dir": "receipt-v1/synthetic-es256-iat-grade-observed-only",
+      "ok": true
+    },
+    {
+      "id": "fail-attached-payload",
+      "dir": "receipt-v1/fail-attached-payload",
+      "ok": false
+    },
+    {
+      "id": "fail-attached-payload-root",
+      "dir": "receipt-v1/fail-attached-payload-root",
+      "ok": false
+    },
+    {
+      "id": "fail-es256-secp256k1-key",
+      "dir": "receipt-v1/fail-es256-secp256k1-key",
+      "ok": false
+    },
+    {
+      "id": "fail-es384-p256-key",
+      "dir": "receipt-v1/fail-es384-p256-key",
+      "ok": false
+    },
+    {
+      "id": "fail-eddsa-p256-key",
+      "dir": "receipt-v1/fail-eddsa-p256-key",
+      "ok": false
+    },
+    {
+      "id": "fail-wrong-log-key",
+      "dir": "receipt-v1/fail-wrong-log-key",
+      "ok": false
+    },
+    {
+      "id": "fail-unsupported-alg",
+      "dir": "receipt-v1/fail-unsupported-alg",
+      "ok": false
+    },
+    {
+      "id": "fail-malformed-proof",
+      "dir": "receipt-v1/fail-malformed-proof",
+      "ok": false
+    },
+    {
+      "id": "fail-malformed-tail-proof",
+      "dir": "receipt-v1/fail-malformed-tail-proof",
+      "ok": false
+    },
+    {
+      "id": "fail-undefined-payload",
+      "dir": "receipt-v1/fail-undefined-payload",
+      "ok": false
+    }
+  ]
+}

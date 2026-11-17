@@ -71,6 +71,23 @@ def load_public_key(key):
     return ser.load_pem_public_key(data)
 
 
+_CURVE_OF = {ALG_ES256: "secp256r1", ALG_ES384: "secp384r1"}   # 0.26.0: RFC 9053 §2.1 pairs, RFC 9864 §2.1
+
+
+def _curve_problem(alg: int, pub) -> Optional[str]:
+    """None when the key may verify `alg`: ES256 a P-256 key, ES384 a P-384 key (another curve is refused before any
+    signature check); EdDSA keys are checked by _verify_sig."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+    want = _CURVE_OF.get(alg)
+    if want is None:
+        return None
+    if not isinstance(pub, ec.EllipticCurvePublicKey):
+        return f"alg {alg} needs an EC key on {want}, the key is {type(pub).__name__}"
+    if pub.curve.name != want:
+        return f"alg {alg} needs a key on {want}, the key is on {pub.curve.name}"
+    return None
+
+
 def _verify_sig(alg: int, pub, to_be_signed: bytes, sig: bytes) -> bool:
     """COSE signature check with the key TYPE bound to the algorithm (an ES256 header over an Ed25519 key is refused)."""
     from cryptography.exceptions import InvalidSignature
@@ -85,7 +102,7 @@ def _verify_sig(alg: int, pub, to_be_signed: bytes, sig: bytes) -> bool:
             pub.verify(sig, to_be_signed)
             return True
         digest, size = {ALG_ES256: (hashes.SHA256, 32), ALG_ES384: (hashes.SHA384, 48)}[alg]
-        if not isinstance(pub, ec.EllipticCurvePublicKey) or len(sig) != 2 * size:
+        if _curve_problem(alg, pub) is not None or len(sig) != 2 * size:
             return False                 # r || s of the alg's fixed length (RFC 9053 §2.1); a key on another curve cannot verify it
         r, s = int.from_bytes(sig[:size], "big"), int.from_bytes(sig[size:], "big")
         pub.verify(encode_dss_signature(r, s), to_be_signed, ec.ECDSA(digest()))
@@ -135,7 +152,11 @@ def verify_statement(cose: bytes, issuer_key, payload: Optional[bytes] = None, p
             pl = bytes(payload)
         elif payload is not None and bytes(payload) != pl:
             return _refuse("PAYLOAD_MISMATCH", "the attached payload differs from the given Statement")
-        if not _verify_sig(alg, load_public_key(issuer_key), _sig1(pbytes, pl), sig):
+        pub = load_public_key(issuer_key)
+        why = _curve_problem(alg, pub)
+        if why:
+            return _refuse("KEY_CURVE_MISMATCH", f"statement: {why}")
+        if not _verify_sig(alg, pub, _sig1(pbytes, pl), sig):
             return _refuse("BAD_STATEMENT_SIGNATURE", "statement signature does not verify with the Issuer key")
         return {"ok": True, "stage": None, "why": "statement signature valid", "alg": alg,
                 "payload_sha256": hashlib.sha256(pl).hexdigest()}
@@ -164,27 +185,36 @@ def verify_receipt(receipt: bytes, entry: bytes, log_key, profile: str = "rfc994
         if not isinstance(proofs, list) or not proofs or not all(isinstance(p, bytes) for p in proofs):
             return _refuse("MALFORMED_PROOF", "no inclusion proof (vdp 396, key -1: [+ bstr .cbor proof])")
         pub = load_public_key(log_key)
+        why = _curve_problem(alg, pub)
+        if why:
+            return _refuse("KEY_CURVE_MISMATCH", f"receipt: {why}")
         if vds == VDS_CCF_LEDGER_SHA256:
             return _verify_ccf(rp, rpl, sig, alg, pub, proofs, bytes(entry))
         leaf = M.leaf_hash(bytes(entry))
-        tried: List[str] = []
-        for i, pb in enumerate(proofs):                  # RFC 9942: one or more proofs; any one that verifies suffices
+        walked = []
+        for i, pb in enumerate(proofs):                  # 0.26.0: every proof is checked, a malformed one is never skipped
             dec = R.cbor_decode(pb)
             # RFC 9942: tree-size and leaf-index are uint — a CBOR true/false or a negative is not (as audit V1 #8/#9
             # fixed in cryptovalid_scitt, 30/09/2026; ported here 04/10/2026)
             if not (isinstance(dec, list) and len(dec) == 3 and type(dec[0]) is int and type(dec[1]) is int
                     and dec[0] >= 0 and dec[1] >= 0
                     and isinstance(dec[2], list) and all(isinstance(h, bytes) and len(h) == 32 for h in dec[2])):
-                tried.append(f"proof {i}: malformed"); continue
+                return _refuse("MALFORMED_PROOF", f"proof {i}: not [uint tree-size, uint leaf-index, [* 32-byte bstr]]")
             size, index, path = dec
             root = _root_from_inclusion(index, size, leaf, path)
             if root is None:                 # a path that cannot be walked (index ≥ size, path too long) proves nothing
-                tried.append(f"proof {i}: the path does not rebuild a root"); continue
+                return _refuse("MALFORMED_PROOF", f"proof {i}: the path does not rebuild a root (tree size {size}, "
+                                                  f"leaf index {index}, {len(path)} hashes)")
+            walked.append((i, size, index, root))
+        tried: List[str] = []
+        for i, size, index, root in walked:              # then one whose root the log signed suffices
             if rpl is not None and rpl != root:
-                tried.append(f"proof {i}: the attached payload is not the rebuilt root"); continue
+                tried.append(f"proof {i}: the attached payload is not the rebuilt root")
+                continue
             if _verify_sig(alg, pub, _sig1(rp, root), sig):
                 return {"ok": True, "stage": None, "why": "log signature valid over the root rebuilt from the entry and the path",
-                        "alg": alg, "tree_size": size, "leaf_index": index, "root": root.hex()}
+                        "alg": alg, "tree_size": size, "leaf_index": index, "root": root.hex(),
+                        "payload_attached": rpl is not None}
             tried.append(f"proof {i}: the log signature does not verify over the rebuilt root")
         return _refuse("INCLUSION_ROOT_SIGNATURE_INVALID", "; ".join(tried))
     except Exception as e:  # noqa: BLE001
@@ -229,7 +259,7 @@ def _verify_ccf(rp: bytes, rpl, sig: bytes, alg: int, pub, proofs: List[bytes], 
     if not _verify_sig(alg, pub, _sig1(rp, root), sig):
         return _refuse("INCLUSION_ROOT_SIGNATURE_INVALID", "the log signature does not verify over the rebuilt root")
     return {"ok": True, "stage": None, "why": "CCF: log signature valid over the root rebuilt from the leaf and the path",
-            "alg": alg, "root": root.hex(), "vds": VDS_CCF_LEDGER_SHA256}
+            "alg": alg, "root": root.hex(), "vds": VDS_CCF_LEDGER_SHA256, "payload_attached": False}
 
 
 def verify_statement_with_receipt(statement: bytes, receipt: bytes, issuer_key, log_key, entry: bytes,

@@ -7,7 +7,7 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
-## Unreleased
+## Unreleased (0.26.0: verdicts change)
 
 ### Added
 
@@ -120,6 +120,29 @@ run by the same author, not by a third party.
 
 ### Changed
 
+- **Verdicts of 0.25.x that change in 0.26.0** (`cryptovalid_cose_receipts`, profiles `rfc9942` and `rfc9943`; rules in
+  its docstring, decided on 2026-11-17 after a cross-verification matrix measured 0.25.1 on the scitt-cose public vectors,
+  action-state-group/scitt-cose at commit e76bbfdf7a02, now in `spec/vectors/scitt-cose/` with their SHA-256 pinned).
+  PASS in 0.25.x, FAIL now, measured on the 25 vectors with the 0.25.1 tag and with this branch:
+  - `receipt-v1/fail-es256-secp256k1-key`: ES256 (-7) over a secp256k1 key, now `KEY_CURVE_MISMATCH`;
+  - `receipt-v1/fail-es384-p256-key`: ES384 (-35) over a P-256 key, now `KEY_CURVE_MISMATCH`;
+  - `receipt-v1/fail-malformed-tail-proof`: a valid inclusion proof followed by a malformed one, `[0, 0, []]`, now
+    `MALFORMED_PROOF` (0.25.x skipped a malformed proof when another one verified).
+  ES256 is bound to P-256 and ES384 to P-384 for a Signed Statement too (a statement signed with ES256 over a secp256k1
+  key passed in 0.25.x; no public vector, tested with keys made in the test). Basis: RFC 9053 §2.1 (Informational, 2022,
+  updated by RFC 9864): "it is suggested that SHA-256 be used only with curve P-256, SHA-384 be used only with curve
+  P-384"; RFC 9864 (Proposed Standard, October 2025) §2.1 calls these COSE algorithms polymorphic and §4.2.2 registers
+  them as Deprecated (status read on rfc-editor.org on 2026-11-17). Refusals that keep their verdict and change only
+  their stage: `v1/fail-zero-size-proof` and `receipt-v1/fail-malformed-proof` (`INCLUSION_ROOT_SIGNATURE_INVALID` →
+  `MALFORMED_PROOF`), an ES256 header over an Ed25519 or P-384 key (`BAD_STATEMENT_SIGNATURE` → `KEY_CURVE_MISMATCH`).
+  Unchanged and now reported: a receipt whose payload is attached and equal to the rebuilt root stays accepted (RFC 9942
+  §4.4: the payload "SHOULD be detached"; the vector `fail-attached-payload-root` expects a refusal, a declared
+  difference) and its result carries `payload_attached: true`. Unchanged and stated: `cryptovalid_acta` keeps refusing
+  `"previousReceiptHash": null`, an ambiguity of draft-farley-acta-signed-receipts-03 (still the current revision on the
+  IETF datatracker on 2026-11-17). `test_scitt_cose_vectors_20261117.py`: 6 tests, 4 of which fail on 0.25.1 (the 2 that check the pinned files pass
+  there); 13 hand mutants
+  of the changed lines, 12 detected, 1 equivalent (the curve test inside the signature helper: every call to it comes
+  after the same test with a refusal).
 - `test_pyc_cut_20261014.py` counts 34 commands carrying the bytecode wrapper (33 until 0.25.1): the new module is one.
 - `cryptovalid/__init__.pyi` and `API.md` declare the new parameters `crls` of `verify_token` and `tsa_crls` of
   `verify_pack`.

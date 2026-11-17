@@ -117,9 +117,10 @@ class TestRefusals(Base):
         bad = self.st[:-1] + bytes([self.st[-1] ^ 1])
         self.assertEqual(self.stage(C.verify_statement(bad, _pem(self.isk))), "BAD_STATEMENT_SIGNATURE")
         self.assertEqual(self.stage(C.verify_statement(self.st, _pem(_key(C.ALG_ES256)))), "BAD_STATEMENT_SIGNATURE")
-        # the ALG names P-256 but the relying party's key is P-384 / Ed25519: never accepted
-        self.assertEqual(self.stage(C.verify_statement(self.st, _pem(_key(C.ALG_ES384)))), "BAD_STATEMENT_SIGNATURE")
-        self.assertEqual(self.stage(C.verify_statement(self.st, _pem(_key(C.ALG_EDDSA)))), "BAD_STATEMENT_SIGNATURE")
+        # the ALG names P-256 but the relying party's key is P-384 / Ed25519: never accepted (0.26.0: refused before the
+        # signature check, KEY_CURVE_MISMATCH; until 0.25.x BAD_STATEMENT_SIGNATURE)
+        self.assertEqual(self.stage(C.verify_statement(self.st, _pem(_key(C.ALG_ES384)))), "KEY_CURVE_MISMATCH")
+        self.assertEqual(self.stage(C.verify_statement(self.st, _pem(_key(C.ALG_EDDSA)))), "KEY_CURVE_MISMATCH")
         # the same r and s with a zero byte inserted before s (65 bytes): a non-canonical encoding, never accepted
         pb, ph, uh, pl, sig = C.parse_cose_sign1(self.st)
         padded = TAG_COSE_SIGN1 + R.cbor_encode([pb, uh, pl, sig[:32] + b"\x00" + sig[32:]])
@@ -225,8 +226,8 @@ class TestUintFields(Base):
         for size, index in ((True, False), (True, 0), (1, False), (-1, 0), (1, -1)):
             out = C.verify_receipt(self._single_leaf(size, index), self.entry, _pem(self.lsk))
             self.assertFalse(out["ok"], (size, index, out))
-            self.assertEqual(out["stage"], "INCLUSION_ROOT_SIGNATURE_INVALID")
-            self.assertIn("malformed", out["why"])
+            self.assertEqual(out["stage"], "MALFORMED_PROOF")              # 0.26.0: a proof is never skipped
+            self.assertIn("proof 0: not [uint tree-size", out["why"])
 
     def test_vds_true_is_not_one(self):
         out = C.verify_receipt(self._single_leaf(1, 0, vds=True), self.entry, _pem(self.lsk))
