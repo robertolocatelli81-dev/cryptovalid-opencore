@@ -373,21 +373,34 @@ def _is_certificate_der(der: bytes) -> bool:
     return i == top[2] and tags == [0x30, 0x30, 0x03]
 
 
+PIN_MAX_BYTES = 64 * 1024 * 1024   # SPEC §11 (v0.11): a pinned certificate or CRL file is at most this
+
+
+def _read_pin(path: str, what: str) -> bytes:
+    """SPEC §5 step 0 and §11 (v0.11): a file the caller pins, opened once without blocking and judged on the open
+    descriptor (until 0.26.0 os.stat then open: a FIFO put in between blocked); ValueError naming it otherwise"""
+    try:
+        from verifier import InputNotRegular, InputTooLarge, read_regular
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore.verifier import InputNotRegular, InputTooLarge, read_regular
+    try:
+        return read_regular(path, PIN_MAX_BYTES)
+    except InputNotRegular:
+        raise ValueError(f"{what}: {path!r} is not a regular file") from None
+    except InputTooLarge:
+        raise ValueError(f"{what}: {path!r} is larger than {PIN_MAX_BYTES} bytes") from None
+    except OSError as e:
+        raise ValueError(f"{what}: cannot read {path!r}: {e.strerror or e}") from None
+
+
 def _pem_certs(items) -> bytes:
     """The pinned certificates as one PEM file: each item a path or bytes, PEM or DER. Anything else is a ValueError,
     a PEM block or DER item that is not shaped as an X.509 certificate (RFC 5280 §4.1) included."""
     import base64
     out = []
-    import stat
     for it in items:
         if isinstance(it, str):   # review of 13/11/2026: a FIFO hung, a missing file or a directory was a traceback
-            try:
-                if not stat.S_ISREG(os.stat(it).st_mode):
-                    raise ValueError(f"tsa_certs: {it!r} is not a regular file")
-                with open(it, "rb") as f:
-                    it = f.read()
-            except OSError as e:
-                raise ValueError(f"tsa_certs: cannot read {it!r}: {e.strerror or e}") from None
+            it = _read_pin(it, "tsa_certs")
         if not isinstance(it, (bytes, bytearray)) or not it:
             raise ValueError("tsa_certs: each item is a path or the bytes of a certificate")
         it = bytes(it)
@@ -442,19 +455,12 @@ UNDECIDED_REASONS = frozenset({"certificate_hold", "remove_from_crl"})
 def _load_crls(crls) -> list:
     """the CRLs the caller pins (paths or bytes, PEM or DER, one CRL each): cryptography CRL objects, ValueError otherwise"""
     from cryptography import x509
-    import stat
     if not isinstance(crls, (list, tuple)) or not crls:   # a str or bytes is not a list of CRLs
         raise ValueError("crls: a non-empty list of CRL files or bytes, or None for no revocation check")
     out = []
     for it in crls:
         if isinstance(it, str):
-            try:
-                if not stat.S_ISREG(os.stat(it).st_mode):
-                    raise ValueError(f"crls: {it!r} is not a regular file")
-                with open(it, "rb") as f:
-                    it = f.read()
-            except OSError as e:
-                raise ValueError(f"crls: cannot read {it!r}: {e.strerror or e}") from None
+            it = _read_pin(it, "crls")
         if not isinstance(it, (bytes, bytearray)) or not it:
             raise ValueError("crls: each item is a path or the bytes of a CRL")
         it = bytes(it)

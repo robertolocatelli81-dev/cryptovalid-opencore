@@ -124,6 +124,13 @@ forces a boolean where reality had none.
 
 ## 5. Verification algorithm (normative)
 
+0. **Input (v0.11, 2026-11-18).** A verifier that reads the ledger from a path opens it once, without blocking, and
+   judges the OPEN descriptor: a path that is not a regular file (a FIFO, a device, a directory) is FAIL
+   (`unreadable: not a regular file`) without reading a byte, and a file larger than the bound (`verifier.py`:
+   `MAX_INPUT_BYTES`, 256 MiB) is FAIL (`input_too_large`). Checking the path first and opening it after leaves a window
+   where the path is replaced by a FIFO, and opening a FIFO for reading blocks until a writer comes: measured on
+   2026-11-18 with 0.26.0, `verifier.py <a FIFO>` did not return (killed after 5 s, exit 124). The same rule holds for
+   every file §10 and §11 read from a path (below). The other implementations in `verifiers/` are not measured here.
 1. Parse every line as JSON; any parse error → FAIL.
 2. Detect profile on entry 0; recompute `self_hash` for EVERY entry → any
    mismatch → FAIL.
@@ -263,7 +270,9 @@ not change. The ledger format (§2–§5), its hashes and its vectors do not cha
 v0.10 also adds to §11 step 8, the TSA certificate's revocation checked against CRLs the caller pins (`crls`, new reasons
 `tsa_certificate_revoked`, `tsa_revocation_unknown`), and to §10 the library parameter `tsa_crls`. Additive: without
 CRLs the outcome is the outcome of v0.9.
-v0.11 (2026-11-18) adds to §11 step 6 the reason `signer_certificate_absent`: a token whose signer certificate is neither
+v0.11 (2026-11-18) adds §5 step 0 (a path is opened once without blocking and must be a regular file within the size
+bound; §10's listed files and §11's pinned files follow it, and §10 refuses a listed file over the bound before reading
+it) and to §11 step 6 the reason `signer_certificate_absent`: a token whose signer certificate is neither
 in the token nor pinned was `signature_invalid`, a signature reported as failed that was never evaluated. The status
 stays `invalid` (it does not count as a timestamp); the evidence pack with a pin reports it `not_evaluated /
 tsa_unresolved` where v0.10 said `contradicted / token_invalid`. v0.11 also writes in §11 step 7 the rule of RFC 2634
@@ -326,11 +335,15 @@ of meaning is a new identifier).
 **Admission.** `admission` is `"admitted"` or `"refused"`. A refused pack has `refusal_class` — `format_unsupported`
 (`pack_format` absent, not a string, or not `cryptovalid-evidence-pack/1.1`; packs of format 1.0 included), `unknown_member`
 (a key outside §2.1's lists: `manifest_unknown_field`), `malformed` (anything else that makes the manifest unreadable as this
-format: not readable, not UTF-8 JSON, a key twice in one object, nested deeper than the bound, larger than the bound, not an
+format: not readable (not a regular file, §5 step 0, since v0.11), not UTF-8 JSON, a key twice in one object, nested deeper than the bound, larger than the bound, not an
 object, `file_digests_sha256` not an object of names inside the pack to strings, `ledgers` not a list of objects naming a file inside the pack, `rfc3161_timestamp` not an object,
 `anchored` not a boolean, `tsa` / `tsr_b64` / `note` not strings, `tsr_b64` without `anchored: true`,
 `manifest_digest_sha256` / `manifest_signer` / `manifest_signature` not strings, `ledgers[i].entries` not an integer
-(a boolean is not one), `ledgers[i].head_self_hash` not a string or null, `ledgers[i].pq_protected` not a boolean or null) — `states: null`, `valid: false`, exit 1, and the reason text in `error` (the field this receipt has carried since
+(a boolean is not one), `ledgers[i].head_self_hash` not a string or null, `ledgers[i].pq_protected` not a boolean or null; since v0.11, a file named in `file_digests_sha256` that is larger
+than the bound of §5 step 0 (`input_too_large: file <name> ...`, judged on the open descriptor before any byte is read,
+then hashed in blocks: measured on 2026-11-18 with 0.26.0, which read each listed file whole into memory first, a peak
+of 17 MB for a 1 MiB file and 515 MB for a 500 MiB one, `resource.getrusage`) or that exists and cannot be opened
+(`input_unreadable: file <name> ...`, a permission error: until v0.11 an exception)) — `states: null`, `valid: false`, exit 1, and the reason text in `error` (the field this receipt has carried since
 0.9). The order of the checks is the order of this list's classes as the code meets them: size, read, depth, JSON, object,
 format, unknown keys, shapes and types (the format first, as in ap2-evidence-pack 1.6.0: a later revision that adds a
 member is `format_unsupported`, not `unknown_member`). The other fields of a refused receipt keep their fail values (`files_ok`,
@@ -347,7 +360,7 @@ its state is the state of the element of highest rank: `contradicted` > `not_eva
 
 | subject | elements, in order | verified | contradicted | not_evaluated |
 |---|---|---|---|---|
-| `sealed_content` | each name of `file_digests_sha256`; the manifest's own digest; for each `ledgers[i]`: the file inside the pack, its hash chain (§5 steps 1–4), its entry count and head equal to the manifest's | every element holds | `digest_mismatch` (a file absent, outside the pack or of another digest; the manifest digest; no file listed at all), `artifact_invalid` (a ledger that is not a file inside the pack, or whose chain fails), `binding_mismatch` (entry count or head differ from the manifest: truncation or extension) | — |
+| `sealed_content` | each name of `file_digests_sha256`; the manifest's own digest; for each `ledgers[i]`: the file inside the pack, its hash chain (§5 steps 1–4), its entry count and head equal to the manifest's | every element holds | `digest_mismatch` (a file absent, outside the pack, not a regular file (§5 step 0: opened once without blocking, so a FIFO never blocks) or of another digest; the manifest digest; no file listed at all), `artifact_invalid` (a ledger that is not a file inside the pack, or whose chain fails), `binding_mismatch` (entry count or head differ from the manifest: truncation or extension) | — |
 | `producer_signature` | the manifest signature; then, for each ledger whose entries carry a signature field (any entry, §5 step 5), its signature layer, then its post-quantum layer when the manifest claims one (`pq_protected: true`) | every element verifies under a key the CALLER pinned (`manifest_signer_hex`; `signer_pubkey_hex` and, for the post-quantum layer, `pq_pubkey_b64`) | `signature_invalid` (a signature that was checked and fails: broken, malformed, a key or R of small or mixed order, an entry of a signed ledger unsigned; a post-quantum layer the manifest claims and the file does not carry, carries partly, or carries broken) | `not_present` (no manifest signature, no signed ledger), `self_asserted` (it verifies under the key it carries; nobody pinned one: draft-krausz §5.4.2(a)), `key_unresolved` (a pin was given and the signer is another key), `backend_missing` (`cryptography`, or ML-DSA-65 in it, is not available here) |
 | `time_anchor` | the `rfc3161_timestamp` block | only when the caller pins TSA certificates (v0.8, below): §11 gives `verified` for the token, the manifest digest and the pinned certificates. Without a pin never: this verifier does not check the TSA's signature (a self-issued token binds as well as a real one) | `token_missing` (`anchored: true` and no `tsr_b64`), `binding_mismatch` (an imprint was read and is another digest; with a pin also §11's `imprint_mismatch`), `token_invalid` (otherwise: not a TimeStampResp, status not granted, no imprint read; with a pin, any other refusal of §11 steps 1–6, its reason in `detail`: a signature that does not verify, a token that is not DER as §11 reads it, a hash algorithm outside §11's list) | `not_present` (no block, or `anchored: false`), `tsa_not_checked` (no pin; status granted, imprint = the manifest digest), `tsa_unresolved` (a pin was given; §11 steps 1–6 pass and step 7 refuses: the token is not established under the pinned certificates; since v0.11 also §11's `signer_certificate_absent`), `instrument_failure` (openssl absent, with or without a pin; openssl that cannot be started, gives no answer in time, is ended by a signal, or no temporary file: exit 74, below) |
 
@@ -622,6 +635,12 @@ FALSE, a DEFAULT value DER leaves out, so step 1 refuses that token as `malforme
 SHALL be the DER-encoded value of TSTInfo"; a verdict this version does not change, and OpenSSL reads the token); the
 tokens of 2026-11-13 (freetsa, DigiCert, Sectigo, GlobalSign) carry no statement. Whether those signers are granted QTST
 services is read from a trusted list the caller gives, not assumed here.
+
+**Files the caller pins (v0.11).** A path given in `tsa_certs` or `crls` is read as §5 step 0 says: opened once without
+blocking and judged on the open descriptor, a regular file of at most 64 MiB, else a ValueError naming it (exit 2 in a
+command). Until v0.11 the path was checked with `os.stat` and then opened: a FIFO put in its place between the two
+blocked the program (measured on 2026-11-18 by replaying the window, `timeout 5`, exit 124; opening first and
+checking after blocks too, since the open itself waits for a writer).
 
 **Revocation, with CRLs the caller pins (v0.10).** `verify_token(..., crls=[...])` (paths or bytes, PEM or DER, each
 one X.509 CRL) adds step 8 after step 7, and only when steps 1–7 gave `verified`. Measured on 2026-11-16 (Athena's

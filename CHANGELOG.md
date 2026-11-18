@@ -11,6 +11,23 @@ run by the same author, not by a third party.
 
 ### Fixed
 
+- **A listed file was read whole into memory, and a FIFO could block the verifier** (SPEC v0.11 §5 step 0, §10, §11,
+  written before the code; from an external review of 0.26.0, re-measured on 2026-11-18). `evidence_pack.verify_pack`
+  read every file of `file_digests_sha256` whole before any size bound: peak memory 20 / 219 / 519 MiB for a listed
+  sparse file of 1 / 200 / 500 MiB (`ru_maxrss`, Python 3.11); now each is opened once without blocking, judged on the
+  open descriptor and hashed in 1 MiB blocks (21 MiB for 200 MiB), and a file over the verifier's bound (256 MiB) is
+  refused before reading (`refused` / `malformed`, `input_too_large: file <name> ...`); a listed file that exists and
+  cannot be opened is `input_unreadable: file <name> ...` (until now an exception). The pinned TSA certificates and
+  CRLs were checked with `os.stat` and then opened: a FIFO put in between blocked (`timeout 5`, exit 124; opening and
+  then calling `fstat` blocks too, the open waits for a writer); now they are read the same way, at most 64 MiB each.
+  The same class, found by running every sub-command of `cryptovalid-verify` on a FIFO and reading the readers of this
+  repository: `verifier.py <a FIFO>` (the core ledger verifier), a pack whose MANIFEST.json is a FIFO and
+  `cryptovalid-verify cldma <a FIFO>` blocked outright; now they are FAIL `unreadable: not a regular file`, refused
+  `manifest_unreadable: not a regular file`, and a FAIL layer. A directory given to `verifier.py` is now named the same
+  way (was `unreadable: IsADirectoryError`). `test_input_regular_bounded_20261118.py` (the cases that could block run
+  in a child process with a timeout): 8 of its 9 tests fail on 4f15a65 (the control passes), all pass here, with and
+  without `cryptography`.
+
 - **Messages in Italian in an English package.** `cryptovalid_receipt.cbor_decode` said "CBOR: byte in eccesso" for
   too much data (now "CBOR: trailing bytes"), and other messages for people were in Italian: the reasons, notes and
   errors of `cldma_confidential`, `committed_attestation`, `cryptovalid_heterogeneous`, `cryptovalid_jws`,

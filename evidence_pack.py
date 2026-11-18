@@ -49,9 +49,9 @@ import base64
 import hashlib
 import json
 try:  # depth bound shared with the reference verifier (same repo, flat layout)
-    from verifier import MAX_JSON_DEPTH as _MAX_JSON_DEPTH, json_nesting_depth as _json_depth, input_too_large as _too_large
+    from verifier import MAX_JSON_DEPTH as _MAX_JSON_DEPTH, json_nesting_depth as _json_depth
 except Exception:  # noqa: BLE001 — packaged/relative layouts
-    from .verifier import MAX_JSON_DEPTH as _MAX_JSON_DEPTH, json_nesting_depth as _json_depth, input_too_large as _too_large  # type: ignore
+    from .verifier import MAX_JSON_DEPTH as _MAX_JSON_DEPTH, json_nesting_depth as _json_depth  # type: ignore
 import os
 import shutil
 import sys
@@ -64,9 +64,10 @@ import signer  # noqa: E402
 import verifier  # noqa: E402
 
 
-def _sha256_file(p: str) -> str:
-    with open(p, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()
+def _sha256_file(p: str, limit: Optional[int] = None) -> str:
+    """SHA-256 hex of a regular file, read in blocks (SPEC §5 step 0, §10, v0.11: 0.26.0 read the whole file into memory);
+    `limit` None for the files build_pack has just copied, the verifier's bound in verify_pack"""
+    return verifier.sha256_regular(p, 1 << 62 if limit is None else limit)
 
 
 def _canon(obj: Dict) -> bytes:
@@ -516,12 +517,13 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
     openssl cannot be run here, CheckNotRun carries the COMPLETE receipt (`.receipt`)."""
     if pq_pubkey_b64 and not signer_pubkey_hex:
         raise ValueError("pq_pubkey_b64 needs signer_pubkey_hex: hybrid means both keys are pinned (a classical pack may pin the Ed25519 key alone)")
-    if _too_large(os.path.join(pack_dir, "MANIFEST.json")):
+    try:   # SPEC §5 step 0 (v0.11): opened once without blocking (a FIFO here hung until 0.26.0), bounded
+        raw = verifier.read_regular(os.path.join(pack_dir, "MANIFEST.json")).decode("utf-8")
+    except verifier.InputTooLarge:
         return _refused("input_too_large: MANIFEST exceeds the verifier's size bound", "malformed")
-    try:
-        with open(os.path.join(pack_dir, "MANIFEST.json"), encoding="utf-8") as f:
-            raw = f.read()
-    except (OSError, UnicodeDecodeError) as e:   # missing, a directory, not UTF-8 (audit V1 #5, 30/09/2026)
+    except verifier.InputNotRegular:
+        return _refused("manifest_unreadable: not a regular file", "malformed")
+    except (OSError, UnicodeDecodeError) as e:   # missing, not UTF-8 (audit V1 #5, 30/09/2026)
         return _refused(f"manifest_unreadable: {type(e).__name__}", "malformed")
     depth = _json_depth(raw)
     if depth > _MAX_JSON_DEPTH:
@@ -572,7 +574,15 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
     file_ok = {}
     for name, dig in man.get("file_digests_sha256", {}).items():
         p = os.path.join(pack_dir, name)
-        file_ok[name] = _real_inside(p) and os.path.isfile(p) and _sha256_file(p) == dig
+        try:   # SPEC §10 (v0.11): opened once without blocking, judged on the descriptor, bounded, hashed in blocks
+            file_ok[name] = _real_inside(p) and _sha256_file(p, verifier.MAX_INPUT_BYTES) == dig
+        except verifier.InputTooLarge:
+            return _refused(f"input_too_large: file {name} exceeds the verifier's size bound ({verifier.MAX_INPUT_BYTES} "
+                            "bytes)", "malformed")
+        except (verifier.InputNotRegular, FileNotFoundError, NotADirectoryError):
+            file_ok[name] = False              # absent or not a regular file: digest_mismatch, as before
+        except OSError as e:
+            return _refused(f"input_unreadable: file {name}: {e.strerror or type(e).__name__}", "malformed")
         sealed.append(("verified", None) if file_ok[name] else ("contradicted", "digest_mismatch", f"file {name}"))
     if not file_ok:
         sealed.append(("contradicted", "digest_mismatch", "no file listed in file_digests_sha256"))

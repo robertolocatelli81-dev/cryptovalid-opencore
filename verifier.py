@@ -592,6 +592,58 @@ class _RecursionHeadroom:
         return False
 
 
+class InputNotRegular(OSError):
+    """SPEC §5 step 0: the path is not a regular file (a FIFO, a device, a directory)"""
+
+
+class InputTooLarge(OSError):
+    """SPEC §5 step 0: the file is larger than the bound"""
+
+
+def open_regular(path: str, limit: int = MAX_INPUT_BYTES) -> int:
+    """SPEC §5 step 0 (v0.11): a descriptor of a REGULAR file of at most `limit` bytes, opened once WITHOUT blocking and
+    judged on the open descriptor (fstat), so a FIFO put at the path is never waited on and nothing is checked on one
+    file and read from another. Raises InputNotRegular, InputTooLarge, or the OSError of os.open (FileNotFoundError...).
+    O_NONBLOCK does not change reads of a regular file."""
+    import stat
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise InputNotRegular(f"{path}: not a regular file")
+        if st.st_size > limit:
+            raise InputTooLarge(f"{path}: larger than {limit} bytes")
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def read_regular(path: str, limit: int = MAX_INPUT_BYTES) -> bytes:
+    """the bytes of a regular file of at most `limit` bytes (open_regular), read bounded: a file that grew past the
+    bound after the fstat is InputTooLarge too"""
+    with os.fdopen(open_regular(path, limit), "rb") as f:
+        data = f.read(limit + 1)
+    if len(data) > limit:
+        raise InputTooLarge(f"{path}: larger than {limit} bytes")
+    return data
+
+
+def sha256_regular(path: str, limit: int = MAX_INPUT_BYTES, block: int = 1 << 20) -> str:
+    """SHA-256 hex of a regular file of at most `limit` bytes (open_regular), read in blocks of `block` bytes"""
+    h, n = hashlib.sha256(), 0
+    with os.fdopen(open_regular(path, limit), "rb") as f:
+        while True:
+            b = f.read(block)
+            if not b:
+                break
+            n += len(b)
+            if n > limit:
+                raise InputTooLarge(f"{path}: larger than {limit} bytes")
+            h.update(b)
+    return h.hexdigest()
+
+
 def input_too_large(path: str) -> bool:
     try:
         return os.path.getsize(path) > MAX_INPUT_BYTES
@@ -752,15 +804,26 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     errors: List[Dict] = []
 
-    if input_too_large(path):
+    try:
+        # SPEC §5 step 0 (v0.11): opened once without blocking, judged on the descriptor (a FIFO hung until 0.26.0)
+        fd = open_regular(path)
+    except InputTooLarge:
         # fail-closed on size too: reading it would exhaust memory and die without a receipt (council 13/09)
         return {"verdict": "FAIL", "path": path, "verified_utc": started, "entries_count": 0,
                 "parse_errors": [{"line": -1, "error": f"input_too_large: file exceeds {MAX_INPUT_BYTES} bytes"}]}
+    except InputNotRegular:
+        return {"verdict": "FAIL", "path": path, "verified_utc": started, "entries_count": 0,
+                "parse_errors": [{"line": -1, "error": "unreadable: not a regular file"}]}
+    except FileNotFoundError:
+        return {"verdict": "FILE_NOT_FOUND", "path": path, "verified_utc": started}
+    except OSError as e:   # a permission error: a receipt, never a traceback
+        return {"verdict": "FAIL", "path": path, "verified_utc": started, "entries_count": 0,
+                "parse_errors": [{"line": -1, "error": f"unreadable: {type(e).__name__}"}]}
     try:
         # ONE line rule in the five verifiers (council 16/09 r5): lines are separated by LF only (no universal
         # newlines: a lone CR is data inside the line, hence a decode error), and a line is blank when it holds
         # nothing but ASCII space / tab / CR — never Unicode whitespace (str.strip() took U+00A0).
-        with open(path, encoding="utf-8", errors="surrogateescape", newline="\n") as f:
+        with open(fd, encoding="utf-8", errors="surrogateescape", newline="\n") as f:
             raw_lines = [ln for ln in f if ln.strip(" \t\r\n")]
     except FileNotFoundError:
         return {

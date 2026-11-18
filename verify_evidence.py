@@ -278,8 +278,9 @@ def verify_cldma(path: str) -> dict:
         return _rollup("cldma", [_layer("cldma", "SKIP", "opencore/ not found")])
     try:
         import committed_attestation as cldma
-        with open(path, encoding="utf-8") as f:
-            att = json.load(f)
+        import verifier
+        # SPEC §5 step 0 (v0.11): opened once without blocking, bounded (a FIFO here hung until 0.26.0)
+        att = json.loads(verifier.read_regular(path, _AUTO_JSON_LIMIT).decode("utf-8"))
         ok = cldma.verify_attestation(att)
         layers.append(_layer("totali legati alla radice + ratio", "PASS" if ok else "FAIL"))
         # disciplina dual-hash (2026-08-22): guardia di coerenza che SA fallire — riproducibilita' del calcolo
