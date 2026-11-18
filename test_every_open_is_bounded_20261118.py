@@ -18,8 +18,12 @@ cover).
 3. What a writer reads: a pipe with a writer is read (`signer.py sign ledger out <(cat key)` works as before), a pipe
    with no writer is an error after FIFO_IDLE_SECONDS, a device is refused.
 
-Positive control, measured: on 54fc7eb test 1 lists 52 calls outside the list and 6 of the 7 tests fail (the control
-of the scan passes)."""
+4. The other ways of loading a path (review of 55e2e3f): `test_no_other_load_of_a_path` keeps a second closed list
+   (ctypes.CDLL, zipfile, pathlib read_text / read_bytes, shutil copies, imports by path), and the PKCS#11 module that
+   `cryptovalid_kms` loads is judged on a descriptor before `dlopen`.
+
+Positive control, measured: on 54fc7eb test 1 lists 52 calls outside the list and 6 of the first 7 tests fail (the
+control of the scan passes); on 55e2e3f the PKCS#11 test fails (it does not return)."""
 import ast
 import glob
 import json
@@ -88,6 +92,42 @@ def plain_opens():
     return out
 
 
+# the other ways a module opens a path it is given (review of 55e2e3f: the scan above sees open() only, and
+# ctypes.CDLL of the PKCS#11 module was found by hand): the closed list of such calls, (file, call, first argument)
+OTHER_ALLOWED = {
+    ("cryptovalid_kms.py", "CDLL", "module"),            # judged on a descriptor by verifier.open_regular just before
+    ("fundcert_canonical.py", "ZipFile", "io.BytesIO(read_regular(path))"),   # bytes already read by read_regular
+    ("mutation_runner.py", "copy", "target_path"),       # development tool: the sources of this repository
+    ("mutation_runner.py", "copy", "bak"),
+    ("tools/check_stub.py", "import_module", "argv[1]"),   # development tool: imports the package it checks
+}
+OTHER_LOADERS = {"CDLL", "PyDLL", "LoadLibrary", "dlopen", "ZipFile", "is_zipfile", "read_text", "read_bytes", "copy", "copy2",
+                 "copyfile", "copytree", "import_module", "spec_from_file_location", "run_path", "fromfile", "memmap"}
+
+
+def other_loads():
+    """(file, call, first argument) of every call that loads or reads a path without open(), in the modules that are
+    not tests; `tarfile.open` and the like are seen by plain_opens only when called as open(): named here too"""
+    files = sorted(f for f in glob.glob(os.path.join(ROOT, "*.py")) + glob.glob(os.path.join(ROOT, "cryptovalid", "*.py"))
+                   + glob.glob(os.path.join(ROOT, "tools", "*.py")) if not os.path.basename(f).startswith("test_"))
+    out = []
+    for f in files:
+        with open(f, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+            owner = fn.value.id if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) else ""
+            if name in OTHER_LOADERS or (name == "open" and owner in ("tarfile", "zipfile", "gzip", "bz2", "lzma", "shelve", "dbm")):
+                if name == "copy" and owner not in ("shutil",):
+                    continue                                     # dict.copy(), list.copy()
+                out.append((os.path.relpath(f, ROOT).replace(os.sep, "/"), name,
+                            ast.unparse(node.args[0]) if node.args else ""))
+    return out
+
+
 def child(code: str, *args, timeout: int = 25):
     """(returncode, stdout + stderr) of `code` run with the repository on sys.path; 124 when it did not finish"""
     pre = "import sys, json, os\nsys.dont_write_bytecode = True\nsys.path.insert(0, %r)\n" % ROOT
@@ -106,6 +146,12 @@ class ClosedList(unittest.TestCase):
                          "(a verifier) or verifier.read_input (a writer), SPEC §5 step 0")
         self.assertEqual(sorted(ALLOWED - set(found)), [], "an entry of the closed list no longer exists: remove it")
 
+    def test_no_other_load_of_a_path(self):
+        found = other_loads()
+        self.assertEqual(sorted(set(found) - OTHER_ALLOWED), [], "a path loaded or read without open(): judge it first "
+                         "with verifier.open_regular / read_regular, SPEC §5 step 0")
+        self.assertEqual(sorted(OTHER_ALLOWED - set(found)), [], "an entry of the closed list no longer exists: remove it")
+
     def test_control_the_scan_sees_an_open(self):
         """the scan reports a plain open() of a path in a module made here (it is not blind)"""
         td = tempfile.mkdtemp()
@@ -117,6 +163,10 @@ class ClosedList(unittest.TestCase):
             keep, ROOT = ROOT, td
             try:
                 self.assertEqual(plain_opens(), [("m.py", "p")])
+                with open(os.path.join(td, "m.py"), "a") as f:
+                    f.write("import ctypes, zipfile, shutil\ndef l(p):\n    ctypes.CDLL(p)\n    zipfile.ZipFile(p)\n"
+                            "    shutil.copy(p, p + '.b')\n    {}.copy()\n")
+                self.assertEqual(other_loads(), [("m.py", "CDLL", "p"), ("m.py", "ZipFile", "p"), ("m.py", "copy", "p")])
             finally:
                 ROOT = keep
         finally:
@@ -265,6 +315,29 @@ class WhatAWriterReads(unittest.TestCase):
             self.assertNotEqual(p.returncode, 0, bad)
             self.assertGreaterEqual(time.monotonic() - t, least, bad)
             self.assertFalse(os.path.exists(os.path.join(self.td, "o3.jsonl")), bad)
+
+
+@LINUX
+class Pkcs11Module(unittest.TestCase):
+    def test_module_path_fifo_is_refused_not_loaded(self):
+        """review of 55e2e3f: ctypes.CDLL of a FIFO blocks in dlopen holding the GIL, so Pkcs11Backend.sign's own timeout
+        never fired (measured: a backend with timeout=3 still waiting after 20 s). The module path is now judged on a
+        descriptor opened without blocking before it is loaded."""
+        td = tempfile.mkdtemp()
+        try:
+            fifo = os.path.join(td, "m.so")
+            os.mkfifo(fifo)
+            rc, out = child("""
+                import cryptovalid_kms as K
+                try:
+                    K._p11_sign_direct(sys.argv[1], "t", "k", b"1", b"x")
+                except RuntimeError as e:
+                    print("refused:", e)
+                """, fifo, timeout=15)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("cannot be loaded", out)
+        finally:
+            shutil.rmtree(td)
 
 
 if __name__ == "__main__":

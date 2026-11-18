@@ -141,7 +141,8 @@ forces a boolean where reality had none.
    read up to the size bound, however slowly.
    **v0.12, every path read:** the rule holds for every path a module of this package reads, through three readers and
    a closed list of exceptions that a test keeps (`test_every_open_is_bounded_20261118.py`: an `open()` of a path
-   outside the list fails it).
+   outside the list fails it, and so does a path loaded without `open()`, as `ctypes.CDLL` or `zipfile` do, outside a
+   second list).
    (a) What a verifier, a checker or a report reads is a regular file, as in the first paragraph: the manifest when
    the front-end reads it again, the ledgers of a pack when their signatures and their count are read, the
    `*.sth.json`, `*.head.json` and `*.sth.tsr` of an ingest archive, the signed tip (`--tip`) and the ledger of
@@ -163,7 +164,12 @@ forces a boolean where reality had none.
    `cryptovalid_scitt`, `cryptovalid_checkpoint`, `cryptovalid_witness`, `cryptovalid_kms` (the file backend) and
    `evidence_pack.py build --sign-key`, the ledger of `signer.py sign` and of `cryptovalid_jws sign`, the statement
    and the signed statement of `cryptovalid_scitt`, the previous tree head of `cryptovalid_receipt consistency`, the
-   note of `cryptovalid_witness cosign` and the file of `cryptovalid_worm put`.
+   note of `cryptovalid_witness cosign` and the file of `cryptovalid_worm put`. As for the ledger, only the wait for a
+   byte is bounded, not the whole read (measured on 2026-11-18: a pipe giving one byte every 3 s kept `read_input`
+   reading past 30 s; a pipe of zeros stopped at the bound, `input_too_large`, peak memory 271 MiB for 256 MiB).
+   The PKCS#11 module that the token backend of `cryptovalid_kms` loads (`module=` of the backend URI) is judged on a
+   descriptor opened without blocking before `dlopen`: a FIFO there blocked `dlopen` with the interpreter lock held,
+   past the backend's own timeout (measured on 2026-11-18: `timeout=3`, still waiting after 20 s).
    The exceptions: a temporary file the module has just written itself (three), a directory opened to fsync it (two),
    this distribution's own `pyproject.toml`, the expected verdicts `conformance.py` reads beside the vectors, and the
    development tools (`mutation_runner.py`, `tools/`).

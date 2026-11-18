@@ -29,6 +29,13 @@ class BoundAfterFstat(unittest.TestCase):
             verifier.sha256_regular(PROC, 10, block=4)
         self.assertEqual(len(verifier.sha256_regular(PROC, 1 << 20)), 64)
 
+    def test_read_input(self):
+        """the writers' reader (SPEC §5 step 0 (c)) on a regular file: the bound holds on what is read (review of 55e2e3f:
+        this check survived as a mutant)"""
+        with self.assertRaises(verifier.InputTooLarge):
+            verifier.read_input(PROC, 10)
+        self.assertTrue(len(verifier.read_input(PROC, 1 << 20)) > 10)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -706,7 +706,8 @@ def read_input(path: str, limit: int = MAX_INPUT_BYTES, idle: float = FIFO_IDLE_
     """SPEC §5 step 0 (v0.12), what a WRITER reads from a path it was given (the data it signs or stores, a key file):
     a regular file of at most `limit` bytes, or a FIFO read to its end as the ledger verifier reads one
     (open_ledger_input: `<(command)` works, bounded in size, and a pipe that gives no byte and no end of file for `idle`
-    seconds is InputIdle, never a wait without end). A device or a directory is InputNotRegular. All are OSError."""
+    seconds is InputIdle; only the wait for a byte is bounded, not the whole read: a writer that keeps giving bytes is
+    read up to `limit`, however slowly). A device or a directory is InputNotRegular. All are OSError."""
     fd, piped = open_ledger_input(path, limit, idle)
     if piped is not None:
         return piped

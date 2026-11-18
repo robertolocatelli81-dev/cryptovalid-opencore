@@ -103,10 +103,16 @@ run by the same author, not by a third party.
   reach from a command line were changed too: `cryptovalid_monitor --sth-file` and `--match`, the object
   `cryptovalid_worm get` reads back, `cryptovalid_qeas`, `fundcert_crosssource` (the XLSX too), the LOTL cache, the
   witness's state, the ingest writer's own segments, the source of `verifier.copy_output`.
+  The PKCS#11 module the token backend of `cryptovalid_kms` loads is judged on a descriptor before `dlopen` (a FIFO
+  there blocked `dlopen` with the interpreter lock held, past the backend's own timeout: `timeout=3`, still waiting
+  after 20 s; found by a second review, of 55e2e3f). Only the wait for each byte of a pipe is bounded, not the whole
+  read (as for the ledger).
   `test_every_open_is_bounded_20261118.py` keeps the sentence true: it reads every module that is not a test and
   fails on an `open()` of a path outside a closed list of 14 entries (a temporary file the module has just written, a
   directory opened to fsync it, this distribution's `pyproject.toml`, the expected verdicts of `conformance.py`, the
-  development tools); on 54fc7eb it lists 52 calls outside the list and 6 of its 7 tests fail (the control passes).
+  development tools); on 54fc7eb it lists 52 calls outside the list and 6 of its first 7 tests fail (the control
+  passes). A second closed list, of 5 entries, holds the calls that load or read a path without `open()` (`ctypes.CDLL`,
+  `zipfile`, `shutil` copies, an import by name); the test of the PKCS#11 module does not return on 55e2e3f.
   `test_verifier_readers_no_block_20261118.py`: 2 of its 3 tests fail on 54fc7eb (the third, a regular file read as
   before, is the control), all pass here.
   Not covered (SPEC §5 step 0): a path a command writes: six output arguments (`--out`, `--cose`) still wait when the

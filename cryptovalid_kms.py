@@ -160,7 +160,12 @@ def _p11_sign_direct(module: str, token: str, label: str, pin: bytes, message: b
     class _Mech(ctypes.Structure):
         _fields_ = [("mechanism", ul), ("pParameter", ctypes.c_void_p), ("ulParameterLen", ul)]
 
-    try:
+    try:   # SPEC §5 step 0: dlopen of a FIFO waits holding the GIL, so the caller's timeout thread never runs (18/11/2026)
+        try:
+            import verifier
+        except ImportError:   # python3 -m opencore.<module> from the parent directory
+            from opencore import verifier
+        os.close(verifier.open_regular(module, float("inf")))
         lib = ctypes.CDLL(module)
     except OSError as e:
         raise RuntimeError(f"PKCS#11 module {module!r} cannot be loaded: {str(e)[:120]}") from None
