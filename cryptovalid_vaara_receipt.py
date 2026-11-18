@@ -23,6 +23,12 @@ modules"): kept, installed and tested, no new scope is added here.
 Keys are the relying party's (a PEM, a JWK, a raw ML-DSA-65 key, or the HS256 secret); nothing inside a receipt is
 trusted to name its own key. Every check that cannot run (no predecessor, no result, no evidence given) is reported
 as None, never as True.
+
+Backend (0.27.0, 2026-11-18). The signature check imports `cryptography` (the `[sign]` extra) for every algorithm,
+HS256 included, and ML-DSA-65 from it. When it, or ML-DSA-65 in it, is not available, the check did not run: `signature_ok` is None (not False), `ok`
+false, `why` starts with "backend_missing:". Until 0.26.0 it was `signature_ok: false` with `why`
+"ModuleNotFoundError: No module named 'cryptography'" (measured on 2026-11-18 on a valid ES256 receipt, `cryptography`
+made unimportable in the process): a check that did not run reported as one that failed.
 """
 from __future__ import annotations
 
@@ -187,6 +193,10 @@ def verify_receipt(r: Any, key, *, alg: str, predecessor: Any = None, runtime_re
         out["ok"] = bool(out["signature_ok"]) and all(ran)
         out["why"] = "verified" if out["ok"] else "a check failed: " + ", ".join(
             k for k in ("signature_ok", "back_link_ok", "result_commitment_ok", "evidence_ok", "anchors_ok") if out[k] is False)
+        return out
+    except ImportError as e:   # Backend (module docstring): the check did not run here
+        out["signature_ok"] = None
+        out["why"] = f"backend_missing: cryptography is not installed here (pip install 'cryptovalid-opencore[sign]'): {e}"[:300]
         return out
     except Exception as e:  # noqa: BLE001 — hostile input is a verdict
         out["why"] = f"{type(e).__name__}: {e}"[:300]

@@ -35,6 +35,12 @@ Stages, in this order; the first that fails is the verdict:
 Verified only when their files are given (inputs_text, index_text, operator_credentials): inputs-binding, index,
 approval-signature, control; each stage not given is named under `not_verified`, never silently passed, and
 "approval-challenge-binding" always stays there (sources below).
+
+Backend (0.27.0, 2026-11-18). The keys and signatures are read with `cryptography` (the `[sign]` extra). When it is not
+installed, the ledger was not evaluated: `result` is `NOT_EVALUATED` (a third value of the closed set, beside VALID and
+INVALID), `stage` `backend_missing`. Until 0.26.0 the missing module was caught as hostile input: measured on
+2026-11-18 (a valid ledger, `cryptography` made unimportable in the process) `INVALID`, stage `malformed`,
+"ModuleNotFoundError: No module named 'cryptography'".
 """
 from __future__ import annotations
 
@@ -455,6 +461,10 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
         return out
     except CedulonError as e:
         out.update(stage=e.stage, why=str(e)[:300])
+        return out
+    except ImportError as e:   # Backend (module docstring): not run here, not a malformed ledger
+        out.update(result="NOT_EVALUATED", stage="backend_missing",
+                   why=f"cryptography is not installed here (pip install 'cryptovalid-opencore[sign]'): {e}"[:300])
         return out
     except Exception as e:  # noqa: BLE001 — hostile input is a verdict, never a crash
         out.update(stage="malformed", why=f"{type(e).__name__}: {e}"[:300])

@@ -11,6 +11,23 @@ run by the same author, not by a third party.
 
 ### Fixed
 
+- **A missing `cryptography` was reported as a malformed input** (rule first in each module's docstring, "Backend").
+  Measured on 2026-11-18 on the wheel 0.26.0 installed without the `[sign]` extra: `cryptovalid_cose_receipts.
+  verify_statement` answered a valid Signed Statement `MALFORMED_STATEMENT | ModuleNotFoundError: No module named
+  'cryptography'`, and `verify_receipt` a valid receipt `MALFORMED_RECEIPT`. Now the stage is `BACKEND_MISSING` and
+  `verify_statement_with_receipt` answers `result: "NOT_EVALUATED"` (a new value beside VALID and INVALID) unless a part
+  was refused for another stage, which stays `INVALID`. The same class, found by reading every module that imports
+  `cryptography` inside a function under a broad `except` (6 places in 5 modules) and measured with `cryptography` made
+  unimportable: `cryptovalid_cedulon.verify_ledger` said `INVALID` / `malformed`, now `NOT_EVALUATED` /
+  `backend_missing`; `cryptovalid_vaara_receipt.verify_receipt` said `signature_ok: false`, now `None` with `why`
+  "backend_missing: ..." (its own rule: a check that cannot run is None). The other places read are not verdicts:
+  `cryptovalid_jws.verify` loads the backend before its `try` and raises ImportError, `evidence_pack.build_pack` raises
+  "manifest signing failed: ..." while building. All three modules are experimental. Without the backend a receipt
+  whose key is read before its structure (most refusals of `verify_receipt`) is `BACKEND_MISSING`, not its refusal:
+  nothing becomes VALID. `test_backend_missing_20261118.py` (the checks in a child process where `cryptography` cannot
+  be imported, on an interpreter with or without it): red on 5dce401 (4 failures with `cryptography`, 2 without), green
+  here.
+
 - **A token under a pinned CA was "not issued by the pinned TSA" when its signing-certificate attribute lists more
   certificates than the chain to that CA** (SPEC v0.11 §11 step 7, written before the code). RFC 2634 §5.4 and RFC 5035
   (§5.4.1, §5.4.2 of ESS as it rewrites them): the first ESSCertID MUST be the certificate that verifies the signature;

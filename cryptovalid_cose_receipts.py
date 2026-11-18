@@ -60,6 +60,13 @@ action-state-group/scitt-cose e76bbfdf7a02; each turns a 0.25.x acceptance into 
 The leaf ENTRY is the Transparency Service's choice (RFC 9943 leaves it to the TS): the caller passes the entry bytes,
 the receipt never chooses them. Keys are the relying party's: a kid or a certificate inside a message is never trusted
 by itself. Every hostile input is a refusal with a named stage, never an exception.
+
+Backend (0.27.0, 2026-11-18). The keys and signatures are read with `cryptography` (the `[sign]` extra). When it is
+not installed, the check that needs it did not run: the stage is `BACKEND_MISSING` (`ok: false`), and
+verify_statement_with_receipt answers `result: "NOT_EVALUATED"` when no part was refused for another stage (a part
+refused before it needed `cryptography` stays `INVALID`). Until 0.26.0 the missing module was caught as hostile input:
+measured on 2026-11-18 on the wheel 0.26.0 installed without `[sign]`, a valid statement was `MALFORMED_STATEMENT |
+ModuleNotFoundError: No module named 'cryptography'` and a valid receipt `MALFORMED_RECEIPT`.
 """
 from __future__ import annotations
 
@@ -75,6 +82,7 @@ ALG_EDDSA, ALG_ES256, ALG_ES384 = -8, -7, -35
 VDS_CCF_LEDGER_SHA256 = 2        # draft-ietf-scitt-receipts-ccf-profile-06 §5: TBD_1, "Requested assignment" 2 (not yet IANA)
 L_X5CHAIN, L_X5T = 33, 34
 PROFILES = ("rfc9942", "rfc9943")
+BACKEND_MISSING_WHY = "cryptography is not installed here (pip install 'cryptovalid-opencore[sign]'): the signature was not evaluated"
 
 
 def load_public_key(key):
@@ -176,6 +184,8 @@ def verify_statement(cose: bytes, issuer_key, payload: Optional[bytes] = None, p
             return _refuse("BAD_STATEMENT_SIGNATURE", "statement signature does not verify with the Issuer key")
         return {"ok": True, "stage": None, "why": "statement signature valid", "alg": alg,
                 "payload_sha256": hashlib.sha256(pl).hexdigest()}
+    except ImportError as e:   # the module's docstring, Backend: not run here, not a malformed input
+        return _refuse("BACKEND_MISSING", BACKEND_MISSING_WHY + f" ({e})"[:120])
     except Exception as e:  # noqa: BLE001 — hostile bytes are a refusal, never a crash
         return _refuse("MALFORMED_STATEMENT", f"{type(e).__name__}: {e}"[:200])
 
@@ -239,6 +249,8 @@ def verify_receipt(receipt: bytes, entry: bytes, log_key, profile: str = "rfc994
                         "payload_attached": rpl is not None}
             tried.append(f"proof {i}: the log signature does not verify over the rebuilt root")
         return _refuse("INCLUSION_ROOT_SIGNATURE_INVALID", "; ".join(tried))
+    except ImportError as e:   # the module's docstring, Backend: not run here, not a malformed input
+        return _refuse("BACKEND_MISSING", BACKEND_MISSING_WHY + f" ({e})"[:120])
     except Exception as e:  # noqa: BLE001
         return _refuse("MALFORMED_RECEIPT", f"{type(e).__name__}: {e}"[:200])
 
@@ -343,5 +355,9 @@ def verify_statement_with_receipt(statement: bytes, receipt: bytes, issuer_key, 
     st = verify_statement(statement, issuer_key, payload, profile)
     rc = verify_receipt(receipt, entry, log_key, profile)
     first = st if not st["ok"] else rc
-    return {"ok": st["ok"] and rc["ok"], "result": "VALID" if st["ok"] and rc["ok"] else "INVALID",
+    refused = [x for x in (st, rc) if not x["ok"] and x["stage"] != "BACKEND_MISSING"]
+    if refused:
+        first = refused[0]
+    result = "VALID" if st["ok"] and rc["ok"] else "INVALID" if refused else "NOT_EVALUATED"
+    return {"ok": st["ok"] and rc["ok"], "result": result,
             "stage": first["stage"], "statement": st, "receipt": rc, "profile": profile}
