@@ -55,7 +55,8 @@ run by the same author, not by a third party.
   signer too, and `verified` with the signer or R46 pinned; never `contradicted` (the pack said `tsa_unresolved`), but
   the reason was false. Now a token whose signing-certificate attribute lists more than one ESSCertID is checked as a
   signer named by subjectKeyIdentifier already was: the first ESSCertID is the signer certificate (hash; issuerSerial
-  when present), every ESSCertID has a closed shape (hash of its algorithm's length, issuerSerial of one directoryName),
+  when present), every ESSCertID has a closed shape (hash of its algorithm's length, issuerSerial of one directoryName,
+  no certificate listed twice),
   and openssl `verify -purpose timestampsign` builds the path through the pinned certificates and only the token's
   certificates a later ESSCertID identifies. sectigo.tsr is `verified` with R41 pinned. Verdicts that change, both
   ways: a signer named by subjectKeyIdentifier with more than one ESSCertID was refused whatever the pin ("exactly one is
@@ -66,8 +67,8 @@ run by the same author, not by a third party.
   `test_tsa_ess_cert_ids_20261118.py`: 848 tokens made here (sid issuerAndSerialNumber or subjectKeyIdentifier x
   signingCertificate SHA-1 / signingCertificateV2 SHA-256 or SHA-384 x lists of 1 to 3 ESSCertIDs, the signer first or
   not, its hash altered x issuerSerial absent, present, wrong on the first or on a later one x the pin at the signer, the
-  intermediate CA, the root, an unrelated CA), the outcome computed from the rule as written; on 0.26.0's code 118 of
-  them differ; a first ESSCertID that is not the signer's is refused in every combination; the sectigo vector with each
+  intermediate CA, the root, an unrelated CA), the outcome computed from the rule as written; on 0.26.0 (747086e)
+  94 of them differ; a first ESSCertID that is not the signer's is refused in every combination; the sectigo vector with each
   pin of its chain.
 
 - **A token without its signer certificate was "signature invalid"** (SPEC v0.11 §11 step 6, written before the code).

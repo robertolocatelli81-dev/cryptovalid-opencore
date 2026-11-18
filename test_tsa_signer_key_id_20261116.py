@@ -423,7 +423,7 @@ class AnchorParts(unittest.TestCase):
         t = tree(self.ski)
         ids = ess_v2(signer_info(t))
         ids.append(copy.deepcopy(ids[0]))
-        self.assertIsNone(self.anchor(enc(t)))   # SPEC v0.11: the signer listed again limits nothing (refused until 0.26.0)
+        self.assertIn("same certificate hash", self.anchor(enc(t)))   # SPEC v0.11: the signer listed twice is refused
         h = [x for x in ids[-1][1] if x[0] == 0x04][0]
         h[1] = bytes([h[1][0] ^ 1]) + h[1][1:]       # a hash of no certificate here: its issuerSerial is not compared
         self.assertIsNone(self.anchor(enc(t)))   # the path limited to the signer, whose CA is pinned

@@ -171,6 +171,8 @@ def expected(ids, is_mode, pin):
     """SPEC v0.11 §11 step 7 for one attribute: (status, reason). ids: [(cert, wrong)] as LISTS; is_mode: None, "ok",
     "first_bad", "later_bad" (the issuerSerial of the second ESSCertID wrong)"""
     refused = ("invalid", "not_issued_by_pinned_tsa")
+    if len(set(ids)) != len(ids):
+        return refused                                     # the same certificate listed twice (closed)
     if ids[0] != ("S", False) or is_mode == "first_bad":
         return refused                                     # the first ESSCertID is the signer's, or the token is refused
     pool = {"S", "I", "R", pin}                            # the token's certificates and the pinned one

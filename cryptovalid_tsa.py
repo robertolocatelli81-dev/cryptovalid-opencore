@@ -784,6 +784,8 @@ def _ess_cert_ids(o: str, certs: bytes):
                     and names[0][0] == 0xA4):
                 return f"ESSCertID {n}: issuerSerial is not {{one directoryName, serialNumber}}"
             isr = (names[0][1], int.from_bytes(iss[1][1], "big", signed=True))
+        if any(alg == a and cid[0][1] == h for a, h, _ in out):   # closed: an identifier listed twice is refused
+            return f"ESSCertID {n}: the same certificate hash as an earlier ESSCertID"
         out.append((alg, cid[0][1], isr))
     return out
 

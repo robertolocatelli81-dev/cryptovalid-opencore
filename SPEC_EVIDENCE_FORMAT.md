@@ -507,7 +507,9 @@ first that fails gives the outcome:
      say how the later ESSCertIDs limit the path; this format's reading (v0.11): every ESSCertID, the later ones too, is
      `{certHash, issuerSerial OPTIONAL}` (ESSCertIDv2 `{hashAlgorithm OPTIONAL, certHash, issuerSerial OPTIONAL}`, the
      algorithm one of SHA-1, SHA-224, SHA-256, SHA-384, SHA-512, SHA3-256, SHA3-384, SHA3-512 with absent or NULL
-     parameters), `certHash` of that algorithm's length, `issuerSerial` of that same shape, else refused; a later
+     parameters), `certHash` of that algorithm's length, `issuerSerial` of that same shape, and no two with the same
+     algorithm and `certHash` (the signer listed again, or any certificate listed twice: OpenSSL refuses the first case
+     too, "ess cert id wrong order"), else refused; a later
      ESSCertID whose hash is the hash of a certificate of the token or a pinned one and whose `issuerSerial` does not
      name that certificate is refused; with more than one ESSCertID, the certificates of the token that (c) may use to
      build the path are the ones some later ESSCertID identifies by its hash (with both attributes listing more than one,
