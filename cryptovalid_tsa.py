@@ -338,6 +338,8 @@ def _run_openssl(cmd, **kw):
 
 
 SIGNATURE_ONLY_NOTE = "signature valid with the certificate contained in the token, chain not established"
+SIGNER_NOT_FOUND = "signer certificate not found"   # OpenSSL CMS_R_SIGNER_CERTIFICATE_NOT_FOUND (CMS_verify)
+SIGNER_ABSENT_DETAIL = "signature not evaluated: the signer certificate the SignerInfo names is not in the token"
 
 
 def _der_tlv(b: bytes, i: int) -> "tuple | None":
@@ -648,6 +650,65 @@ def _signer_named_by_key_id(token_der: bytes) -> bool:
     return _signer_info(token_der)[0][1][0] == 0x80
 
 
+def _signer_certificate_absent(token_der: bytes, pins_pem: bytes = None) -> bool:
+    """SPEC §11 step 6 (v0.11): True only when every certificate in the token and among the pinned ones was read and none
+    is the one the SignerInfo's sid names (RFC 5652 §5.3: issuerAndSerialNumber, the issuer compared as X509_NAME_cmp and
+    the serial as an integer; or subjectKeyIdentifier, against the certificate's subjectKeyIdentifier extension, as
+    OpenSSL looks it up: measured on 2026-11-18 with OpenSSL 3.0.22, a certificate without the extension cannot sign with
+    `cms -sign -keyid`, "certificate has no keyid"). Anything not read (a certificate, the sid, a certificates field)
+    answers False: the absence is never presumed."""
+    try:
+        sid = _signer_info(token_der)[0][1]
+        ci = _der_items(_der_one(token_der, "ContentInfo", 0x30), "ContentInfo")
+        sd = _der_items(_der_one(ci[1][1], "SignedData", 0x30), "SignedData")
+        certs = []
+        for tag, val in sd[3:-1]:
+            if tag == 0xA0:
+                for t, v in _der_items(val, "certificates"):
+                    if t != 0x30:                       # another CertificateChoices: not read here
+                        return False
+                    certs.append(_tlv_bytes(t, v))
+        if pins_pem:
+            pinned = _pem_ders(pins_pem)
+            if pins_pem.count(b"-----BEGIN") != len(pinned):
+                return False
+            certs += pinned
+        if sid[0] == 0x30:
+            ias = _der_items(sid[1], "issuerAndSerialNumber")
+            if len(ias) != 2 or ias[0][0] != 0x30 or ias[1][0] != 0x02:
+                return False
+            # the canonical form, not _names_equal: a Name not read here raises (absence not presumed), it is not "unequal"
+            want_issuer, want_serial = _name_canon(_tlv_bytes(0x30, ias[0][1])), int.from_bytes(ias[1][1], "big", signed=True)
+        elif sid[0] == 0x80:
+            want_ski = sid[1]
+        else:
+            return False
+        for der in certs:
+            cert = _der_items(_der_one(der, "certificate", 0x30), "certificate")
+            tbs = _der_items(cert[0][1], "tbsCertificate")
+            k = 1 if tbs[0][0] == 0xA0 else 0
+            if tbs[k][0] != 0x02 or tbs[k + 2][0] != 0x30 or tbs[k + 5][0] != 0x30:
+                return False
+            if sid[0] == 0x30:
+                if _name_canon(_tlv_bytes(0x30, tbs[k + 2][1])) == want_issuer and \
+                        int.from_bytes(tbs[k][1], "big", signed=True) == want_serial:
+                    return False
+                continue
+            for t, v in tbs[k + 6:]:
+                if t != 0xA3:
+                    continue
+                for et, ev in _der_items(_der_one(v, "extensions", 0x30), "extensions"):
+                    ext = _der_items(ev, "Extension") if et == 0x30 else []
+                    if not ext or ext[0][0] != 0x06:
+                        return False
+                    if _der_oid(ext[0][1], "extnID") == "2.5.29.14" and ext[-1][0] == 0x04 and \
+                            _der_one(ext[-1][1], "SubjectKeyIdentifier", 0x04) == want_ski:
+                        return False
+        return True
+    except (TokenError, IndexError, ValueError):
+        return False
+
+
 def _policies_shape(el: tuple) -> bool:
     """ESS `policies` (RFC 2634 §5.4.1): SEQUENCE OF PolicyInformation, each a SEQUENCE that starts with an OID"""
     if el[0] != 0x30:
@@ -817,6 +878,8 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
     is signed with SHA-1, NIST SP 800-131A Rev. 2 legacy verification; None too when one cannot be read here):
     status `verified` (pinned TSA, the only one that counts), `signature_only` (no pin: signature valid with the certificate
     contained in the token, chain not established), `invalid` (a closed `reason`), `not_evaluated` (openssl absent).
+    `invalid` with reason `signer_certificate_absent` (SPEC v0.11): the certificate the SignerInfo names is neither in the
+    token nor pinned, so the signature was not evaluated (a token requested with certReq FALSE; pin the TSA certificate).
     openssl present that cannot run here, does not answer, or is ended by a signal: CheckNotRun (SPEC §10, §11).
     `crls` (SPEC v0.10 §11 step 8, needs `tsa_certs`): CRLs the caller pins; a `verified` token is then checked for the
     revocation of its signer certificate, and the outcome gains `revocation`. None: no revocation check, as before."""
@@ -852,6 +915,12 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
         out.update(status="not_evaluated", reason="openssl_absent", note="openssl absent: signature not checked")
         return out
     if state == "invalid":
+        # SPEC §11 step 6 (v0.11): the signature was not evaluated. Both must say so: the sid matches no certificate read
+        # here AND openssl stopped at the signer lookup (a token openssl cannot parse is not "absent": FORMAT_FAILURE)
+        if SIGNER_NOT_FOUND in (why or "") and _signer_certificate_absent(t["token_der"], pins):
+            out.update(reason="signer_certificate_absent", detail=SIGNER_ABSENT_DETAIL + (
+                " (pin the TSA certificate)" if pins is None else " nor among the pinned certificates"))
+            return out
         out.update(reason="signature_invalid", detail=why)
         return out
     out["signer_sha256"] = signer

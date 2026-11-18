@@ -243,6 +243,10 @@ def _token_badge(manifest: Dict, ts: Dict):
     if chk["status"] == "not_evaluated":
         return (_badge(None, na="IMPRINT BOUND, SIGNATURE NOT CHECKED"),
                 f"Granted, imprint = the manifest digest; signature not checked (openssl absent). TSA: {ts.get('tsa')}")
+    if chk["reason"] == "signer_certificate_absent":   # SPEC v0.11 §11 step 6: the signature was not evaluated
+        return (_badge(None, na="IMPRINT BOUND, SIGNATURE NOT CHECKED"),
+                f"Granted, imprint = the manifest digest; signature not checked: the token does not carry its signer "
+                f"certificate (pin the TSA certificate). TSA: {ts.get('tsa')}")
     return (_badge(False, no="TOKEN INVALID"),
             f"Granted, imprint = the manifest digest, but the token does not pass SPEC §11: {chk['reason']} "
             f"({str(chk['detail'])[:120]}). TSA: {ts.get('tsa')}")

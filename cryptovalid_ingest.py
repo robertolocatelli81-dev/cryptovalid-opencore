@@ -404,7 +404,8 @@ _TSA_FAILURE = {"imprint_mismatch": "tsa_token_digest_mismatch", "hash_algorithm
                 "not_signed_data": "tsa_token_cms_invalid", "response_not_granted": "tsa_token_cms_invalid",
                 "econtent_type_not_tstinfo": "tsa_token_not_tstinfo", "tstinfo_unknown_element": "tsa_token_not_tstinfo",
                 "hash_algorithm_not_allowed": "tsa_token_hash_algorithm_not_allowed",
-                "not_issued_by_pinned_tsa": "tsa_token_not_issued_by_pinned_tsa"}
+                "not_issued_by_pinned_tsa": "tsa_token_not_issued_by_pinned_tsa",
+                "signer_certificate_absent": "tsa_token_signer_certificate_absent"}   # SPEC v0.11 §11 step 6
 _SIGNATURE_ONLY = "signature valid with the certificate contained in the token, chain not established"
 
 

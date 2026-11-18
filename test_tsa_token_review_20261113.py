@@ -220,8 +220,9 @@ class HandBuiltTokens(unittest.TestCase):
     def test_token_without_certificate_checked_with_the_pin(self):
         tok = self.token(self.k, self.c, self.tstinfo(), certs=False)
         self.assertEqual(self.outcome(tok, self.pin), ("verified", None))
-        self.assertEqual(self.outcome(tok, None), ("invalid", "signature_invalid"))   # nothing to check it with
-        self.assertEqual(self.outcome(tok, self.pin_rsa), ("invalid", "signature_invalid"))
+        # nothing to check it with: SPEC v0.11 §11 step 6, `signer_certificate_absent` (`signature_invalid` until 0.26.0)
+        self.assertEqual(self.outcome(tok, None), ("invalid", "signer_certificate_absent"))
+        self.assertEqual(self.outcome(tok, self.pin_rsa), ("invalid", "signer_certificate_absent"))   # another TSA pinned
 
     @unittest.skipUnless(os.name == "posix", "a shell wrapper")
     def test_ts_verify_exit_0_without_ok_is_not_verified(self):

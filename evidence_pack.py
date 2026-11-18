@@ -466,6 +466,8 @@ def _pinned_time_anchor(tsr_b64: str, digest_hex: str, tsa_certs, tsa_crls=None)
         return ("not_evaluated", "instrument_failure", f"TSA pinned, token not checked: {v['reason']}"), check
     if v["status"] == "invalid" and v["reason"] == "not_issued_by_pinned_tsa":
         return ("not_evaluated", "tsa_unresolved", f"not established under the pinned TSA certificates: {v['detail']}"), check
+    if v["status"] == "invalid" and v["reason"] == "signer_certificate_absent":   # SPEC v0.11 §11 step 6: not evaluated
+        return ("not_evaluated", "tsa_unresolved", f"signer certificate neither in the token nor pinned: {v['detail']}"), check
     if v["status"] == "invalid" and v["reason"] == "imprint_mismatch":
         return ("contradicted", "binding_mismatch", "the token's imprint is another digest"), check
     if v["status"] == "invalid":

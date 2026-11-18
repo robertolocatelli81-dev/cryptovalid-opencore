@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.10 (2026-11-16; v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
+# CryptoValid Evidence Format — candidate standard v0.11 (2026-11-18; v0.10 2026-11-16, v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -235,7 +235,8 @@ v0.8 (2026-11-15) lets the caller of the evidence pack's verify pin TSA certific
 writes in §11 which refusals of the token check show the token false and which only leave it unestablished. Additive
 for a pack verified without a pin: the receipt is the receipt of v0.7, `states_vocabulary` included. With a pin the
 receipt names `cryptovalid-evidence-pack/states-2`, and `time_anchor` can be `verified` (it was never), `not_evaluated /
-tsa_unresolved` (a token valid but not established under the pinned certificates), or `contradicted` for a token whose
+tsa_unresolved` (a token valid but not established under the pinned certificates, or, since v0.11, whose signer
+certificate is neither in the token nor pinned, §11 step 6), or `contradicted` for a token whose
 signature does not verify or that §11 refuses at steps 1–6 (without a pin such a token is `tsa_not_checked` and the pack
 valid, as before). §11's function and the other callers of it do not change.
 v0.8 also adds §15 (2026-11-15), the difference between the hybrid signature of this format and the composite ML-DSA of
@@ -262,6 +263,10 @@ not change. The ledger format (§2–§5), its hashes and its vectors do not cha
 v0.10 also adds to §11 step 8, the TSA certificate's revocation checked against CRLs the caller pins (`crls`, new reasons
 `tsa_certificate_revoked`, `tsa_revocation_unknown`), and to §10 the library parameter `tsa_crls`. Additive: without
 CRLs the outcome is the outcome of v0.9.
+v0.11 (2026-11-18) adds to §11 step 6 the reason `signer_certificate_absent`: a token whose signer certificate is neither
+in the token nor pinned was `signature_invalid`, a signature reported as failed that was never evaluated. The status
+stays `invalid` (it does not count as a timestamp); the evidence pack with a pin reports it `not_evaluated /
+tsa_unresolved` where v0.10 said `contradicted / token_invalid`. Every other token has the outcome of v0.10.
 
 ## 7. Conformance (normative)
 
@@ -338,7 +343,7 @@ its state is the state of the element of highest rank: `contradicted` > `not_eva
 |---|---|---|---|---|
 | `sealed_content` | each name of `file_digests_sha256`; the manifest's own digest; for each `ledgers[i]`: the file inside the pack, its hash chain (§5 steps 1–4), its entry count and head equal to the manifest's | every element holds | `digest_mismatch` (a file absent, outside the pack or of another digest; the manifest digest; no file listed at all), `artifact_invalid` (a ledger that is not a file inside the pack, or whose chain fails), `binding_mismatch` (entry count or head differ from the manifest: truncation or extension) | — |
 | `producer_signature` | the manifest signature; then, for each ledger whose entries carry a signature field (any entry, §5 step 5), its signature layer, then its post-quantum layer when the manifest claims one (`pq_protected: true`) | every element verifies under a key the CALLER pinned (`manifest_signer_hex`; `signer_pubkey_hex` and, for the post-quantum layer, `pq_pubkey_b64`) | `signature_invalid` (a signature that was checked and fails: broken, malformed, a key or R of small or mixed order, an entry of a signed ledger unsigned; a post-quantum layer the manifest claims and the file does not carry, carries partly, or carries broken) | `not_present` (no manifest signature, no signed ledger), `self_asserted` (it verifies under the key it carries; nobody pinned one: draft-krausz §5.4.2(a)), `key_unresolved` (a pin was given and the signer is another key), `backend_missing` (`cryptography`, or ML-DSA-65 in it, is not available here) |
-| `time_anchor` | the `rfc3161_timestamp` block | only when the caller pins TSA certificates (v0.8, below): §11 gives `verified` for the token, the manifest digest and the pinned certificates. Without a pin never: this verifier does not check the TSA's signature (a self-issued token binds as well as a real one) | `token_missing` (`anchored: true` and no `tsr_b64`), `binding_mismatch` (an imprint was read and is another digest; with a pin also §11's `imprint_mismatch`), `token_invalid` (otherwise: not a TimeStampResp, status not granted, no imprint read; with a pin, any other refusal of §11 steps 1–6, its reason in `detail`: a signature that does not verify, a token that is not DER as §11 reads it, a hash algorithm outside §11's list) | `not_present` (no block, or `anchored: false`), `tsa_not_checked` (no pin; status granted, imprint = the manifest digest), `tsa_unresolved` (a pin was given; §11 steps 1–6 pass and step 7 refuses: the token is not established under the pinned certificates), `instrument_failure` (openssl absent, with or without a pin; openssl that cannot be started, gives no answer in time, is ended by a signal, or no temporary file: exit 74, below) |
+| `time_anchor` | the `rfc3161_timestamp` block | only when the caller pins TSA certificates (v0.8, below): §11 gives `verified` for the token, the manifest digest and the pinned certificates. Without a pin never: this verifier does not check the TSA's signature (a self-issued token binds as well as a real one) | `token_missing` (`anchored: true` and no `tsr_b64`), `binding_mismatch` (an imprint was read and is another digest; with a pin also §11's `imprint_mismatch`), `token_invalid` (otherwise: not a TimeStampResp, status not granted, no imprint read; with a pin, any other refusal of §11 steps 1–6, its reason in `detail`: a signature that does not verify, a token that is not DER as §11 reads it, a hash algorithm outside §11's list) | `not_present` (no block, or `anchored: false`), `tsa_not_checked` (no pin; status granted, imprint = the manifest digest), `tsa_unresolved` (a pin was given; §11 steps 1–6 pass and step 7 refuses: the token is not established under the pinned certificates; since v0.11 also §11's `signer_certificate_absent`), `instrument_failure` (openssl absent, with or without a pin; openssl that cannot be started, gives no answer in time, is ended by a signal, or no temporary file: exit 74, below) |
 
 **A pinned TSA (v0.8).** `verify_pack(..., tsa_certs=[...])` and `evidence_pack.py verify DIR --tsa-cert PEM` (repeatable:
 the TSA certificate or a CA above it, as in §11) check the token with §11, `verify_token(token, manifest digest, "sha256",
@@ -426,6 +431,24 @@ first that fails gives the outcome:
    against the eContent, with the certificate the SignerInfo names, looked up in the token and among the pinned
    certificates (a token requested with certReq FALSE carries none, RFC 3161 §2.4.1) (`signature_invalid` if not). The signer
    certificate's SHA-256 is returned (`signer_sha256`).
+   **Signer certificate absent (v0.11, 2026-11-18).** When openssl refuses and the certificate the SignerInfo's `sid`
+   names (RFC 5652 §5.3: issuerAndSerialNumber, the issuer compared as in step 7 and the serial as an integer; or
+   subjectKeyIdentifier, against the certificate's subjectKeyIdentifier extension, as OpenSSL looks it up: measured on
+   2026-11-18 with OpenSSL 3.0.22, a certificate without the extension cannot sign with `cms -sign -keyid`, "certificate
+   has no keyid") is neither among the token's certificates
+   nor among the pinned ones, and openssl stopped at the lookup of the signer certificate ("signer certificate not
+   found"), the signature was not evaluated, and the reason is `signer_certificate_absent`, not `signature_invalid`.
+   The absence is never presumed: a certificate, a pin, the `sid`, a Name or a certificates field that is not read here
+   (BER, another CertificateChoices, a string that does not decode) keeps `signature_invalid`, and so does a token that
+   openssl cannot parse (ETSI EN 319 102-1 V1.4.1 §5.3.4: the format check, step 1, FORMAT_FAILURE, comes before the
+   identification of the signing certificate, step 2). Until v0.11 such a token was
+   `signature_invalid`: measured on 2026-11-18 with the published wheel 0.26.0 on the RFC 3161 token of a sigstore bundle
+   (stacklok/toolhive 0.66.0, its `[0] certificates` present and empty), `verified` with the sigstore TSA chain pinned and
+   `invalid / signature_invalid` (openssl: "signer certificate not found") without it; and on freetsa.tsr of
+   spec/vectors/rfc3161 with its certificates removed (as certReq FALSE), `invalid / signature_invalid` unpinned and with
+   digicert's certificate pinned, `verified` with freetsa's. A signature never evaluated was reported as one that does
+   not verify. ETSI EN 319 102-1 V1.4.1 (2024-06) §5.2.3.3: when the signing certificate cannot be identified the output
+   is INDETERMINATE / NO_SIGNING_CERTIFICATE_FOUND.
 7. **Anchor.** With `tsa_certs` (certificates the verifier pins: the TSA certificate or a CA above it), the token is
    checked against them. How depends on how the SignerInfo names its signer (`sid`, RFC 5652 §5.3: both forms are
    allowed, the SignedData version is 3 in both):
@@ -495,7 +518,7 @@ Outcome `status`, a closed set:
 |---|---|---|
 | `verified` | steps 1–7 pass with pinned certificates | yes |
 | `signature_only` | steps 1–6 pass, nothing pinned: "signature valid with the certificate contained in the token, chain not established" | no |
-| `invalid` | a step fails; `reason` names it (`malformed`, `not_signed_data`, `response_not_granted`, `econtent_type_not_tstinfo`, `tstinfo_unknown_element`, `hash_algorithm_not_allowed`, `hash_algorithm_mismatch`, `imprint_mismatch`, `signature_invalid`, `not_issued_by_pinned_tsa`; with `crls`, v0.10: `tsa_certificate_revoked`, `tsa_revocation_unknown`), `detail` says where | no |
+| `invalid` | a step fails; `reason` names it (`malformed`, `not_signed_data`, `response_not_granted`, `econtent_type_not_tstinfo`, `tstinfo_unknown_element`, `hash_algorithm_not_allowed`, `hash_algorithm_mismatch`, `imprint_mismatch`, `signature_invalid`, `signer_certificate_absent` (v0.11), `not_issued_by_pinned_tsa`; with `crls`, v0.10: `tsa_certificate_revoked`, `tsa_revocation_unknown`), `detail` says where | no |
 | `not_evaluated` | steps 1–5 pass and openssl is absent; or, with `crls` (v0.10), `cryptography` is absent (`crl_backend_missing`) | no |
 
 openssl present that cannot start, does not answer in time or is ended by a signal is a check not run here
@@ -505,7 +528,11 @@ hashed message, serial number, `gen_time` as ISO 8601 UTC, nonce) whenever steps
 **What a refusal shows (v0.8).** ETSI EN 319 102-1 V1.4.1 (2024-06) validates a time-stamp token as a signature (§5.4)
 and names the outcomes in §5.1.3, Table 6. A refusal at steps 1–4 or 6 shows that the token is not a valid signed
 timestamp: TOTAL-FAILED (FORMAT_FAILURE for a token that cannot be processed; SIG_CRYPTO_FAILURE for the signature;
-HASH_FAILURE for the messageDigest attribute). A refusal at step 5 shows that the token is not a timestamp of the digest
+HASH_FAILURE for the messageDigest attribute), except `signer_certificate_absent` (v0.11): the signature was not
+evaluated, INDETERMINATE / NO_SIGNING_CERTIFICATE_FOUND (§5.2.3.3), read as step 7's refusal is (the evidence pack
+reports it `not_evaluated / tsa_unresolved`, §10; the ingest's verify `tsa_token_signer_certificate_absent`; the report
+shows the signature as not checked; `eidas_ledger_check.py` counts it among the invalid tokens, as it counts step 7).
+The status stays `invalid`: such a token does not count as a timestamp. A refusal at step 5 shows that the token is not a timestamp of the digest
 the caller expects; ETSI answers a content time-stamp over other data INDETERMINATE / SIG_CONSTRAINTS_FAILURE
 (§5.2.8.4.2.5), and the callers of this repository that hold a claim of that digest (the pack's `binding_mismatch`, §10,
 since v0.5) treat it as a contradiction of the claim: a deliberate difference. A refusal at step 7,

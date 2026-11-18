@@ -196,7 +196,10 @@ class SignerByKeyId(unittest.TestCase):
                      [self.other.j("ca.crt"), self.other.j("tsa.crt")]):
             v = self.check(forged, pins)
             self.assertEqual(v["status"], "invalid", (pins, v))
-            self.assertIn(v["reason"], ("signature_invalid", "not_issued_by_pinned_tsa"), v)
+            # SPEC v0.11 §11 step 6: with no certificate of that key identifier in the token or the pins, the signature is
+            # not evaluated (`signer_certificate_absent`; `signature_invalid` until 0.26.0)
+            want = ("signer_certificate_absent",) if pins == [self.lab.j("ca.crt")] else ("signature_invalid", "not_issued_by_pinned_tsa")
+            self.assertIn(v["reason"], want, v)
 
     def test_another_tsa_key(self):
         v = self.check(self.other.resign(self.tok))   # signed by b's TSA, a's CA pinned

@@ -7,6 +7,31 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
+## Unreleased (0.26.1): a reason changes
+
+### Fixed
+
+- **A token without its signer certificate was "signature invalid"** (SPEC v0.11 §11 step 6, written before the code).
+  `cryptovalid_tsa.verify_token` answered `invalid / signature_invalid` for a token whose signer certificate is neither
+  in the token nor among the pinned certificates (a token requested with certReq FALSE, RFC 3161 §2.4.1): openssl never
+  evaluated the signature ("signer certificate not found"). Measured on 2026-11-18 with the published wheel 0.26.0
+  (sha256 32301998…8de4f) on the RFC 3161 token of a sigstore bundle (stacklok/toolhive 0.66.0
+  `linux_amd64.tar.gz.sigstore.json`, its `[0] certificates` present and empty): `signature_invalid` without a pin,
+  `verified` with the TSA chain of sigstore's trusted_root.json; and on the tokens of spec/vectors/rfc3161 with their
+  certificates removed. The reason is now `signer_certificate_absent` (the status stays `invalid`: it does not count as a
+  timestamp; ETSI EN 319 102-1 V1.4.1 §5.2.3.3, INDETERMINATE / NO_SIGNING_CERTIFICATE_FOUND). The absence is read from
+  the SignerInfo's `sid` and every certificate in the token and pinned, and openssl must have stopped at the lookup of
+  the signer certificate; anything not read, and a token openssl cannot parse, keeps `signature_invalid`.
+  Verdicts that change: the evidence pack with a pin of another TSA said `time_anchor` `contradicted / token_invalid` for
+  such a token, now `not_evaluated / tsa_unresolved`; the ingest's verify names it `tsa_token_signer_certificate_absent`
+  (was `tsa_token_cms_invalid`); the report shows "IMPRINT BOUND, SIGNATURE NOT CHECKED" (was "TOKEN INVALID"). Every
+  token that carries its signer certificate, or whose signer is pinned, has the outcome of 0.26.0
+  (`test_tsa_signer_absent_20261118.py`: 7 vectors of spec/vectors/rfc3161 and 3 tokens made here — issuerAndSerialNumber,
+  subjectKeyIdentifier, a written subjectKeyIdentifier — x certificates kept/removed x no pin/own/other x intact/altered
+  signature, the shapes of the certificates field, a token openssl cannot parse and an issuer Name that does not decode;
+  on 0.26.0, 45 of its cases fail and 84 are errors, the function they call being new; each of the four lookups of
+  the new function, removed alone, turns it red).
+
 ## 0.26.0 (2026-11-17): verdicts change
 
 ### Added

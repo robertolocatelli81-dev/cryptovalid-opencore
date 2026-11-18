@@ -41,7 +41,7 @@ V = os.path.join(HERE, "spec", "vectors", "rfc3161")
 OPENSSL = shutil.which("openssl")
 CLOSED = {"malformed", "not_signed_data", "response_not_granted", "econtent_type_not_tstinfo", "tstinfo_unknown_element",
           "hash_algorithm_not_allowed", "hash_algorithm_mismatch", "imprint_mismatch", "signature_invalid",
-          "not_issued_by_pinned_tsa"}
+          "not_issued_by_pinned_tsa", "signer_certificate_absent"}   # the last: SPEC v0.11 §11 step 6
 REAL = ("freetsa", "digicert", "sectigo", "globalsign")
 
 
