@@ -111,8 +111,8 @@ def check_deadlines(phases: List[Phase]) -> Dict:
     base = _find(phases, "classified_major")
     if base is None:
         return {"applicable": False,
-                "note": "nessuna classificazione 'classified_major' → il timer DORA non parte "
-                        "(incident non-major o classificazione mancante)"}
+                "note": "no 'classified_major' classification: the DORA timer does not start "
+                        "(a non-major incident or a missing classification)"}
     t0 = _parse(base.ts)
     checks = {}
 

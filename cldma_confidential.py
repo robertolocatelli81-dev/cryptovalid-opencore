@@ -78,7 +78,7 @@ except ImportError:  # importato come opencore.*
 def _merkle_root(leaf_hashes: List[str]) -> str:
     """Radice Merkle hash-only (PQ-safe) sui leaf_hash. Nodo dispari promosso (come CLDMA)."""
     if not leaf_hashes:
-        raise ValueError("nessuna foglia")
+        raise ValueError("no leaf")
     cur = list(leaf_hashes)
     while len(cur) > 1:
         nxt = []
@@ -113,7 +113,7 @@ def build_confidential(records: List[Dict], master_salt: str, spec: "_C.MetricSp
     for i, rec in enumerate(records):
         num, den = spec.num_of(rec), spec.den_of(rec)
         if num < 0 or den < 0:
-            raise ValueError(f"contributo negativo al record {i}")
+            raise ValueError(f"negative contribution in record {i}")
         salt = _C.leaf_salt(master_salt, i)
         record_commit = _C._h(_C._enc("commit", salt, _C.canonical_record(rec)))
         c_num, r_num = _P.commit(num)
@@ -142,14 +142,14 @@ def verify_confidential(att: Dict) -> Dict:
     reasons: List[str] = []
     leaves = att.get("leaves", [])
     if not leaves:
-        return {"ok": False, "reasons": ["nessuna foglia"]}
+        return {"ok": False, "reasons": ["no leaf"]}
     if len(leaves) != att.get("n_records"):
-        reasons.append(f"n_records dichiarato ({att.get('n_records')}) != foglie ({len(leaves)})")
+        reasons.append(f"declared n_records ({att.get('n_records')}) != leaves ({len(leaves)})")
     lh = [_leaf_hash(i, l["record_commit"], l["c_num"], l["c_den"]) for i, l in enumerate(leaves)]
     root = _bound_root(_merkle_root(lh), att["metric_id"], att["as_of"], len(leaves))
     if root != att["root"]:
-        reasons.append("radice non combacia (foglie/impegni/ordine/metadati manomessi). NB: la radice va "
-                       "ANCORATA ESTERNAMENTE per contare la completezza/troncamento")
+        reasons.append("root does not match (leaves/commitments/order/metadata tampered with). NB: the root must be "
+                       "ANCHORED EXTERNALLY for completeness/truncation to count")
     if _P.add(*[l["c_num"] for l in leaves]) != att["C_num_total"]:
         reasons.append("somma omomorfica numeratore != C_num_total")
     if _P.add(*[l["c_den"] for l in leaves]) != att["C_den_total"]:
@@ -176,13 +176,13 @@ def verify_total_opening(att: Dict, opening: Dict) -> Dict:
     reasons: List[str] = []
     vc = verify_confidential(att)
     if not vc["ok"]:
-        return {"ok": False, "reasons": ["attestazione non coerente: " + "; ".join(vc["reasons"])]}
+        return {"ok": False, "reasons": ["attestation not consistent: " + "; ".join(vc["reasons"])]}
     C_num = _P.add(*[l["c_num"] for l in att["leaves"]])   # ricomputato dalle foglie legate alla radice
     C_den = _P.add(*[l["c_den"] for l in att["leaves"]])
     if not _P.open_commit(C_num, opening["num_total"], opening["r_num_total"]):
-        reasons.append("C_num_total (ricomputato dalle foglie) non apre al num_total dichiarato")
+        reasons.append("C_num_total (recomputed from the leaves) does not open to the declared num_total")
     if not _P.open_commit(C_den, opening["den_total"], opening["r_den_total"]):
-        reasons.append("C_den_total (ricomputato dalle foglie) non apre al den_total dichiarato")
+        reasons.append("C_den_total (recomputed from the leaves) does not open to the declared den_total")
     if att.get("num_le_den") and not reasons and opening["num_total"] > opening["den_total"]:
         reasons.append(f"ratio IMPOSSIBILE: num_total {opening['num_total']} > den_total {opening['den_total']}")
     ratio = None
@@ -218,17 +218,17 @@ def verify_challenged(att: Dict, opened: List[Dict]) -> Dict:
     l'overflow. Se una foglia barata e' campionata, FALLISCE. Honest-scope: detection PROBABILISTICA."""
     reasons: List[str] = []
     if not opened:
-        return {"ok": False, "reasons": ["nessuna foglia aperta (challenge vuoto) = assurance nulla"]}
+        return {"ok": False, "reasons": ["no leaf opened (empty challenge): no assurance"]}
     for o in opened:
         i = o["index"]
         leaf = att["leaves"][i]
         if not _P.open_commit(leaf["c_num"], o["num"], o["r_num"]):
-            reasons.append(f"foglia {i}: c_num non apre al valore dichiarato")
+            reasons.append(f"leaf {i}: c_num does not open to the declared value")
         if not _P.open_commit(leaf["c_den"], o["den"], o["r_den"]):
-            reasons.append(f"foglia {i}: c_den non apre al valore dichiarato")
+            reasons.append(f"leaf {i}: c_den does not open to the declared value")
         if not (0 <= o["num"] <= o["den"] <= MAX_SANE):
-            reasons.append(f"foglia {i}: FUORI RANGE (num={o['num']}, den={o['den']}) -> contributo "
-                           f"negativo/overflow (attacco -k) o valore assurdo")
+            reasons.append(f"leaf {i}: OUT OF RANGE (num={o['num']}, den={o['den']}) -> negative or "
+                           f"overflowing contribution (the -k attack) or an absurd value")
     return {"ok": not reasons, "reasons": reasons, "n_checked": len(opened)}
 
 

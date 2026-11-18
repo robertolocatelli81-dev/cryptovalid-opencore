@@ -131,7 +131,7 @@ def h_provenance() -> dict:
     """Provenienza dei parametri (verificabile da terzi): come e' derivato h (no trapdoor nascosta)."""
     return {"group": "RFC3526-MODP-2048-group14", "g": G,
             "h_seed": "OMEGA-CLDMA-Pedersen-h/RFC3526-group14/v1",
-            "h": hex(H), "note": "h = (H(seed))^2 mod p; log_g(h) ignoto per costruzione (NUMS)"}
+            "h": hex(H), "note": "h = (H(seed))^2 mod p; log_g(h) unknown by construction (NUMS)"}
 
 
 def _demo() -> int:

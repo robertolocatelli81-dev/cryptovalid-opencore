@@ -135,7 +135,7 @@ def attest_portfolio(p: LoanPortfolio, tol_abs: str = "1", tol_rel: str = "0") -
         "total_disbursed": str(dis), "total_outstanding": str(out),
         "par30": portfolio_at_risk(p, 30), "par90": portfolio_at_risk(p, 90),
         "digest": portfolio_digest(p),
-        "attests": "coerenza interna del portafoglio + no-PII; NON che i prestiti esistano o siano ben concessi",
+        "attests": "internal consistency of the portfolio + no PII; NOT that the loans exist or were properly granted",
     }
 
 

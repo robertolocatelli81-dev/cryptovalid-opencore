@@ -155,14 +155,14 @@ def build_leaves(records: List[Dict], master_salt: str, spec: MetricSpec) -> Lis
         num = spec.num_of(rec)
         den = spec.den_of(rec)
         if num < 0 or den < 0:
-            raise ValueError(f"contributo negativo al record {i}: num={num} den={den} (Maxwell richiede non-negativi)")
+            raise ValueError(f"negative contribution in record {i}: num={num} den={den} (Maxwell needs non-negative values)")
         leaves.append(leaf_node(rec, leaf_salt(master_salt, i), num, den))
     return leaves
 
 
 def _levels(leaves: List[Dict]) -> List[List[Dict]]:
     if not leaves:
-        raise ValueError("ledger vuoto")
+        raise ValueError("empty ledger")
     levels = [leaves]
     cur = leaves
     while len(cur) > 1:
@@ -290,7 +290,7 @@ def verify_metric_consistency(att: Dict, num_le_den: Optional[bool] = None) -> D
     if not repro_ok:
         reasons.append("numerical_hash non deterministico (impossibile: bug)")
     if not match_ok:
-        reasons.append("numerical_hash dichiarato != ricalcolato (totali/spec alterati dopo il calcolo)")
+        reasons.append("declared numerical_hash != recomputed (totals or spec changed after the computation)")
 
     # 2) invariante di dominio della metrica: il verificatore decide se e' limitata
     if num_le_den is None:
@@ -304,8 +304,8 @@ def verify_metric_consistency(att: Dict, num_le_den: Optional[bool] = None) -> D
         bound_ok = (num <= den)
         checks["num_le_den"] = bound_ok
         if not bound_ok:
-            reasons.append(f"ratio IMPOSSIBILE per metrica limitata: num_total={num} > den_total={den} "
-                           f"(> 100%): buco che verify_attestation da solo NON coglie")
+            reasons.append(f"IMPOSSIBLE ratio for a bounded metric: num_total={num} > den_total={den} "
+                           f"(> 100%): a hole verify_attestation alone does NOT catch")
     ratio_bound_ok = True
     if num_le_den and nonneg_ok and den not in (0, None):
         ratio_bound_ok = (Decimal(num) / Decimal(den)) <= Decimal(1)
@@ -374,7 +374,7 @@ def verify_open(c: Commitment, spec: MetricSpec, opened: List[Dict]) -> Dict:
     results = []
     # E3 (NEMESIS): un insieme di apertura VUOTO non deve dare assurance (passaggio vacuo).
     if not opened:
-        return {"all_ok": False, "leaves": [], "error": "nessun record aperto (challenge vuoto) — assurance nulla"}
+        return {"all_ok": False, "leaves": [], "error": "no record opened (empty challenge): no assurance"}
     ok_all = True
     for o in opened:
         rec, salt = o["record"], o["salt"]

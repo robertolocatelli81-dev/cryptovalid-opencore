@@ -99,8 +99,8 @@ def run(ledger_path: str, state_path: str, keyfile: Optional[str] = None, max_si
         was (reported, not an alert).
       * NONE (no key): the state is trusted blindly — declared limit."""
     alerts: List[str] = []
-    stato_auth = ("auditor senza chiave privata: stato non firmabile (limite dichiarato)" if (trusted_pubkey_hex and not keyfile)
-                  else "firmato con la log key" if keyfile else "non autenticato (nessuna chiave: limite dichiarato)")
+    stato_auth = ("auditor without a private key: the state cannot be signed (declared limit)" if (trusted_pubkey_hex and not keyfile)
+                  else "signed with the log key" if keyfile else "not authenticated (no key: declared limit)")
     import cryptovalid_receipt as R
     snap = V.verify_ledger(ledger_path)
     if snap.get("verdict") != "PASS":   # 0.20.0 review: hash+link alone let a ledger without idx / with an unknown key through
@@ -124,17 +124,17 @@ def run(ledger_path: str, state_path: str, keyfile: Optional[str] = None, max_si
                 # Writer: poteva firmare e non l'ha fatto. Auditor: non scrive MAI uno stato non firmato (round 3),
                 # quindi uno stato senza STH sotto una chiave fidata può venire solo da altri → alert in entrambi i casi.
                 alerts.append("STATE UNSIGNED: baseline without a signed tree head under a trusted log key")
-                stato_auth = "stato senza STH firmato"
+                stato_auth = "state without a signed STH"
             else:
                 v = R.verify_sth(sth, pk_trusted)
                 if not v.get("ok"):
                     alerts.append(f"STATE TAMPERED: saved tree head signature invalid ({v.get('why')})")
-                    stato_auth = "STH dello stato NON valido"
+                    stato_auth = "the state's STH is NOT valid"
                 elif int(sth["tree_size"]) != int(prev["tree_size"]) or sth["root_sha256"] != prev["root_sha256"]:
                     alerts.append("STATE TAMPERED: top-level size/root differ from the signed tree head")
-                    stato_auth = "stato incoerente con lo STH firmato"
+                    stato_auth = "state inconsistent with the signed STH"
                 else:
-                    stato_auth = "STH dello stato verificato contro la chiave fidata"
+                    stato_auth = "the state's STH verified under the trusted key"
         n1, root1 = int(prev["tree_size"]), prev["root_sha256"]
         if n2 < n1:
             alerts.append(f"TRUNCATION: tree size {n1} → {n2}")
@@ -208,8 +208,8 @@ def run(ledger_path: str, state_path: str, keyfile: Optional[str] = None, max_si
                 state.update({"sth": prev["sth"], "log_pubkey_hex": prev.get("log_pubkey_hex")})   # unchanged tree: keep the signed head
             else:
                 scrivi = False
-                verdict["baseline_non_avanzata"] = ("auditor: nessuno STH firmato per l'albero corrente (passare --sth-file "
-                                                    "pubblicato dal writer); la baseline resta quella precedente")
+                verdict["baseline_non_avanzata"] = ("auditor: no signed STH for the current tree (pass the --sth-file "
+                                                    "the writer published); the baseline stays the previous one")
         if scrivi:
             write_output(state_path, json.dumps(state, indent=1))   # 0.20.3: whole (temporary + fsync + rename), or exit 74
             verdict["state_written"] = state_path

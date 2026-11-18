@@ -11,6 +11,22 @@ run by the same author, not by a third party.
 
 ### Fixed
 
+- **Messages in Italian in an English package.** `cryptovalid_receipt.cbor_decode` said "CBOR: byte in eccesso" for
+  too much data (now "CBOR: trailing bytes"), and other messages for people were in Italian: the reasons, notes and
+  errors of `cldma_confidential`, `committed_attestation`, `cryptovalid_heterogeneous`, `cryptovalid_jws`,
+  `cryptovalid_monitor`, `cryptovalid_qeas`, `cryptovalid_reanchor`, `cryptovalid_receipt`, `cryptovalid_worm`,
+  `dora_incident`, `eidas_ledger_check`, `fundcert_canonical`, `fundcert_crosssource`, `microfinance`,
+  `pedersen_commit`, `signer` and `verify_evidence`, and two help texts of `cryptovalid_ingest`. Found by reading every
+  string literal of the 46 packaged modules and of the `cryptovalid` package for Italian words (101 replacements,
+  some of a message written over two lines, in 18 files); API.md: the wording of
+  messages is not part of the API. Not changed, because they are keys or values of a closed vocabulary that a program
+  may read (API.md §3: renamed only after the deprecation period): the witness's and checkpoint commands' `stato`,
+  `motivo`, `tipo` and the value `ERRORE`, the keys and states of `eidas_ledger_check` (`stato`,
+  `DICHIARATO_NON_VERIFICATO`, ...), the layer names of `verify_evidence` ("manifest autenticato (Ed25519)", ...) and
+  `cryptovalid_monitor`'s `baseline_non_avanzata`. Docstrings and comments in Italian (141 docstrings in 29 modules)
+  are not changed here. Four tests that matched the old wording now match the new one ("OUT OF RANGE",
+  "trailing bytes", "chain not established", "NOT DEMONSTRATED").
+
 - **A missing `cryptography` was reported as a malformed input** (rule first in each module's docstring, "Backend").
   Measured on 2026-11-18 on the wheel 0.26.0 installed without the `[sign]` extra: `cryptovalid_cose_receipts.
   verify_statement` answered a valid Signed Statement `MALFORMED_STATEMENT | ModuleNotFoundError: No module named

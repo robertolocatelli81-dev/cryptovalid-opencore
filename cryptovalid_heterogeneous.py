@@ -92,14 +92,14 @@ def verify_heterogeneous_anchor(expected_sha3_hex: str, attestations: List[Dict]
         seen_domains.add(dom)
         vfn = vmap.get(dom)
         if vfn is None:
-            per_domain.append({"domain": dom, "ok": False, "note": "dominio sconosciuto"})
+            per_domain.append({"domain": dom, "ok": False, "note": "unknown domain"})
             continue
         try:
             ok = bool(vfn(att, expected_sha3_hex))
         except CheckNotRun:           # the check cannot be RUN here (0.20.3): exit 74, never a domain that failed
             raise
         except Exception as e:        # noqa: BLE001 — un dominio che erra non deve rompere gli altri
-            per_domain.append({"domain": dom, "ok": False, "note": f"errore: {str(e).splitlines()[0][:80]}"})
+            per_domain.append({"domain": dom, "ok": False, "note": f"error: {str(e).splitlines()[0][:80]}"})
             continue
         per_domain.append({"domain": dom, "ok": ok, "note": ""})
         if ok:
@@ -114,9 +114,9 @@ def verify_heterogeneous_anchor(expected_sha3_hex: str, attestations: List[Dict]
         "verified_domains": sorted(verified_domains),
         "distinct_domains_attempted": len(seen_domains),
         "per_domain": per_domain,
-        "honest_scope": ("prova l'attestazione su ≥N sistemi di fiducia INDIPENDENTI (un attacco a un "
-                         "dominio non tocca l'altro); repliche dello stesso dominio contano UNA. NON prova "
-                         "la veridicità del contenuto (confine W1)."),
+        "honest_scope": ("proves the attestation on >=N INDEPENDENT trust systems (an attack on one "
+                         "domain does not reach another); replicas in the same domain count as ONE. It does NOT prove "
+                         "that the content is true (boundary W1)."),
     }
 
 

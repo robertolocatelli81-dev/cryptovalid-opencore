@@ -95,7 +95,7 @@ def _canon_quantity(raw) -> str:
     try:
         d = Decimal(str(raw).strip().replace(",", ""))
     except (InvalidOperation, AttributeError):
-        raise ValueError(f"quantità non numerica: {raw!r}")
+        raise ValueError(f"quantity not numeric: {raw!r}")
     if d == d.to_integral_value():
         # BUG-FIX (trovato su SPY reale 18/08): str(to_integral_value()) preserva l'esponente su interi in
         # notazione scientifica ('1.275099E7' → '1.275099E+7'), rompendo il determinismo. format(...,'f')
@@ -577,8 +577,8 @@ def _safe_fromstring(data):
                 else data[:4096])
         low = head.lower()
         if "<!doctype" in low or "<!entity" in low:
-            raise ValueError("XML con DOCTYPE/ENTITY rifiutato (rischio XML-bomb/XXE; "
-                             "per parsarlo installare defusedxml)")
+            raise ValueError("XML with DOCTYPE/ENTITY refused (XML-bomb/XXE risk; "
+                             "install defusedxml to parse it)")
         return ET.fromstring(data)  # nosec B314 - DOCTYPE/ENTITY già rifiutati sopra
 
 
@@ -764,7 +764,7 @@ def parse_ncsr_soi(html_text: str, fund_name: str) -> Holdings:
     secs = _ncsr_soi_sections(html_text)
     starts = [off for (nm, off) in secs if nm == fund_name]
     if not starts:
-        raise ValueError(f"sezione SOI non trovata: {fund_name!r} (disponibili: {sorted({n for n, _ in secs})})")
+        raise ValueError(f"SOI section not found: {fund_name!r} (available: {sorted({n for n, _ in secs})})")
     start = starts[0]
     later = [off for (_, off) in secs if off > start]
     sa = html_text.find("Statement of Assets", start)

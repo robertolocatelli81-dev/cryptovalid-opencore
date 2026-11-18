@@ -75,7 +75,7 @@ def sign_entry(entry: Dict, keyfile: str, x5c: Optional[List[str]] = None) -> st
     header = {"alg": "EdDSA", "typ": "JOSE", "kid": pk, "cty": "application/cryptovalid-record+json"}
     if x5c:
         if not isinstance(x5c, list) or not all(isinstance(c, str) for c in x5c):
-            raise ValueError("x5c: lista di certificati DER in base64")
+            raise ValueError("x5c: a list of base64 DER certificates")
         for c in x5c:
             base64.b64decode(c, validate=True)     # must be standard base64 (RFC 7515 §4.1.6), not base64url
         header["x5c"] = x5c
@@ -112,17 +112,17 @@ def verify(jws: str, trusted_pubkey_hex: Optional[str] = None) -> Dict:
                 return {"ok": False, "why": "crit_unsupported:"
                         + ",".join(unsupported)[:120].encode("ascii", "backslashreplace").decode("ascii")}
         if header.get("alg") != "EdDSA":
-            return {"ok": False, "why": f"alg non supportato: {header.get('alg')!r}"}
+            return {"ok": False, "why": f"alg not supported: {header.get('alg')!r}"}
         kid = header.get("kid")
         pk = trusted_pubkey_hex or kid
         if trusted_pubkey_hex and kid != trusted_pubkey_hex:
-            return {"ok": False, "why": "kid diverso dalla chiave fidata"}
+            return {"ok": False, "why": "kid differs from the trusted key"}
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(pk)).verify(_b64u_dec(s), f"{h}.{p}".encode("ascii"))
         payload = json.loads(_b64u_dec(p))
         return {"ok": bool(trusted_pubkey_hex), "signature_valid": True, "header": header, "record": payload,
                 "x5c_present": "x5c" in header,
-                "why": ("firma valida contro la chiave fidata" if trusted_pubkey_hex else
-                        "firma valida ma chiave presa dall'header: NON fidata (passare trusted_pubkey_hex)")}
+                "why": ("signature valid under the trusted key" if trusted_pubkey_hex else
+                        "signature valid, but the key was taken from the header: NOT trusted (pass trusted_pubkey_hex)")}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "signature_valid": False, "why": f"{type(e).__name__}"}
 

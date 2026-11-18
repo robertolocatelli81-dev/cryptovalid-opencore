@@ -61,7 +61,7 @@ def pack_digest(pack_dir: str) -> str:
         man = json.load(f)
     d = man.get("manifest_digest_sha256")
     if not d:
-        raise ValueError("MANIFEST.json senza manifest_digest_sha256")
+        raise ValueError("MANIFEST.json without manifest_digest_sha256")
     return d
 
 

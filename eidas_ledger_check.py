@@ -128,7 +128,7 @@ def assess(ledger_path: str, deployment: Optional[Dict] = None, tsa_certs=None) 
             import signer as SG
             firme_valide = SG.verify_ledger_signatures(entries)
         except Exception as ex:  # noqa: BLE001 — senza cryptography: firme presenti ma NON verificate qui
-            firme_valide = {"verified": None, "note": f"non verificate: {type(ex).__name__}"}
+            firme_valide = {"verified": None, "note": f"not verified: {type(ex).__name__}"}
     tok = _tsa_outcomes(entries, tsa_certs)
     present, stamped = tok["present"], tok["verified"]
     algo = snap.get("algorithm_used")
@@ -141,55 +141,55 @@ def assess(ledger_path: str, deployment: Optional[Dict] = None, tsa_certs=None) 
         req.append({"req": rid, "titolo": titolo, "stato": stato, "misura": misura, **({"cosa_manca": cosa_manca} if cosa_manca else {})})
 
     # REQ-7.5-04 chronological ordering via cryptographic links
-    add("REQ-7.5-04", "ordinamento cronologico sequenziale unico via link crittografici (hash list / hash tree, SHA-256/SHA3-256+)",
+    add("REQ-7.5-04", "one sequential chronological ordering through cryptographic links (hash list / hash tree, SHA-256/SHA3-256+)",
         "SODDISFATTO_PER_COSTRUZIONE" if chain_ok and algo in ("sha256", "sha3_256") else "NON_SODDISFATTO",
-        {"hash_list": "prev_hash → self_hash su ogni record", "hash_tree": "RFC 6962/9162 Merkle (cryptovalid_merkle)",
+        {"hash_list": "prev_hash -> self_hash on every record", "hash_tree": "RFC 6962/9162 Merkle (cryptovalid_merkle)",
          "algoritmo": algo, "catena_verificata": chain_ok, "idx_sequenziale": snap.get("idx_monotonic"),
          "ts_monotoni": snap.get("ts_monotonic"), "record": n})
     # REQ-7.5-05 integrity + immediate detectability
     if signed == n and n > 0:
         # un booleano dichiarato dal fornitore NON è una verifica (council 13/09): stato «DICHIARATO», mai «SODDISFATTO»
         stato = "DICHIARATO_NON_VERIFICATO" if d["qualified_certificates"] else "PARZIALE"
-        manca = ("i certificati qualificati sono DICHIARATI dal fornitore, non ispezionati qui (QcStatements, EUTL): li verifica "
-                 "l'organismo di valutazione" if d["qualified_certificates"] else
-                 "firme Ed25519 su chiave del produttore: NON su certificato qualificato (serve AdES/QES)")
+        manca = ("the qualified certificates are DECLARED by the provider, not inspected here (QcStatements, EUTL): the "
+                 "conformity assessment body checks them" if d["qualified_certificates"] else
+                 "Ed25519 signatures under the producer's key: NOT on a qualified certificate (AdES/QES needed)")
     else:
-        stato, manca = "NON_SODDISFATTO", f"record firmati {signed}/{n}: firmare ogni record (signer.py) con certificato qualificato"
-    add("REQ-7.5-05", "integrità dei record con firme/sigilli avanzati su certificati qualificati; rilevabilità IMMEDIATA di ogni modifica",
+        stato, manca = "NON_SODDISFATTO", f"records signed {signed}/{n}: sign every record (signer.py) with a qualified certificate"
+    add("REQ-7.5-05", "integrity of the records with advanced signatures/seals on qualified certificates; IMMEDIATE detection of any change",
         stato, {"record_firmati": signed, "totale": n, "firme_verificate": firme_valide,
-                "rilevabilita_immediata": ("del CONTENUTO: verifier ricalcola ogni self_hash e ogni anello, una modifica al contenuto è FAIL al "
-                                           "primo controllo; dei campi di attestazione (signer/signature, fuori dal canonico) solo con "
-                                           "signer.verify_ledger_signatures — qui eseguita se ci sono firme"),
+                "rilevabilita_immediata": ("of the CONTENT: verifier recomputes every self_hash and every link, a change to the content is FAIL at the "
+                                           "first check; of the attestation fields (signer/signature, outside the canonical form) only with "
+                                           "signer.verify_ledger_signatures, run here when there are signatures"),
                 "certificati_qualificati_dichiarati": d["qualified_certificates"]}, manca)
     # REQ-7.5-03 data origin by the users with AdES on qualified certificates
-    add("REQ-7.5-03", "origine dei dati: firme/sigilli avanzati su certificati qualificati creati dagli UTENTI (CAdES/XAdES/JAdES con x5c)",
+    add("REQ-7.5-03", "data origin: advanced signatures/seals on qualified certificates created by the USERS (CAdES/XAdES/JAdES with x5c)",
         "DICHIARATO_NON_VERIFICATO" if (signed == n and n > 0 and d["qualified_certificates"]) else "PARZIALE" if signed else "NON_SODDISFATTO",
-        {"record_firmati_dal_produttore": signed, "formato": "Ed25519 su self_hash (+ JWS EdDSA via cryptovalid_jws, con x5c se fornito)"},
-        None if d["qualified_certificates"] and signed == n else "firma per-utente su certificato qualificato in formato JAdES (x5c presente): cryptovalid_jws produce il contenitore JWS, il certificato qualificato lo porta l'utente")
+        {"record_firmati_dal_produttore": signed, "formato": "Ed25519 over self_hash (+ JWS EdDSA through cryptovalid_jws, with x5c when given)"},
+        None if d["qualified_certificates"] and signed == n else "a per-user signature on a qualified certificate in JAdES form (x5c present): cryptovalid_jws makes the JWS container, the user brings the qualified certificate")
     # REQ-7.5-04 alternative: qualified timestamps if time recording is used
     manca_tsa = None
     if stamped and not d["qtsp_timestamps"]:
-        manca_tsa = "i token RFC 3161 presenti provengono da una TSA non dichiarata qualificata"
+        manca_tsa = "the RFC 3161 tokens present come from a TSA not declared qualified"
     elif tok["signature_only"] and not stamped:
-        manca_tsa = (f"{tok['signature_only']} token con firma valida col certificato contenuto nel token, catena non "
-                     "stabilita: fissare il certificato della TSA (--tsa-cert) per contarli")
-    add("REQ-7.5-04-bis", "se l'ordine cronologico si affida al tempo registrato: marche temporali QUALIFICATE",
+        manca_tsa = (f"{tok['signature_only']} tokens whose signature is valid with the certificate in the token, chain not "
+                     "established: pin the TSA certificate (--tsa-cert) to count them")
+    add("REQ-7.5-04-bis", "when the chronological order relies on the recorded time: QUALIFIED time stamps",
         "DICHIARATO_NON_VERIFICATO" if d["qtsp_timestamps"] and stamped else "PARZIALE" if stamped else "NON_APPLICABILE",
         {"record_con_token_rfc3161": stamped, "record_con_campo_tsa_token": present, "qtsp_dichiarato": d["qtsp_timestamps"],
          "record_con_token_firma_senza_catena": tok["signature_only"], "record_con_token_non_valutato": tok["not_evaluated"],
          "record_con_token_non_valido": tok["invalid"], "certificato_tsa_fissato": bool(tsa_certs),
-         "nota": "l'ordine qui è garantito dai link crittografici (REQ-7.5-04); il tempo è evidenza aggiuntiva; un token conta "
-                 "solo se verificato contro il certificato della TSA fissato (--tsa-cert; SPEC §11)"},
+         "nota": "the order here is given by the cryptographic links (REQ-7.5-04); the time is additional evidence; a token counts "
+                 "only when verified under the pinned TSA certificate (--tsa-cert; SPEC §11)"},
         manca_tsa)
     # REQ-7.5-06 device
     dev = d["signing_device"]
-    add("REQ-7.5-06", "chiavi private di firma del fornitore in dispositivo crittografico sicuro certificato (CC EAL4+/EUCC; FIPS 140-3 L3 fino al 31.12.2030)",
+    add("REQ-7.5-06", "the provider's private signing keys in a certified secure cryptographic device (CC EAL4+/EUCC; FIPS 140-3 L3 until 31.12.2030)",
         "DICHIARATO_NON_VERIFICATO" if dev in ("CC-EAL4", "EUCC", "FIPS140-3-L3") else "NON_VALUTABILE" if dev == "unknown" else "NON_SODDISFATTO",
-        {"dispositivo_dichiarato": dev, "supporto_codice": "cryptovalid_kms: backend KMS/HSM (PKCS#11) — la certificazione è del dispositivo, non del codice"},
-        None if dev in ("CC-EAL4", "EUCC", "FIPS140-3-L3") else "dichiarare/adottare un HSM certificato; la chiave su file (signer.py) NON soddisfa il requisito")
-    add("Art.45l(a)", "fornitore = prestatore di servizi fiduciari QUALIFICATO (status legale, vigilanza, audit di conformità)",
+        {"dispositivo_dichiarato": dev, "supporto_codice": "cryptovalid_kms: KMS/HSM backend (PKCS#11); the certification is the device's, not the code's"},
+        None if dev in ("CC-EAL4", "EUCC", "FIPS140-3-L3") else "declare/adopt a certified HSM; the key in a file (signer.py) does NOT meet the requirement")
+    add("Art.45l(a)", "provider = QUALIFIED trust service provider (legal status, supervision, conformity audit)",
         "DICHIARATO_NON_VERIFICATO" if d["provider_is_qtsp"] else "FUORI_PORTATA_DEL_CODICE",
-        {"provider_is_qtsp_dichiarato": d["provider_is_qtsp"]}, "uno status giuridico: nessun software lo conferisce né lo verifica")
+        {"provider_is_qtsp_dichiarato": d["provider_is_qtsp"]}, "a legal status: no software grants it or checks it")
     stati = [r["stato"] for r in req]
     return {"kind": "eidas_ledger_self_assessment/1", "generato_il": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "ledger": os.path.abspath(ledger_path), "fonti": FONTI, "requisiti": req,
@@ -198,10 +198,10 @@ def assess(ledger_path: str, deployment: Optional[Dict] = None, tsa_certs=None) 
                           "parziali": stati.count("PARZIALE"), "non_soddisfatti": stati.count("NON_SODDISFATTO"),
                           "non_valutabili": stati.count("NON_VALUTABILE") + stati.count("NON_APPLICABILE"),
                           "fuori_portata": stati.count("FUORI_PORTATA_DEL_CODICE")},
-            "verdetto": ("qualified electronic ledger: NON DIMOSTRATO da questo strumento — autovalutazione per chi prepara la "
-                         "conformità: ciò che è per costruzione è misurato, ciò che è dichiarato dal fornitore resta da verificare "
-                         "dall'organismo di valutazione; CryptoValid è un toolkit, non un QTSP"),
-            "confine": "mai un claim di qualificazione: lo stato qualificato lo danno un QTSP e un organismo di valutazione"}
+            "verdetto": ("qualified electronic ledger: NOT DEMONSTRATED by this tool; a self-assessment for whoever prepares "
+                         "conformity: what holds by construction is measured, what the provider declares remains to be checked "
+                         "by the conformity assessment body; CryptoValid is a toolkit, not a QTSP"),
+            "confine": "never a claim of qualification: the qualified status is given by a QTSP and a conformity assessment body"}
 
 
 def ledger_report(ledger_path: str, tsa_certs=None) -> Dict:
@@ -217,7 +217,7 @@ def ledger_report(ledger_path: str, tsa_certs=None) -> Dict:
             "idx_sequenziale": snap.get("idx_monotonic"), "ts_monotoni": snap.get("ts_monotonic"),
             "record_firmati": sum(1 for e in entries if e.get("signature")), "record_con_marca_rfc3161": _tsa_tokens(entries, tsa_certs)[1],
             "tree_head": M.tree_head(leaves), "verdetto_verifier": snap.get("verdict"),
-            "riproducibile": "stesso file → stesso report (tranne generato_il): un terzo lo ricalcola con verifier.py e cryptovalid_merkle"}
+            "riproducibile": "same file, same report (except generato_il): a third party recomputes it with verifier.py and cryptovalid_merkle"}
 
 
 def practice_statement(ledger_path: str, provider: str = "<provider>", deployment: Optional[Dict] = None,

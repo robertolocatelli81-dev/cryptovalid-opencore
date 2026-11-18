@@ -219,7 +219,7 @@ def sign_ledger(in_path: str, out_path: str, keyfile: Optional[str] = None,
     subito, non alla verifica del terzo)."""
     if backend is None:
         if not keyfile:
-            raise ValueError("serve un keyfile oppure un backend KMS/HSM (cryptovalid_kms)")
+            raise ValueError("a keyfile or a KMS/HSM backend (cryptovalid_kms) is needed")
         try:
             from cryptovalid_kms import FileKeyBackend
             backend = FileKeyBackend(keyfile)
@@ -248,7 +248,7 @@ def sign_ledger(in_path: str, out_path: str, keyfile: Optional[str] = None,
             e = json.loads(ln)
             sh = e.get("self_hash")
             if not sh:
-                raise ValueError("entry senza self_hash: firma un ledger già hash-chained")
+                raise ValueError("entry without self_hash: sign a ledger that is already hash-chained")
             sig = backend.sign(sh.encode())
             pub.verify(sig, sh.encode())   # fail-fast se il backend firma con altra chiave
             e["signature"] = base64.b64encode(sig).decode()
@@ -459,11 +459,11 @@ def _main(argv: Optional[List[str]] = None) -> int:
         if getattr(a, "backend", None):
             if a.keyfile:
                 from verifier import say
-                say("warning: sia keyfile che --backend indicati — uso --backend, il keyfile è ignorato\n")
+                say("warning: both a keyfile and --backend given; --backend is used, the keyfile is ignored\n")
             from cryptovalid_kms import backend_from_uri
             be = backend_from_uri(a.backend)
         elif not a.keyfile:
-            p.error("sign richiede un keyfile oppure --backend <uri>")
+            p.error("sign needs a keyfile or --backend <uri>")
         return _emit(json.dumps(sign_ledger(a.ledger, a.out, a.keyfile, backend=be,
                                             pq_backend=pq_backend_from_args(a.pq_key, a.pq_kms, a.pq_kms_region, a.pq_kms_profile)), indent=1), 0)
     if a.cmd == "verify":

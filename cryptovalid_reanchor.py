@@ -45,13 +45,13 @@ def assess(retention: Dict, age_days: Optional[float], min_witnesses: int = 2,
     witnesses = retention.get("witnesses_with_tx", 0)
     if witnesses < min_witnesses:
         return {"status": "decayed", "needs_reanchor": True, "witnesses": witnesses,
-                "reason": f"{witnesses} testimoni < {min_witnesses} richiesti: evidenza già sotto soglia"}
+                "reason": f"{witnesses} witnesses < {min_witnesses} required: the evidence is already below the threshold"}
     if age_days is not None and age_days >= (pruning_window_days - warn_margin_days):
         return {"status": "decaying", "needs_reanchor": True, "witnesses": witnesses,
-                "reason": f"età {age_days:.0f}gg entro {warn_margin_days:.0f}gg dalla finestra di pruning "
-                          f"(~{pruning_window_days:.0f}gg): ri-ancorare prima dell'inaccessibilità"}
+                "reason": f"age {age_days:.0f} days, within {warn_margin_days:.0f} days of the pruning window "
+                          f"(~{pruning_window_days:.0f} days): re-anchor before it becomes inaccessible"}
     return {"status": "healthy", "needs_reanchor": False, "witnesses": witnesses,
-            "reason": "testimoni sufficienti e lontano dalla finestra di pruning"}
+            "reason": "enough witnesses and far from the pruning window"}
 
 
 def plan(anchors: List[Dict], probe_fn: Callable[[str], Dict], now_ts: float,
@@ -75,9 +75,9 @@ def plan(anchors: List[Dict], probe_fn: Callable[[str], Dict], now_ts: float,
         "summary": summary,
         "to_reanchor": [it["signature"] for it in items if it["needs_reanchor"]],
         "alert": summary["decayed"] > 0,      # almeno un anchor già sotto soglia → ALERT
-        "honest_scope": ("pianifica il rinnovo dell'ACCESSIBILITÀ dell'evidenza (il re-ancoraggio è una tx "
-                         "on-chain HUMAN-GATED, non automatica); non prova veridicità (W1) né sostituisce "
-                         "un archive dedicato. Finestra ancorata alla MISURA, non a un'ipotesi."),
+        "honest_scope": ("plans the renewal of the evidence's ACCESSIBILITY (re-anchoring is a HUMAN-GATED on-chain "
+                         "transaction, not automatic); it does not prove that the content is true (W1) nor replace "
+                         "a dedicated archive. The window comes from a MEASUREMENT, not an assumption."),
     }
 
 

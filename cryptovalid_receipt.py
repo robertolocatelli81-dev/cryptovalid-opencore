@@ -91,7 +91,7 @@ def cbor_encode(x: Any) -> bytes:
         # deterministic encoding (RFC 8949 §4.2): keys sorted by their encoded form
         items = sorted(((cbor_encode(k), cbor_encode(v)) for k, v in x.items()), key=lambda kv: kv[0])
         return head(5, len(items)) + b"".join(k + v for k, v in items)
-    raise TypeError(f"CBOR: tipo non supportato {type(x).__name__}")
+    raise TypeError(f"CBOR: type not supported {type(x).__name__}")
 
 
 CBOR_MAX_DEPTH = 64
@@ -103,14 +103,14 @@ def cbor_decode(b: bytes) -> Any:
     (RFC 8949 Appendix F: too little data, too much data, a reserved or unsupported encoding). Since 2026-11-15, on
     bytes, ValueError is the only exception: a head cut short raised IndexError, and a head or a string cut short was
     called "byte in eccesso" (bytes in excess, the opposite of what happened); proposed by Athena's review of
-    15/11/2026."""
+    15/11/2026. Since 0.27.0 the messages are in English: too much data is "CBOR: trailing bytes"."""
     def need(i: int, k: int, what: str) -> None:
         if i + k > len(b):
             raise ValueError(f"CBOR: input ends inside {what} at byte {i} ({k} byte(s) needed, {len(b) - i} left)")
 
     def rd(i: int, depth: int = 0):
         if depth > CBOR_MAX_DEPTH:
-            raise ValueError("CBOR: annidamento oltre il limite")
+            raise ValueError("CBOR: nesting beyond the limit")
         need(i, 1, "a data item")
         ib = b[i]
         major, info = ib >> 5, ib & 0x1f
@@ -124,7 +124,7 @@ def cbor_decode(b: bytes) -> Any:
             need(i, k, "the head of an item")
             n = int.from_bytes(b[i:i + k], "big"); i += k
         elif info == 31:
-            raise ValueError("CBOR: forma indefinita non supportata")
+            raise ValueError("CBOR: indefinite length not supported")
         else:                                             # 28, 29, 30: reserved (RFC 8949 §3), not well-formed
             raise ValueError(f"CBOR: additional information {info} is reserved (RFC 8949 §3)")
         if major in (2, 3):
@@ -152,15 +152,15 @@ def cbor_decode(b: bytes) -> Any:
                 # Python 1 == True e collidono in una mappa: darebbero un «duplicato» spurio); array/mappe come
                 # chiavi non sono hashabili qui.
                 if isinstance(k, bool) or k is None or not isinstance(k, (int, str, bytes)):
-                    raise ValueError("CBOR: chiave di mappa non ammessa da questo decoder (ammesse: int, str, bytes)")
+                    raise ValueError("CBOR: map key not allowed by this decoder (allowed: int, str, bytes)")
                 if k in out:
-                    raise ValueError("CBOR: chiave duplicata (RFC 8949 §5.6)")
+                    raise ValueError("CBOR: duplicate key (RFC 8949 §5.6)")
                 out[k] = v
             return out, i
-        raise ValueError(f"CBOR: major type {major} non supportato")
+        raise ValueError(f"CBOR: major type {major} not supported")
     v, end = rd(0)
     if end != len(b):
-        raise ValueError("CBOR: byte in eccesso")
+        raise ValueError("CBOR: trailing bytes")
     return v
 
 
@@ -235,7 +235,7 @@ def verify_sth(sth: Dict, trusted_pubkey_hex: Optional[str] = None) -> Dict:
 def inclusion_receipt(ledger_path: str, index: int, keyfile: str, tsa_url: Optional[str] = None, tsa_certs=None) -> Dict:
     leaves = M.leaves_from_ledger(ledger_path)
     if not (0 <= index < len(leaves)):
-        raise IndexError(f"index {index} fuori dal ledger ({len(leaves)} entry)")
+        raise IndexError(f"index {index} outside the ledger ({len(leaves)} entries)")
     sth = signed_tree_head(leaves, keyfile)
     path = [h.hex() for h in M.inclusion_proof(index, leaves)]
     with open(ledger_path, encoding="utf-8") as f:

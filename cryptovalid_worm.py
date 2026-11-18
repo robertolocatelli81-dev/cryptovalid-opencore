@@ -66,14 +66,14 @@ class LocalWormStore:
     def put(self, key: str, blob: bytes) -> Dict:
         p = self._path(key)
         if os.path.exists(p):
-            raise WormError(f"WORM: '{key}' già scritto, overwrite RIFIUTATO (write-once)")
+            raise WormError(f"WORM: '{key}' already written, overwrite REFUSED (write-once)")
         write_new(p, blob, mode=0o400)   # 0400; 0.20.3: whole or absent (temporary + link, never over an existing object)
         return {"key": key, "bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest()}
 
     def get(self, key: str) -> bytes:
         p = self._path(key)
         if not os.path.exists(p):
-            raise WormError(f"WORM: '{key}' assente")
+            raise WormError(f"WORM: '{key}' absent")
         with open(p, "rb") as f:
             return f.read()
 
@@ -105,7 +105,7 @@ def store_record_escrow(record: bytes, worm: LocalWormStore, keyring: KeyRing, r
     """Cifra il record (AES-256-GCM), lo mette in WORM write-once, e ritorna la ricevuta con il DIGEST del
     ciphertext (ANCORABILE con l'ancora esistente → integrità attestata) + il key_id."""
     if not _HAVE_CRYPTO:
-        raise WormError("cryptography assente: AES-256-GCM non disponibile per l'escrow WORM")
+        raise WormError("cryptography absent: AES-256-GCM not available for the WORM escrow")
     key_id = "k-" + hashlib.sha256((record_id + ":key").encode()).hexdigest()[:24]
     key = keyring.new_key(key_id)
     nonce = os.urandom(12)
@@ -119,18 +119,18 @@ def store_record_escrow(record: bytes, worm: LocalWormStore, keyring: KeyRing, r
         "worm_sha256": receipt["sha256"],
         "ciphertext_sha3_256": digest,           # QUESTO va ancorato (integrità del dato retained, non solo l'hash)
         "bytes": receipt["bytes"],
-        "honest_scope": ("il DATO cifrato è in WORM write-once; il suo digest è ancorabile per integrità; "
-                         "GDPR erasure via crypto_shred (la chiave, non l'oggetto WORM). Non prova veridicità."),
+        "honest_scope": ("the encrypted DATA is in write-once WORM; its digest can be anchored for integrity; "
+                         "GDPR erasure through crypto_shred (the key, not the WORM object). It does not prove that the content is true."),
     }
 
 
 def retrieve_record(record_id: str, key_id: str, worm: LocalWormStore, keyring: KeyRing) -> bytes:
     """Recupera e decifra. Se la chiave è stata crypto-shreddata → fallisce (dato cancellato per GDPR)."""
     if not _HAVE_CRYPTO:
-        raise WormError("cryptography assente")
+        raise WormError("cryptography absent")
     key = keyring.get(key_id)
     if key is None:
-        raise WormError("chiave assente (crypto-shredded?) → record cancellato per GDPR, ciphertext immutato in WORM")
+        raise WormError("key absent (crypto-shredded?): record erased for GDPR, ciphertext unchanged in WORM")
     blob = worm.get(record_id)
     nonce, ct = blob[:12], blob[12:]
     return AESGCM(key).decrypt(nonce, ct, record_id.encode())     # AES-GCM: manomissione → InvalidTag

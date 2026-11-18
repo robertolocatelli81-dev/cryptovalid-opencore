@@ -50,7 +50,7 @@ def _load(path: str, kind: str):
     if kind == "csv":
         with open(path, encoding="utf-8") as f:
             return parse_holdings_csv(f.read())
-    raise SystemExit(f"type sconosciuto: {kind} (usa ssga-xlsx | csv | nport-xml)")
+    raise SystemExit(f"unknown type: {kind} (use ssga-xlsx | csv | nport-xml)")
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
@@ -77,7 +77,7 @@ def main(argv=None):
         "same_digest": da == db,
     }
     if ha.as_of and hb.as_of and ha.as_of != hb.as_of:
-        out["WARNING"] = f"as_of DIVERSI ({ha.as_of} vs {hb.as_of}) — non è lo stesso giorno, il test non è valido"
+        out["WARNING"] = f"as_of DIFFERS ({ha.as_of} vs {hb.as_of}): not the same day, the test is not valid"
     if da != db:
         out["diff"] = diff(ha, hb, "ISIN")
     emit(json.dumps(out, indent=1, default=str)[:6000])
@@ -85,15 +85,15 @@ def main(argv=None):
     if out.get("WARNING"):
         emit("\n⚠  " + out["WARNING"])
     elif out["same_digest"]:
-        emit("\n✓ STESSO DIGEST: le due fonti concordano sul basket canonico — cross-source REGGE su dati reali.")
+        emit("\n✓ SAME DIGEST: the two sources agree on the canonical basket; the cross-source check holds on real data.")
     else:
         d = out["diff"]
-        emit(f"\n✗ DIGEST DIVERSI: {len(d['only_in_a'])} solo in A, {len(d['only_in_b'])} solo in B, "
-              f"{len(d['changed_quantity'])} quantità diverse → è QUI il problema reale della canonicalizzazione.")
+        emit(f"\n✗ DIGESTS DIFFER: {len(d['only_in_a'])} only in A, {len(d['only_in_b'])} only in B, "
+              f"{len(d['changed_quantity'])} quantities differ: this is where the canonicalization problem is.")
     for s in ("source_A", "source_B"):
         au = out[s]["audit"]
         if au["alert"]:
-            emit(f"⚠  {s}: {au['material_dropped']} POSIZIONI MATERIALI droppate (basket incompleto) — {au['material']}")
+            emit(f"⚠  {s}: {au['material_dropped']} MATERIAL POSITIONS dropped (incomplete basket): {au['material']}")
     return 0
 
 

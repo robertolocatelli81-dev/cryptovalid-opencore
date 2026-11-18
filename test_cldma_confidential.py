@@ -123,7 +123,7 @@ class TestSpotCheckMitigation(unittest.TestCase):
         opened = CC.open_challenged(att, secret, [0])          # foglia barata campionata
         r = CC.verify_challenged(att, opened)
         self.assertFalse(r["ok"])
-        self.assertTrue(any("FUORI RANGE" in x for x in r["reasons"]))
+        self.assertTrue(any("OUT OF RANGE" in x for x in r["reasons"]))
 
     def test_spotcheck_honest_passes(self):
         att, secret = _mk()

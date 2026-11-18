@@ -332,7 +332,7 @@ class TestEidasLedger(unittest.TestCase):
         self.assertEqual(by["REQ-7.5-04"]["stato"], "SODDISFATTO_PER_COSTRUZIONE")
         self.assertEqual(by["REQ-7.5-05"]["stato"], "NON_SODDISFATTO")
         self.assertEqual(by["Art.45l(a)"]["stato"], "FUORI_PORTATA_DEL_CODICE")
-        self.assertIn("NON DIMOSTRATO", a["verdetto"])
+        self.assertIn("NOT DEMONSTRATED", a["verdetto"])
         self.assertEqual(by["REQ-7.5-06"]["stato"], "NON_VALUTABILE")
 
     def test_tampered_fails_ordering(self):
@@ -352,7 +352,7 @@ class TestEidasLedger(unittest.TestCase):
             for rid in ("REQ-7.5-05", "REQ-7.5-06", "REQ-7.5-03"):
                 self.assertEqual(by[rid]["stato"], "DICHIARATO_NON_VERIFICATO", rid)
             self.assertNotIn("SODDISFATTO\"", json.dumps([r["stato"] for r in E.assess(out, {"provider_is_qtsp": True, "qualified_certificates": True})["requisiti"]]))
-            self.assertIn("NON DIMOSTRATO", E.assess(out, {"provider_is_qtsp": True})["verdetto"])
+            self.assertIn("NOT DEMONSTRATED", E.assess(out, {"provider_is_qtsp": True})["verdetto"])
             ps = E.practice_statement(out, "ACME QTSP", {"qualified_certificates": True})
             self.assertIn("Practice Statement", ps); self.assertIn("to be provided", ps)   # QTSP timestamps, device still missing
             self.assertNotIn("qualified electronic ledger: YES", ps)
@@ -579,7 +579,7 @@ class TestEidasCountsBoundTokensOnly(unittest.TestCase):
         r = [x for x in E.assess(p)["requisiti"] if x["req"] == "REQ-7.5-04-bis"][0]
         self.assertEqual((r["stato"], r["misura"]["record_con_token_rfc3161"], r["misura"]["record_con_token_firma_senza_catena"]),
                          ("NON_APPLICABILE", 0, 2))
-        self.assertIn("catena non stabilita", r["cosa_manca"])
+        self.assertIn("chain not established", r["cosa_manca"])
         import base64
         import hashlib
         import json

@@ -131,7 +131,7 @@ class DecoderOnTheExamples(unittest.TestCase):
                 R.cbor_decode(e)
             except ValueError as ex:
                 msg = str(ex)
-            self.assertNotIn("byte in eccesso", msg, f"{group}: {e.hex()}")
+            self.assertNotIn("trailing bytes", msg, f"{group}: {e.hex()}")
             if short and e[0] >> 5 not in (6,) and (e[0] & 0x1f) != 31 and b"\x9f" not in e[:2]:
                 self.assertIn("input ends inside", msg, f"{group}: {e.hex()}")
 
@@ -139,7 +139,7 @@ class DecoderOnTheExamples(unittest.TestCase):
         for e in (b"\x1c", b"\x5d", b"\xfe"):
             with self.assertRaisesRegex(ValueError, "is reserved"):
                 R.cbor_decode(e)
-        with self.assertRaisesRegex(ValueError, "byte in eccesso"):   # too much data keeps its message
+        with self.assertRaisesRegex(ValueError, "trailing bytes"):   # too much data ("byte in eccesso" until 0.26.0)
             R.cbor_decode(b"\x00\x00")
 
     def test_generative_every_prefix_of_well_formed_items_is_too_little_data(self):
@@ -157,7 +157,7 @@ class DecoderOnTheExamples(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "input ends inside", msg=enc[:k].hex()):
                     R.cbor_decode(enc[:k])
                 n += 1
-            with self.assertRaisesRegex(ValueError, "byte in eccesso"):
+            with self.assertRaisesRegex(ValueError, "trailing bytes"):
                 R.cbor_decode(enc + b"\x00")
         self.assertGreater(n, 5000)
 

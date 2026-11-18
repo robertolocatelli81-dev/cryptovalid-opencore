@@ -592,8 +592,8 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
     v = sub.add_parser("verify"); v.add_argument("directory")
     v.add_argument("--prefix", default="ledger"); v.add_argument("--pubkey", action=_Once)
     v.add_argument("--lotl", action="store_true",
-                   help="certifica i token RFC 3161 come eIDAS-qualified via EU Trusted Lists (rete)")
-    v.add_argument("--lotl-ms", nargs="*", default=None, help="restringi alle member state (es. ES IT)")
+                   help="qualify the RFC 3161 tokens as eIDAS-qualified through the EU Trusted Lists (network)")
+    v.add_argument("--lotl-ms", nargs="*", default=None, help="restrict to these member states (e.g. ES IT)")
     v.add_argument("--tsa-cert", action="append", default=None, metavar="PEM", type=_T_arg.tsa_cert_arg,
                    help="pin the TSA certificate (or a CA above it), repeatable: a token counts as timestamped only "
                         "when verified against it, or with --lotl (SPEC §11)")

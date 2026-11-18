@@ -155,8 +155,8 @@ def _pack_layers(r: dict, pack_dir: str) -> list:
     # a manifest signature that is PRESENT but does not verify is tampering, never "unsigned" (audit V1 #1, 30/09/2026)
     layers.append(_layer("manifest autenticato (Ed25519)",
                          "PASS" if auth else ("FAIL" if sig_present else "SKIP"),
-                         "firmato" if auth else ("firma presente ma NON valida" if sig_present
-                                                 else "non firmato o cryptography assente")))
+                         "signed" if auth else ("signature present but NOT valid" if sig_present
+                                                 else "not signed, or cryptography absent")))
     layers.append(_layer("ledger: hash+firma+anti-troncamento", "PASS" if r.get("ledgers_ok") else "FAIL"))
     rfc = r.get("rfc3161") or {}
     ta = (r.get("states") or {}).get("time_anchor") or {}
@@ -165,9 +165,9 @@ def _pack_layers(r: dict, pack_dir: str) -> list:
         # 0.22.0: the reference's time_anchor decides FAIL (contradicted: token missing, invalid, another digest) vs SKIP
         layers.append(_layer("RFC 3161 timestamp",
                              "PASS" if v is True else ("FAIL" if ta.get("state") == "contradicted" or v is False else "SKIP"),
-                             "" if v is True else str(ta.get("detail") or rfc.get("note") or "openssl assente")))
+                             "" if v is True else str(ta.get("detail") or rfc.get("note") or "openssl absent")))
     else:
-        layers.append(_layer("RFC 3161 timestamp", "SKIP", "nessun timestamp nel pack"))
+        layers.append(_layer("RFC 3161 timestamp", "SKIP", "no timestamp in the pack"))
     # the reference verifier's own verdict is a mandatory layer: this front-end never passes what it rejects
     layers.append(_layer("verdetto del verificatore di riferimento (evidence_pack.verify_pack)",
                          "PASS" if r.get("valid") is True else "FAIL",
@@ -182,7 +182,7 @@ def verify_pack(pack_dir: str) -> dict:
     receipt and exit 74 (CheckNotRun carries it), as in evidence_pack.py verify."""
     if not _need_opencore():
         return _rollup("pack", [_layer("evidence pack", "SKIP",
-                                       "opencore/ non trovato: serve il repo per la verifica completa")])
+                                       "opencore/ not found: the full check needs the repository")])
     try:
         import evidence_pack
         r = evidence_pack.verify_pack(pack_dir)
@@ -201,7 +201,7 @@ def verify_archive(directory: str, prefix: str = "ledger") -> dict:
     """Archivio ingest: catene dei segmenti, Merkle STH, HEAD firmato (tail guard)."""
     layers = []
     if not _need_opencore():
-        return _rollup("archive", [_layer("archive", "SKIP", "opencore/ non trovato")])
+        return _rollup("archive", [_layer("archive", "SKIP", "opencore/ not found")])
     try:
         import cryptovalid_ingest as ingest
         r = ingest.verify_archive(directory, prefix=prefix)
@@ -231,10 +231,10 @@ def _ap2_layers(r: dict) -> list:
     if prod.get("present"):
         # a producer signature that is PRESENT but does not verify is tampering (audit V1 #2, 30/09/2026)
         layers.append(_layer("firma producer", "PASS" if prod.get("ok") else "FAIL",
-                             "" if prod.get("ok") else "firma presente ma NON valida"))
+                             "" if prod.get("ok") else "signature present but NOT valid"))
     if r.get("self_asserted_only"):
         layers.append(_layer("provenienza chiavi", "SKIP",
-                             "solo jwk auto-asserito: firma prova coerenza, non identità"))
+                             "self-asserted jwk only: the signature proves consistency, not identity"))
     # the reference's own reason reaches the auditor: 1.2.x receipts carry `refused` (the copy shipped until 0.17.2
     # wrote `error`); without it a refused pack was a FAIL with an empty detail (measured 2026-10-05); 1.6.0 adds the class
     why = str(r.get("refused") or r.get("error") or "")
@@ -252,7 +252,7 @@ def verify_ap2(path: str) -> dict:
     here, SPEC §6.10) becomes this front-end's complete receipt and exit 74 — 1.6.0 raises it only with tsa_cert or
     trust_anchor, which this function does not pass (measured 19/10/2026: unreachable from here today, kept for a later 1.x)."""
     if not _need_opencore():
-        return _rollup("ap2", [_layer("ap2 evidence", "SKIP", "opencore/ non trovato")])
+        return _rollup("ap2", [_layer("ap2 evidence", "SKIP", "opencore/ not found")])
     try:
         import ap2_evidence   # ap2-evidence-pack (0.18.0: no longer shipped here; the `ap2` extra installs it)
     except ImportError:
@@ -275,7 +275,7 @@ def verify_cldma(path: str) -> dict:
     """Attestazione CLDMA: i totali pubblicati sono legati alla radice + ratio coerente."""
     layers = []
     if not _need_opencore():
-        return _rollup("cldma", [_layer("cldma", "SKIP", "opencore/ non trovato")])
+        return _rollup("cldma", [_layer("cldma", "SKIP", "opencore/ not found")])
     try:
         import committed_attestation as cldma
         with open(path, encoding="utf-8") as f:
@@ -490,7 +490,7 @@ def _rollup(kind: str, layers: list) -> dict:
     valid = bool(checked) and all(x["status"] == "PASS" for x in checked)
     return {"kind": kind, "valid": valid, "layers": layers,
             "verified_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "note": ("verificati %d strati; %d non verificabili qui (SKIP, onesto)"
+            "note": ("%d layers verified; %d not verifiable here (SKIP)"
                      % (len(checked), len(layers) - len(checked)))}
 
 
