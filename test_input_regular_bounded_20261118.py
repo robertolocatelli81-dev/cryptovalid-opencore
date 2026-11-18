@@ -8,7 +8,11 @@ Measured on 2026-11-18 on 0.26.0 (external review, re-measured): `evidence_pack.
 certificates and CRLs were checked with `os.stat` and then opened, so a FIFO put in their place between the two blocked
 the program; and, found while auditing the same class here, `verifier.py <a FIFO>`, a pack whose MANIFEST.json is a
 FIFO and `cryptovalid-verify cldma <a FIFO>` blocked outright. Every check that could block runs in a child process with a timeout, so a regression is a
-failure, not a hung suite. Linux (mkfifo, sparse files, ru_maxrss in KiB)."""
+failure, not a hung suite. Linux (mkfifo, sparse files, ru_maxrss in KiB).
+
+SPEC v0.12 §5 step 0: the ledger verifier reads a FIFO (`verifier.py <(cat ledger)`, the six verifiers since 0.20.2),
+bounded in size and in idle time; a FIFO with no writer is FAIL after 10 s. Positive control: on 4f15a65 10 of the 12
+tests fail (the control and the pipe read whole pass), on 255eec5 the 3 pipe tests fail."""
 import json
 import os
 import shutil
@@ -133,13 +137,57 @@ class Fifos(unittest.TestCase):
         shutil.rmtree(self.td)
 
     def test_ledger_verifier_on_a_fifo(self):
+        """SPEC v0.12 §5 step 0: a FIFO with no writer is FAIL after FIFO_IDLE_SECONDS (10 s), never a hang (0.26.0)"""
         rc, out, err = child("""
             import verifier as V
             r = V.verify_ledger(sys.argv[1])
             print(json.dumps([r["verdict"], r["parse_errors"][0]["error"]]))
         """, self.fifo, timeout=20)
         self.assertEqual(rc, 0, err[-300:])
-        self.assertEqual(json.loads(out), ["FAIL", "unreadable: not a regular file"])
+        self.assertEqual(json.loads(out), ["FAIL", "unreadable: FIFO idle for 10 s"])
+
+    def run_fed(self, chunks, pause, limit=None):
+        """verify_ledger on the FIFO while a writer process writes `chunks` with `pause` seconds between them"""
+        w = subprocess.Popen([sys.executable, "-c", "import sys, time\nwith open(sys.argv[1], 'wb') as f:\n"
+                              "    for c in sys.argv[3:]:\n        f.write(c.encode()); f.flush(); time.sleep(float(sys.argv[2]))",
+                              self.fifo, str(pause), *chunks])
+        try:
+            return child("""
+                import verifier as V
+                limit = %r
+                if limit:
+                    V.MAX_INPUT_BYTES = limit
+                r = V.verify_ledger(sys.argv[1])
+                print(json.dumps([r["verdict"], r.get("entries_count"), [e["error"] for e in r.get("parse_errors", [])]]))
+            """ % (limit,), self.fifo, timeout=30)
+        finally:
+            w.wait(10)
+
+    def test_a_pipe_is_read_as_in_the_other_verifiers(self):
+        """`verifier.py <(cat ledger)`: the bytes of the pipe, the verdict of the same bytes in a file (0.20.2 contract,
+        the oracle case input-fifo); a writer slower than one block, and a tampered ledger, read whole"""
+        with open(os.path.join(ROOT, "examples", "sample_ledger.jsonl")) as f:
+            lines = f.read().splitlines(True)
+        rc, out, err = self.run_fed(lines, 0.3)
+        self.assertEqual((rc, json.loads(out)), (0, ["PASS", len(lines), []]), err[-300:])
+        with open(os.path.join(ROOT, "examples", "sample_ledger_tampered.jsonl")) as f:
+            rc, out, err = self.run_fed([f.read()], 0)
+        self.assertEqual(json.loads(out)[0], "FAIL")
+
+    def test_a_pipe_over_the_bound(self):
+        with open(os.path.join(ROOT, "examples", "sample_ledger.jsonl")) as f:
+            text = f.read()
+        rc, out, err = self.run_fed([text], 0, limit=len(text) - 1)
+        self.assertEqual(json.loads(out)[0], "FAIL", err[-300:])
+        self.assertTrue(json.loads(out)[2][0].startswith("input_too_large"), out)
+
+    def test_a_device_is_not_read(self):
+        rc, out, err = child("""
+            import verifier as V
+            r = V.verify_ledger("/dev/zero")
+            print(json.dumps([r["verdict"], r["parse_errors"][0]["error"]]))
+        """, timeout=20)
+        self.assertEqual(json.loads(out), ["FAIL", "unreadable: not a regular file"], err[-300:])
 
     def test_cldma_command_on_a_fifo(self):
         """found by running every sub-command of cryptovalid-verify on a FIFO (18/11/2026): only `cldma` blocked"""

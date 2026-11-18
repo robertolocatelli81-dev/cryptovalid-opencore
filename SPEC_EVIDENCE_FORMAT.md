@@ -131,6 +131,13 @@ forces a boolean where reality had none.
    where the path is replaced by a FIFO, and opening a FIFO for reading blocks until a writer comes: measured on
    2026-11-18 with 0.26.0, `verifier.py <a FIFO>` did not return (killed after 5 s, exit 124). The same rule holds for
    every file §10 and §11 read from a path (below). The other implementations in `verifiers/` are not measured here.
+   **v0.12:** for the ledger itself a FIFO is read, not refused: `verifier.py <(cat ledger.jsonl)` gives the verdict of
+   the same bytes in a file, as the five other verifiers do since 0.20.2 (the oracle case `input-fifo`; v0.11 had made
+   it FAIL in `verifier.py` only, a disagreement with the other five that the differential oracle reported on
+   2026-11-18). It is read without ever blocking: at most the size bound (`input_too_large`), and a pipe that gives no
+   byte and no end of file for 10 s (`FIFO_IDLE_SECONDS`; a FIFO with no writer) is FAIL (`unreadable: FIFO idle for
+   10 s`). A device or a directory stays `unreadable: not a regular file`; the files of §10 and §11 and `auto` (§12)
+   still refuse a FIFO.
 1. Parse every line as JSON; any parse error → FAIL.
 2. Detect profile on entry 0; recompute `self_hash` for EVERY entry → any
    mismatch → FAIL.
@@ -304,7 +311,9 @@ v0.12 (2026-11-18) reads the TSTInfo's `nonce` as an INTEGER of either sign (§1
 negative one as `malformed`, stricter than §11 itself, which asked "not negative" only of `serialNumber`. Measured on
 2026-11-18 on a real DigiCert token (nonce -0x5BDDFD8205AA38EC, `spec/vectors/rfc3161/third_party/`): 0.26.0 said
 `invalid / malformed`, OpenSSL `ts -verify` OK; now `verified` under the DigiCert root pinned. A token with a nonce in
-non-minimal form is still `malformed`. v0.12 also adds to §5 the failure classes of a FAIL receipt (`failure_classes`),
+non-minimal form is still `malformed`. v0.12 also reads a FIFO given as the ledger (§5 step 0) instead of refusing it,
+bounded in size and in idle time: the verdict of v0.10 for `<(cat ledger.jsonl)`, never the hang of v0.10 for a pipe
+with no writer. v0.12 also adds to §5 the failure classes of a FAIL receipt (`failure_classes`),
 an added member: the verdict, the receipt of a PASS and the other verifiers do not change.
 
 ## 7. Conformance (normative)

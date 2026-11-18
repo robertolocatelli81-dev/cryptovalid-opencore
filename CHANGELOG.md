@@ -58,11 +58,16 @@ run by the same author, not by a third party.
   then calling `fstat` blocks too, the open waits for a writer); now they are read the same way, at most 64 MiB each.
   The same class, found by running every sub-command of `cryptovalid-verify` on a FIFO and reading the readers of this
   repository: `verifier.py <a FIFO>` (the core ledger verifier), a pack whose MANIFEST.json is a FIFO and
-  `cryptovalid-verify cldma <a FIFO>` blocked outright; now they are FAIL `unreadable: not a regular file`, refused
-  `manifest_unreadable: not a regular file`, and a FAIL layer. A directory given to `verifier.py` is now named the same
+  `cryptovalid-verify cldma <a FIFO>` blocked outright when no writer came; a pack's manifest and `cldma` are now
+  refused `manifest_unreadable: not a regular file` and a FAIL layer. The ledger verifier reads a FIFO (SPEC v0.12 §5
+  step 0): `verifier.py <(cat ledger.jsonl)` and `cryptovalid-verify ledger <(cat ...)` give the verdict of the same
+  bytes, as the five other verifiers do since 0.20.2, read without blocking, at most 256 MiB, and a pipe idle for 10 s
+  (no writer) is FAIL `unreadable: FIFO idle for 10 s`. A first version of this change refused every FIFO in
+  `verifier.py`; the differential oracle (`verifiers/differential_oracle.py`, case `input-fifo`) found the disagreement
+  with JS before release. A directory given to `verifier.py` is now named the same
   way (was `unreadable: IsADirectoryError`). `test_input_regular_bounded_20261118.py` (the cases that could block run
-  in a child process with a timeout): 8 of its 9 tests fail on 4f15a65 (the control passes), all pass here, with and
-  without `cryptography`.
+  in a child process with a timeout): 10 of its 12 tests fail on 4f15a65 (the control passes, and so does the pipe
+  read whole, which 4f15a65 already did), all pass here, with and without `cryptography`.
 
 - **Messages in Italian in an English package.** `cryptovalid_receipt.cbor_decode` said "CBOR: byte in eccesso" for
   too much data (now "CBOR: trailing bytes"), and other messages for people were in Italian: the reasons, notes and

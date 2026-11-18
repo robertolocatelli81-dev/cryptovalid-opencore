@@ -619,6 +619,54 @@ def open_regular(path: str, limit: int = MAX_INPUT_BYTES) -> int:
         raise
 
 
+FIFO_IDLE_SECONDS = 10   # SPEC §5 step 0 (v0.12): a pipe that gives no byte and no end of file for this long is FAIL
+
+
+class InputIdle(OSError):
+    """SPEC §5 step 0 (v0.12): a FIFO that gave no byte and no end of file within FIFO_IDLE_SECONDS"""
+
+
+def open_ledger_input(path: str, limit: int = MAX_INPUT_BYTES, idle: float = FIFO_IDLE_SECONDS):
+    """SPEC §5 step 0 (v0.12), the ledger verifier only: a descriptor of a regular file (as open_regular), or, for a FIFO
+    (`verifier.py <(cat ledger.jsonl)`, read by the six verifiers since 0.20.2), its bytes read to the end without ever
+    blocking: at most `limit` bytes, and InputIdle when `idle` seconds pass with no byte and no end of file (a pipe with
+    no writer). Returns (fd, None) or (None, bytes). Raises InputNotRegular (a device, a directory), InputTooLarge,
+    InputIdle, or the OSError of os.open."""
+    import select
+    import stat
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+    try:
+        st = os.fstat(fd)
+        if stat.S_ISREG(st.st_mode):
+            if st.st_size > limit:
+                raise InputTooLarge(f"{path}: larger than {limit} bytes")
+            return fd, None
+    except BaseException:
+        os.close(fd)
+        raise
+    try:
+        if not stat.S_ISFIFO(st.st_mode):
+            raise InputNotRegular(f"{path}: not a regular file")
+        data = bytearray()
+        while True:
+            # select, not poll: poll on a FIFO is unreliable on macOS. Linux: no writer yet = not ready (it waits); the
+            # writer gone = ready, and read gives b"" (the end)
+            ready, _, _ = select.select([fd], [], [], idle)
+            if not ready:
+                raise InputIdle(f"{path}: FIFO gave no byte and no end of file in {idle:g} s")
+            try:
+                b = os.read(fd, 1 << 16)
+            except BlockingIOError:
+                continue
+            if not b:
+                return None, bytes(data)
+            data += b
+            if len(data) > limit:
+                raise InputTooLarge(f"{path}: larger than {limit} bytes")
+    finally:
+        os.close(fd)
+
+
 def read_regular(path: str, limit: int = MAX_INPUT_BYTES) -> bytes:
     """the bytes of a regular file of at most `limit` bytes (open_regular), read bounded: a file that grew past the
     bound after the fstat is InputTooLarge too"""
@@ -805,8 +853,12 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
     errors: List[Dict] = []
 
     try:
-        # SPEC §5 step 0 (v0.11): opened once without blocking, judged on the descriptor (a FIFO hung until 0.26.0)
-        fd = open_regular(path)
+        # SPEC §5 step 0 (v0.11): opened once without blocking, judged on the descriptor (a FIFO hung until 0.26.0);
+        # v0.12: a FIFO is read to its end, bounded in size and in idle time (`<(cat ledger)`, the six verifiers since 0.20.2)
+        fd, piped = open_ledger_input(path, MAX_INPUT_BYTES)   # the module value at call time
+    except InputIdle:
+        return {"verdict": "FAIL", "path": path, "verified_utc": started, "entries_count": 0,
+                "parse_errors": [{"line": -1, "error": f"unreadable: FIFO idle for {FIFO_IDLE_SECONDS} s"}]}
     except InputTooLarge:
         # fail-closed on size too: reading it would exhaust memory and die without a receipt (council 13/09)
         return {"verdict": "FAIL", "path": path, "verified_utc": started, "entries_count": 0,
@@ -823,7 +875,9 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
         # ONE line rule in the five verifiers (council 16/09 r5): lines are separated by LF only (no universal
         # newlines: a lone CR is data inside the line, hence a decode error), and a line is blank when it holds
         # nothing but ASCII space / tab / CR — never Unicode whitespace (str.strip() took U+00A0).
-        with open(fd, encoding="utf-8", errors="surrogateescape", newline="\n") as f:
+        import io
+        with (open(fd, encoding="utf-8", errors="surrogateescape", newline="\n") if piped is None else
+              io.TextIOWrapper(io.BytesIO(piped), encoding="utf-8", errors="surrogateescape", newline="\n")) as f:
             raw_lines = [ln for ln in f if ln.strip(" \t\r\n")]
     except FileNotFoundError:
         return {
