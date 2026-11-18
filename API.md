@@ -56,7 +56,8 @@ Before 1.0 the code of the core moves into the package and the flat core modules
 - A closed vocabulary (a verdict, a `reason`) may gain a value in a minor release, announced in `CHANGELOG.md`; a
   value is not removed or redefined without the deprecation period.
 - The receipt of `verify_ledger` is declared key by key in `cryptovalid/receipts.py` and a test compares it with the
-  code that builds it. The other receipts are described in the specification (§10, §11, §13, §14) and typed as
+  code that builds it. 0.27.0 adds `failure_classes` (present only on a FAIL with entries read; its members are a
+  closed vocabulary, SPEC §5 "Failure classes"). The other receipts are described in the specification (§10, §11, §13, §14) and typed as
   plain dictionaries until they are declared in the same way.
 
 ## 4. The evidence format

@@ -95,10 +95,26 @@ def _layer(name, status, detail=""):
 
 # ─────────────────────────────────────────────────── verificatori per tipo
 
+def _ledger_classes(r: dict) -> str:
+    """SPEC v0.12 §5 "Failure classes": the chain's findings told apart from the entries that are not in this format"""
+    fc = r.get("failure_classes")
+    if not isinstance(fc, dict):
+        return ""
+    ch, fo = fc.get("chain") or {}, fc.get("format") or {}
+    parts = ["chain: %d link_mismatch, %d hash_mismatch" % (ch.get("link_mismatch", 0), ch.get("hash_mismatch", 0))]
+    if any(fo.values()):
+        parts.append("format (entries not in this format's schema, SPEC §2; they say nothing on the links): "
+                     + ", ".join("%d %s" % (n, k) for k, n in fo.items() if n))
+    if fc.get("other"):
+        parts.append("other: %d" % fc["other"])
+    return "; ".join(parts)
+
+
 def _ledger_reasons(r: dict) -> list:
-    """Every failure the reference receipt names, one string each: where (idx / line) and why."""
+    """Every failure the reference receipt names, one string each: where (idx / line) and why. The chain's findings first
+    (links, then hashes), then the entries outside the schema (SPEC v0.12 §5 "Failure classes")."""
     out = []
-    for k in ("hash_failures", "link_failures", "schema_failures"):
+    for k in ("link_failures", "hash_failures", "schema_failures"):
         for x in r.get(k) or []:
             why = x.get("reason") or ("prev_hash does not link to the previous self_hash" if k == "link_failures" else "unnamed")
             out.append(f"{k[:-9]} idx {json.dumps(x.get('idx'), ensure_ascii=False)}: {why}" if isinstance(x, dict) else f"{k[:-9]}: {x}")
@@ -125,6 +141,9 @@ def verify_ledger(path: str) -> dict:
         if not ok:
             # 0.20.0: the reasons the receipt names, not the bare verdict (the receipt keeps the first 10 per field)
             layer["reasons"] = _ledger_reasons(r)
+            if isinstance(r.get("failure_classes"), dict):
+                layer["failure_classes"] = r["failure_classes"]
+                layer["detail"] += "; " + _ledger_classes(r)
             layer["detail"] += "; " + ("; ".join(layer["reasons"][:3]) if layer["reasons"] else "no reason named by the receipt")
         layers.append(layer)
     except Exception as e:  # noqa: BLE001

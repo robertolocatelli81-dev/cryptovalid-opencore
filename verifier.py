@@ -1043,6 +1043,22 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
         },
     }
 
+    # SPEC v0.12 §5 "Failure classes" (18/11/2026): on a ledger written in another schema the real breaks of the chain
+    # came out mixed with one unknown_field and one idx_mismatch per entry (measured on a third-party ledger of 179
+    # entries: 4 true link breaks among 20 listed reasons). A FAIL receipt now counts every finding, uncapped, by class;
+    # only a FAIL, so the receipt of a PASS ledger is the one of 0.26.0
+    if not chain_integrity:
+        idx_n = sum(1 for x in errors if str(x.get("error", "")).startswith("idx_mismatch:"))
+        receipt["failure_classes"] = {
+            "chain": {"link_mismatch": sum(1 for i, e in enumerate(entries) if "prev_hash" in e and e["prev_hash"] != (
+                          entries[i - 1].get("self_hash") if i > 0 else GENESIS_PREV)),
+                      "hash_mismatch": sum(1 for x in hash_failures if x.get("reason") == "hash_mismatch")},
+            "format": {"unknown_field": len(schema_failures), "idx_mismatch": idx_n,
+                       "missing_self_hash": sum(1 for x in hash_failures if x.get("reason") == "missing_self_hash"),
+                       "missing_prev_hash": sum(1 for e in entries if "prev_hash" not in e)},
+            "other": len(errors) - idx_n,
+        }
+
     # 0.21.0 (SPEC v0.4 §5 step 5): this verifier does not check signatures; when the ledger carries a signature layer it
     # says how many entries carry one (only then, so the receipt of a ledger without signatures is the one of 0.20.3)
     signed_n = sum(1 for e in entries if isinstance(e, dict) and any(k in e for k in ("signature", "signer", "signature_pq", "signer_pq")))

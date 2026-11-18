@@ -9,7 +9,43 @@ run by the same author, not by a third party.
 
 ## 0.27.0 (unreleased): reasons change
 
+### Added
+
+- **A FAIL ledger receipt tells the chain's breaks apart from entries that are not in this format** (SPEC v0.12 §5
+  "Failure classes", written before the code). Measured on 2026-11-18 on a third-party ledger of 179 entries (another
+  schema: its own fields, no `idx`, `self_hash`/`prev_hash` by the rule of §3; not shipped here, it has no licence):
+  0.26.0 named its 4 true link breaks among one `unknown_field` and one `idx_mismatch` per entry, and `cryptovalid-verify
+  ledger` listed 4 + 10 + 10 reasons. The receipt of `verifier.py` for a FAIL now carries `failure_classes`, counts over
+  every entry with a closed set of members: `chain` (`link_mismatch`, `hash_mismatch`), `format` (`unknown_field`,
+  `idx_mismatch`, `missing_self_hash`, `missing_prev_hash`) and `other`; on that ledger `chain` 4 link / 0 hash, `format`
+  179 / 179. `cryptovalid-verify ledger` (and `auto` on a ledger) writes the classes first in the layer's `detail`,
+  copies `failure_classes` into the layer and lists the links, then the hashes, before the schema. The verdict does not
+  change, and the receipt of a PASS ledger is the receipt of 0.26.0; the other five verifiers do not emit the member.
+  `test_real_tokens_and_failure_classes_20261118.py`: the shape of that ledger made here, and 300 ledgers with random
+  mutations of six kinds against an oracle that counts each class from §2 and §3.
+
 ### Fixed
+
+- **A real DigiCert token was refused because its nonce is negative** (SPEC v0.12 §11 step 3, written before the code).
+  `cryptovalid_tsa.parse_token` read the TSTInfo's `nonce` with the reader of non-negative INTEGERs and answered
+  `invalid / malformed` ("nonce: negative INTEGER") for a TimeStampResp of DigiCert SHA256 RSA4096 Timestamp Responder
+  2025 1 committed in thebristolsound/birdbrain (nonce -0x5BDDFD8205AA38EC, genTime 2026-05-30), which OpenSSL 3.0
+  `ts -verify` accepts under the DigiCert Trusted Root G4. RFC 3161 §2.4.2 writes `nonce INTEGER OPTIONAL` and sets no
+  sign; SPEC §11 asked "not negative" only of `serialNumber`, so the code was stricter than its own specification. The
+  nonce is now an INTEGER of either sign in minimal form; `serialNumber`, the versions and PKIStatus keep the
+  non-negative rule. The token is `verified` with the root pinned and `signature_only` without a pin; another digest is
+  `imprint_mismatch`, a nonce changed inside it does not verify. The five verifiers in other languages do not read RFC
+  3161 tokens (they keep `tsa_token` outside the canonical form, §3) and the conformance vectors do not change.
+  New vectors in `spec/vectors/rfc3161/third_party/` with their licences (manifest.json: repository, commit, sha256):
+  that token (MIT) and the DigiCert root; `eurocert_signeddata_v1.tst` of esig/dss (LGPL-2.1), a real EuroCert QTSA
+  token whose SignedData.version is 1 with eContentType id-ct-TSTInfo, still refused `malformed` "SignedData version
+  is not 3 (RFC 5652 §5.1)" ("version MUST be 3" when the content type is not id-data; OpenSSL 3.0 parses it without a remark on the
+  version: `ts -reply -token_in -text` prints it, `ts -verify` stops later, at "ess cert id not found"); and
+  the token of a Sigstore bundle of dfandrich/fileviewinfo (MIT) without any certificate, `signer_certificate_absent`
+  (0.26.0: `signature_invalid`, the entry below). `test_real_tokens_and_failure_classes_20261118.py`: the vectors, 610
+  INTEGER encodings drawn at random for the nonce and for serialNumber against an oracle from X.690 §8.3.2, tokens
+  signed here with 11 nonces of either sign, SignedData versions -1 to 6 and 256 on two real tokens; 8 of its 11 tests
+  fail on 255eec5, all pass here.
 
 - **A listed file was read whole into memory, and a FIFO could block the verifier** (SPEC v0.11 §5 step 0, §10, §11,
   written before the code; from an external review of 0.26.0, re-measured on 2026-11-18). `evidence_pack.verify_pack`

@@ -52,6 +52,18 @@ Sectigo's qualified service) and the certificates they carry or publish
 (freetsa_cacert.pem from https://freetsa.org/files/cacert.pem); manifest.json
 says how each was obtained. They are the services' outputs, kept as received.
 
+spec/vectors/rfc3161/third_party/ holds RFC 3161 tokens committed in other
+projects, kept byte for byte, each under its project's licence (manifest.json
+there names the repository, the commit and the path):
+digicert_negative_nonce.tsr from thebristolsound/birdbrain (MIT, Copyright (c)
+2026 Matt Donovan, full text in LICENSE.birdbrain); eurocert_signeddata_v1.tst
+from esig/dss, the Digital Signature Service of the European Commission
+(GNU LGPL version 2.1, full text in LICENSE.dss; distributed unmodified);
+sigstore_signer_absent.tsr, the base64 field of a Sigstore bundle of
+dfandrich/fileviewinfo decoded (MIT, Copyright (c) 2003-2026 Dan Fandrich, full
+text in LICENSE.fileviewinfo). digicert_trusted_root_g4.pem is the public root
+certificate DigiCert publishes at cacerts.digicert.com.
+
 DCO is the Developer Certificate of Origin, version 1.1, copyright The Linux
 Foundation and its contributors, kept verbatim as its licence asks.
 

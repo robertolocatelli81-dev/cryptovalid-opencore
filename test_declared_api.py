@@ -185,7 +185,7 @@ class TestLedgerReceiptType(unittest.TestCase):
         every, always = keys_built_by_verify_ledger()
         self.assertEqual(every, set(typing.get_type_hints(receipts.LedgerReceipt)))
         self.assertEqual(always, set(receipts.LedgerReceipt.__required_keys__))
-        self.assertEqual(len(every), 26)
+        self.assertEqual(len(every), 27)   # 0.27.0: failure_classes (SPEC v0.12 §5)
 
     def test_real_receipts_have_the_declared_shape(self):
         paths = sorted(glob.glob(os.path.join(HERE, "spec", "vectors", "*.jsonl"))) + \

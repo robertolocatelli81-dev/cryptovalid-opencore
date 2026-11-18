@@ -158,12 +158,19 @@ def _der_one(buf: bytes, where: str, tag: int):
     return items[0][1]
 
 
-def _der_uint(v: bytes, where: str) -> int:
+def _der_sint(v: bytes, where: str) -> int:
+    """a DER INTEGER in minimal form (X.690 §8.3.2), either sign"""
     if not v or (len(v) > 1 and ((v[0] == 0 and v[1] < 0x80) or (v[0] == 0xFF and v[1] >= 0x80))):
         raise TokenError("malformed", f"{where}: INTEGER not in minimal form")
-    if v[0] & 0x80:
+    return int.from_bytes(v, "big", signed=True)
+
+
+def _der_uint(v: bytes, where: str) -> int:
+    """a DER INTEGER in minimal form that the field's definition keeps non-negative (versions, PKIStatus, serialNumber)"""
+    n = _der_sint(v, where)
+    if n < 0:
         raise TokenError("malformed", f"{where}: negative INTEGER")
-    return int.from_bytes(v, "big")
+    return n
 
 
 def _der_oid(v: bytes, where: str) -> str:
@@ -263,7 +270,7 @@ def parse_token(der: bytes) -> dict:
         if t == 0x01:
             _check(v in (b"\x00", b"\xff"), "malformed", "ordering is not a DER BOOLEAN")
         if t == 0x02:
-            nonce = _der_uint(v, "nonce")
+            nonce = _der_sint(v, "nonce")   # SPEC v0.12 §11 step 3: RFC 3161 §2.4.2 sets no sign (a real DigiCert one is negative)
         if t == 0xA1:   # review of 13/11/2026: Extensions (RFC 5280 §4.1): a critical one is not understood here, so refused
             exts = _der_items(v, "extensions")
             _check(exts and all(et == 0x30 for et, _ in exts), "malformed", "extensions is not SEQUENCE SIZE (1..MAX) OF Extension")

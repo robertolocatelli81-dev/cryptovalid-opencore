@@ -288,7 +288,9 @@ Other people's work this repository uses, each under its own licence:
   (BSD-3-Clause) in `testdata/interop/`; action-state-group/scitt-cose at commit e76bbfdf7a02 (Apache-2.0, with its
   NOTICE) in `spec/vectors/scitt-cose/`; NIST Randomness Beacon 2.0 pulses (U.S. government work, 17 U.S.C. §105) in
   `spec/vectors/beacon/nist/` (with the statement NIST asks for, `NIST-STATEMENT.txt`); tokens of public time-stamping
-  services in `spec/vectors/rfc3161/`; the Cedar policy and key-window vectors of ScopeBlind/agent-governance-testvectors
+  services in `spec/vectors/rfc3161/`; RFC 3161 tokens committed in thebristolsound/birdbrain (MIT), esig/dss of the
+  European Commission (LGPL-2.1) and dfandrich/fileviewinfo (MIT), licence text beside them, in
+  `spec/vectors/rfc3161/third_party/`; the Cedar policy and key-window vectors of ScopeBlind/agent-governance-testvectors
   (Apache-2.0, licence text beside them) and receipts made with protect-mcp 0.29.0 (MIT) in `examples/acta/`. See
   [NOTICE](NOTICE).
 - **Data not shipped**: no ISO 4217 table; `tools/iso4217_table.py` builds the one you pin (`--currency-table`) from your

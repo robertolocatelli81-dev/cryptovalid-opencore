@@ -41,6 +41,7 @@ class LedgerReceipt(_LedgerReceiptAlways, total=False):
     tip: Optional[Dict[str, Any]]     # None: no signed chain tip was checked
     scope: Dict[str, Any]             # what the verdict proves and does not prove
     signatures_not_checked: int       # present only when entries carry a signature layer
+    failure_classes: Dict[str, Any]   # 0.27.0, present only on a FAIL with entries read: SPEC §5 "Failure classes"
     receipt_sha256: str
     receipt_sha3_256: str
 

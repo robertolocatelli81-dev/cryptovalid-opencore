@@ -1,0 +1,31 @@
+{
+ "kind": "cryptovalid_rfc3161_third_party_vectors/1",
+ "spec": "SPEC_EVIDENCE_FORMAT.md §11 (v0.12)",
+ "how": "files committed in other projects' repositories, fetched on 2026-11-18 with `gh api` (contents API, raw) at the commit named, kept byte for byte (sigstore_signer_absent.tsr: the base64 field named, decoded); the licence of each repository read on 2026-11-18 from its LICENSE file at that commit; found on 2026-11-18 by a measurement of this package over 126 files committed in other projects on GitHub",
+ "check": "cryptovalid_tsa.verify_token(token, digest, hash_alg, tsa_certs)",
+ "vectors": [
+  {"file": "digicert_negative_nonce.tsr", "sha256": "6b14b4bc2db1373e4c545137ceaadbc15914500b0e6c18cc9836e4f803833713",
+   "source": "https://github.com/thebristolsound/birdbrain/blob/ac40b47697c58f69ed0fe3f856eff468fdcc0a95/tests/fixtures/timestamp/digicert-response.tsr",
+   "licence": "MIT, Copyright (c) 2026 Matt Donovan (LICENSE.birdbrain)",
+   "what": "a TimeStampResp of DigiCert SHA256 RSA4096 Timestamp Responder 2025 1, genTime 2026-05-30T19:31:07Z, nonce -0x5BDDFD8205AA38EC (RFC 3161 §2.4.2: nonce INTEGER, no sign set)",
+   "digest_sha256": "ed86a486cca1a9e9de75363b58ea86e595452c89ba6031c19f5ead3df0e0c349",
+   "expect": {"unpinned": "signature_only", "pinned digicert_trusted_root_g4.pem": "verified", "pinned ../freetsa_cacert.pem": "invalid/not_issued_by_pinned_tsa", "until 0.26.0": "invalid/malformed (nonce: negative INTEGER)"},
+   "independent": "openssl 3.0 ts -verify -token_in -in <the token of the response> -digest <digest_sha256> -CAfile digicert_trusted_root_g4.pem -untrusted <the token's CA certificate> -attime 1780169467: Verification: OK; another digest: message imprint mismatch"},
+  {"file": "digicert_trusted_root_g4.pem", "sha256_of_der": "552f7bdcf1a7af9e6ce672017f4f12abf77240c78e761ac203d1d9d20ac89988",
+   "source": "https://cacerts.digicert.com/DigiCertTrustedRootG4.crt (DER, fetched on 2026-11-18, written here as PEM; byte-identical to the DigiCert_Trusted_Root_G4 of the system CA store)",
+   "licence": "a public CA certificate, published by DigiCert for relying parties"},
+  {"file": "eurocert_signeddata_v1.tst", "sha256": "2201679aa8d2ce99ce7d7843e224f4011ee55421ae523b5d44efe78af9bce0e3",
+   "source": "https://github.com/esig/dss/blob/e234c93d893f5eeb687873a4e0c564bab4955f08/dss-validation/src/test/resources/tst-two-refs.tst",
+   "licence": "LGPL-2.1 (the DSS project, European Commission; full text in LICENSE.dss); distributed here unmodified",
+   "what": "a TimeStampToken of EuroCert QTSA, genTime 2022-05-31, whose SignedData.version is 1 with eContentType id-ct-TSTInfo; RFC 5652 §5.1: '(encapContentInfo eContentType is other than id-data) THEN version MUST be 3' (rfc-editor.org text of 2026-11-18, sha256 dbd209ae7844031f51722c4d9e2d1fa3fff3081319851d581f914f5f0147f918)",
+   "expect": {"unpinned": "invalid/malformed (SignedData version is not 3 (RFC 5652 §5.1))"},
+   "independent": "openssl asn1parse: offset 23 INTEGER :01, offset 47 OBJECT :id-smime-ct-TSTInfo; openssl 3.0 ts -reply -token_in -text parses it with no remark on the version; ts -verify with the one certificate it carries stops at 'ess cert id not found'"},
+  {"file": "sigstore_signer_absent.tsr", "sha256": "ab7365f32972f2d9f73cc7dacc6fefc61813b7ea003ca58f6adce4d05d79032f",
+   "source": "verificationMaterial.timestampVerificationData.rfc3161Timestamps[0].signedTimestamp of https://github.com/dfandrich/fileviewinfo/blob/f95475f70a54eb90c62db037dfc152cfa5c4f9b6/testfiles/type1.sigstore.json (sha256 4a13ce8ec671aa6aed79fe6e8dfcc1bc79142e9d9387c43236057fa85dd3e7f7), base64-decoded",
+   "licence": "MIT, Copyright (c) 2003-2026 Dan Fandrich (LICENSE.fileviewinfo)",
+   "what": "a TimeStampResp (status granted) of a Sigstore bundle (policy 1.3.6.1.4.1.57264.2, genTime 2025-11-05T07:18:19Z) that carries no certificate: its imprint is the SHA-256 of the bundle's DSSE signature",
+   "digest_sha256": "b9e42501ff3916ae839eab6a9175f2977b4d8efca5277494e254348c85b3079a",
+   "expect": {"unpinned": "invalid/signer_certificate_absent", "pinned ../freetsa_cacert.pem": "invalid/signer_certificate_absent", "until 0.26.0": "invalid/signature_invalid"},
+   "independent": "openssl 3.0 ts -verify -in <file> -digest <digest_sha256> -CAfile ../freetsa_cacert.pem: Verification: FAILED, PKCS7_get0_signers: signer certificate not found"}
+ ]
+}

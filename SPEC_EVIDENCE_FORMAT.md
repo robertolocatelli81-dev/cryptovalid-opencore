@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.11 (2026-11-18; v0.10 2026-11-16, v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
+# CryptoValid Evidence Format — candidate standard v0.12 (2026-11-18; v0.11 2026-11-18, v0.10 2026-11-16, v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -152,6 +152,24 @@ forces a boolean where reality had none.
    and the receipt's own SHA-256 (receipt-of-receipt, deterministic: timestamp
    excluded).
 
+**Failure classes (v0.12, 2026-11-18; a presentation of the receipt, the verdict does not change).** A FAIL can mean two
+different things: the chain is broken, or the entries are not written in this format. On a ledger of another schema the
+two came out mixed: measured on 2026-11-18 on a third-party ledger of 179 entries that hashes as §3 does
+(`self_hash`/`prev_hash` the same rule) but carries its own fields and no `idx`, `verifier.py` 0.26.0 named its 4 true
+link breaks among one `unknown_field` and one `idx_mismatch` per entry, and `cryptovalid-verify ledger` listed 4 + 10 +
+10 reasons. The receipt of `verifier.py` for a FAIL with entries read therefore carries `failure_classes`, counts over
+every entry (not capped like the lists), with a closed set of members:
+`{"chain": {"link_mismatch", "hash_mismatch"}, "format": {"unknown_field", "idx_mismatch", "missing_self_hash",
+"missing_prev_hash"}, "other"}`. `chain.link_mismatch` counts the entries that carry `prev_hash` and whose `prev_hash` is
+not the previous entry's `self_hash` (genesis: 64 zeros): it needs only those two fields, so it holds on any schema that
+names them so. `chain.hash_mismatch` counts the entries whose `self_hash` does not recompute under §3: on a ledger of
+another schema it may come from another canonical form, not from a change. `format` counts the entries outside §2
+(top-level keys outside §2.1, `idx` not equal to the position, `self_hash` or `prev_hash` absent); they say nothing on the
+links. `other` counts the remaining errors (lines that are not JSON objects, nesting, zero entries, the caller's
+expectations of §17, the tip). The receipt of a PASS is unchanged. `cryptovalid-verify ledger` (and `auto` when it
+reads a ledger) writes the classes first in the layer's `detail`, copies them as `failure_classes`, and lists the chain's
+reasons (links, then hashes) before the schema's. The other five verifiers do not emit the member.
+
 Reference implementation: `verifier.py` (steps 1–4 + receipt, stdlib-only); `signer.py verify` (step 5, Ed25519 and,
 when present, ML-DSA-65). Steps 5–6 are OPTIONAL profiles: a verifier may leave them out (and says so: see below), their
 absence never weakens steps 1–4; a verifier that performs step 5 follows its profile. Who performs them, measured on
@@ -282,6 +300,12 @@ signer certificate, the ones after it limit the certificates of the path), check
 the last certificate of the list (sectigo.tsr of spec/vectors/rfc3161 with its CA R41 pinned) was
 `not_issued_by_pinned_tsa` and is `verified`; a path through a certificate the list leaves out is refused (OpenSSL
 accepted it). Every other token has the outcome of v0.10.
+v0.12 (2026-11-18) reads the TSTInfo's `nonce` as an INTEGER of either sign (§11 step 3): until v0.11 the code refused a
+negative one as `malformed`, stricter than §11 itself, which asked "not negative" only of `serialNumber`. Measured on
+2026-11-18 on a real DigiCert token (nonce -0x5BDDFD8205AA38EC, `spec/vectors/rfc3161/third_party/`): 0.26.0 said
+`invalid / malformed`, OpenSSL `ts -verify` OK; now `verified` under the DigiCert root pinned. A token with a nonce in
+non-minimal form is still `malformed`. v0.12 also adds to §5 the failure classes of a FAIL receipt (`failure_classes`),
+an added member: the verdict, the receipt of a PASS and the other verifiers do not change.
 
 ## 7. Conformance (normative)
 
@@ -435,7 +459,8 @@ first that fails gives the outcome:
    `econtent_type_not_tstinfo`.
 3. **TSTInfo, closed.** `{version 1, policy OID, messageImprint {hashAlgorithm {OID, NULL or absent}, hashedMessage
    OCTET STRING}, serialNumber INTEGER (not negative), genTime GeneralizedTime}` then, each at most once and in this
-   order, `accuracy` (SEQUENCE), `ordering` (BOOLEAN, DER: 00 or FF), `nonce` (INTEGER), `tsa` ([0]), `extensions`
+   order, `accuracy` (SEQUENCE), `ordering` (BOOLEAN, DER: 00 or FF), `nonce` (INTEGER of either sign, v0.12: RFC 3161
+   §2.4.2 writes `nonce INTEGER OPTIONAL` and sets no sign), `tsa` ([0]), `extensions`
    ([1], Extensions of RFC 5280 §4.1); any other element, a repeated one or one out of order, and any extension marked
    critical (none is understood here), is `tstinfo_unknown_element`. genTime is
    `YYYYMMDDhhmmss[.f+]Z` (RFC 3161 §2.4.2: UTC, no trailing zero in the fraction) and a real calendar time.
