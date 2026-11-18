@@ -76,10 +76,9 @@ _WRITE_ENABLED = os.environ.get("CRYPTOVALID_MCP_ALLOW_WRITE") == "1"
 # ────────────────────────────────────────────────────────────── provenance
 
 def _sha256_file(p: str) -> Optional[str]:
-    try:
-        with open(p, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest()
-    except OSError:
+    try:   # SPEC §5 step 0: opened once without blocking, hashed in blocks (a FIFO left the server waiting, 18/11/2026)
+        return verifier.sha256_regular(p, float("inf"))
+    except OSError:   # not a regular file (InputNotRegular), absent, unreadable: no provenance hash, never a wait
         return None
 
 

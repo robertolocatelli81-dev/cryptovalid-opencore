@@ -15,7 +15,8 @@ run by the same author, not by a third party.
   "Failure classes", written before the code). Measured on 2026-11-18 on a third-party ledger of 179 entries (another
   schema: its own fields, no `idx`, `self_hash`/`prev_hash` by the rule of §3; not shipped here, it has no licence):
   0.26.0 named its 4 true link breaks among one `unknown_field` and one `idx_mismatch` per entry, and `cryptovalid-verify
-  ledger` listed 4 + 10 + 10 reasons. The receipt of `verifier.py` for a FAIL now carries `failure_classes`, counts over
+  ledger` listed 4 + 10 + 10 reasons. The receipt of `verifier.py` for a FAIL of a file it read (zero entries included,
+  counted in `other`; not the FAILs of §5 step 0: unreadable, too large, a FIFO idle) now carries `failure_classes`, counts over
   every entry with a closed set of members: `chain` (`link_mismatch`, `hash_mismatch`), `format` (`unknown_field`,
   `idx_mismatch`, `missing_self_hash`, `missing_prev_hash`) and `other`; on that ledger `chain` 4 link / 0 hash, `format`
   179 / 179. `cryptovalid-verify ledger` (and `auto` on a ledger) writes the classes first in the layer's `detail`,
@@ -43,9 +44,9 @@ run by the same author, not by a third party.
   version: `ts -reply -token_in -text` prints it, `ts -verify` stops later, at "ess cert id not found"); and
   the token of a Sigstore bundle of dfandrich/fileviewinfo (MIT) without any certificate, `signer_certificate_absent`
   (0.26.0: `signature_invalid`, the entry below). `test_real_tokens_and_failure_classes_20261118.py`: the vectors, 610
-  INTEGER encodings drawn at random for the nonce and for serialNumber against an oracle from X.690 §8.3.2, tokens
-  signed here with 11 nonces of either sign, SignedData versions -1 to 6 and 256 on two real tokens; 8 of its 11 tests
-  fail on 255eec5, all pass here.
+  INTEGER encodings (10 chosen, 600 drawn at random) for the nonce and for serialNumber against an oracle from X.690
+  §8.3.2, tokens signed here with 11 nonces of either sign, SignedData versions -1 to 6 and 256 on two real tokens; 8
+  of its 11 tests fail on 255eec5, all pass here.
 
 - **A listed file was read whole into memory, and a FIFO could block the verifier** (SPEC v0.11 §5 step 0, §10, §11,
   written before the code; from an external review of 0.26.0, re-measured on 2026-11-18). `evidence_pack.verify_pack`
@@ -70,7 +71,7 @@ run by the same author, not by a third party.
   read whole, which 4f15a65 already did), all pass here, with and without `cryptography`.
 
 - **The files inside a pack and an archive, the tip and `signer.py verify` could still wait on a FIFO** (SPEC v0.12 §5
-  step 0 "every reader", written before the code). Measured on 2026-11-18 on the branch itself by replacing every file
+  step 0 "every path read", written before the code). Measured on 2026-11-18 on the branch itself by replacing every file
   of an evidence pack, of an ingest archive and of a tile directory, one at a time, with a FIFO, a link to `/dev/zero`
   and a directory and running the commands (100 cases, each in a child process with a timeout): `cryptovalid-verify pack` and `auto` on a
   pack whose MANIFEST.json is a FIFO did not return (`evidence_pack.verify_pack` refused it, then the front-end opened
@@ -83,7 +84,34 @@ run by the same author, not by a third party.
   `head_unreadable` (`InputNotRegular`), `tsa_token_invalid` with `unreadable: ...`, `tip_unreadable`, `not a regular
   file`, `input_unreadable`; `signer.py verify` on a path it cannot read (a FIFO, a device, a directory, an absent
   file) writes `{"ok": false, "error": "unreadable: ..."}` and exits 1 (until now a traceback for an absent file).
-  The files a writer reads (`signer.py sign`, `evidence_pack.py build`) are not covered (SPEC §5 step 0).
+  A review of 54fc7eb then found the sentence "every reader" false: `cryptovalid_jws verify`, `cryptovalid_scitt
+  verify`, `cryptovalid_witness verify`, `cryptovalid_receipt verify`, `cryptovalid_monitor` (its state),
+  `eidas_ledger_check`, `cryptovalid_heterogeneous`, `cryptovalid_reanchor`, `tx_evidence verify`, `dora_incident
+  verify`, `cryptovalid_report` (MANIFEST.json, SOLANA_ANCHOR.json) and the MCP server's `verify_pack` (its provenance
+  hash) did not return on a FIFO with no writer (`timeout 25`, exit 124). A bench then gave every string argument of
+  every command of the repository, one at a time, a FIFO with no writer and a link to `/dev/zero` (716 cases: 179
+  arguments of 44 commands in 22 modules; the commands that go to the network or serve were not run, and
+  `cryptovalid-verify` was measured apart with 210 cases): on 54fc7eb the command waited, or read the device without
+  bound, for 41 arguments that it reads (the ten commands above, and `cryptovalid_tip check`, the key files of every
+  signer, the inputs of `sign`, `register`, `cosign`, `attest`, `build`, `put`, the profiles of `refresh_regulatory`).
+  Now for none. The rule is one sentence with three readers (SPEC v0.12 §5 step 0): what a verifier, a checker or a
+  report reads is a regular file (`verifier.open_regular`, `read_regular`, `read_text_regular`, `sha256_regular`);
+  the ledger of `verifier.py` is a regular file or a pipe; what a writer reads once, a key file or the data it signs
+  or stores, is a regular file or a pipe read within a size bound and FAIL after 10 s without a byte
+  (`verifier.read_input`, new), so `signer.py sign ledger out <(a command that prints the key)` works as before and a
+  key path that is a FIFO with no writer is an error after 10 s (it waited without end). Readers the bench does not
+  reach from a command line were changed too: `cryptovalid_monitor --sth-file` and `--match`, the object
+  `cryptovalid_worm get` reads back, `cryptovalid_qeas`, `fundcert_crosssource` (the XLSX too), the LOTL cache, the
+  witness's state, the ingest writer's own segments, the source of `verifier.copy_output`.
+  `test_every_open_is_bounded_20261118.py` keeps the sentence true: it reads every module that is not a test and
+  fails on an `open()` of a path outside a closed list of 14 entries (a temporary file the module has just written, a
+  directory opened to fsync it, this distribution's `pyproject.toml`, the expected verdicts of `conformance.py`, the
+  development tools); on 54fc7eb it lists 52 calls outside the list and 6 of its 7 tests fail (the control passes).
+  `test_verifier_readers_no_block_20261118.py`: 2 of its 3 tests fail on 54fc7eb (the third, a regular file read as
+  before, is the control), all pass here.
+  Not covered (SPEC §5 step 0): a path a command writes: six output arguments (`--out`, `--cose`) still wait when the
+  path is a FIFO with no reader; and the form of the error: for 48 of the 179 arguments the command given a FIFO or
+  `/dev/zero` ends in a traceback and exit 1, not in a named failure.
   `test_every_reader_no_block_20261118.py`: 9 of its 10 tests fail on e5037e0 (the control passes), all pass here,
   with and without `cryptography`. Two faults of the two changes above, found by the full suite before release and
   corrected here: `test_packaging.py` reported the ledger's conditional `open` in `verifier.py` as a handle that is

@@ -92,8 +92,7 @@ def _load_sk(keyfile):
     if isinstance(keyfile, tuple):
         return keyfile
     Ed25519PrivateKey, _, ser = _ed()
-    with open(keyfile, encoding="utf-8") as f:
-        sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(f.read().strip()))
+    sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(read_input_text(keyfile, KEY_MAX_BYTES).strip()))   # SPEC §5 step 0
     return sk, sk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
 
 
@@ -141,8 +140,12 @@ def parse_instant(ts: str) -> Tuple[int, int]:
 
 def chain_tip(ledger_path: str) -> Dict:
     """(entries, ledger_id = first self_hash, last self_hash) read from the file — no verification here."""
+    try:   # SPEC §5 step 0: a regular file, opened once without blocking
+        from verifier import open_regular
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore.verifier import open_regular
     n, first, last = 0, GENESIS, GENESIS
-    with open(ledger_path, "rb") as f:
+    with os.fdopen(open_regular(ledger_path), "rb") as f:
         for line in f:
             if not line.strip():
                 continue
@@ -166,8 +169,7 @@ def load_pq_key(keyfile):
         return keyfile
     from cryptography.hazmat.primitives import serialization as ser
     from cryptography.hazmat.primitives.asymmetric import mldsa
-    with open(keyfile, encoding="utf-8") as f:
-        sk = ser.load_der_private_key(base64.b64decode(f.read().strip()), password=None)
+    sk = ser.load_der_private_key(base64.b64decode(read_input_text(keyfile, KEY_MAX_BYTES).strip()), password=None)   # SPEC §5 step 0
     if not isinstance(sk, mldsa.MLDSA65PrivateKey):
         raise ValueError("not an ML-DSA-65 private key")
     return sk, base64.b64encode(sk.public_key().public_bytes_raw()).decode()
@@ -353,9 +355,9 @@ def load_tip(path: str) -> Dict:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import _Once, Parser, check_ledger_id_arg, emit, receipt_cli, say, write_output
+    from verifier import check_ledger_id_arg, emit, KEY_MAX_BYTES, _Once, Parser, read_input_text, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import _Once, Parser, check_ledger_id_arg, emit, receipt_cli, say, write_output
+    from opencore.verifier import check_ledger_id_arg, emit, KEY_MAX_BYTES, _Once, Parser, read_input_text, receipt_cli, say, write_output
 
 
 @receipt_cli

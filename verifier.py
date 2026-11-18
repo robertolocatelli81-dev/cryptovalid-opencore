@@ -396,7 +396,7 @@ def copy_output(src: str, path: str) -> None:
 
     def lost(e):
         return OutputNotWritten(f"{path}: {e.strerror or e}")
-    with open(src, "rb") as f:
+    with os.fdopen(open_regular(src, float("inf")), "rb") as f:   # SPEC §5 step 0: a regular file, opened once without blocking
         try:
             fd = os.open(tmp, flags, 0o666)
         except OSError as e:
@@ -690,6 +690,37 @@ def sha256_regular(path: str, limit: int = MAX_INPUT_BYTES, block: int = 1 << 20
                 raise InputTooLarge(f"{path}: larger than {limit} bytes")
             h.update(b)
     return h.hexdigest()
+
+
+def read_text_regular(path: str, limit: int = MAX_INPUT_BYTES) -> str:
+    """the text of a regular file of at most `limit` bytes (read_regular), decoded as open(path, encoding="utf-8")
+    decodes it (strict UTF-8, universal newlines): for the readers that used open() on a path (SPEC §5 step 0)"""
+    import io
+    return io.TextIOWrapper(io.BytesIO(read_regular(path, limit)), encoding="utf-8").read()
+
+
+KEY_MAX_BYTES = 1 << 20   # a key file read by a signer (hex seed, base64 DER): far above any key this package reads
+
+
+def read_input(path: str, limit: int = MAX_INPUT_BYTES, idle: float = FIFO_IDLE_SECONDS) -> bytes:
+    """SPEC §5 step 0 (v0.12), what a WRITER reads from a path it was given (the data it signs or stores, a key file):
+    a regular file of at most `limit` bytes, or a FIFO read to its end as the ledger verifier reads one
+    (open_ledger_input: `<(command)` works, bounded in size, and a pipe that gives no byte and no end of file for `idle`
+    seconds is InputIdle, never a wait without end). A device or a directory is InputNotRegular. All are OSError."""
+    fd, piped = open_ledger_input(path, limit, idle)
+    if piped is not None:
+        return piped
+    with os.fdopen(fd, "rb") as f:
+        data = f.read(limit + 1)
+    if len(data) > limit:
+        raise InputTooLarge(f"{path}: larger than {limit} bytes")
+    return data
+
+
+def read_input_text(path: str, limit: int = MAX_INPUT_BYTES, idle: float = FIFO_IDLE_SECONDS) -> str:
+    """read_input decoded as open(path, encoding="utf-8") decodes it (strict UTF-8, universal newlines)"""
+    import io
+    return io.TextIOWrapper(io.BytesIO(read_input(path, limit, idle)), encoding="utf-8").read()
 
 
 def input_too_large(path: str) -> bool:

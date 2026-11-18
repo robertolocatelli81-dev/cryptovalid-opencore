@@ -76,7 +76,7 @@ def _canon(obj: Dict) -> bytes:
 
 def _first_entry(path: str) -> Dict:
     try:
-        with open(path, encoding="utf-8") as f:
+        with os.fdopen(verifier.open_regular(path), encoding="utf-8") as f:   # SPEC §5 step 0
             return json.loads(f.readline() or "{}")
     except Exception:  # noqa: BLE001
         return {}
@@ -262,8 +262,8 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
         try:
             from cryptography.hazmat.primitives import serialization as _ser
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey as _Sk
-            with open(sign_key, encoding="utf-8") as f:
-                sk = _Sk.from_private_bytes(bytes.fromhex(f.read().strip()))
+            sk = _Sk.from_private_bytes(bytes.fromhex(   # SPEC §5 step 0: a regular file or a pipe, bounded
+                verifier.read_input_text(sign_key, verifier.KEY_MAX_BYTES).strip()))
             manifest["manifest_signer"] = sk.public_key().public_bytes(
                 _ser.Encoding.Raw, _ser.PublicFormat.Raw).hex()
             manifest["manifest_signature"] = base64.b64encode(

@@ -588,7 +588,12 @@ def parse_ssga_xlsx(path: str) -> Holdings:
     import re
     import zipfile
     NS = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
-    z = zipfile.ZipFile(path)
+    import io
+    try:
+        from verifier import read_regular
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore.verifier import read_regular
+    z = zipfile.ZipFile(io.BytesIO(read_regular(path)))   # SPEC §5 step 0: a regular file, opened once without blocking
     ss = []
     if "xl/sharedStrings.xml" in z.namelist():
         for si in _safe_fromstring(z.read("xl/sharedStrings.xml")).findall("a:si", NS):

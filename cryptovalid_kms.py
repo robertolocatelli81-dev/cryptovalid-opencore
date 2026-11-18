@@ -110,9 +110,8 @@ class FileKeyBackend:
         # cache: una lettura sola (evita N read + TOCTOU a metà ledger)
         if self._cached is None:
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-            with open(self._path, encoding="utf-8") as f:
-                self._cached = Ed25519PrivateKey.from_private_bytes(
-                    bytes.fromhex(f.read().strip()))
+            self._cached = Ed25519PrivateKey.from_private_bytes(   # SPEC §5 step 0: a regular file or a pipe, bounded
+                bytes.fromhex(read_input_text(self._path, KEY_MAX_BYTES).strip()))
         return self._cached
 
     def public_key_hex(self) -> str:
@@ -879,9 +878,9 @@ def backend_from_uri(uri: str, **extra):
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say
+    from verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, receipt_cli, say
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say
+    from opencore.verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, receipt_cli, say
 
 
 @receipt_cli

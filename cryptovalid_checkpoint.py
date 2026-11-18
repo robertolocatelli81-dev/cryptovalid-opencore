@@ -266,11 +266,10 @@ def parse_vkey(s: str, strict: bool = True) -> Tuple[str, bytes, int, bytes]:
 
 
 def load_seed_hex(path: str) -> bytes:
-    with open(path, encoding="utf-8") as f:
-        try:
-            seed = bytes.fromhex(f.read().strip())
-        except ValueError:
-            raise NoteError("key file is not hex") from None
+    try:   # SPEC §5 step 0: a regular file or a pipe, bounded (read_input)
+        seed = bytes.fromhex(read_input_text(path, KEY_MAX_BYTES).strip())
+    except ValueError:
+        raise NoteError("key file is not hex") from None
     if len(seed) != 32:
         raise NoteError("key file must hold a 32-byte hex seed (signer.py keygen)")
     return seed
@@ -580,9 +579,9 @@ def verify_consistency_b64(old_size: int, old_root: bytes, new_size: int, new_ro
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import OutputNotWritten, Parser, emit, receipt_cli, say, write_output
+    from verifier import emit, KEY_MAX_BYTES, OutputNotWritten, Parser, read_input_text, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import OutputNotWritten, Parser, emit, receipt_cli, say, write_output
+    from opencore.verifier import emit, KEY_MAX_BYTES, OutputNotWritten, Parser, read_input_text, receipt_cli, say, write_output
 
 
 @receipt_cli

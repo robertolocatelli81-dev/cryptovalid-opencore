@@ -121,9 +121,9 @@ def verify_heterogeneous_anchor(expected_sha3_hex: str, attestations: List[Dict]
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import CheckNotRun, Parser, emit, receipt_cli, say
+    from verifier import CheckNotRun, Parser, emit, read_text_regular, receipt_cli, say
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import CheckNotRun, Parser, emit, receipt_cli, say
+    from opencore.verifier import CheckNotRun, Parser, emit, read_text_regular, receipt_cli, say
 
 
 @receipt_cli
@@ -136,8 +136,7 @@ def main(argv=None):
     p.add_argument("attestations_json", help="JSON file: list of attestations [{\"domain\": ...}, ...]")
     p.add_argument("--min-domains", type=int, default=2)
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
-    with open(a.attestations_json, encoding="utf-8") as f:
-        atts = json.load(f)
+    atts = json.loads(read_text_regular(a.attestations_json))   # SPEC §5 step 0: opened once without blocking
     r = verify_heterogeneous_anchor(a.digest_sha3_hex, atts, min_domains=a.min_domains)
     emit(json.dumps(r, ensure_ascii=False, indent=1))
     return 0 if r.get("ok") else 1

@@ -191,8 +191,7 @@ def verify_attestation(att: Dict, txs: List[Tx]) -> Dict:
 
 
 def _load_txs(path: str) -> List[Tx]:
-    with open(path, encoding="utf-8") as f:
-        rows = json.load(f)
+    rows = json.loads(read_text_regular(path))   # SPEC §5 step 0: opened once without blocking
     return [Tx(txid=str(r.get("txid", i)), kind=r["kind"], asset=r["asset"],
                qty=str(r["qty"]), unit_price=str(r.get("unit_price", "0")),
                currency=r.get("currency", "USD"), ts=r.get("ts", ""),
@@ -200,9 +199,9 @@ def _load_txs(path: str) -> List[Tx]:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say
+    from verifier import Parser, emit, read_text_regular, receipt_cli, say
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say
+    from opencore.verifier import Parser, emit, read_text_regular, receipt_cli, say
 
 
 @receipt_cli
@@ -226,8 +225,7 @@ def main(argv=None) -> int:
                          ensure_ascii=False, indent=1))
         return 0
     if a.cmd == "verify":
-        with open(a.attestation_json, encoding="utf-8") as f:
-            att = json.load(f)
+        att = json.loads(read_text_regular(a.attestation_json))
         r = verify_attestation(att, _load_txs(a.transactions_json))
         emit(json.dumps(r, ensure_ascii=False, indent=1))
         return 0 if r["valid"] else 1

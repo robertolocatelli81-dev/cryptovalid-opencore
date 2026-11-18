@@ -88,8 +88,7 @@ def statement_id(cose: bytes) -> str:
 
 def _load_sk(keyfile: str):
     Ed, _, ser, _ = _ed()
-    with open(keyfile, encoding="utf-8") as f:
-        sk = Ed.from_private_bytes(bytes.fromhex(f.read().strip()))
+    sk = Ed.from_private_bytes(bytes.fromhex(read_input_text(keyfile, KEY_MAX_BYTES).strip()))   # SPEC §5 step 0
     return sk, sk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw)
 
 
@@ -182,7 +181,7 @@ def register(cose: bytes, ledger_path: str, issuer_pubkey_hex: str, payload: Opt
     try:
         entries = []
         if os.path.exists(ledger_path):
-            with open(ledger_path, encoding="utf-8") as f:
+            with os.fdopen(open_regular(ledger_path), encoding="utf-8") as f:   # SPEC §5 step 0: the ledger appended to
                 entries = [json.loads(l) for l in f if l.strip()]
         prev = entries[-1]["self_hash"] if entries else "0" * 64
         e = {"idx": len(entries), "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -324,14 +323,13 @@ def verify_transparent_statement(cose: bytes, issuer_pubkey_hex: str, ts_pubkey_
 
 
 def _read_bytes(path: str) -> bytes:
-    with open(path, "rb") as f:
-        return f.read()
+    return read_input(path)   # SPEC §5 step 0: a regular file or a pipe, bounded
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import OutputNotWritten, Parser, append_line, emit, receipt_cli, refuse_directory, say, write_output
+    from verifier import append_line, emit, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import OutputNotWritten, Parser, append_line, emit, receipt_cli, refuse_directory, say, write_output
+    from opencore.verifier import append_line, emit, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
 
 
 @receipt_cli
@@ -349,15 +347,13 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     try:
         if a.cmd == "sign":
-            with open(a.statement, "rb") as f:
-                pl = f.read()
+            pl = _read_bytes(a.statement)
             cose = signed_statement(pl, a.cty, a.iss, a.sub, a.key, detached=a.detached)
             write_output(a.out, cose)   # 0.20.3: whole at --out, or exit 74
             emit(json.dumps({"stato": "OK", "bytes": len(cose), "sha256": hashlib.sha256(cose).hexdigest()})); return 0
         if a.cmd == "register":
             refuse_directory(a.out)   # 0.20.3: before the ledger line, never after it
-            with open(a.signed, "rb") as f:
-                cose = f.read()
+            cose = _read_bytes(a.signed)
             pl = _read_bytes(a.statement) if a.statement else None
             reg = register(cose, a.ledger, a.issuer_pubkey, pl)
             rc = receipt(a.ledger, reg["index"], a.ts_key, a.ts_iss)
@@ -368,9 +364,8 @@ def main(argv=None) -> int:
                 raise OutputNotWritten(f"{e}; the statement is registered in the ledger (index {reg['index']}): only the "
                                        "transparent statement was not written") from None
             emit(json.dumps({"stato": "OK", **reg, "transparent_bytes": len(ts)})); return 0
-        with open(a.transparent, "rb") as f:
-            ts = f.read()
-        pl = _read_bytes(a.statement) if a.statement else None
+        ts = read_regular(a.transparent)   # SPEC §5 step 0: opened once without blocking
+        pl = read_regular(a.statement) if a.statement else None
         res = verify_transparent_statement(ts, a.issuer_pubkey, a.ts_pubkey, pl, a.ts_iss)
         emit(json.dumps(res, ensure_ascii=False)); return 0 if res["ok"] else 1
     except OutputNotWritten:

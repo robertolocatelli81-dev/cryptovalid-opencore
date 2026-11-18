@@ -45,18 +45,16 @@ def _load(path: str, kind: str):
     if kind == "ssga-xlsx":
         return parse_ssga_xlsx(path)
     if kind == "nport-xml":
-        with open(path, encoding="utf-8") as f:
-            return parse_nport_xml(f.read())
+        return parse_nport_xml(read_text_regular(path))   # SPEC §5 step 0: opened once without blocking
     if kind == "csv":
-        with open(path, encoding="utf-8") as f:
-            return parse_holdings_csv(f.read())
+        return parse_holdings_csv(read_text_regular(path))
     raise SystemExit(f"unknown type: {kind} (use ssga-xlsx | csv | nport-xml)")
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say
+    from verifier import Parser, emit, read_text_regular, receipt_cli, say
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say
+    from opencore.verifier import Parser, emit, read_text_regular, receipt_cli, say
 
 
 @receipt_cli

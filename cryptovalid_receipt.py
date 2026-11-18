@@ -185,8 +185,7 @@ def _order_problem(pub: bytes, sig: bytes):
 
 def _load_sk(keyfile: str):
     Ed25519PrivateKey, _, ser = _ed()
-    with open(keyfile, encoding="utf-8") as f:
-        sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(f.read().strip()))
+    sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(read_input_text(keyfile, KEY_MAX_BYTES).strip()))   # SPEC §5 step 0
     pk = sk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
     return sk, pk
 
@@ -238,8 +237,8 @@ def inclusion_receipt(ledger_path: str, index: int, keyfile: str, tsa_url: Optio
         raise IndexError(f"index {index} outside the ledger ({len(leaves)} entries)")
     sth = signed_tree_head(leaves, keyfile)
     path = [h.hex() for h in M.inclusion_proof(index, leaves)]
-    with open(ledger_path, encoding="utf-8") as f:
-        entry = [json.loads(l) for l in f if l.strip()][index]
+    import io
+    entry = [json.loads(l) for l in io.StringIO(read_text_regular(ledger_path)) if l.strip()][index]   # SPEC §5 step 0
     r = {"kind": KIND, "proof_type": "inclusion", "vds": "RFC9162_SHA256",
          "leaf_index": index, "tree_size": len(leaves), "inclusion_path": path,
          "leaf_sha256": M.leaf_hash(leaves[index]).hex(), "entry_self_hash": entry.get("self_hash"),
@@ -517,9 +516,9 @@ def verify_cose(cose: bytes, trusted_pubkey_hex: str, leaf_hash_hex: Optional[st
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say, write_output
+    from verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, read_text_regular, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say, write_output
+    from opencore.verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, read_text_regular, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -548,14 +547,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             write_output(args.cose, to_cose(r, args.keyfile))   # 0.20.3: whole, or exit 74
         emit(json.dumps(r, indent=1)); return 0
     if args.cmd == "consistency":
-        with open(args.old_sth_json, encoding="utf-8") as f:
-            old = json.load(f)
+        old = json.loads(read_input_text(args.old_sth_json))   # SPEC §5 step 0: a regular file or a pipe, bounded
         r = consistency_receipt(old.get("sth", old), args.ledger, args.keyfile)
         emit(json.dumps(r, indent=1)); return 0 if r.get("ok", True) else 1
     def _load(path, what):   # unreadable / not JSON / not an object: a verdict, never a traceback (audit V1 #7)
         try:
-            with open(path, encoding="utf-8") as f:
-                obj = json.load(f)
+            obj = json.loads(read_text_regular(path))   # SPEC §5 step 0: opened once without blocking
         except (OSError, ValueError, RecursionError) as e:
             return None, f"{what} unreadable: {type(e).__name__}"
         return (obj, None) if isinstance(obj, dict) else (None, f"{what} is not a JSON object")

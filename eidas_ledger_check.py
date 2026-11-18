@@ -109,8 +109,9 @@ def _tsa_tokens(entries, tsa_certs=None):
 
 
 def _entries(path: str) -> List[Dict]:
-    with open(path, encoding="utf-8") as f:
-        return [json.loads(l) for l in f if l.strip()]
+    import io
+    # SPEC §5 step 0: opened once without blocking; the lines as open() gave them
+    return [json.loads(l) for l in io.StringIO(read_text_regular(path)) if l.strip()]
 
 
 def assess(ledger_path: str, deployment: Optional[Dict] = None, tsa_certs=None) -> Dict:
@@ -259,9 +260,9 @@ def practice_statement(ledger_path: str, provider: str = "<provider>", deploymen
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say
+    from verifier import Parser, emit, read_text_regular, receipt_cli, say
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say
+    from opencore.verifier import Parser, emit, read_text_regular, receipt_cli, say
 
 
 @receipt_cli

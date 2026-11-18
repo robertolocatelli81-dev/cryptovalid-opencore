@@ -74,7 +74,8 @@ class LocalWormStore:
         p = self._path(key)
         if not os.path.exists(p):
             raise WormError(f"WORM: '{key}' absent")
-        with open(p, "rb") as f:
+        # SPEC §5 step 0: opened once without blocking, judged on the descriptor (an object is a regular file, 0400)
+        with os.fdopen(open_regular(p, float("inf")), "rb") as f:
             return f.read()
 
     def exists(self, key: str) -> bool:
@@ -137,9 +138,9 @@ def retrieve_record(record_id: str, key_id: str, worm: LocalWormStore, keyring: 
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say, write_all_bytes, write_new
+    from verifier import emit, open_regular, Parser, read_input, receipt_cli, say, write_all_bytes, write_new
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say, write_all_bytes, write_new
+    from opencore.verifier import emit, open_regular, Parser, read_input, receipt_cli, say, write_all_bytes, write_new
 
 
 @receipt_cli
@@ -155,8 +156,7 @@ def main(argv=None):
     pg.add_argument("store"); pg.add_argument("key")
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     if a.cmd == "put":
-        with open(a.file, "rb") as f:
-            emit(json.dumps(LocalWormStore(a.store).put(a.key, f.read())))
+        emit(json.dumps(LocalWormStore(a.store).put(a.key, read_input(a.file))))   # SPEC §5 step 0: a file or a pipe, bounded
         return 0
     if a.cmd == "get":
         write_all_bytes(LocalWormStore(a.store).get(a.key))   # 0.20.3: every byte, or exit 74

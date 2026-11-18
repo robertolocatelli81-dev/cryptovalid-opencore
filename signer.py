@@ -178,11 +178,20 @@ def load_pq_key(path: str):
     if m is None:
         raise RuntimeError("ML-DSA-65 needs cryptography >= 50.0.1")
     from cryptography.hazmat.primitives import serialization as ser
-    with open(path, encoding="utf-8") as f:
-        sk = ser.load_der_private_key(base64.b64decode(f.read().strip()), password=None)
+    sk = ser.load_der_private_key(base64.b64decode(_read_input_text(path, key=True).strip()), password=None)
     if not isinstance(sk, m.MLDSA65PrivateKey):
         raise ValueError("not an ML-DSA-65 private key")
     return sk, base64.b64encode(sk.public_key().public_bytes_raw()).decode()
+
+
+def _read_input_text(path: str, key: bool = False) -> str:
+    """SPEC §5 step 0 (v0.12): the ledger to sign or a key file, a regular file or a pipe read bounded in size and in
+    idle time (verifier.read_input): a FIFO with no writer is an OSError after 10 s, a device is refused"""
+    try:
+        from verifier import KEY_MAX_BYTES, MAX_INPUT_BYTES, read_input_text
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore.verifier import KEY_MAX_BYTES, MAX_INPUT_BYTES, read_input_text
+    return read_input_text(path, KEY_MAX_BYTES if key else MAX_INPUT_BYTES)
 
 
 class _InlineFileBackend:
@@ -190,8 +199,7 @@ class _InlineFileBackend:
 
     def __init__(self, keyfile: str):
         Ed25519PrivateKey, _, _ = _ed()
-        with open(keyfile, encoding="utf-8") as f:
-            self._sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(f.read().strip()))
+        self._sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(_read_input_text(keyfile, key=True).strip()))
 
     def public_key_hex(self) -> str:
         from cryptography.hazmat.primitives import serialization as ser
@@ -241,7 +249,8 @@ def sign_ledger(in_path: str, out_path: str, keyfile: Optional[str] = None,
             raise RuntimeError("hybrid signing needs cryptography >= 50 (ML-DSA) to self-verify the post-quantum signatures")
         pq_pub = m.MLDSA65PublicKey.from_public_bytes(base64.b64decode(pq_pk_b64))
     out: List[Dict] = []
-    with open(in_path, encoding="utf-8") as f:
+    import io
+    with io.StringIO(_read_input_text(in_path)) as f:   # SPEC §5 step 0: a regular file or a pipe, bounded
         for ln in f:
             if not ln.strip():
                 continue

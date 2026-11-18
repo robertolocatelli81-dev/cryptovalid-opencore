@@ -139,19 +139,52 @@ forces a boolean where reality had none.
    10 s`). A device or a directory stays `unreadable: not a regular file`; the files of §10 and §11 and `auto` (§12)
    still refuse a FIFO. Only the wait for a byte is bounded, not the whole read: a writer that keeps giving bytes is
    read up to the size bound, however slowly.
-   **v0.12, every reader:** the rule of the first paragraph holds for every file a verifier of this package reads from
-   a path, not only the ledger and the files of §10 and §11: the manifest when the front-end reads it again, the
-   ledgers of a pack when their signatures and their count are read, the `*.sth.json`, `*.head.json` and `*.sth.tsr`
-   of an ingest archive, the signed tip (`--tip`), the ledger given to `signer.py verify`, the note of §13, the tiles
-   of §14 and the files of §18-§19. Measured on 2026-11-18 by replacing each file of a pack and of an archive, one at a
-   time, with a FIFO, a link to `/dev/zero` and a directory: `cryptovalid-verify pack` and `auto` with a FIFO as
-   MANIFEST.json, `cryptovalid-verify archive` and `auto` with a FIFO as `*.sth.json` or `*.head.json`, `signer.py
-   verify <a FIFO>` and `verifier.py --tip <a FIFO> --trusted-pubkey ...` did not return; the readers of §13, §14,
-   §18-§19 and `auto` checked the path with `stat` and opened it after (the window above). Each is now a named failure
-   of its own receipt (`manifest_unreadable`, `sth_unreadable`, `head_unreadable`, `tsa_token_invalid` with
-   `unreadable`, `tip_unreadable`, `unreadable`, `not a regular file`, `input_unreadable`), never a wait. Not covered:
-   the files a WRITER reads (the ledger and the key given to `signer.py sign`, the files `evidence_pack.py build`
-   copies), which the caller names for its own process.
+   **v0.12, every path read:** the rule holds for every path a module of this package reads, through three readers and
+   a closed list of exceptions that a test keeps (`test_every_open_is_bounded_20261118.py`: an `open()` of a path
+   outside the list fails it).
+   (a) What a verifier, a checker or a report reads is a regular file, as in the first paragraph: the manifest when
+   the front-end reads it again, the ledgers of a pack when their signatures and their count are read, the
+   `*.sth.json`, `*.head.json` and `*.sth.tsr` of an ingest archive, the signed tip (`--tip`) and the ledger of
+   `cryptovalid_tip check`, the ledger given to `signer.py verify`, the note of §13, the tiles of §14 and the files of
+   §18-§19; the inputs of `cryptovalid_jws verify`, `cryptovalid_scitt verify`, `cryptovalid_witness verify`,
+   `cryptovalid_receipt verify`, `cryptovalid_monitor` (ledger, state, `--sth-file`), `eidas_ledger_check`,
+   `cryptovalid_heterogeneous`, `cryptovalid_reanchor`, `tx_evidence`, `dora_incident`, `fundcert_crosssource`,
+   `cryptovalid_qeas`, `cryptovalid_merkle` and `cryptovalid_acta` (its key file too), the object `cryptovalid_worm
+   get` reads back, the LOTL cache, the profiles of `refresh_regulatory`, the MANIFEST.json and SOLANA_ANCHOR.json that
+   `cryptovalid_report` reads again and the file the MCP server hashes for its provenance. So is a writer's input that
+   is read more than once or appended to: the ledger of `cryptovalid_tip sign`, of `cryptovalid_receipt` and of
+   `cryptovalid_checkpoint sign`, the ledgers `evidence_pack.py build` copies, the ledger `cryptovalid_scitt register`
+   appends to, the witness's state and the ingest writer's own segments.
+   (b) The ledger given to `verifier.py` is a regular file or a FIFO read within the two bounds above.
+   (c) What a writer reads once, a key file or the data it signs or stores, is read as (b) (`verifier.read_input`): a
+   regular file, or a FIFO read to its end within the size bound (1 MiB for a key file) and FAIL after 10 s without a
+   byte, so `signer.py sign ledger out <(a command that prints the key)` works as before; a device or a directory is
+   refused. These are the key files of `signer.py`, `cryptovalid_tip`, `cryptovalid_jws`, `cryptovalid_receipt`,
+   `cryptovalid_scitt`, `cryptovalid_checkpoint`, `cryptovalid_witness`, `cryptovalid_kms` (the file backend) and
+   `evidence_pack.py build --sign-key`, the ledger of `signer.py sign` and of `cryptovalid_jws sign`, the statement
+   and the signed statement of `cryptovalid_scitt`, the previous tree head of `cryptovalid_receipt consistency`, the
+   note of `cryptovalid_witness cosign` and the file of `cryptovalid_worm put`.
+   The exceptions: a temporary file the module has just written itself (three), a directory opened to fsync it (two),
+   this distribution's own `pyproject.toml`, the expected verdicts `conformance.py` reads beside the vectors, and the
+   development tools (`mutation_runner.py`, `tools/`).
+   Measured on 2026-11-18. First by replacing each file of a pack and of an archive, one at a time, with a FIFO, a link
+   to `/dev/zero` and a directory: `cryptovalid-verify pack` and `auto` with a FIFO as MANIFEST.json,
+   `cryptovalid-verify archive` and `auto` with a FIFO as `*.sth.json` or `*.head.json`, `signer.py verify <a FIFO>`
+   and `verifier.py --tip <a FIFO> --trusted-pubkey ...` did not return; the readers of §13, §14, §18-§19 and `auto`
+   checked the path with `stat` and opened it after (the window above). Each is now a named failure of its own receipt
+   (`manifest_unreadable`, `sth_unreadable`, `head_unreadable`, `tsa_token_invalid` with `unreadable`,
+   `tip_unreadable`, `unreadable`, `not a regular file`, `input_unreadable`). Then a review found ten more commands,
+   the report and the MCP server's pack check waiting, and a bench gave every string argument of every command, one at
+   a time, a FIFO with no writer and a link to `/dev/zero` (716 cases: 179 arguments of 44 commands in 22 modules; not
+   run: the commands that go to the network or serve, `cryptovalid_solana`, `cryptovalid_lotl`, `cryptovalid_tsa`,
+   `cryptovalid_kms`, `cryptovalid_witness serve` and `submit`, `cryptovalid_acta run-vectors`, `cryptovalid_ingest
+   bench`; `cryptovalid-verify` was measured apart, 210 cases): on 54fc7eb the command waited, or read the device
+   without bound, for 41 arguments that it reads; now for none.
+   Not covered: a path a command WRITES. Six output arguments still wait when the path is a FIFO with no reader
+   (`--out` of `verifier.py`, `cryptovalid_tip sign`, `cryptovalid_checkpoint sign`, `cryptovalid_scitt sign` and
+   `cryptovalid_acta sign`; `--cose` of `cryptovalid_receipt inclusion`). And the FORM of the error is each command's:
+   for 48 of the 179 arguments the command given a FIFO or `/dev/zero` ends in a traceback and exit 1, not in a named
+   failure (25 on 54fc7eb, where others waited).
 1. Parse every line as JSON; any parse error → FAIL.
 2. Detect profile on entry 0; recompute `self_hash` for EVERY entry → any
    mismatch → FAIL.
@@ -178,7 +211,8 @@ different things: the chain is broken, or the entries are not written in this fo
 two came out mixed: measured on 2026-11-18 on a third-party ledger of 179 entries that hashes as §3 does
 (`self_hash`/`prev_hash` the same rule) but carries its own fields and no `idx`, `verifier.py` 0.26.0 named its 4 true
 link breaks among one `unknown_field` and one `idx_mismatch` per entry, and `cryptovalid-verify ledger` listed 4 + 10 +
-10 reasons. The receipt of `verifier.py` for a FAIL with entries read therefore carries `failure_classes`, counts over
+10 reasons. The receipt of `verifier.py` for a FAIL of a file it read (zero entries included; not the FAILs of step 0) therefore
+carries `failure_classes`, counts over
 every entry (not capped like the lists), with a closed set of members:
 `{"chain": {"link_mismatch", "hash_mismatch"}, "format": {"unknown_field", "idx_mismatch", "missing_self_hash",
 "missing_prev_hash"}, "other"}`. `chain.link_mismatch` counts the entries that carry `prev_hash` and whose `prev_hash` is
@@ -481,7 +515,8 @@ first that fails gives the outcome:
 2. **Content type.** eContentType MUST be id-ct-TSTInfo (1.2.840.113549.1.9.16.1.4); anything else is
    `econtent_type_not_tstinfo`.
 3. **TSTInfo, closed.** `{version 1, policy OID, messageImprint {hashAlgorithm {OID, NULL or absent}, hashedMessage
-   OCTET STRING}, serialNumber INTEGER (not negative), genTime GeneralizedTime}` then, each at most once and in this
+   OCTET STRING}, serialNumber INTEGER (not negative: a choice of this format, stricter than RFC 3161 §2.4.2, which
+   sets no sign; OpenSSL accepts a negative one), genTime GeneralizedTime}` then, each at most once and in this
    order, `accuracy` (SEQUENCE), `ordering` (BOOLEAN, DER: 00 or FF), `nonce` (INTEGER of either sign, v0.12: RFC 3161
    §2.4.2 writes `nonce INTEGER OPTIONAL` and sets no sign), `tsa` ([0]), `extensions`
    ([1], Extensions of RFC 5280 §4.1); any other element, a repeated one or one out of order, and any extension marked

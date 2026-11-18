@@ -55,10 +55,18 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _read_text(path: str) -> str:
+    """SPEC §5 step 0: the text of a regular file, opened once without blocking (a FIFO or a device is an OSError)"""
+    try:
+        from verifier import read_text_regular
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore.verifier import read_text_regular
+    return read_text_regular(path)
+
+
 def pack_digest(pack_dir: str) -> str:
     """Il digest da depositare: il manifest_digest del pack (già impegna tutto il pack)."""
-    with open(os.path.join(pack_dir, "MANIFEST.json"), encoding="utf-8") as f:
-        man = json.load(f)
+    man = json.loads(_read_text(os.path.join(pack_dir, "MANIFEST.json")))
     d = man.get("manifest_digest_sha256")
     if not d:
         raise ValueError("MANIFEST.json without manifest_digest_sha256")
@@ -75,8 +83,7 @@ class LocalQeasStub:
         self._path = store_path
         self._db: Dict[str, Dict] = {}
         if os.path.exists(store_path):
-            with open(store_path, encoding="utf-8") as f:
-                self._db = json.load(f)
+            self._db = json.loads(_read_text(store_path))
 
     def deposit(self, digest_hex: str, subject: str, now: float) -> Dict:
         rid = _sha256(f"{digest_hex}|{subject}|{now}".encode())[:32]
@@ -149,8 +156,7 @@ def verify_pack_archive(pack_dir: str, backend) -> Dict:
     rp = os.path.join(pack_dir, "QEAS_RECEIPT.json")
     if not os.path.exists(rp):
         return {"present": False, "note": "no QEAS_RECEIPT.json (pack not archived)"}
-    with open(rp, encoding="utf-8") as f:
-        saved = json.load(f)
+    saved = json.loads(_read_text(rp))
     current = pack_digest(pack_dir)
     local_match = current == saved.get("pack_digest")
     remote = backend.verify(saved["receipt"])

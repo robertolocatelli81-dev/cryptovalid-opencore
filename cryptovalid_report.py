@@ -125,9 +125,8 @@ def solana_status(pack_dir: str, manifest: Dict, check: bool = False) -> Dict:
     path = os.path.join(pack_dir, "SOLANA_ANCHOR.json")
     if not os.path.exists(path):
         return {"present": False, "checked": False, "verified": None}
-    try:
-        with open(path, encoding="utf-8") as f:
-            a = json.load(f)
+    try:   # SPEC §5 step 0: opened once without blocking
+        a = json.loads(read_text_regular(path))
     except (OSError, ValueError) as e:
         return {"present": True, "checked": False, "verified": False,
                 "note": f"SOLANA_ANCHOR.json unreadable: {type(e).__name__}"}
@@ -402,9 +401,8 @@ def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = 
                     title: str = "Compliance Evidence — Audit Report") -> Dict:
     """Verify the pack independently, render HTML (always), then PDF if WeasyPrint
     is importable and not html_only. Returns paths + the UNMODIFIED verdict."""
-    try:
-        with open(os.path.join(pack_dir, "MANIFEST.json"), encoding="utf-8") as f:
-            manifest = json.load(f)
+    try:   # SPEC §5 step 0: opened once without blocking (a FIFO here waited, 18/11/2026)
+        manifest = json.loads(read_text_regular(os.path.join(pack_dir, "MANIFEST.json")))
     except (OSError, ValueError) as e:
         # fail-closed E pulito: un auditor merita un errore leggibile, mai un traceback
         return {"valid": False, "html": None, "pdf": None,
@@ -436,9 +434,9 @@ def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = 
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say, write_output
+    from verifier import Parser, emit, read_text_regular, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say, write_output
+    from opencore.verifier import Parser, emit, read_text_regular, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -459,8 +457,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--title", default="Compliance Evidence — Audit Report")
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     if a.solana_digest:
-        with open(os.path.join(a.pack_dir, "MANIFEST.json"), encoding="utf-8") as f:
-            d = solana_anchor_digest(json.load(f))
+        d = solana_anchor_digest(json.loads(read_text_regular(os.path.join(a.pack_dir, "MANIFEST.json"))))
         emit(json.dumps({"solana_memo": f"sha3:{d}", "digest_sha3_hex": d,
                           "binding": "sha3_256(manifest_digest_sha256)"}, indent=1))
         return 0

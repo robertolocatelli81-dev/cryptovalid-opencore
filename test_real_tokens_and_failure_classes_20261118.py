@@ -13,8 +13,8 @@
 4. §11 step 6: the token of a Sigstore bundle that carries no certificate is `signer_certificate_absent` (0.26.0:
    `signature_invalid`).
 
-The real tokens are in spec/vectors/rfc3161/third_party/ (manifest.json: source, commit, licence). Generative: every
-INTEGER encoding of 0 to 9 bytes drawn at random for the nonce and for serialNumber against an oracle written from
+The real tokens are in spec/vectors/rfc3161/third_party/ (manifest.json: source, commit, licence). Generative: 610
+INTEGER encodings of 0 to 9 bytes (10 chosen, 600 drawn at random) for the nonce and for serialNumber against an oracle written from
 X.690 §8.3.2 and RFC 3161; tokens signed by an openssl TSA made on this machine with negative, zero, positive and
 boundary nonces; the SignedData version 0 to 6 and -1 on real tokens; ledgers with random mutations of six kinds and an
 oracle that counts each class independently of the verifier.

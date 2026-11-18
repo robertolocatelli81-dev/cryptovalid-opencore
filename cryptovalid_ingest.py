@@ -178,7 +178,8 @@ class Ingestor:
         """Fail-closed recovery: keep every complete line, truncate a torn tail (it can
         only be an un-acknowledged write: flush() had not returned), resume the chain."""
         good_end, self._idx, self._prev, self._first = 0, 0, GENESIS_PREV, GENESIS_PREV
-        with open(path, "rb") as f:
+        import verifier
+        with os.fdopen(verifier.open_regular(path, float("inf")), "rb") as f:   # SPEC §5 step 0: its own segment, a regular file
             for line in f:
                 if not line.endswith(b"\n"):
                     break                                     # torn tail
@@ -339,8 +340,8 @@ class Ingestor:
     def _prev_sth_hash(self) -> str:
         prev = self._seg_path(self._seq - 1) + ".sth.json" if self._seq > 0 else None
         if prev and os.path.exists(prev):
-            with open(prev, encoding="utf-8") as f:
-                return _sth_canonical_hash(json.load(f))
+            import verifier
+            return _sth_canonical_hash(json.loads(verifier.read_text_regular(prev)))   # SPEC §5 step 0
         return GENESIS_PREV
 
     def close(self, seal: bool = True):

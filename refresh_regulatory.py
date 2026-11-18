@@ -71,8 +71,7 @@ def _reachable(url: str, timeout: int = 15) -> bool:
 def refresh(profiles_path: str = PROFILES, check_urls: bool = False, now: Optional[datetime] = None) -> Dict:
     """`now` (timezone-aware) defaults to the system clock; tests pass a fixed instant so their verdict does not
     depend on the calendar. The command line always uses the clock: staleness is what it reports."""
-    with open(profiles_path, encoding="utf-8") as f:
-        prof = json.load(f)
+    prof = json.loads(read_text_regular(profiles_path))   # SPEC §5 step 0: a regular file, opened once without blocking
     if now is None:
         now = datetime.now(timezone.utc)
     elif now.tzinfo is None:
@@ -95,9 +94,9 @@ def refresh(profiles_path: str = PROFILES, check_urls: bool = False, now: Option
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say, write_output
+    from verifier import emit, Parser, read_text_regular, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say, write_output
+    from opencore.verifier import emit, Parser, read_text_regular, receipt_cli, say, write_output
 
 
 @receipt_cli

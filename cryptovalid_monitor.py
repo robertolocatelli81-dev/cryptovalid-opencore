@@ -53,8 +53,7 @@ def _now() -> str:
 def _load_state(path: str) -> Optional[Dict]:
     if not os.path.exists(path):
         return None
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    return json.loads(read_text_regular(path))   # SPEC §5 step 0: opened once without blocking
 
 
 def find_matches(ledger_path: str, patterns: List[str], since_index: int = 0) -> Dict:
@@ -70,7 +69,7 @@ def find_matches(ledger_path: str, patterns: List[str], since_index: int = 0) ->
         except re.error as e:
             raise ValueError(f"bad pattern {pat!r}: {e}") from None
     matches = []
-    with open(ledger_path, encoding="utf-8") as f:
+    with os.fdopen(V.open_regular(ledger_path), encoding="utf-8") as f:   # SPEC §5 step 0: opened once without blocking
         idx = -1
         for line in f:
             if not line.strip():
@@ -194,8 +193,7 @@ def run(ledger_path: str, state_path: str, keyfile: Optional[str] = None, max_si
             sth_ext = None
             if sth_path and os.path.exists(sth_path):
                 try:
-                    with open(sth_path, encoding="utf-8") as f:
-                        doc = json.load(f)
+                    doc = json.loads(read_text_regular(sth_path))   # SPEC §5 step 0: opened once without blocking
                     # accetta sia {"sth": {...}} (stato del writer) sia lo STH nudo; tutto il resto è «non valido»
                     sth_ext = doc.get("sth", doc) if isinstance(doc, dict) else None
                     if not isinstance(sth_ext, dict):
@@ -217,9 +215,9 @@ def run(ledger_path: str, state_path: str, keyfile: Optional[str] = None, max_si
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say, write_output
+    from verifier import Parser, emit, read_text_regular, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say, write_output
+    from opencore.verifier import Parser, emit, read_text_regular, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -235,7 +233,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     a = p.parse_args(argv)
     try:
         v = run(a.ledger, a.state, a.keyfile, a.max_silence_h, a.trusted_pubkey, a.sth_file, a.match or None)
-    except ValueError as e:
+    except (ValueError, OSError) as e:   # OSError: SPEC §5 step 0, a path that is not a regular file
         emit(json.dumps({"ok": False, "error": str(e)})); return 2
     emit(json.dumps(v, indent=1))
     return 0 if v["ok"] else 2

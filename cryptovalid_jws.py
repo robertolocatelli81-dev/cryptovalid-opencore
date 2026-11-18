@@ -69,8 +69,7 @@ def sign_entry(entry: Dict, keyfile: str, x5c: Optional[List[str]] = None) -> st
     """JWS compact of the record's CANONICAL form (same bytes the ledger hashes). x5c: list of base64 DER
     certificates (leaf first), passed through untouched — a qualified certificate makes it JAdES-relevant."""
     Ed25519PrivateKey, _, ser = _ed()
-    with open(keyfile, encoding="utf-8") as f:
-        sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(f.read().strip()))
+    sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(read_input_text(keyfile, KEY_MAX_BYTES).strip()))   # SPEC §5 step 0
     pk = sk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
     header = {"alg": "EdDSA", "typ": "JOSE", "kid": pk, "cty": "application/cryptovalid-record+json"}
     if x5c:
@@ -128,9 +127,9 @@ def verify(jws: str, trusted_pubkey_hex: Optional[str] = None) -> Dict:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say
+    from verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, read_text_regular, receipt_cli, say
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say
+    from opencore.verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, read_text_regular, receipt_cli, say
 
 
 @receipt_cli
@@ -142,11 +141,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     v = sub.add_parser("verify"); v.add_argument("jws_file"); v.add_argument("trusted_pubkey_hex")
     args = p.parse_args(argv)
     if args.cmd == "sign":
-        with open(args.ledger, encoding="utf-8") as f:
-            entries = [json.loads(l) for l in f if l.strip()]
+        import io
+        entries = [json.loads(l) for l in io.StringIO(read_input_text(args.ledger)) if l.strip()]   # SPEC §5 step 0
         emit(sign_entry(entries[args.index], args.keyfile, args.x5c)); return 0
-    with open(args.jws_file, encoding="utf-8") as f:
-        r = verify(f.read().strip(), args.trusted_pubkey_hex)
+    r = verify(read_text_regular(args.jws_file).strip(), args.trusted_pubkey_hex)   # SPEC §5 step 0: never waits
     emit(json.dumps(r, indent=1, ensure_ascii=False)); return 0 if r["ok"] else 1
 
 

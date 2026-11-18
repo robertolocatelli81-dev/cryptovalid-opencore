@@ -82,9 +82,9 @@ def plan(anchors: List[Dict], probe_fn: Callable[[str], Dict], now_ts: float,
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say
+    from verifier import Parser, emit, read_text_regular, receipt_cli, say
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say
+    from opencore.verifier import Parser, emit, read_text_regular, receipt_cli, say
 
 
 @receipt_cli
@@ -97,8 +97,7 @@ def main(argv=None):
     p.add_argument("--age-days", type=float, required=True)
     p.add_argument("--min-witnesses", type=int, default=2)
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
-    with open(a.retention_json, encoding="utf-8") as f:
-        ret = json.load(f)
+    ret = json.loads(read_text_regular(a.retention_json))   # SPEC §5 step 0: opened once without blocking
     r = assess(ret, a.age_days, a.min_witnesses)
     emit(json.dumps(r, ensure_ascii=False, indent=1))
     return 1 if r["needs_reanchor"] else 0

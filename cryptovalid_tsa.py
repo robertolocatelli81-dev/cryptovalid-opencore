@@ -166,7 +166,9 @@ def _der_sint(v: bytes, where: str) -> int:
 
 
 def _der_uint(v: bytes, where: str) -> int:
-    """a DER INTEGER in minimal form that the field's definition keeps non-negative (versions, PKIStatus, serialNumber)"""
+    """a DER INTEGER in minimal form read where this format accepts no negative value: the versions and PKIStatus (their
+    defined values are small non-negative numbers) and serialNumber (a choice of this format: RFC 3161 §2.4.2 sets no
+    sign on it)"""
     n = _der_sint(v, where)
     if n < 0:
         raise TokenError("malformed", f"{where}: negative INTEGER")

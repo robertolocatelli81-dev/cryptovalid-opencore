@@ -65,8 +65,7 @@ def _load_state(path: str) -> Dict:
     if not os.path.exists(path):
         return {"origins": {}}
     try:
-        with open(path, encoding="utf-8") as f:
-            st = json.load(f)
+        st = json.loads(read_text_regular(path))   # SPEC §5 step 0: the witness's own state, a regular file
     except (OSError, ValueError) as e:      # unreadable or not JSON: a clear error, not a dead connection
         raise C.NoteError(f"witness state file unreadable: {e}") from None
     if not isinstance(st, dict) or not isinstance(st.get("origins"), dict):
@@ -298,7 +297,7 @@ def _cosign_locked(state_path, cp, proof, witness_name, witness_seed, timestamp,
         unauthenticated refusal costs a bounded read under the lock — stated. {root_b64: note}."""
         found = {}
         try:
-            with open(state_path + ".cosigned.jsonl", "rb") as f:
+            with os.fdopen(open_regular(state_path + ".cosigned.jsonl", float("inf")), "rb") as f:   # SPEC §5 step 0
                 f.seek(0, os.SEEK_END); end = f.tell()
                 start = max(0, end - _HISTORY_SCAN)
                 cut_mid_line = False
@@ -725,9 +724,9 @@ def submit_checkpoint(url: str, note: bytes, leaves: List[bytes], witness_vkeys:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import OutputNotWritten, Parser, append_line, emit, receipt_cli, refuse_directory, say, write_output
+    from verifier import append_line, emit, open_regular, OutputNotWritten, Parser, read_input, read_regular, read_text_regular, receipt_cli, refuse_directory, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import OutputNotWritten, Parser, append_line, emit, receipt_cli, refuse_directory, say, write_output
+    from opencore.verifier import append_line, emit, open_regular, OutputNotWritten, Parser, read_input, read_regular, read_text_regular, receipt_cli, refuse_directory, say, write_output
 
 
 @receipt_cli
@@ -793,8 +792,7 @@ def main(argv=None) -> int:
     if a.cmd == "cosign":
         refuse_directory(a.out)   # 0.20.3: before the state records the cosignature, never after it
         try:
-            with open(a.note, "rb") as f:
-                note = f.read()
+            note = read_input(a.note)   # SPEC §5 step 0: a regular file or a pipe, bounded
             proof = json.loads(a.proof) if a.proof else None
             if proof is not None and not (isinstance(proof, list) and all(isinstance(x, str) for x in proof)):
                 raise C.NoteError("--proof must be a JSON list of base64 strings")
@@ -813,8 +811,7 @@ def main(argv=None) -> int:
         r["cosignature"] = r["cosignature"].decode("utf-8") if r["cosignature"] else None
         emit(json.dumps({k: v for k, v in r.items() if k != "note"}, ensure_ascii=False)); return 0 if r["stato"] == STATO_OK else 1
     try:
-        with open(a.note, "rb") as f:
-            note = f.read()
+        note = read_regular(a.note)   # SPEC §5 step 0: opened once without blocking
         r = verify_witnessed(note, a.log_vkey, a.witness_vkey, a.min_witnesses, a.max_age, clock_skew_s=a.clock_skew, expected_origin=a.origin)
     except (C.NoteError, OSError) as e:
         emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2

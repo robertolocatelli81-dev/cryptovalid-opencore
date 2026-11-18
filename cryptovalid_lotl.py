@@ -261,8 +261,11 @@ def load_qualified_status(member_states=None, cache_path=None, timeout=45, log=l
     `built_at`): the set is the status in force when it was built, so an old cache would answer for an old day."""
     from datetime import datetime, timezone
     if cache_path and os.path.exists(cache_path):
-        with open(cache_path) as f:
-            d = json.load(f)
+        try:   # SPEC §5 step 0: a regular file, opened once without blocking
+            from verifier import read_text_regular
+        except ImportError:   # python3 -m opencore.<module> from the parent directory
+            from opencore.verifier import read_text_regular
+        d = json.loads(read_text_regular(cache_path))
         built = _when(d.get("built_at")) if isinstance(d, dict) and isinstance(d.get("built_at"), str) else None
         age = (datetime.now(timezone.utc) - built).total_seconds() if built else None
         if isinstance(d, dict) and d.get("rule") == RULE and isinstance(d.get("fingerprints"), list) \
