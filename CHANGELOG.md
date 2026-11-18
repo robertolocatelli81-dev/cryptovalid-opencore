@@ -33,8 +33,10 @@ run by the same author, not by a third party.
   2025 1 committed in thebristolsound/birdbrain (nonce -0x5BDDFD8205AA38EC, genTime 2026-05-30), which OpenSSL 3.0
   `ts -verify` accepts under the DigiCert Trusted Root G4. RFC 3161 §2.4.2 writes `nonce INTEGER OPTIONAL` and sets no
   sign; SPEC §11 asked "not negative" only of `serialNumber`, so the code was stricter than its own specification. The
-  nonce is now an INTEGER of either sign in minimal form; `serialNumber`, the versions and PKIStatus keep the
-  non-negative rule. The token is `verified` with the root pinned and `signature_only` without a pin; another digest is
+  nonce is now an INTEGER of either sign in minimal form, and so is `serialNumber`: RFC 3161 §2.4.2 writes
+  `serialNumber INTEGER` with no sign either, and §11 asked it "not negative" (measured on 2026-11-18: a TSTInfo
+  re-signed here with serialNumber -5 or -2^63 is `ts -verify` OK, 0.26.0 said `malformed`); the versions and PKIStatus
+  keep the non-negative rule. The token is `verified` with the root pinned and `signature_only` without a pin; another digest is
   `imprint_mismatch`, a nonce changed inside it does not verify. The five verifiers in other languages do not read RFC
   3161 tokens (they keep `tsa_token` outside the canonical form, §3) and the conformance vectors do not change.
   New vectors in `spec/vectors/rfc3161/third_party/` with their licences (manifest.json: repository, commit, sha256):
@@ -45,8 +47,9 @@ run by the same author, not by a third party.
   the token of a Sigstore bundle of dfandrich/fileviewinfo (MIT) without any certificate, `signer_certificate_absent`
   (0.26.0: `signature_invalid`, the entry below). `test_real_tokens_and_failure_classes_20261118.py`: the vectors, 610
   INTEGER encodings (10 chosen, 600 drawn at random) for the nonce and for serialNumber against an oracle from X.690
-  §8.3.2, tokens signed here with 11 nonces of either sign, SignedData versions -1 to 6 and 256 on two real tokens; 8
-  of its 11 tests fail on 255eec5, all pass here.
+  §8.3.2, tokens signed here with 11 nonces and 6 serial numbers of either sign, SignedData versions -1 to 6 and 256 on
+  two real tokens; 8 of its first 11 tests fail on 255eec5, the two that read a negative serialNumber fail on 54fc7eb,
+  all pass here.
 
 - **A listed file was read whole into memory, and a FIFO could block the verifier** (SPEC v0.11 §5 step 0, §10, §11,
   written before the code; from an external review of 0.26.0, re-measured on 2026-11-18). `evidence_pack.verify_pack`
@@ -113,7 +116,9 @@ run by the same author, not by a third party.
   development tools); on 54fc7eb it lists 52 calls outside the list and 6 of its first 7 tests fail (the control
   passes). A second closed list, of 5 entries, holds the calls that load or read a path without `open()` (`ctypes.CDLL`,
   `zipfile`, `shutil` copies, an import by name); the test of the PKCS#11 module does not return on 55e2e3f.
-  `test_verifier_readers_no_block_20261118.py`: 2 of its 3 tests fail on 54fc7eb (the third, a regular file read as
+  An ingest archive whose segment without STH is a directory, a device or a FIFO was `ok` (the segment is not read);
+  it is now `unsealed_segment_not_regular`, judged on a descriptor without reading it.
+  `test_verifier_readers_no_block_20261118.py`: 3 of its 4 tests fail on 54fc7eb (the fourth, a regular file read as
   before, is the control), all pass here.
   Not covered (SPEC §5 step 0): a path a command writes: six output arguments (`--out`, `--cose`) still wait when the
   path is a FIFO with no reader; and the form of the error: for 48 of the 179 arguments the command given a FIFO or

@@ -155,7 +155,9 @@ forces a boolean where reality had none.
    `cryptovalid_report` reads again and the file the MCP server hashes for its provenance. So is a writer's input that
    is read more than once or appended to: the ledger of `cryptovalid_tip sign`, of `cryptovalid_receipt` and of
    `cryptovalid_checkpoint sign`, the ledgers `evidence_pack.py build` copies, the ledger `cryptovalid_scitt register`
-   appends to, the witness's state and the ingest writer's own segments.
+   appends to, the witness's state and the ingest writer's own segments. An ingest archive's segment without STH,
+   which is not read, is a regular file or the failure `unsealed_segment_not_regular`, judged on a descriptor opened
+   without blocking (until 0.26.0 a directory, a device or a FIFO in its place left the archive `ok`).
    (b) The ledger given to `verifier.py` is a regular file or a FIFO read within the two bounds above.
    (c) What a writer reads once, a key file or the data it signs or stores, is read as (b) (`verifier.read_input`): a
    regular file, or a FIFO read to its end within the size bound (1 MiB for a key file) and FAIL after 10 s without a
@@ -361,8 +363,10 @@ signer certificate, the ones after it limit the certificates of the path), check
 the last certificate of the list (sectigo.tsr of spec/vectors/rfc3161 with its CA R41 pinned) was
 `not_issued_by_pinned_tsa` and is `verified`; a path through a certificate the list leaves out is refused (OpenSSL
 accepted it). Every other token has the outcome of v0.10.
-v0.12 (2026-11-18) reads the TSTInfo's `nonce` as an INTEGER of either sign (§11 step 3): until v0.11 the code refused a
-negative one as `malformed`, stricter than §11 itself, which asked "not negative" only of `serialNumber`. Measured on
+v0.12 (2026-11-18) reads the TSTInfo's `nonce` and `serialNumber` as INTEGERs of either sign (§11 step 3): RFC 3161
+§2.4.2 sets no sign on either. Until v0.11 the code refused a negative nonce as `malformed`, stricter than §11 itself,
+and §11 asked "not negative" of `serialNumber`, stricter than RFC 3161 (measured on 2026-11-18 with OpenSSL 3.0.22: a
+token re-signed here with serialNumber -5 or -2^63, `ts -verify` OK, 0.26.0 `malformed`). Measured on
 2026-11-18 on a real DigiCert token (nonce -0x5BDDFD8205AA38EC, `spec/vectors/rfc3161/third_party/`): 0.26.0 said
 `invalid / malformed`, OpenSSL `ts -verify` OK; now `verified` under the DigiCert root pinned. A token with a nonce in
 non-minimal form is still `malformed`. v0.12 also reads a FIFO given as the ledger (§5 step 0) instead of refusing it,
@@ -521,8 +525,8 @@ first that fails gives the outcome:
 2. **Content type.** eContentType MUST be id-ct-TSTInfo (1.2.840.113549.1.9.16.1.4); anything else is
    `econtent_type_not_tstinfo`.
 3. **TSTInfo, closed.** `{version 1, policy OID, messageImprint {hashAlgorithm {OID, NULL or absent}, hashedMessage
-   OCTET STRING}, serialNumber INTEGER (not negative: a choice of this format, stricter than RFC 3161 §2.4.2, which
-   sets no sign; OpenSSL accepts a negative one), genTime GeneralizedTime}` then, each at most once and in this
+   OCTET STRING}, serialNumber INTEGER (of either sign since v0.12: RFC 3161 §2.4.2 writes `serialNumber INTEGER` and
+   sets no sign; until v0.11 "not negative"), genTime GeneralizedTime}` then, each at most once and in this
    order, `accuracy` (SEQUENCE), `ordering` (BOOLEAN, DER: 00 or FF), `nonce` (INTEGER of either sign, v0.12: RFC 3161
    §2.4.2 writes `nonce INTEGER OPTIONAL` and sets no sign), `tsa` ([0]), `extensions`
    ([1], Extensions of RFC 5280 §4.1); any other element, a repeated one or one out of order, and any extension marked

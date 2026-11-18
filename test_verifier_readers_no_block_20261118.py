@@ -8,7 +8,7 @@ verify`, `cryptovalid_witness verify`, `cryptovalid_receipt verify`, `cryptovali
 Each now opens the path once without blocking and judges the open descriptor: a FIFO, a device or a directory is the
 error the command gives for a file it cannot read, never a wait. A regular file is read as before (the control).
 
-Each case runs in a child process with a timeout. Positive control, measured: on 54fc7eb 2 of the 3 tests fail
+Each case runs in a child process with a timeout. Positive control, measured: on 54fc7eb 3 of the 4 tests fail
 (every FIFO case times out); the control on a regular file passes there."""
 import json
 import os
@@ -108,6 +108,47 @@ class PackReaders(unittest.TestCase):
             p = subprocess.run([sys.executable, "cryptovalid_report.py", "--html-only", "--out", os.path.join(td, "r.html"),
                                 pack], cwd=ROOT, capture_output=True, text=True, timeout=WAIT, env=env)
             self.assertIn("MANIFEST.json unreadable: InputNotRegular", p.stdout)
+        finally:
+            shutil.rmtree(td)
+
+
+class ArchiveUnsealedSegment(unittest.TestCase):
+    """an ingest archive whose segment without STH (the active one) is replaced by a directory, a device or a FIFO was
+    `ok` on 54fc7eb (the segment is not read): now `unsealed_segment_not_regular`, without reading it; a regular one,
+    and one that is gone, keep the outcome of before (the segment is not sealed, nothing attests it)"""
+
+    def test_unsealed_segment_kinds(self):
+        sys.path.insert(0, ROOT)
+        import cryptovalid_ingest as I
+        td = tempfile.mkdtemp()
+        try:
+            for kind in ("regular", "directory", "device", "fifo", "gone"):
+                d = os.path.join(td, kind)
+                g = I.Ingestor(d, batch_size=1, rotate_entries=1000, fsync=False)
+                for i in range(3):
+                    g.append({"i": i})
+                g.flush()
+                g.seal()
+                g.append({"j": 0})
+                g.flush()
+                g.close(seal=False)
+                op = sorted(x for x in os.listdir(d) if x.endswith(".jsonl"))[-1]
+                op = os.path.join(d, op)
+                if kind != "regular":
+                    os.remove(op)
+                if kind == "directory":
+                    os.mkdir(op)
+                elif kind == "device":
+                    os.symlink("/dev/zero", op)
+                elif kind == "fifo":
+                    os.mkfifo(op)
+                r = I.verify_archive(d)
+                with self.subTest(kind=kind):
+                    if kind in ("regular", "gone"):
+                        self.assertEqual((r["ok"], r["failures"]), (True, []), r)
+                    else:
+                        self.assertEqual((r["ok"], [f["reason"] for f in r["failures"]]),
+                                         (False, ["unsealed_segment_not_regular"]), r)
         finally:
             shutil.rmtree(td)
 

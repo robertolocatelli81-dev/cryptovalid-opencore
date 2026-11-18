@@ -441,6 +441,18 @@ def verify_archive(directory: str, prefix: str = "ledger",
     tsa_tokens: List[Dict] = []       # one line per token: segment, status, reason, gen_time, signer_sha256
     segs = sorted(glob.glob(os.path.join(directory, f"{prefix}-[0-9]*.jsonl")))
     sealed = [s for s in segs if os.path.exists(s + ".sth.json")]
+    # SPEC §5 step 0 (review of 18/11/2026): a segment without STH is not read (nothing seals it), but one that is not a
+    # regular file (a directory, a device, a FIFO in its place) is not a segment this format writes: a named failure, judged
+    # on a descriptor opened without blocking, never a read and never a wait
+    for s in segs:
+        if s in sealed:
+            continue
+        try:
+            os.close(verifier.open_regular(s, float("inf")))
+        except verifier.InputNotRegular:
+            failures.append({"segment": os.path.basename(s), "reason": "unsealed_segment_not_regular"})
+        except OSError:
+            pass   # gone or unreadable since the listing: as before, it is not read
     prev_sth = GENESIS_PREV
     for s in sealed:
         name = os.path.basename(s)

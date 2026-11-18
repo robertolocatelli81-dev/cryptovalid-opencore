@@ -20,7 +20,9 @@ boundary nonces; the SignedData version 0 to 6 and -1 on real tokens; ledgers wi
 oracle that counts each class independently of the verifier.
 
 Positive control, measured: on 255eec5 (before this change) 8 of the 11 tests of this file fail; the three that pass
-there are the file hashes, the EuroCert refusal (already right) and the PASS receipt without classes."""
+there are the file hashes, the EuroCert refusal (already right) and the PASS receipt without classes. The serialNumber
+of either sign (review of 18/11/2026): `test_nonce_and_serial_number` and `test_signed_serial_numbers_of_every_sign`
+fail on 54fc7eb."""
 import hashlib
 import json
 import os
@@ -186,7 +188,7 @@ class IntegerGenerative(unittest.TestCase):
         rnd = random.Random(20261118)
         cases = [b"", b"\x00", b"\x7f", b"\x80", b"\xff", b"\x00\x80", b"\xff\x7f", b"\x00\x7f", b"\xff\x80", b"\x01\x00"]
         cases += [bytes(rnd.randrange(256) for _ in range(rnd.randrange(10))) for _ in range(600)]
-        seen = {"nonce ok": 0, "nonce neg ok": 0, "serial neg refused": 0, "not minimal refused": 0}
+        seen = {"nonce ok": 0, "nonce neg ok": 0, "serialNumber ok": 0, "serialNumber neg ok": 0, "not minimal refused": 0}
         for v in cases:
             for field, at in (("nonce", pos_nonce), ("serialNumber", 3)):
                 tok = with_tstinfo(inner, lambda e, at=at, v=v: [(t, v if i == at else x) for i, (t, x) in enumerate(e)])
@@ -198,14 +200,10 @@ class IntegerGenerative(unittest.TestCase):
                 if not minimal(v):
                     want = ("malformed", f"{field}: INTEGER not in minimal form")
                     seen["not minimal refused"] += 1
-                elif field == "serialNumber" and v[0] & 0x80:
-                    want = ("malformed", "serialNumber: negative INTEGER")
-                    seen["serial neg refused"] += 1
                 else:
                     want = ("ok", int.from_bytes(v, "big", signed=True))
-                    if field == "nonce":
-                        seen["nonce ok"] += 1
-                        seen["nonce neg ok"] += want[1] < 0
+                    seen[field + " ok"] += 1
+                    seen[field + " neg ok"] += want[1] < 0
                 self.assertEqual(out, want, (field, v.hex()))
         self.assertTrue(all(n > 20 for n in seen.values()), seen)
 
@@ -248,6 +246,33 @@ class SignedNonces(unittest.TestCase):
                 tok = _read(j("tok.der"))
                 r = T.verify_token(tok, K.DIGEST, "sha256", [j("ca.crt")])
                 self.assertEqual((r["status"], r["tst_info"]["nonce"]), ("verified", str(n)), (n, r))
+        finally:
+            shutil.rmtree(td)
+
+    def test_signed_serial_numbers_of_every_sign(self):
+        """SPEC v0.12 §11 step 3 (review of 18/11/2026): RFC 3161 §2.4.2 `serialNumber INTEGER` sets no sign; a TSTInfo
+        re-signed here (openssl cms -sign -cades, the signer named by issuerAndSerialNumber) with a negative serialNumber
+        is `ts -verify` OK and `verified` (0.26.0 and 54fc7eb: malformed "serialNumber: negative INTEGER")"""
+        import subprocess
+        import test_tsa_signer_key_id_20261116 as K
+        td = tempfile.mkdtemp()
+        try:
+            lab = K.Lab(td, "s")
+            j = lab.j
+            els = tstinfo_elements(lab.token())
+            for n in (5, 0, -5, -(2 ** 63), 2 ** 159, -(2 ** 159)):
+                tst = der(0x30, b"".join(der(t, sint(n) if i == 3 else v) for i, (t, v) in enumerate(els)))
+                with open(j("tst.der"), "wb") as f:
+                    f.write(tst)
+                subprocess.run(["openssl", "cms", "-sign", "-binary", "-nodetach", "-econtent_type", K.OID_TSTINFO, "-cades",
+                                "-md", "sha256", "-nosmimecap", "-signer", j("tsa.crt"), "-inkey", j("tsa.key"), "-certfile",
+                                j("ca.crt"), "-in", j("tst.der"), "-outform", "DER", "-out", j("x.der")],
+                               check=True, capture_output=True)
+                v = subprocess.run(["openssl", "ts", "-verify", "-token_in", "-in", j("x.der"), "-digest", K.DIGEST.hex(),
+                                    "-CAfile", j("ca.crt")], capture_output=True, text=True)
+                self.assertIn("Verification: OK", v.stdout, (n, v.stderr))
+                r = T.verify_token(_read(j("x.der")), K.DIGEST, "sha256", [j("ca.crt")])
+                self.assertEqual((r["status"], r["tst_info"]["serial_number"]), ("verified", str(n)), (n, r))
         finally:
             shutil.rmtree(td)
 

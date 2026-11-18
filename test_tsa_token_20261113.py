@@ -300,7 +300,9 @@ class TestParserClosedGenerative(unittest.TestCase):
             return rebuild(ci, sd, tst)
         self.assertRefused(mut(lambda t: t.__setitem__(0, [0x02, b"\x02"])), "malformed")          # version 2
         self.assertRefused(mut(lambda t: t.__setitem__(0, [0x02, b"\x00\x01"])), "malformed")      # INTEGER not minimal
-        self.assertRefused(mut(lambda t: t.__setitem__(3, [0x02, b"\xff"])), "malformed")          # negative serial
+        # SPEC v0.12 §11 step 3: serialNumber of either sign (RFC 3161 §2.4.2); a negative one not in minimal form is refused
+        self.assertEqual(T.parse_token(mut(lambda t: t.__setitem__(3, [0x02, b"\xff"])))["serial_number"], -1)
+        self.assertRefused(mut(lambda t: t.__setitem__(3, [0x02, b"\xff\x80"])), "malformed")      # negative, not minimal
         self.assertRefused(mut(lambda t: t.__setitem__(1, [0x06, b"\x2a\x80\x03"])), "malformed")  # OID arc not minimal
         self.assertRefused(mut(lambda t: t.__setitem__(1, [0x06, b"\x2a\x83"])), "malformed")      # OID truncated
         for gt in (b"20261113124040", b"20261113124040.50Z", b"20261113124040.Z", b"20261130250000Z", b"20260230124040Z",

@@ -166,9 +166,8 @@ def _der_sint(v: bytes, where: str) -> int:
 
 
 def _der_uint(v: bytes, where: str) -> int:
-    """a DER INTEGER in minimal form read where this format accepts no negative value: the versions and PKIStatus (their
-    defined values are small non-negative numbers) and serialNumber (a choice of this format: RFC 3161 §2.4.2 sets no
-    sign on it)"""
+    """a DER INTEGER in minimal form read where this format accepts no negative value (the versions and PKIStatus, whose
+    defined values are small non-negative numbers); RFC 3161 sets no sign on serialNumber or nonce (_der_sint)"""
     n = _der_sint(v, where)
     if n < 0:
         raise TokenError("malformed", f"{where}: negative INTEGER")
@@ -293,7 +292,7 @@ def parse_token(der: bytes) -> dict:
     name, size = HASH_ALGORITHMS[oid]
     _check(len(mi[1][1]) == size, "malformed", f"hashedMessage of {len(mi[1][1])} bytes for {name}")
     return {"token_der": tok, "policy": _der_oid(tst[1][1], "policy"), "hash_algorithm": name,
-            "hashed_message": mi[1][1], "serial_number": _der_uint(tst[3][1], "serialNumber"),
+            "hashed_message": mi[1][1], "serial_number": _der_sint(tst[3][1], "serialNumber"),   # SPEC v0.12 §11 step 3: RFC 3161 §2.4.2 sets no sign
             "gen_time": _gen_time(tst[4][1]), "nonce": nonce, "extensions": extensions}
 
 def _not_run(what: str, e: BaseException):
