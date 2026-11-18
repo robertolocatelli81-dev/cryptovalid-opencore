@@ -286,7 +286,12 @@ class TestLedgerReasons(unittest.TestCase):
             lay = self._run(es)
             self.assertIn(f"line 1: idx_mismatch: expected 1, got {text}", lay["reasons"], (name, lay["reasons"]))
             self.assertNotIn("None", " ".join(lay["reasons"]), lay["reasons"])
-            self.assertEqual(lay["detail"], "verdict=FAIL; " + "; ".join(lay["reasons"][:3]))
+            # 0.27.0 (SPEC v0.12 §5 "Failure classes"): the classes first, then the first three reasons
+            self.assertEqual(lay["detail"], "verdict=FAIL; chain: 0 link_mismatch, 1 hash_mismatch; format (entries not in "
+                             "this format's schema, SPEC §2; they say nothing on the links): 1 idx_mismatch; "
+                             + "; ".join(lay["reasons"][:3]))
+            self.assertEqual(lay["failure_classes"], {"chain": {"link_mismatch": 0, "hash_mismatch": 1}, "format": {
+                "unknown_field": 0, "idx_mismatch": 1, "missing_self_hash": 0, "missing_prev_hash": 0}, "other": 0})
 
     @unittest.skipUnless(__import__("shutil").which("node"), "node not on PATH")
     def test_js_prints_the_same_idx_text(self):

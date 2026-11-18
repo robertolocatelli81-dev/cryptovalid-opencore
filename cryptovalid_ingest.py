@@ -390,9 +390,9 @@ def _check_signature(doc: Dict, expected_pubkey_hex) -> Optional[str]:
 
 def _load_json_object(path):
     """(object, None) or (None, reason): a file that is not UTF-8 JSON, or not a JSON object, is a named failure."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            obj = json.load(f)
+    import verifier
+    try:   # SPEC §5 step 0: opened once without blocking (a FIFO as *.sth.json or *.head.json blocked here, 18/11/2026)
+        obj = json.loads(verifier.read_regular(path).decode("utf-8"))
     except (OSError, ValueError, RecursionError) as e:   # UnicodeDecodeError and JSONDecodeError are ValueError
         return None, type(e).__name__
     return (obj, None) if isinstance(obj, dict) else (None, "not_a_json_object")
@@ -451,7 +451,12 @@ def verify_archive(directory: str, prefix: str = "ledger",
             failures.append({"segment": name, "reason": f"sth_unreadable: {why}"})
             prev_sth = None
             continue
-        leaves = merkle.leaves_from_ledger(s)
+        try:
+            leaves = merkle.leaves_from_ledger(s)
+        except OSError:   # a segment read through a pipe by the chain check cannot be read a second time for its leaves
+            failures.append({"segment": name, "reason": "hash_chain_fail"})
+            prev_sth = None
+            continue
         if merkle.mth(leaves).hex() != sth.get("root_sha256") \
                 or len(leaves) != sth.get("tree_size"):
             failures.append({"segment": name, "reason": "merkle_root_mismatch"})
@@ -473,8 +478,12 @@ def verify_archive(directory: str, prefix: str = "ledger",
         # spot, content = the digest's OCTET STRING, counted as timestamped (measured 2026-11-13).
         if os.path.exists(s + ".sth.tsr"):
             import cryptovalid_tsa as tsa_mod
-            with open(s + ".sth.tsr", "rb") as f:
-                token = f.read()
+            try:   # SPEC §5 step 0: a token file that is a FIFO, a device or over the bound is a named failure
+                token = verifier.read_regular(s + ".sth.tsr", tsa_mod.PIN_MAX_BYTES)
+            except OSError as e:
+                failures.append({"segment": name, "reason": "tsa_token_invalid",
+                                 "detail": f"unreadable: {type(e).__name__}"})
+                continue
             chk = tsa_mod.verify_token(token, bytes.fromhex(prev_sth), "sha256", tsa_certs)
             tsa_tokens.append({"segment": name, "status": chk["status"], "reason": chk["reason"],
                                "gen_time": (chk["tst_info"] or {}).get("gen_time"), "signer_sha256": chk["signer_sha256"]})

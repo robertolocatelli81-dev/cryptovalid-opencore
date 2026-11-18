@@ -402,7 +402,11 @@ def _load_line(ln):
 
 def verify_file(path: str, pubkey_hex: Optional[str] = None, pq_pubkey_b64: Optional[str] = None,
                 require_pq: bool = False) -> Dict:
-    with open(path, encoding="utf-8") as f:
+    try:   # SPEC §5 step 0: a regular file, opened once without blocking (a FIFO blocked here until 0.26.0)
+        from verifier import open_regular
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore.verifier import open_regular
+    with os.fdopen(open_regular(path), encoding="utf-8") as f:
         entries = [_load_line(ln) for ln in f if ln.strip()]
     return verify_ledger_signatures(entries, pubkey_hex, pq_pubkey_b64, require_pq=require_pq)
 
@@ -473,7 +477,10 @@ def _main(argv: Optional[List[str]] = None) -> int:
             p.error("verify: --require-pq needs --pq-pubkey (a post-quantum layer verified against the key INSIDE the ledger is self-declared)")
         if a.pq_pubkey and not a.pubkey:
             p.error("verify: --pq-pubkey needs --pubkey (hybrid = both keys pinned; the same rule as the tip's --trusted-pq-pubkey)")
-        r = verify_file(a.ledger, a.pubkey, a.pq_pubkey, require_pq=a.require_pq)
+        try:
+            r = verify_file(a.ledger, a.pubkey, a.pq_pubkey, require_pq=a.require_pq)
+        except OSError as e:   # absent, a FIFO, a device, over the bound: named, exit 1 (until 0.26.0 a traceback or a wait)
+            return _emit(json.dumps({"ok": False, "error": f"unreadable: {type(e).__name__}: {e.strerror or e}"}, indent=1), 1)
         return _emit(json.dumps(r, indent=1), 0 if (r["ok"] and (r["pq_protected"] is True or not a.pq_pubkey)) else 1)
     p.print_help(); return 2
 

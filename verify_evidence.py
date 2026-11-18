@@ -162,12 +162,25 @@ def _with_reference_states(rollup: dict, r: dict) -> dict:
     return rollup
 
 
+def _open_regular(path: str) -> int:
+    """SPEC §5 step 0: a descriptor of a regular file, opened once without blocking and judged on the open descriptor
+    (a FIFO or a device at the path is an OSError, never waited on). Here and not from verifier.py: this front-end also
+    runs where only the mini-verifier is beside it."""
+    import stat
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OSError(f"{path}: not a regular file")
+    return fd
+
+
 def _pack_layers(r: dict, pack_dir: str) -> list:
     layers = [_layer("file digests == manifest", "PASS" if r.get("files_ok") else "FAIL"),
               _layer("manifest auto-consistente", "PASS" if r.get("manifest_ok") else "FAIL")]
     auth = r.get("manifest_authenticated")
     try:
-        with open(os.path.join(pack_dir, "MANIFEST.json"), encoding="utf-8") as fh:
+        # SPEC §5 step 0: opened once without blocking (a FIFO as MANIFEST.json blocked here until 0.26.0)
+        with os.fdopen(_open_regular(os.path.join(pack_dir, "MANIFEST.json")), encoding="utf-8") as fh:
             sig_present = bool(json.load(fh).get("manifest_signature"))
     except (OSError, ValueError, AttributeError):
         sig_present = False
@@ -369,7 +382,7 @@ def _checkpoint_note(raw: bytes):
 def _file_format(path: str, found: dict = None) -> str:
     """'ap2', 'cldma', 'ledger' or 'checkpoint' for a regular file (SPEC §12), else _NotRecognised with the reason;
     `found` receives the parsed checkpoint"""
-    with open(path, "rb") as fh:
+    with os.fdopen(_open_regular(path), "rb") as fh:   # SPEC §5 step 0: judged on the open descriptor
         raw = fh.read(_AUTO_JSON_LIMIT + 1)
     whole_read = len(raw) <= _AUTO_JSON_LIMIT
     rows, whole, doc = [], _NO_JSON, None

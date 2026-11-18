@@ -210,12 +210,15 @@ MAX_NOTE_FILE = 1 << 20   # bytes of a note file read by the command line (100 l
 def read_note_file(path: str, limit: int = MAX_NOTE_FILE) -> bytes:
     """The bytes of a note file for the command line: a regular file (a FIFO or a device is refused before it is opened,
     so it can neither block nor stream without end) of at most `limit` bytes; NoteError otherwise (exit 2)."""
-    st = os.stat(path)
-    if not stat.S_ISREG(st.st_mode):
-        raise NoteError(f"{path}: not a regular file")
-    if st.st_size > limit:
-        raise NoteError(f"{path}: {st.st_size} bytes, more than the {limit} of a note file")
-    with open(path, "rb") as f:
+    # opened once without blocking, judged on the open descriptor (until 0.26.0 os.stat then open: a FIFO put there in
+    # between was waited on)
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise NoteError(f"{path}: not a regular file")
+        if st.st_size > limit:
+            raise NoteError(f"{path}: {st.st_size} bytes, more than the {limit} of a note file")
         b = f.read(limit + 1)
     if len(b) > limit:
         raise NoteError(f"{path}: more than the {limit} bytes of a note file")

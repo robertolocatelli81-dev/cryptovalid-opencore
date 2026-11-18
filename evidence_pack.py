@@ -87,7 +87,7 @@ def _entries_and_head(path: str):
     append-only troncata resta valida da sola, ma non combacia con conteggio+testa impegnati nel manifest."""
     n, head = 0, None
     try:
-        with open(path, encoding="utf-8") as f:
+        with os.fdopen(verifier.open_regular(path), encoding="utf-8") as f:   # SPEC §5 step 0
             for ln in f:
                 if ln.strip():
                     n += 1
@@ -357,7 +357,7 @@ def _manifest_type_problem(man: Dict) -> Optional[str]:
 def _has_signature_field(path: str) -> bool:
     """SPEC §5 step 5: the signature layer is opened by a signature field on ANY entry (0.21.0 read entry 0 only)."""
     try:
-        with open(path, encoding="utf-8") as f:
+        with os.fdopen(verifier.open_regular(path), encoding="utf-8") as f:   # SPEC §5 step 0
             for ln in f:
                 if not ln.strip():
                     continue
@@ -624,6 +624,8 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
                 expected_pq, expected_ed = rec_pq[0], rec_ed[0]   # pinned by a manifest the CALLER trusts, digest AND signature verified
             try:
                 sv = signer.verify_file(p, expected_ed, expected_pq)
+            except OSError as e:   # the ledger stopped being a readable regular file after its digest was checked
+                return _refused(f"input_unreadable: file {lm['file']}: {e.strerror or type(e).__name__}", "malformed")
             except RuntimeError as e:   # no `cryptography` here: the layer cannot be checked (0.21.0: a traceback, exit 1)
                 sp, pq, pq_reason = False, False, "signature_layer_unverifiable"
                 producer.append(("not_evaluated", "backend_missing", f"ledger {lm['file']}: {str(e)[:80]}"))

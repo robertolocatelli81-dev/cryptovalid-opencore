@@ -876,8 +876,9 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
         # newlines: a lone CR is data inside the line, hence a decode error), and a line is blank when it holds
         # nothing but ASCII space / tab / CR — never Unicode whitespace (str.strip() took U+00A0).
         import io
-        with (open(fd, encoding="utf-8", errors="surrogateescape", newline="\n") if piped is None else
-              io.TextIOWrapper(io.BytesIO(piped), encoding="utf-8", errors="surrogateescape", newline="\n")) as f:
+        # the layers open() builds on a descriptor, or the bytes of the pipe: one wrapper, closed here with what it wraps
+        with io.TextIOWrapper(io.BufferedReader(io.FileIO(fd)) if piped is None else io.BytesIO(piped),
+                              encoding="utf-8", errors="surrogateescape", newline="\n") as f:
             raw_lines = [ln for ln in f if ln.strip(" \t\r\n")]
     except FileNotFoundError:
         return {

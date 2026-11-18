@@ -137,7 +137,21 @@ forces a boolean where reality had none.
    2026-11-18). It is read without ever blocking: at most the size bound (`input_too_large`), and a pipe that gives no
    byte and no end of file for 10 s (`FIFO_IDLE_SECONDS`; a FIFO with no writer) is FAIL (`unreadable: FIFO idle for
    10 s`). A device or a directory stays `unreadable: not a regular file`; the files of §10 and §11 and `auto` (§12)
-   still refuse a FIFO.
+   still refuse a FIFO. Only the wait for a byte is bounded, not the whole read: a writer that keeps giving bytes is
+   read up to the size bound, however slowly.
+   **v0.12, every reader:** the rule of the first paragraph holds for every file a verifier of this package reads from
+   a path, not only the ledger and the files of §10 and §11: the manifest when the front-end reads it again, the
+   ledgers of a pack when their signatures and their count are read, the `*.sth.json`, `*.head.json` and `*.sth.tsr`
+   of an ingest archive, the signed tip (`--tip`), the ledger given to `signer.py verify`, the note of §13, the tiles
+   of §14 and the files of §18-§19. Measured on 2026-11-18 by replacing each file of a pack and of an archive, one at a
+   time, with a FIFO, a link to `/dev/zero` and a directory: `cryptovalid-verify pack` and `auto` with a FIFO as
+   MANIFEST.json, `cryptovalid-verify archive` and `auto` with a FIFO as `*.sth.json` or `*.head.json`, `signer.py
+   verify <a FIFO>` and `verifier.py --tip <a FIFO> --trusted-pubkey ...` did not return; the readers of §13, §14,
+   §18-§19 and `auto` checked the path with `stat` and opened it after (the window above). Each is now a named failure
+   of its own receipt (`manifest_unreadable`, `sth_unreadable`, `head_unreadable`, `tsa_token_invalid` with
+   `unreadable`, `tip_unreadable`, `unreadable`, `not a regular file`, `input_unreadable`), never a wait. Not covered:
+   the files a WRITER reads (the ledger and the key given to `signer.py sign`, the files `evidence_pack.py build`
+   copies), which the caller names for its own process.
 1. Parse every line as JSON; any parse error → FAIL.
 2. Detect profile on entry 0; recompute `self_hash` for EVERY entry → any
    mismatch → FAIL.

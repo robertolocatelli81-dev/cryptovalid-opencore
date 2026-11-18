@@ -47,7 +47,7 @@ import hashlib
 import json
 import os
 import re
-import stat
+import sys
 import tempfile
 import unicodedata
 from datetime import datetime, timedelta, timezone
@@ -394,12 +394,11 @@ def _read(src: Union[str, bytes, bytearray], what: str, limit: int) -> bytes:
     if isinstance(src, (bytes, bytearray)):
         b = bytes(src)
     elif isinstance(src, str) and src:
-        try:
-            st = os.stat(src)
-            if not stat.S_ISREG(st.st_mode):
-                raise Refused("input_unreadable", f"{what}: not a regular file")
-            with open(src, "rb") as f:
+        try:   # opened once without blocking, judged on the open descriptor (SPEC §5 step 0; until 0.26.0 stat then open)
+            with os.fdopen(verifier.open_regular(src, sys.maxsize), "rb") as f:
                 b = f.read(limit + 1)
+        except verifier.InputNotRegular:
+            raise Refused("input_unreadable", f"{what}: not a regular file") from None
         except OSError as e:
             raise Refused("input_unreadable", f"{what}: {e.strerror or e}") from None
     else:

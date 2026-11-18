@@ -156,7 +156,13 @@ def canonical(entry):
 
 
 def leaves_from_ledger(path):
-    with open(path, encoding="utf-8") as f:     # the file is JSON, so UTF-8 whatever the locale; closed deterministically
+    try:
+        from verifier import open_regular
+    except ImportError:   # python3 -m opencore.<module> from the parent directory
+        from opencore.verifier import open_regular
+    # the file is JSON, so UTF-8 whatever the locale; closed deterministically; SPEC §5 step 0: a regular file, opened
+    # once without blocking (InputNotRegular / InputTooLarge are OSError)
+    with os.fdopen(open_regular(path), encoding="utf-8") as f:
         return [canonical(json.loads(line)) for line in f if line.strip()]
 
 
@@ -322,8 +328,15 @@ def _read_file(path: str, limit: int = MAX_TILE_FILE):
         raise TileError(f"{path}: not a regular file (links are not followed)")
     if st.st_size > limit:
         raise TileError(f"{path}: {st.st_size} bytes, more than the {limit} this implementation reads")
+    try:   # opened once without blocking and judged again on the descriptor: a FIFO or a link put there after the lstat
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0)
+                     | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+    except OSError as e:
+        raise TileError(f"{path}: {e.strerror}") from None
     try:
-        with open(path, "rb") as f:
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise TileError(f"{path}: not a regular file (links are not followed)")
             return f.read(limit + 1)
     except OSError as e:
         raise TileError(f"{path}: {e.strerror}") from None

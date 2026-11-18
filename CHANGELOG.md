@@ -69,6 +69,28 @@ run by the same author, not by a third party.
   in a child process with a timeout): 10 of its 12 tests fail on 4f15a65 (the control passes, and so does the pipe
   read whole, which 4f15a65 already did), all pass here, with and without `cryptography`.
 
+- **The files inside a pack and an archive, the tip and `signer.py verify` could still wait on a FIFO** (SPEC v0.12 §5
+  step 0 "every reader", written before the code). Measured on 2026-11-18 on the branch itself by replacing every file
+  of an evidence pack, of an ingest archive and of a tile directory, one at a time, with a FIFO, a link to `/dev/zero`
+  and a directory and running the commands (100 cases, each in a child process with a timeout): `cryptovalid-verify pack` and `auto` on a
+  pack whose MANIFEST.json is a FIFO did not return (`evidence_pack.verify_pack` refused it, then the front-end opened
+  the manifest again); `cryptovalid-verify archive` and `auto` did not return on an archive whose `*.sth.json` or
+  `*.head.json` is a FIFO; `signer.py verify <a FIFO>` did not return, and `verifier.py --tip <a FIFO>
+  --trusted-pubkey ...` neither; a `*.sth.tsr` of an archive was read whole whatever it was. The readers of
+  `cryptovalid_beacon`, `cryptovalid_checkpoint` (notes), `cryptovalid_merkle` (tiles) and `auto` checked the path with
+  `os.stat` / `os.lstat` and then opened it: the same window as the pins above. Each now opens once without blocking
+  and judges the open descriptor, and answers with a named failure of its own receipt: `sth_unreadable` /
+  `head_unreadable` (`InputNotRegular`), `tsa_token_invalid` with `unreadable: ...`, `tip_unreadable`, `not a regular
+  file`, `input_unreadable`; `signer.py verify` on a path it cannot read (a FIFO, a device, a directory, an absent
+  file) writes `{"ok": false, "error": "unreadable: ..."}` and exits 1 (until now a traceback for an absent file).
+  The files a writer reads (`signer.py sign`, `evidence_pack.py build`) are not covered (SPEC §5 step 0).
+  `test_every_reader_no_block_20261118.py`: 9 of its 10 tests fail on e5037e0 (the control passes), all pass here,
+  with and without `cryptography`. Two faults of the two changes above, found by the full suite before release and
+  corrected here: `test_packaging.py` reported the ledger's conditional `open` in `verifier.py` as a handle that is
+  not closed by a `with` (now one wrapper over the descriptor or over the pipe's bytes), and `test_verify_evidence.py`
+  still expected the `detail` of a FAIL ledger layer without the failure classes (now it asserts the classes first and
+  the `failure_classes` member).
+
 - **Messages in Italian in an English package.** `cryptovalid_receipt.cbor_decode` said "CBOR: byte in eccesso" for
   too much data (now "CBOR: trailing bytes"), and other messages for people were in Italian: the reasons, notes and
   errors of `cldma_confidential`, `committed_attestation`, `cryptovalid_heterogeneous`, `cryptovalid_jws`,

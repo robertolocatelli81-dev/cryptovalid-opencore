@@ -344,9 +344,9 @@ def load_tip(path: str) -> Dict:
     """The tip is a SIGNED document: it is parsed with the same strict acceptance profile as the entries (no
     duplicate keys, no floats, bounded integers, depth/surrogate pre-scan) — one rule in Python, JS, Go and Java
     (council 16/09 r5: Java was strict, Python and Go were lax)."""
-    from verifier import _loads_strict
-    with open(path, encoding="utf-8") as f:
-        doc = _loads_strict(f.read().strip(" \t\r\n"))
+    from verifier import _loads_strict, read_regular
+    # SPEC §5 step 0: a regular file, opened once without blocking (a FIFO given as --tip blocked here until 0.26.0)
+    doc = _loads_strict(read_regular(path).decode("utf-8").strip(" \t\r\n"))
     if not isinstance(doc, dict):
         raise ValueError("tip file is not a JSON object")
     return doc
