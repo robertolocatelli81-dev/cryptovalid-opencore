@@ -7,9 +7,35 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
-## Unreleased (0.26.1): a reason changes
+## 0.27.0 (unreleased): reasons change
 
 ### Fixed
+
+- **A token under a pinned CA was "not issued by the pinned TSA" when its signing-certificate attribute lists more
+  certificates than the chain to that CA** (SPEC v0.11 §11 step 7, written before the code). RFC 2634 §5.4 and RFC 5035
+  (§5.4.1, §5.4.2 of ESS as it rewrites them): the first ESSCertID MUST be the certificate that verifies the signature;
+  the ones after it "limit the set of certificates that are used during validation". openssl `ts -verify` asks more:
+  every ESSCertID must be in the chain it built (`OSSL_ESS_check_signing_certs`, OpenSSL 3.0 and master), and with a
+  pinned CA below the last certificate listed `-partial_chain` stops the chain at the pin. Measured on 2026-11-18 with
+  OpenSSL 3.0.22 and 0.26.0: sectigo.tsr of spec/vectors/rfc3161 (ESSCertIDs of its signer, the CA R41, the Root R46)
+  was `invalid / not_issued_by_pinned_tsa` ("ess cert id not found") with R41 pinned, alone or with R46 or with the
+  signer too, and `verified` with the signer or R46 pinned; never `contradicted` (the pack said `tsa_unresolved`), but
+  the reason was false. Now a token whose signing-certificate attribute lists more than one ESSCertID is checked as a
+  signer named by subjectKeyIdentifier already was: the first ESSCertID is the signer certificate (hash; issuerSerial
+  when present), every ESSCertID has a closed shape (hash of its algorithm's length, issuerSerial of one directoryName),
+  and openssl `verify -purpose timestampsign` builds the path through the pinned certificates and only the token's
+  certificates a later ESSCertID identifies. sectigo.tsr is `verified` with R41 pinned. Verdicts that change, both
+  ways: a signer named by subjectKeyIdentifier with more than one ESSCertID was refused whatever the pin ("exactly one is
+  evaluated here") and is now checked; a path that goes through a certificate of the token the list leaves out (OpenSSL
+  asks only that the listed ones be in the chain) is now refused. Tokens whose attributes list one ESSCertID
+  each go through `ts -verify` as before, and so do the other 6 vectors of spec/vectors/rfc3161 except accv_qualified
+  (two ESSCertIDs: its signer and its root, `verified` with each pin, as in 0.26.0).
+  `test_tsa_ess_cert_ids_20261118.py`: 848 tokens made here (sid issuerAndSerialNumber or subjectKeyIdentifier x
+  signingCertificate SHA-1 / signingCertificateV2 SHA-256 or SHA-384 x lists of 1 to 3 ESSCertIDs, the signer first or
+  not, its hash altered x issuerSerial absent, present, wrong on the first or on a later one x the pin at the signer, the
+  intermediate CA, the root, an unrelated CA), the outcome computed from the rule as written; on 0.26.0's code 118 of
+  them differ; a first ESSCertID that is not the signer's is refused in every combination; the sectigo vector with each
+  pin of its chain.
 
 - **A token without its signer certificate was "signature invalid"** (SPEC v0.11 §11 step 6, written before the code).
   `cryptovalid_tsa.verify_token` answered `invalid / signature_invalid` for a token whose signer certificate is neither

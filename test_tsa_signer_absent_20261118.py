@@ -30,9 +30,10 @@ import cryptovalid_tsa as T  # noqa: E402
 
 NEEDS = unittest.skipUnless(shutil.which("openssl"), "needs openssl")
 V = os.path.join(ROOT, "spec", "vectors", "rfc3161")
-# measured on 2026-11-18, the same with 0.26.0: sectigo's token is refused at step 7 whenever its CA "Sectigo Public
-# Time Stamping CA R41" is pinned (it is `verified` with the signer certificate alone, which this pin set adds the CAs to)
-STEP7_REFUSES_CHAIN = {"sectigo"}
+# measured on 2026-11-18, the same with 0.26.0: sectigo's token was refused at step 7 whenever its CA "Sectigo Public
+# Time Stamping CA R41" was pinned (openssl ts -verify asks each of its 3 ESSCertIDs to be in the chain, which stops at
+# R41); since SPEC v0.11 step 7 (test_tsa_ess_cert_ids_20261118.py) it is `verified`, and no vector is refused here
+STEP7_REFUSES_CHAIN = set()
 VECTORS = ["freetsa", "digicert", "sectigo", "globalsign", "bosa_qualified", "izenpe_qualified", "accv_qualified"]
 
 
@@ -296,7 +297,7 @@ class AbsentOnlyWhenOpensslLookedUp(unittest.TestCase):
             self.assertEqual(outcome(t, digest, None), ("invalid", "signature_invalid"))
 
     def test_report_and_ingest_name_it(self):
-        """the callers named in CHANGELOG 0.26.1: the report's badge and the ingest's failure reason"""
+        """the callers named in CHANGELOG 0.27.0: the report's badge and the ingest's failure reason"""
         import cryptovalid_ingest as I
         import cryptovalid_report as R
         with open(os.path.join(V, "manifest.json")) as f:

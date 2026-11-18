@@ -266,7 +266,13 @@ CRLs the outcome is the outcome of v0.9.
 v0.11 (2026-11-18) adds to §11 step 6 the reason `signer_certificate_absent`: a token whose signer certificate is neither
 in the token nor pinned was `signature_invalid`, a signature reported as failed that was never evaluated. The status
 stays `invalid` (it does not count as a timestamp); the evidence pack with a pin reports it `not_evaluated /
-tsa_unresolved` where v0.10 said `contradicted / token_invalid`. Every other token has the outcome of v0.10.
+tsa_unresolved` where v0.10 said `contradicted / token_invalid`. v0.11 also writes in §11 step 7 the rule of RFC 2634
+§5.4 and RFC 5035 §3 for a signing-certificate attribute that lists more than one ESSCertID (the first identifies the
+signer certificate, the ones after it limit the certificates of the path), checked by this format instead of by openssl
+`ts -verify`, which asked every ESSCertID to be in the chain it built: a token under a pinned CA that is listed below
+the last certificate of the list (sectigo.tsr of spec/vectors/rfc3161 with its CA R41 pinned) was
+`not_issued_by_pinned_tsa` and is `verified`; a path through a certificate the list leaves out is refused (OpenSSL
+accepted it). Every other token has the outcome of v0.10.
 
 ## 7. Conformance (normative)
 
@@ -452,10 +458,22 @@ first that fails gives the outcome:
 7. **Anchor.** With `tsa_certs` (certificates the verifier pins: the TSA certificate or a CA above it), the token is
    checked against them. How depends on how the SignerInfo names its signer (`sid`, RFC 5652 §5.3: both forms are
    allowed, the SignedData version is 3 in both):
-   - **issuerAndSerialNumber**: openssl `ts -verify` checks the token against them: signer certificate, ESS
-     signing-certificate attribute, extended key usage timeStamping, the `tsa` field against the signer's name, chain to
-     a pinned certificate (`-partial_chain`; the pinned certificates are also given as `-untrusted`), validity at genTime
-     (`-attime`); it passes on exit 0 with `Verification: OK` on stdout.
+   - **issuerAndSerialNumber**, each signing-certificate attribute listing one ESSCertID: openssl `ts -verify` checks
+     the token against them: signer certificate, ESS signing-certificate attribute, extended key usage timeStamping, the
+     `tsa` field against the signer's name, chain to a pinned certificate (`-partial_chain`; the pinned certificates are
+     also given as `-untrusted`), validity at genTime (`-attime`); it passes on exit 0 with `Verification: OK` on stdout.
+   - **issuerAndSerialNumber, a signing-certificate attribute listing more than one ESSCertID** (v0.11, 2026-11-18): the
+     checks of the next form, (a) to (c), on the signer certificate of step 6. OpenSSL's `ts -verify` asks every
+     ESSCertID of the list to identify a certificate of the chain it built, the first at the signer's place and the others
+     elsewhere in it (`OSSL_ESS_check_signing_certs` and its `find`, the same in the OpenSSL 3.0 branch and in master,
+     read on 2026-11-18); RFC 2634 §5.4 and RFC 5035 §3 do not ask that (below). With a pinned CA below the last
+     certificate listed, `-partial_chain` ends the chain at the pin and the token was refused ("ess cert id not found").
+     Measured on 2026-11-18 with OpenSSL 3.0.22 and cryptovalid 0.26.0: sectigo.tsr of spec/vectors/rfc3161, whose
+     signingCertificate lists its signer (Sectigo Public Time Stamping Signer R37), the CA R41 and the Root R46, was
+     `verified` with the signer or R46 pinned and `not_issued_by_pinned_tsa` with R41 pinned (alone or with others),
+     although `openssl verify -partial_chain` establishes the signer under R41; never `contradicted` (in a pack,
+     `tsa_unresolved`), but the reason was false. Which route a token takes is read from its signed attributes; one that
+     cannot be read there takes `ts -verify`, as until v0.11.
    - **subjectKeyIdentifier** (since v0.10): openssl's TS code reads the token as PKCS #7, whose SignerInfo has only
      issuerAndSerialNumber, and refuses such a token with an ASN.1 error. Measured on 2026-11-16 with OpenSSL 3.0.22:
      the TSTInfo of a valid token re-signed by `openssl cms -sign -keyid -cades` with the same TSA key and certificate
@@ -469,16 +487,41 @@ first that fails gives the outcome:
      wording of v0.10) the names were compared byte for byte: measured on 2026-11-17, a `tsa` field that differs from
      the signer's subject only in letter case was `verified` in the issuerAndSerialNumber form and
      `not_issued_by_pinned_tsa` in this one. (a) a signed
-     attribute signingCertificate (RFC 2634 §5.4, SHA-1) or signingCertificateV2 (RFC 5035, its `hashAlgorithm`, SHA-256
-     when absent), each one present checked and at least one present, with exactly one ESSCertID whose `certHash` is the
-     hash of the signer certificate and whose `issuerSerial`, when present, is exactly one directoryName equal (as above) to the
-     certificate's issuer and whose serial number is the certificate's (compared as integers) (more than one ESSCertID
-     is not evaluated here and fails); (b) the TSTInfo `tsa` field, when present: a directoryName equal (as above) to the
-     signer's subject, or one of the names of its subjectAltName (a directoryName compared as above, another name of the
-     same type with the same bytes, as `GENERAL_NAME_cmp`); (c) openssl `verify -purpose timestampsign -partial_chain -attime <genTime> -CAfile <pinned>
-     -no-CApath -no-CAstore -untrusted <pinned and the token's certificates>` over the signer certificate, exit 0: the
-     extended key usage timeStamping (OpenSSL's purpose: present, critical, the only one), the chain to a pinned
-     certificate and the validity at genTime, with the same OpenSSL chain building as `ts -verify`.
+     attribute signingCertificate (RFC 2634 §5.4, SHA-1) or signingCertificateV2 (RFC 5035 §3, its `hashAlgorithm`,
+     SHA-256 when absent; RFC 3161 §2.4.2 as updated by RFC 5816 §2.2.1 asks the TSA for the identifier of its
+     certificate in one of them, and allows both), each one present checked and at least one present. The rule (RFC
+     2634 §5.4, rewritten by RFC 5035 as §5.4.1 for ESSCertIDv2 and §5.4.2 for ESSCertID with the same words; texts read
+     on rfc-editor.org on 2026-11-18, neither obsoleted): "The first certificate identified in the sequence of
+     certificate identifiers MUST be the certificate used to verify the signature. [...] If the hash of the certificate
+     does not match the certificate used to verify the signature, the signature MUST be considered invalid"; "If more
+     than one certificate is present in the sequence of ESSCertIDs, the certificates after the first one limit the set
+     of certificates that are used during validation. Certificates can be either attribute certificates (limiting
+     authorizations) or public key certificates (limiting path validation)"; "If only the signing certificate is present
+     in the sequence, there are no restrictions on the set of certificates used in validating the signature". For a
+     public key certificate the issuerSerial's issuer "MUST contain only the issuer name from the certificate encoded in
+     the directoryName choice of GeneralNames" (RFC 5035 §4). Applied here: the first
+     ESSCertID's `certHash` is the hash of the signer certificate, and its `issuerSerial` (SHOULD in the RFCs, not
+     required here), when present, is exactly one directoryName equal (as above) to the certificate's issuer and a
+     serial number equal to the certificate's (compared as integers); otherwise the token is refused (so is an empty
+     list). The RFCs do not
+     say how the later ESSCertIDs limit the path; this format's reading (v0.11): every ESSCertID, the later ones too, is
+     `{certHash, issuerSerial OPTIONAL}` (ESSCertIDv2 `{hashAlgorithm OPTIONAL, certHash, issuerSerial OPTIONAL}`, the
+     algorithm one of SHA-1, SHA-224, SHA-256, SHA-384, SHA-512, SHA3-256, SHA3-384, SHA3-512 with absent or NULL
+     parameters), `certHash` of that algorithm's length, `issuerSerial` of that same shape, else refused; a later
+     ESSCertID whose hash is the hash of a certificate of the token or a pinned one and whose `issuerSerial` does not
+     name that certificate is refused; with more than one ESSCertID, the certificates of the token that (c) may use to
+     build the path are the ones some later ESSCertID identifies by its hash (with both attributes listing more than one,
+     the ones both identify); the pinned certificates are the trust anchors the verifier chose and stay usable; a later
+     ESSCertID that identifies no certificate here (an attribute certificate, a certificate the token does not carry)
+     adds no certificate to the path and is not an error. With one ESSCertID the path is not limited. Until v0.11 this form
+     refused more than one ESSCertID ("not evaluated here"); OpenSSL also accepts a path through a certificate the list
+     leaves out (it asks the opposite inclusion), which this format refuses. (b) the TSTInfo `tsa` field, when present:
+     a directoryName equal (as above) to the signer's subject, or one of the names of its subjectAltName (a
+     directoryName compared as above, another name of the same type with the same bytes, as `GENERAL_NAME_cmp`); (c)
+     openssl `verify -purpose timestampsign -partial_chain -attime <genTime> -CAfile <pinned> -no-CApath -no-CAstore
+     -untrusted <pinned and the token's certificates (a) allows>` over the signer certificate, exit 0: the extended key
+     usage timeStamping (OpenSSL's purpose: present, critical, the only one), the chain to a pinned certificate and the
+     validity at genTime, with the same OpenSSL chain building as `ts -verify`.
      Closed shapes (v0.10, measured on 2026-11-17 against the generative bench of omega-cra-evol's port of this step,
      which found them): exactly one SignerInfo (step 1 asks it of the token; this step asks it again of what it reads);
      every signed attribute is `Attribute ::= SEQUENCE { attrType OID, attrValues SET }` and nothing else; a
@@ -1422,10 +1465,11 @@ marks what could not be checked against its issuer today.
 | Regulation (EU) 2016/679, Art. 5(1)(c), 17 | OJ L 119, 4.5.2016; in force | EUR-Lex (ELI page; consolidation not checked) |
 | EDPB Guidelines 02/2025 | version 2.0 adopted 2026-07-07 (its version history: 1.1 of 2025-04-08, 2.0 after public consultation); no later version found | edpb.europa.eu, PDF sha256 e90cc80ef9ba6c26… |
 | NIST IR 8213 | Initial Public Draft, May 2019, never finalised; NIST planning note of 2025-01-23: "NIST continues to develop this publication" | csrc.nist.gov |
-| RFC 3161 | Proposed Standard (2001), updated by RFC 5816 (ESSCertIDv2); not obsoleted | rfc-editor.org |
+| RFC 3161 | Proposed Standard (2001), updated by RFC 5816 (ESSCertIDv2); not obsoleted (checked on 2026-11-18) | rfc-editor.org |
+| RFC 5816 (§11 step 7) | Proposed Standard (March 2010); not updated, not obsoleted (checked on 2026-11-18) | rfc-editor.org |
 | RFC 5652 (§11 step 7) | Internet Standard (2009), updated by RFC 8933 and RFC 9629; not obsoleted | rfc-editor.org |
-| RFC 2634 (§11 step 7) | Proposed Standard (1999), updated by RFC 5035; not obsoleted | rfc-editor.org |
-| RFC 5035 (§11 step 7) | Proposed Standard (2007); not updated, not obsoleted | rfc-editor.org |
+| RFC 2634 (§11 step 7) | Proposed Standard (1999), updated by RFC 5035; not obsoleted (checked on 2026-11-18) | rfc-editor.org |
+| RFC 5035 (§11 step 7) | Proposed Standard (2007); not updated, not obsoleted (checked on 2026-11-18) | rfc-editor.org |
 | RFC 4055 (§11 step 7, RSASSA-PSS parameters) | Proposed Standard (June 2005), updated by RFC 5756; not obsoleted (checked on 2026-11-17) | rfc-editor.org |
 | Commission Implementing Regulation (EU) 2025/1929 (§11, qualified statement) | OJ L 30.9.2025; in force since 2025-10-20; no amending act listed by CELLAR on 2026-11-17 (CELEX 32025R1929) | CELLAR, English OJ text |
 | ETSI EN 319 422 (§11, qualified statement) | V1.1.1 (2016-03), the version the Regulation names, as adapted by its Annex | etsi.org, PDF sha256 b8dce6e415c90687… |

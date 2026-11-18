@@ -248,7 +248,7 @@ class SignerByKeyId(unittest.TestCase):
 @NEEDS
 class AnchorParts(unittest.TestCase):
     """each check of step 7 for a key-identified signer, called on the step's own function with one field changed (the
-    signature is step 6's, checked apart): the ESS hash, the ESS issuerSerial, the number of ESSCertIDs, genTime, and a
+    signature is step 6's, checked apart): the ESS hash, the ESS issuerSerial, a second ESSCertID, genTime, and a
     pinned leaf whose CA in the token is not a CA that may sign certificates"""
 
     @classmethod
@@ -328,10 +328,13 @@ class AnchorParts(unittest.TestCase):
 
     def test_ess_chain_of_ids(self):
         """openssl ts -reply with ess_cert_id_chain = yes: two ESSCertIDs. openssl ts -verify takes the issuerAndSerialNumber
-        form (verified); the key-identifier form does not evaluate more than one and refuses"""
+        form (verified); the key-identifier form refused more than one until SPEC v0.11 (0.26.0: "2 ESSCertIDs (exactly
+        one is evaluated here)") and now evaluates them: the first is the signer's, the second limits the path to the CA
+        (test_tsa_ess_cert_ids_20261118.py)"""
         tok = self.lab.token(chain=True)
         self.assertEqual(T.verify_token(tok, DIGEST, "sha256", [self.lab.j("ca.crt")])["status"], "verified")
-        self.assertIn("2 ESSCertIDs", self.anchor(self.to_key_id(tok)))
+        self.assertTrue(T._ess_lists_more_than_one(T.parse_token(tok)["token_der"]))
+        self.assertIsNone(self.anchor(self.to_key_id(tok)))
 
     def test_ess_v2_hash_algorithm(self):
         """ESSCertIDv2 with an explicit hashAlgorithm (sha384): verified; with a parameter that is not NULL: refused"""
@@ -420,7 +423,12 @@ class AnchorParts(unittest.TestCase):
         t = tree(self.ski)
         ids = ess_v2(signer_info(t))
         ids.append(copy.deepcopy(ids[0]))
-        self.assertIn("2 ESSCertIDs", self.anchor(enc(t)))
+        self.assertIsNone(self.anchor(enc(t)))   # SPEC v0.11: the signer listed again limits nothing (refused until 0.26.0)
+        h = [x for x in ids[-1][1] if x[0] == 0x04][0]
+        h[1] = bytes([h[1][0] ^ 1]) + h[1][1:]       # a hash of no certificate here: its issuerSerial is not compared
+        self.assertIsNone(self.anchor(enc(t)))   # the path limited to the signer, whose CA is pinned
+        h[1] = h[1][:-1]                             # a hash of the wrong length
+        self.assertIn("certHash is not sha256-long", self.anchor(enc(t)))
 
     def test_validity_at_gen_time(self):
         self.assertIsNotNone(self.anchor(self.ski, at=self.at + 10 * 86400))   # certificates of 2 days

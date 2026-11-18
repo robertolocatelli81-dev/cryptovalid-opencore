@@ -720,10 +720,88 @@ def _policies_shape(el: tuple) -> bool:
     return True
 
 
+def _ess_lists_more_than_one(token_der: bytes) -> bool:
+    """SPEC §11 step 7 (v0.11): True when a signingCertificate or signingCertificateV2 attribute of the token's SignerInfo
+    lists more than one ESSCertID. Anything not read here answers False (the route of v0.10, openssl ts -verify)."""
+    try:
+        for t, av in _der_items(_signer_info(token_der)[0][3][1], "signedAttrs"):
+            a = _der_items(av, "Attribute") if t == 0x30 else []
+            if len(a) != 2 or a[0][0] != 0x06 or a[1][0] != 0x31:
+                continue
+            if _der_oid(a[0][1], "attrType") not in (OID_SIGNING_CERTIFICATE, OID_SIGNING_CERTIFICATE_V2):
+                continue
+            for _t, v in _der_items(a[1][1], "attrValues"):
+                sc = _der_items(v, "SigningCertificate") if _t == 0x30 else []
+                if sc and sc[0][0] == 0x30 and len(_der_items(sc[0][1], "certs")) > 1:
+                    return True
+        return False
+    except (TokenError, IndexError, ValueError):
+        return False
+
+
+def _issuer_serial(der: bytes):
+    """(issuer Name TLV, serial number as an integer) of a DER certificate"""
+    tbs = _der_items(_der_items(_der_one(der, "certificate", 0x30), "certificate")[0][1], "tbsCertificate")
+    k = 1 if tbs[0][0] == 0xA0 else 0
+    if tbs[k][0] != 0x02 or tbs[k + 2][0] != 0x30:
+        raise TokenError("malformed", "certificate serialNumber or issuer not read")
+    return _tlv_bytes(0x30, tbs[k + 2][1]), int.from_bytes(tbs[k][1], "big", signed=True)
+
+
+def _ess_cert_ids(o: str, certs: bytes):
+    """the ESSCertID(v2)s of one attribute, closed: [(hash algorithm, certHash, (issuer Name TLV, serial) or None)], or
+    the reason why not (RFC 2634 §5.4, RFC 5035 §3: ESSCertID ::= {certHash, issuerSerial OPTIONAL}; ESSCertIDv2 ::=
+    {hashAlgorithm DEFAULT sha256, certHash, issuerSerial OPTIONAL}; IssuerSerial ::= {issuer GeneralNames,
+    serialNumber}, its GeneralNames one directoryName, as OpenSSL compares it)"""
+    import hashlib
+    ids = _der_items(certs, "certs")
+    if not ids:
+        return f"ESS attribute {o}: no ESSCertID"
+    out = []
+    for n, (t, v) in enumerate(ids, 1):
+        if t != 0x30:
+            return f"ESS attribute {o}: ESSCertID {n} is not a SEQUENCE"
+        cid = _der_items(v, "ESSCertID")
+        alg = "sha1"
+        if o == OID_SIGNING_CERTIFICATE_V2:
+            alg = "sha256"
+            if cid and cid[0][0] == 0x30:
+                ai = _der_items(cid[0][1], "hashAlgorithm")
+                alg = ESS_HASHES.get(_der_oid(ai[0][1], "hashAlgorithm")) if ai and ai[0][0] == 0x06 else None
+                if alg is None or not (len(ai) == 1 or (len(ai) == 2 and ai[1] == (0x05, b""))):
+                    return f"ESSCertIDv2 {n}: hash algorithm not known"
+                cid = cid[1:]
+        if not cid or cid[0][0] != 0x04 or len(cid) > 2 or (len(cid) == 2 and cid[1][0] != 0x30):
+            return f"ESSCertID {n}: not {{certHash, issuerSerial?}}"
+        if len(cid[0][1]) != hashlib.new(alg).digest_size:
+            return f"ESSCertID {n}: certHash is not {alg}-long"
+        isr = None
+        if len(cid) == 2:
+            iss = _der_items(cid[1][1], "IssuerSerial")
+            names = _der_items(_der_one(_tlv_bytes(0x30, iss[0][1]), "GeneralNames", 0x30), "GeneralNames") \
+                if iss and iss[0][0] == 0x30 else None
+            if not (len(iss) == 2 and iss[1][0] == 0x02 and names is not None and len(names) == 1
+                    and names[0][0] == 0xA4):
+                return f"ESSCertID {n}: issuerSerial is not {{one directoryName, serialNumber}}"
+            isr = (names[0][1], int.from_bytes(iss[1][1], "big", signed=True))
+        out.append((alg, cid[0][1], isr))
+    return out
+
+
+def _ess_names(isr, der: bytes) -> bool:
+    """an ESS issuerSerial (Name TLV, serial) names the certificate `der`: the issuer compared as X509_NAME_cmp, the serial
+    as an integer"""
+    issuer, serial = _issuer_serial(der)
+    return _names_equal(isr[0], issuer) and isr[1] == serial
+
+
 def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int, tmp: str):
-    """SPEC §11 step 7 for a signer named by subjectKeyIdentifier: None when the token is established under the pinned
-    certificates, else why not. (a) ESS signing-certificate attribute(s), (b) the `tsa` field, (c) openssl verify with the
-    timestampsign purpose, the chain to a pinned certificate and the validity at genTime."""
+    """SPEC §11 step 7, the checks made one by one (a signer named by subjectKeyIdentifier, and since v0.11 any signer
+    whose signing-certificate attribute lists more than one ESSCertID): None when the token is established under the
+    pinned certificates, else why not. (a) ESS signing-certificate attribute(s): the first ESSCertID identifies the signer
+    certificate, the ones after it limit the certificates of the path; (b) the `tsa` field; (c) openssl verify with the
+    timestampsign purpose, the chain to a pinned certificate (through the certificates (a) allows) and the validity at
+    genTime."""
     import base64
     import hashlib
     try:
@@ -735,7 +813,7 @@ def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int
         cert = _der_items(_der_one(signer_der, "certificate", 0x30), "certificate")
         tbs = _der_items(cert[0][1], "tbsCertificate")
         k = 1 if tbs[0][0] == 0xA0 else 0
-        serial, issuer, subject = tbs[k][1], _tlv_bytes(0x30, tbs[k + 2][1]), _tlv_bytes(0x30, tbs[k + 4][1])
+        subject = _tlv_bytes(0x30, tbs[k + 4][1])
         san = []
         for tag, v in tbs[k + 6:]:
             if tag == 0xA3:
@@ -754,6 +832,9 @@ def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int
         found = [o for o in (OID_SIGNING_CERTIFICATE, OID_SIGNING_CERTIFICATE_V2) if o in attrs]
         if not found:
             return "no signingCertificate or signingCertificateV2 attribute (ESS)"
+        token_certs = _token_certificates(token_der)
+        pool = token_certs + _pem_ders(pins_pem)
+        allowed = None                                  # None: no attribute limits the path (one ESSCertID each)
         for o in found:
             vals = attrs[o]
             if len(vals) != 1 or len(_der_items(vals[0], "attrValues")) != 1:
@@ -761,34 +842,24 @@ def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int
             sc = _der_items(_der_one(vals[0], "SigningCertificate", 0x30), "SigningCertificate")
             if not 1 <= len(sc) <= 2 or sc[0][0] != 0x30 or (len(sc) == 2 and not _policies_shape(sc[1])):
                 return f"ESS attribute {o}: not {{certs, policies?}}"   # RFC 2634 §5.4, RFC 5035 §3
-            ids = _der_items(sc[0][1], "certs")
-            if len(ids) != 1:
-                return f"ESS attribute {o}: {len(ids)} ESSCertIDs (exactly one is evaluated here)"
-            if ids[0][0] != 0x30:
-                return f"ESS attribute {o}: the ESSCertID is not a SEQUENCE"
-            cid = _der_items(ids[0][1], "ESSCertID")
-            alg = "sha1"
-            if o == OID_SIGNING_CERTIFICATE_V2:
-                alg = "sha256"
-                if cid and cid[0][0] == 0x30:
-                    ai = _der_items(cid[0][1], "hashAlgorithm")
-                    alg = ESS_HASHES.get(_der_oid(ai[0][1], "hashAlgorithm"))
-                    if alg is None or not (len(ai) == 1 or (len(ai) == 2 and ai[1] == (0x05, b""))):
-                        return "ESSCertIDv2: hash algorithm not known"
-                    cid = cid[1:]
-            if not cid or cid[0][0] != 0x04 or len(cid) > 2 or (len(cid) == 2 and cid[1][0] != 0x30):
-                return "ESSCertID: not {certHash, issuerSerial?}"
-            if cid[0][1] != hashlib.new(alg, signer_der).digest():
+            ids = _ess_cert_ids(o, sc[0][1])
+            if isinstance(ids, str):
+                return ids
+            alg, h, isr = ids[0]                        # RFC 2634 §5.4, RFC 5035 §3: the first is the signer certificate
+            if h != hashlib.new(alg, signer_der).digest():
                 return "ESS certHash is not the hash of the signer certificate"
-            if len(cid) == 2:
-                iss = _der_items(cid[1][1], "IssuerSerial")
-                names = _der_items(_der_one(_tlv_bytes(0x30, iss[0][1]), "GeneralNames", 0x30), "GeneralNames") \
-                    if iss and iss[0][0] == 0x30 else None
-                if not (len(iss) == 2 and iss[1][0] == 0x02 and names is not None and len(names) == 1
-                        and names[0][0] == 0xA4 and _names_equal(names[0][1], issuer)
-                        and int.from_bytes(iss[1][1], "big", signed=True) == int.from_bytes(serial, "big", signed=True)):
-                    return "ESS issuerSerial does not name the signer certificate's issuer and serial number"
-        # (b) the tsa field
+            if isr is not None and not _ess_names(isr, signer_der):
+                return "ESS issuerSerial does not name the signer certificate's issuer and serial number"
+            if len(ids) > 1:                            # the ones after it "limit the set of certificates" (SPEC v0.11)
+                ok = {signer_der}
+                for n, (alg, h, isr) in enumerate(ids[1:], 2):
+                    for c in pool:
+                        if hashlib.new(alg, c).digest() == h:
+                            if isr is not None and not _ess_names(isr, c):
+                                return f"ESSCertID {n}: issuerSerial does not name the certificate whose hash it carries"
+                            ok.add(c)
+                allowed = ok if allowed is None else allowed & ok
+    # (b) the tsa field
         tsa = [v for tag, v in tst[5:] if tag == 0xA0]
         if tsa:   # ts_check_signer_name: the subject (a directoryName), then each name of the subjectAltName
             gn = _der_items(tsa[0], "tsa")
@@ -802,7 +873,7 @@ def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int
     sp, cp, up = (os.path.join(tmp, n) for n in ("ski_signer.pem", "ski_pinned.pem", "ski_untrusted.pem"))
     _tmp_write(sp, pem(signer_der))
     _tmp_write(cp, pins_pem)
-    _tmp_write(up, pins_pem + b"".join(pem(c) for c in _token_certificates(token_der)))
+    _tmp_write(up, pins_pem + b"".join(pem(c) for c in token_certs if allowed is None or c in allowed))
     p = _run_openssl(["openssl", "verify", "-purpose", "timestampsign", "-partial_chain", "-attime", str(at),
                       "-CAfile", cp, "-no-CApath", "-no-CAstore", "-untrusted", up, sp], capture_output=True, timeout=30)
     if p.returncode < 0:
@@ -934,7 +1005,9 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
         _tmp_write(cp, pins)
         at = int(datetime.strptime(t["gen_time"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
         signer_der = None
-        if _signer_named_by_key_id(t["token_der"]):   # SPEC §11 step 7, subjectKeyIdentifier: openssl ts cannot read it
+        # SPEC §11 step 7: subjectKeyIdentifier, which openssl ts cannot read; more than one ESSCertID (v0.11), where
+        # openssl ts asks every ESSCertID to be in the chain it built, which RFC 2634 §5.4 and RFC 5035 §3 do not ask
+        if _signer_named_by_key_id(t["token_der"]) or _ess_lists_more_than_one(t["token_der"]):
             state6, signer_der, why = _token_signer(t["token_der"], pins)
             if state6 != "valid" or hashlib.sha256(signer_der).hexdigest() != signer:
                 out.update(reason="not_issued_by_pinned_tsa", detail=f"signer certificate not read again: {why}"[:200])
