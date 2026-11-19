@@ -376,8 +376,9 @@ with no writer. v0.12 also adds to §5 the failure classes of a FAIL receipt (`f
 an added member: the verdict, the receipt of a PASS and the other verifiers do not change.
 v0.12 also adds §20 (2026-11-19), rules written after a security review of 0.26.0. Not additive where they turn an
 accepted input into a refused one; each rule says what changed. Rules 1 and 2 are about outbound URLs (a redirect
-judged on the address it reaches; a credential not sent to another origin). The ledger format (§2–§5), its hashes and
-its vectors do not change.
+judged on the address it reaches; a credential not sent to another origin). Rule 3: the RFC 8785 serializer used for
+the formats of others refuses an integer that is not exactly a double (until 0.26.0 rounded: two integers, the same
+signed bytes). The ledger format (§2–§5), its hashes and its vectors do not change.
 
 ## 7. Conformance (normative)
 
@@ -1707,3 +1708,23 @@ someone else, its own text decides and is cited with the version read; where tha
    applied, which copies every header except the content headers: `X-Vault-Token`, `Authorization` (AWS SigV4, NetHSM
    Basic, a QEAA bearer token) and `X-Amz-Security-Token` went to the host named by the answer (measured on
    2026-11-19 with a 302 from one host to another).
+3. **JCS is applied only to numbers that are IEEE 754 doubles.** `cryptovalid_acta.jcs` is the one RFC 8785
+   serializer of this package, used for formats defined elsewhere (ACTA receipts, Vaara receipts, APS action
+   references and accountability records, the Cedulon effect extract and inputs); the ledger profile of §3 is not JCS.
+   It refuses an integer that is not exactly an IEEE 754 double, with a `ValueError` that names it, when signing and
+   when verifying alike. RFC 8785 §3.1: "JSON number data MUST be expressible as IEEE 754 [IEEE754] double-precision
+   values. For applications needing higher precision or longer integers than offered by IEEE 754 double precision, it
+   is RECOMMENDED to represent such numbers as JSON strings"; §3.2.2.3 serializes that double as ECMAScript does; RFC
+   7493 §2.2, the I-JSON subset RFC 8785 constrains its data to: "An I-JSON sender cannot expect a receiver to treat an
+   integer whose absolute value is greater than 9007199254740991 (i.e., that is outside the range [-(2**53)+1,
+   (2**53)-1]) as an exact value" (both read at rfc-editor.org on 2026-11-19). An integer beyond that range that IS a
+   double (2^53, 2^60, 10^20) is data RFC 8785 accepts, and is serialized as before, as ECMAScript writes it. Until
+   0.26.0 an integer beyond ±2^53 was rounded to the nearest double and then serialized: 2^53 and 2^53+1 gave the same
+   bytes, so a Vaara receipt signed over `9007199254740992` verified after the number in the file was changed to
+   `9007199254740993`, and the caller read from the verified receipt a value nobody signed (measured on 2026-11-19;
+   the same collision in `cryptovalid_aps.payload_ref_v2` and in the digests of a Vaara predecessor and evidence).
+   A declared difference inside this document: the ledger profile of §3 refuses every integer outside ±(2^53−1), in
+   all six verifiers, unchanged; that is this format's own rule for its own entries, and this rule is RFC 8785's for
+   the formats that name it. No verifier of this repository in another language implements JCS (searched on
+   2026-11-19 in `verifiers/js`, `go`, `java`, `rust`, `swift`), and `spec/vectors/canonical_vs_jcs.json` holds no
+   integer beyond ±(2^53−1): neither changes.

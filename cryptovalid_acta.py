@@ -120,7 +120,10 @@ def _es6_number(f: float) -> str:
 
 def jcs(obj: Any) -> bytes:
     """RFC 8785: keys sorted by UTF-16 code units, no whitespace, JSON.stringify escapes, ES6 numbers; NaN/Infinity,
-    integers beyond the double range, non-string keys and nesting deeper than 512 are refused (ValueError/TypeError)."""
+    an integer that is not exactly an IEEE 754 double, non-string keys and nesting deeper than 512 are refused
+    (ValueError/TypeError). SPEC v0.12 §20 rule 3 (19/11/2026): RFC 8785 §3.1, "JSON number data MUST be expressible
+    as IEEE 754 double-precision values". Until 0.26.0 an integer beyond ±2^53 was rounded to the nearest double, so
+    2^53 and 2^53+1 gave the same bytes and a signature over one verified over the other."""
     def enc(x: Any, depth: int = 0) -> str:
         if depth > JCS_MAX_DEPTH:
             raise ValueError("JCS: nesting deeper than 512 refused")
@@ -133,9 +136,14 @@ def jcs(obj: Any) -> bytes:
         if isinstance(x, int):
             if abs(x) > 2 ** 53:
                 try:
-                    return _es6_number(float(x))
+                    f = float(x)
                 except OverflowError:
                     raise ValueError("JCS: integer beyond the double range") from None
+                if int(f) != x:                       # float() rounds to the nearest double: another number
+                    shown = str(x) if abs(x) < 10 ** 40 else f"of {x.bit_length()} bits"
+                    raise ValueError(f"JCS: the integer {shown} is not exactly an IEEE 754 double (RFC 8785 §3.1, "
+                                     "RFC 7493 §2.2): carry it as a string")
+                return _es6_number(f)
             return str(x)
         if isinstance(x, float):
             if x != x or x in (float("inf"), float("-inf")):

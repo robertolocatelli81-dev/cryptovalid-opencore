@@ -49,6 +49,24 @@ run by the same author, not by a third party.
   answered by a resolver replaced in the test; 4,000 pairs of origins with generated header sets; redirects served on
   127.0.0.1. All 9 fail on 22d342c; 14 mutants of the changed lines, 14 killed.
 
+- **A signature over JCS verified after an integer beyond 2^53 was changed** (SPEC v0.12 §20 rule 3, written before
+  the code; same review, re-run on 2026-11-19). `cryptovalid_acta.jcs`, the RFC 8785 serializer of the ACTA, Vaara,
+  APS and Cedulon readers, rounded an integer beyond ±2^53 to the nearest double before writing it: `jcs(2**53)` and
+  `jcs(2**53 + 1)` were the same bytes. A Vaara receipt signed (ES256) over `"amount_wei": 9007199254740992` verified
+  with `9007199254740993` in its place, and the caller read from it a value nobody signed; `payload_ref_v2` of
+  `cryptovalid_aps` and the digests of a Vaara predecessor and evidence collided the same way. `jcs` now refuses an
+  integer that is not exactly an IEEE 754 double, with a `ValueError` that names it (RFC 8785 §3.1, "JSON number data
+  MUST be expressible as IEEE 754 double-precision values"; RFC 7493 §2.2; read at rfc-editor.org on 2026-11-19), when
+  signing and when verifying; the readers report it as their own refusal (`verify_receipt`: `ok` false, the reason in
+  `why`). An integer beyond 2^53 that is a double (2^53, 2^60, 10^20) is written as before, as ECMAScript writes it.
+  The ledger profile of §3 already refuses every integer outside ±(2^53−1), in the six verifiers, and does not
+  change; no verifier in another language implements JCS, and the vectors hold no such integer.
+  `test_sentry_20261119.py`, 4 tests: 3,854 integers of 50 to 1,100 bits and around 2^53, 2^63 and 2^64 of both signs
+  (1,630 doubles, 2,224 not, told apart here by integer arithmetic), refused exactly when not a double and never two
+  with the same bytes; the same integers given to Node, whose `JSON.stringify(JSON.parse(text))` equals the bytes of
+  every accepted one and loses the value of every refused one; 420 receipts signed here and changed. All 4 fail on
+  22d342c (199 of the 420 changed receipts verified there); 4 mutants of the changed lines, 4 killed.
+
 - **A real DigiCert token was refused because its nonce is negative** (SPEC v0.12 §11 step 3, written before the code).
   `cryptovalid_tsa.parse_token` read the TSTInfo's `nonce` with the reader of non-negative INTEGERs and answered
   `invalid / malformed` ("nonce: negative INTEGER") for a TimeStampResp of DigiCert SHA256 RSA4096 Timestamp Responder

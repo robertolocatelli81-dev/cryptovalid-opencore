@@ -6,12 +6,18 @@ names a defect fails on 22d342c, the commit before these rules (measured; the CH
 
 Nothing here uses the network: servers listen on 127.0.0.1, names are answered by a resolver replaced in the test.
 """
+import base64
+import hashlib
 import http.server
 import ipaddress
+import json
 import os
 import random
+import shutil
 import socket
+import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -19,6 +25,18 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+
+try:   # the `sign` extra; without it the cases that need it are skipped with this reason, never an import error
+    from cryptography.hazmat.primitives import hashes, serialization as ser
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job with cryptography must not pass on skips
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
 
 SEED = 20261119
 
@@ -309,6 +327,136 @@ class TestNetCredentialsStayWithTheirOrigin(unittest.TestCase):
         req = urllib.request.Request(base + "/away", headers={"User-Agent": "cv-test"})
         self.assertEqual(N.open_url(req, 5, N.ALLOW_HTTP_OR_HTTPS).read(), b"ok")      # no credential: followed
         self.assertEqual([p for _, p, _ in other.seen], ["/elsewhere"])
+
+
+# ---------------------------------------------------------------- §20 rule 3: JCS and integers that are not doubles
+
+def _is_double(x: int) -> bool:
+    """Is the integer exactly an IEEE 754 binary64 value? Integer arithmetic only: at most 53 significant bits and an
+    exponent the format has (the oracle: float() is not asked)."""
+    m = abs(x)
+    if m == 0:
+        return True
+    low = (m & -m).bit_length() - 1                      # trailing zero bits
+    return m.bit_length() - low <= 53 and m.bit_length() <= 1024
+
+
+_NODE = r"""
+const out = [];
+for (const t of JSON.parse(require('fs').readFileSync(0, 'utf8'))) {
+  const n = JSON.parse(t);
+  out.push([JSON.stringify(n), Number.isFinite(n) && BigInt(n) === BigInt(t)]);   // what ECMAScript writes; did it keep the value
+}
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+class TestJcsIntegersAreDoubles(unittest.TestCase):
+    """Rule 3: jcs() refuses an integer that is not exactly a double; two integers never give the same bytes."""
+
+    def setUp(self):
+        import cryptovalid_acta
+        self.jcs = cryptovalid_acta.jcs
+
+    def _integers(self):
+        rng = random.Random(SEED)
+        xs = set()
+        for k in range(-70, 71):                          # around 2^53 and around 2^63, 2^64, both signs
+            for base in (2 ** 53, 2 ** 63, 2 ** 64):
+                xs.update((base + k, -(base + k)))
+        for _ in range(3000):                             # any size up to past the double range
+            bits = rng.randint(50, 1100)
+            x = rng.getrandbits(bits) | (1 << (bits - 1))
+            if rng.random() < 0.5:                        # half of them made doubles: 53 significant bits, zeros below
+                x = (x >> max(0, bits - 53)) << max(0, bits - 53)
+            xs.add(x if rng.random() < 0.5 else -x)
+        xs.update((10 ** 20, 10 ** 21, 10 ** 22, 10 ** 23, 2 ** 1023, 2 ** 1024, -(2 ** 1024), 2 ** 1024 - 2 ** 970))
+        return sorted(xs)
+
+    def test_refused_exactly_when_not_a_double(self):
+        seen, refused, accepted = {}, 0, 0
+        for x in self._integers():
+            with self.subTest(x=x if abs(x) < 10 ** 30 else f"{x.bit_length()} bits"):
+                if _is_double(x):
+                    b = self.jcs({"n": [x]})
+                    self.assertNotIn(b, seen, "two integers, the same bytes")
+                    seen[b] = x
+                    self.assertEqual(int(float(json.loads(b)["n"][0])), x)          # the bytes still name this integer
+                    accepted += 1
+                else:
+                    with self.assertRaises(ValueError) as cm:
+                        self.jcs({"n": [x]})
+                    self.assertIn("JCS: ", str(cm.exception))
+                    refused += 1
+        self.assertGreater(refused, 1500)
+        self.assertGreater(accepted, 1500)
+        for x in (2 ** 53 + 1, -(2 ** 53 + 1), 2 ** 53 + 3, 2 ** 60 + 7, 2 ** 63 - 1, 2 ** 64 - 1):   # named in the review
+            self.assertFalse(_is_double(x))
+            with self.assertRaises(ValueError) as cm:
+                self.jcs(x)
+            self.assertIn("is not exactly an IEEE 754 double (RFC 8785 §3.1", str(cm.exception))
+        for x in (2 ** 53, -(2 ** 53), 2 ** 53 + 2, 2 ** 53 - 1, -(2 ** 53 - 1), 0, 1, -1):
+            self.assertEqual(self.jcs(x), str(x).encode())
+        self.assertEqual(self.jcs([1e21, 2.0 ** 53, True, False]), b"[1e+21,9007199254740992,true,false]")   # floats, booleans: as before
+
+    def test_against_ecmascript(self):
+        if not shutil.which("node"):
+            self.skipTest("node not installed")
+        xs = self._integers()                                         # past the double range JSON.parse gives Infinity
+        p = subprocess.run(["node", "-e", _NODE], input=json.dumps([str(x) for x in xs]).encode(), capture_output=True, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr.decode()[:300])
+        got = json.loads(p.stdout)
+        self.assertEqual(len(got), len(xs))
+        kept = lost = 0
+        for x, (text, same) in zip(xs, got):
+            with self.subTest(x=x if abs(x) < 10 ** 30 else f"{x.bit_length()} bits"):
+                self.assertEqual(same, _is_double(x), "the control: the oracle here and ECMAScript agree on which are doubles")
+                if same:
+                    self.assertEqual(self.jcs(x), text.encode())
+                    kept += 1
+                else:
+                    with self.assertRaises(ValueError):
+                        self.jcs(x)
+                    lost += 1
+        self.assertGreater(kept, 1500)
+        self.assertGreater(lost, 1500)
+
+    def test_other_call_sites(self):
+        import cryptovalid_aps as A
+        import cryptovalid_vaara_receipt as V
+        self.assertNotEqual(A.payload_ref_v2({"amount": 1}), A.payload_ref_v2({"amount": 2}))
+        self.assertNotEqual(A.payload_ref_v2({"amount": 2 ** 53}), A.payload_ref_v2({"amount": 2 ** 53 + 2}))
+        for f, doc in ((A.payload_ref_v2, {"amount": 2 ** 53 + 1}), (V.sha256_jcs, {"x": 2 ** 60 + 7}),
+                       (V.sha256_jcs, {"deep": [{"x": [-(2 ** 53) - 1]}]})):
+            with self.subTest(f=f.__name__):
+                with self.assertRaises(ValueError):
+                    f(doc)
+
+    @NEEDS_CRYPTO
+    def test_signed_receipt_does_not_verify_with_another_number(self):
+        import cryptovalid_vaara_receipt as V
+        sk = ec.generate_private_key(ec.SECP256R1())
+        pem = sk.public_key().public_bytes(ser.Encoding.PEM, ser.PublicFormat.SubjectPublicKeyInfo)
+        rng = random.Random(SEED)
+        changed = 0
+        for amount in (2 ** 53, -(2 ** 53), 2 ** 60, 2 ** 64, 10 ** 20, 2 ** 53 - 1, 12345):
+            r = {"version": 1, "alg": "ES256", "backLink": {"attestationDigest": "sha256:" + "0" * 64},
+                 "decisionDerived": {"amount_wei": amount}, "issuerAsserted": {"nonce": "n1"}}
+            rr, ss = decode_dss_signature(sk.sign(V.signed_payload(r), ec.ECDSA(hashes.SHA256())))
+            r["signature"] = (rr.to_bytes(32, "big") + ss.to_bytes(32, "big")).hex()
+            wire = json.dumps(r)
+            self.assertTrue(V.verify_receipt(json.loads(wire), pem, alg="ES256")["ok"], amount)     # the control
+            for _ in range(60):
+                other = amount + rng.choice([1, -1, 2, -2, 3, 255, -255, 256, 1024, -1024, rng.randint(-5000, 5000) or 1])
+                forged = json.loads(wire.replace(f'"amount_wei": {amount}', f'"amount_wei": {other}'))
+                self.assertEqual(forged["decisionDerived"]["amount_wei"], other)
+                with self.subTest(amount=amount, other=other):
+                    res = V.verify_receipt(forged, pem, alg="ES256")
+                    self.assertFalse(res["ok"])
+                    if not _is_double(other):
+                        self.assertIn("is not exactly an IEEE 754 double", res["why"])
+                changed += 1
+        self.assertEqual(changed, 420)
 
 
 if __name__ == "__main__":
