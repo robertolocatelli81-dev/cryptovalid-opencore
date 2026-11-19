@@ -67,6 +67,38 @@ run by the same author, not by a third party.
   every accepted one and loses the value of every refused one; 420 receipts signed here and changed. All 4 fail on
   22d342c (199 of the 420 changed receipts verified there); 4 mutants of the changed lines, 4 killed.
 
+- **A Cedulon ledger that was INVALID became VALID with one unsigned line, or with two allows under one ref** (SPEC
+  v0.12 §20 rules 4 to 6, written before the code; same review, re-run on 2026-11-19; `cryptovalid_cedulon` is
+  experimental). The texts were read again that day where they live: draft-dogru-cedulon-decision-profile-04 (5
+  October 2026, active), draft-dogru-cedulon-09 (6 September 2026, which profile-04 cites; replaced on the datatracker
+  by draft-dogru-cedulon-core, at -04 of 7 October 2026), W3C Web Authentication Level 3 (Recommendation, 25 August
+  2026), and the README and verifier of verax-ai/verax at c626c68 (Apache-2.0, read only). Three points were compared;
+  the reader as a whole is still the reader of profile-03 and cedulon-08.
+  (1) The `control` and `approval-signature` stages read a record's context from any row of the unsigned
+  `inputs.jsonl` with its ref, also for a record whose `inputsHash` is null: a ledger `INVALID` at `control` (an allow
+  inside a halt window) was `VALID` after a line `{"ref": ..., "inputs": {"control": {"action": "resume"}}}` was
+  added. They now read only a context the record's signed `inputsHash` binds, and a row that no signed `inputsHash`
+  binds is `INVALID` at `inputs-binding`.
+  (2) Allows were kept in a map by ref, the last replacing the others: two allows under ref X naming effects H1 and
+  H2, with rows carrying H2 twice, were `VALID`. A ref on more than one allow, or on more than one effect row, is now
+  `INVALID` at `effect-binding` with `duplicate-ref` (cedulon-09 §11.4 step 7 and MUST-T10-6, finding "audit fails";
+  profile §6.1). One outcome named differently: two allows under one ref with one row was `decision-without-effect`
+  and is `duplicate-ref` (`test_cedulon.py` changed there). And a row under a ref that a refusal AND an allow carry is
+  `effect-against-refusal` as profile §6.1 writes it (was `VALID`: the allow was looked up first; found by the
+  generated test).
+  (3) The approval's WebAuthn assertion was checked against the RP ID the assertion itself carries, and the origin
+  not at all, without the result saying so: an assertion made with the operator's passkey for `evil.example` passed.
+  `verify_ledger` takes `expected_rp_ids` and `expected_origins` (WebAuthn §7.2: "expected by the Relying Party");
+  without them the check is the one of 0.26.0 and `not_verified` now names `approval-rp-id` and `approval-origin`
+  (`test_cedulon.py` changed there). An assertion with no `rpId` member fails `approval-signature` (was `malformed`).
+  `test_sentry_20261119.py`, 8 tests: 250 generated ledgers with halts and resumes against an oracle that reads only
+  what the Decider signed, each with 4 unsigned rows added (1,000); 400 ledgers with repeated refs and bent rows; 300
+  assertions over 7 RP IDs and 6 origins. All 8 fail on 22d342c; 13 mutants of the changed lines, 12 killed. The one
+  that survives (the approver read from any row, not only a bound one) gives the same verdict and stage: a row is
+  accepted only when some record's signed `inputsHash` binds it, and that record is checked with the same approver.
+  Seen and not changed: Verax's verifier at c626c68 reads the halt and resume from the signed claims (`subject`),
+  not from the inputs row.
+
 - **A real DigiCert token was refused because its nonce is negative** (SPEC v0.12 §11 step 3, written before the code).
   `cryptovalid_tsa.parse_token` read the TSTInfo's `nonce` with the reader of non-negative INTEGERs and answered
   `invalid / malformed` ("nonce: negative INTEGER") for a TimeStampResp of DigiCert SHA256 RSA4096 Timestamp Responder

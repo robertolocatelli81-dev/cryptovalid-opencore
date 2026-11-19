@@ -378,7 +378,9 @@ v0.12 also adds §20 (2026-11-19), rules written after a security review of 0.26
 accepted input into a refused one; each rule says what changed. Rules 1 and 2 are about outbound URLs (a redirect
 judged on the address it reaches; a credential not sent to another origin). Rule 3: the RFC 8785 serializer used for
 the formats of others refuses an integer that is not exactly a double (until 0.26.0 rounded: two integers, the same
-signed bytes). The ledger format (§2–§5), its hashes and its vectors do not change.
+signed bytes). Rules 4 to 6: the experimental Cedulon reader takes the context of `control` and of an approval only
+from inputs a signature binds, reports a repeated ref as `duplicate-ref`, and checks an approval's WebAuthn RP ID and
+origin against the caller's or says it did not. The ledger format (§2–§5), its hashes and its vectors do not change.
 
 ## 7. Conformance (normative)
 
@@ -1728,3 +1730,57 @@ someone else, its own text decides and is cited with the version read; where tha
    the formats that name it. No verifier of this repository in another language implements JCS (searched on
    2026-11-19 in `verifiers/js`, `go`, `java`, `rust`, `swift`), and `spec/vectors/canonical_vs_jcs.json` holds no
    integer beyond ±(2^53−1): neither changes.
+
+Rules 4 to 6 are about `cryptovalid_cedulon`, an experimental reader of a format that is not this one. Its texts, read
+on 2026-11-19 at datatracker.ietf.org and www.ietf.org/archive/id: draft-dogru-cedulon-decision-profile-04 (5 October
+2026, active; the reader was written from -03), which cites as [CEDULON] draft-dogru-cedulon-09 (6 September 2026;
+the datatracker marks it replaced by draft-dogru-cedulon-core, -checkpoint and -threats; core is at -04, 7 October
+2026; the reader was written from -08); and the README and verifier of verax-ai/verax at c626c68 (2026-11-16,
+Apache-2.0; read, nothing copied). Only the three points below were compared with those versions: the reader as a
+whole is still the reader of -03 and -08, and what -04 changed elsewhere (a separate checkpoint key, among others) is
+not judged here.
+
+4. **What the `control` and `approval-signature` stages read is bound by a signature.** They read a record's
+   context (the `inputs` member of its row in `inputs.jsonl`) only when the record's signed `inputsHash` is not null
+   and the row hashed to it at `inputs-binding`; a record whose `inputsHash` is null has no context for these stages.
+   An inputs row whose `ref` is not the `ref` of a record with a non-null `inputsHash` is refused: `INVALID`, stage
+   `inputs-binding`, "no record's signed inputsHash binds it". Sources: profile-04 §4.2, "inputsHash, when not null, is
+   the SHA-256 of whatever further context the Decider consulted"; its "Changes from -03" leaves how that context "is
+   presented beside the record" to the deployment; the Verax test-vector README names the stage `control` as "an
+   allow inside a halt window opened by a signed halt record". None of them says what a row beside a null
+   `inputsHash` is: the refusal is this reader's closed reading. Until 0.26.0 the two stages read any row by `ref`: a
+   ledger that was `INVALID` at `control` (an allow inside a halt window) became `VALID` when one line
+   `{"ref": <that allow>, "inputs": {"control": {"action": "resume"}}}` was added to the unsigned file (measured on
+   2026-11-19). Seen while reading and not changed: Verax's verifier at c626c68 takes the halt and resume from the
+   signed claims (`subject` `verax.halt` / `verax.resume` with `effectClass` `verax.control`), not from the inputs
+   row; this reader still takes them from the bound row, as its vectors' layout gave them on 2026-10-03.
+5. **A ref that repeats on a side is `duplicate-ref`, and the ledger is not valid.** draft-dogru-cedulon-09 §11.4
+   step 7 (core-04 §12.1 step 7, the same words): "A ref that appears more than once on either side MUST be reported
+   as a repeated reference (MUST-T10-6). The identifier duplicate-ref SHOULD be used for this condition", and its
+   table of findings gives `duplicate-ref` the effect "audit fails"; profile-04 §6.1 (and -03 §6.1): "A ref that
+   appears more than once on a side is duplicate-ref as in the core, and the repeating reference is then reconciled
+   by count". This reader reports the first finding only, so the repeated ref is the verdict: `INVALID`, stage
+   `effect-binding`, `duplicate-ref`, for a ref carried by more than one allow (the records that expect a row; a
+   refusal's ref is not on that side) or by more than one effect row over all the extracts presented. Until 0.26.0
+   the allows were kept by ref in a map, the last one replacing the others, and rows were then counted: with two
+   allows under one ref naming the effects H1 and H2, rows carrying H2 twice were `VALID` — H1 never happened, H2
+   happened twice (measured on 2026-11-19). And profile §6.1, "a row whose ref a refusal names is
+   effect-against-refusal", is applied as written, also when an allow carries the same ref: until 0.26.0 the allow
+   was looked up first, the refusal was never seen, and a deny and an allow under one ref with one row were `VALID`
+   (found on 2026-11-19 by the generated test of this rule, not by the review). The drafts do not say which of the
+   two records such a row binds to; the sentence of §6.1 is the one that names the case.
+6. **The WebAuthn assertion of an approval is checked against the RP ID and the origin the relying party expects,
+   or the result says they were not.** W3C Web Authentication Level 3 (Recommendation, 25 August 2026,
+   https://www.w3.org/TR/2026/REC-webauthn-3-20260825/, read on 2026-11-19) §7.2: "Verify that the value of C.origin
+   is an origin expected by the Relying Party" and "Verify that the rpIdHash in authData is the SHA-256 hash of the RP
+   ID expected by the Relying Party". `verify_ledger` takes `expected_rp_ids` and `expected_origins` (a string or a
+   non-empty list of non-empty strings; anything else is a `ValueError`): given, the assertion's `rpIdHash` must be
+   the SHA-256 of one of the RP IDs, the `rpId` member beside the assertion, when present, must be one of them, and
+   `origin` of the client data must be one of the origins, else `approval-signature` fails. Not given, the check of
+   0.26.0 stays (the `rpIdHash` against the `rpId` the assertion itself carries, no check of the origin) and
+   `not_verified` names `approval-rp-id` and `approval-origin`, beside `approval-challenge-binding`, which no
+   parameter resolves. Until 0.26.0 the RP ID was always the assertion's own and `not_verified` did not say so: an
+   assertion made for any other relying party with the operator's passkey passed the stage (measured on 2026-11-19
+   with an assertion for `evil.example`). The Cedulon drafts do not define the assertion (core-04, Implementation
+   Status: "an approval over HTTP carries a passkey (WebAuthn) assertion bound to the held request"), and the pin file
+   of the Verax vectors carries no RP ID.

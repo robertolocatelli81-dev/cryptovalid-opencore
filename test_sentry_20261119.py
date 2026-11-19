@@ -459,5 +459,326 @@ class TestJcsIntegersAreDoubles(unittest.TestCase):
         self.assertEqual(changed, 420)
 
 
+# ---------------------------------------------------------------- §20 rules 4 to 6: cryptovalid_cedulon
+
+class _CedulonLedger:
+    """A Decider's ledger made here with fresh keys from a plan: one dict per record with decision, ref, effectHash,
+    effectClass and `signed` (the context its inputsHash commits to, or None for a null inputsHash)."""
+
+    def __init__(self):
+        self.rk, self.xk, self.ck = (Ed25519PrivateKey.generate() for _ in range(3))
+        self.t0 = 1_790_000_000_000
+
+    @staticmethod
+    def _pem(sk):
+        return sk.public_key().public_bytes(ser.Encoding.PEM, ser.PublicFormat.SubjectPublicKeyInfo)
+
+    def _record(self, claims):
+        import cryptovalid_cedulon as C
+        import cryptovalid_receipt as R
+        der = self.rk.public_key().public_bytes(ser.Encoding.DER, ser.PublicFormat.SubjectPublicKeyInfo)
+        ph = R.cbor_encode({1: -19, 3: C.CT_RECORD, 4: hashlib.sha256(der).digest()[:8]})
+        payload = R.cbor_encode({label: claims[name] for label, name in C.RECORD_LABELS.items()})
+        return R.cbor_encode([ph, {}, payload, self.rk.sign(R.cbor_encode(["Signature1", ph, b"", payload]))])
+
+    def decisions(self, plan):
+        from cryptovalid_acta import jcs
+        lines, prev, hashes = [], None, []
+        for i, p in enumerate(plan):
+            allow = p["decision"] == "allow"
+            c = {"decider": "d", "subject": "s", "requestHash": "a" * 64, "policyHash": "b" * 64,
+                 "inputsHash": None if p.get("signed") is None else hashlib.sha256(jcs(p["signed"])).hexdigest(),
+                 "decision": p["decision"], "reasonCode": "r", "ref": p["ref"], "effectHash": p["effectHash"] if allow else None,
+                 "timestampMs": self.t0 + i, "nonce": f"n{i}", "prevRecordHash": prev,
+                 "effectClass": p.get("effectClass", "act") if allow else None}
+            octets = self._record(c)
+            prev = hashlib.sha256(octets).hexdigest()
+            hashes.append(prev)
+            lines.append(json.dumps({"coseHex": octets.hex(), "claims": c}))
+        return "\n".join(lines) + "\n", hashes
+
+    def effects(self, rows):
+        from cryptovalid_acta import jcs
+        body = {"deciderId": "d", "channelId": "c", "windowStartMs": self.t0, "windowEndMs": self.t0 + 10_000,
+                "effects": [{"ref": ref, "effectHash": h, "effectClass": cls, "timestampMs": self.t0 + 100 + k}
+                            for k, (ref, h, cls) in enumerate(rows)]}
+        return json.dumps({"receipt": {"body": body, "signature": base64.b64encode(self.xk.sign(jcs(body))).decode()}}) + "\n"
+
+    def verify(self, plan, rows=None, inputs=None, **kw):
+        import cryptovalid_cedulon as C
+        dec, _ = self.decisions(plan)
+        if rows is None:                                # every allow has its row
+            rows = [(p["ref"], p["effectHash"], p.get("effectClass", "act")) for p in plan if p["decision"] == "allow"]
+        inputs_text = None if inputs is None else "".join(json.dumps({"ref": r, "inputs": v}) + "\n" for r, v in inputs)
+        kw.setdefault("clock_skew_ms", 0)
+        return C.verify_ledger(dec, self.effects(rows), "", self._pem(self.rk), self._pem(self.xk), self._pem(self.ck),
+                               inputs_text=inputs_text, **kw)
+
+
+def _h(s) -> str:
+    return hashlib.sha256(str(s).encode()).hexdigest()
+
+
+@NEEDS_CRYPTO
+class TestCedulonControlReadsSignedInputs(unittest.TestCase):
+    """Rule 4: control reads a record's context only when its signed inputsHash binds it."""
+
+    def _plan(self, rng):
+        plan = []
+        for i in range(rng.randint(3, 9)):
+            kind = rng.choice(["halt", "resume", "plain-signed", "plain-null", "plain-null", "deny"])
+            signed = {"halt": {"control": {"action": "halt"}}, "resume": {"control": {"action": "resume"}},
+                      "plain-signed": {"principal": {"brain": f"agent-{i}"}, "inputs": []}}.get(kind)
+            plan.append({"decision": "deny" if kind == "deny" else "allow", "ref": f"ref-{i}", "effectHash": _h(f"e{i}"),
+                         "signed": signed if kind != "deny" or rng.random() < 0.5 else None})
+            if kind == "deny" and plan[-1]["signed"] is None and rng.random() < 0.5:
+                plan[-1]["signed"] = {"p": i}
+        return plan
+
+    @staticmethod
+    def _oracle(plan):
+        """The stage's rule on what the Decider SIGNED: the index of the first allow inside a halt window, or None."""
+        halted = False
+        for i, p in enumerate(plan):
+            action = ((p.get("signed") or {}).get("control") or {}).get("action")
+            if p["decision"] != "allow":
+                continue
+            if action == "halt":
+                halted = True
+            elif action == "resume":
+                halted = False
+            elif halted:
+                return i
+        return None
+
+    def test_the_review_case(self):
+        L = _CedulonLedger()
+        plan = [{"decision": "allow", "ref": "a", "effectHash": _h(1), "signed": {"control": {"action": "halt"}}},
+                {"decision": "allow", "ref": "b", "effectHash": _h(2), "signed": None}]
+        bound = [("a", plan[0]["signed"])]
+        r = L.verify(plan, inputs=bound)
+        self.assertEqual((r["result"], r["stage"]), ("INVALID", "control"), r)                    # the control
+        for added in ({"control": {"action": "resume"}}, {"control": {"action": "halt"}}, {}, None, [], "resume",
+                      {"control": {"action": "resume"}, "new-key": 1}):
+            for rows in (bound + [("b", added)], [("b", added)] + bound):
+                with self.subTest(added=added, first=rows[0][0]):
+                    r = L.verify(plan, inputs=rows)
+                    self.assertEqual((r["result"], r["stage"]), ("INVALID", "inputs-binding"), r)
+                    self.assertIn("no record's signed inputsHash binds it", r["why"])
+
+    def test_a_context_signed_for_another_record_of_the_same_ref(self):
+        # a deny whose SIGNED context says "resume" shares its ref with a later allow that has no signed context and
+        # (inside the boundary allowance) no row yet: the allow has no context of its own, so the window stays open
+        L = _CedulonLedger()
+        plan = [{"decision": "allow", "ref": "h", "effectHash": _h(1), "signed": {"control": {"action": "halt"}}},
+                {"decision": "deny", "ref": "X", "effectHash": None, "signed": {"control": {"action": "resume"}}},
+                {"decision": "allow", "ref": "X", "effectHash": _h(2), "signed": None},
+                {"decision": "allow", "ref": "y", "effectHash": _h(3), "signed": None}]
+        bound = [("h", plan[0]["signed"]), ("X", plan[1]["signed"])]
+        rows = [("h", _h(1), "act"), ("y", _h(3), "act")]
+        r = L.verify(plan, rows=rows, inputs=bound, clock_skew_ms=300000)
+        self.assertEqual((r["result"], r["stage"]), ("INVALID", "control"), r)
+        self.assertIn("record 2:", r["why"])
+        plan[2]["signed"] = {"control": {"action": "resume"}}        # the control: the allow's OWN signed context resumes
+        r = L.verify(plan, rows=rows, inputs=bound, clock_skew_ms=300000)
+        self.assertEqual(r["result"], "VALID", r)
+
+    def test_generated(self):
+        rng = random.Random(SEED)
+        L = _CedulonLedger()
+        seen = {"valid": 0, "control": 0, "attacks": 0}
+        for _ in range(250):
+            plan = self._plan(rng)
+            bound = [(p["ref"], p["signed"]) for p in plan if p.get("signed") is not None]
+            unbound = [p["ref"] for p in plan if p.get("signed") is None]
+            first = self._oracle(plan)
+            r = L.verify(plan, inputs=bound)
+            with self.subTest(plan=[(p["decision"], p.get("signed")) for p in plan]):
+                if first is None:
+                    self.assertEqual(r["result"], "VALID", r)
+                    self.assertNotIn("control", r["not_verified"])
+                    seen["valid"] += 1
+                else:
+                    self.assertEqual((r["result"], r["stage"]), ("INVALID", "control"), r)
+                    self.assertIn(f"record {first}:", r["why"])
+                    seen["control"] += 1
+                # rows nobody signed, for the records that have no signed context and for refs no record has:
+                # whatever they say and wherever they stand, the verdict never becomes VALID where the signed
+                # ledger is not, and the added row is the refusal
+                for _ in range(4):
+                    extra = [(rng.choice(unbound + ["nobody", "ref-99"]),
+                              rng.choice([{"control": {"action": rng.choice(["resume", "halt", "x"])}},
+                                          {"control": {"action": "resume"}, "k" + str(rng.randint(0, 9)): 1},
+                                          {"approver": {"id": "op", "resolves": "ref-0", "signature": {}}}, {}, None, 0, []]))]
+                    rows = list(bound)
+                    rows.insert(rng.randint(0, len(rows)), extra[0])
+                    r2 = L.verify(plan, inputs=rows)
+                    self.assertEqual((r2["result"], r2["stage"]), ("INVALID", "inputs-binding"), r2)
+                    seen["attacks"] += 1
+        self.assertGreater(seen["valid"], 40)
+        self.assertGreater(seen["control"], 40)
+        self.assertEqual(seen["attacks"], 1000)
+
+
+@NEEDS_CRYPTO
+class TestCedulonDuplicateRef(unittest.TestCase):
+    """Rule 5: a ref on more than one allow, or on more than one effect row, is duplicate-ref."""
+
+    def test_the_review_case(self):
+        L = _CedulonLedger()
+        h1, h2, h3 = "1" * 64, "2" * 64, "3" * 64
+        two = [{"decision": "allow", "ref": "X", "effectHash": h1}, {"decision": "allow", "ref": "X", "effectHash": h2}]
+        for name, plan, rows in (("H1 never happened, H2 twice", [dict(two[0], effectHash=h3), two[1]], [("X", h2, "act")] * 2),
+                                 ("both happened", two, [("X", h1, "act"), ("X", h2, "act")]),
+                                 ("both happened, rows swapped", two, [("X", h2, "act"), ("X", h1, "act")]),
+                                 ("one row", two, [("X", h2, "act")]), ("no row", two, [])):
+            with self.subTest(name):
+                r = L.verify(plan, rows=rows)
+                self.assertEqual((r["result"], r["stage"]), ("INVALID", "effect-binding"), r)
+                self.assertIn("duplicate-ref: ref X is on more than one allow", r["why"])
+        one = [{"decision": "allow", "ref": "X", "effectHash": h1}]
+        self.assertEqual(L.verify(one)["result"], "VALID")                                         # the control
+        # found by test_generated below, not by the review: a ref on a refusal AND on an allow, with its row
+        for plan in ([{"decision": "deny", "ref": "X", "effectHash": None}, one[0]], [one[0], {"decision": "defer", "ref": "X", "effectHash": None}]):
+            r = L.verify(plan, rows=[("X", h1, "act")])
+            self.assertEqual((r["result"], r["stage"]), ("INVALID", "effect-binding"), r)
+            self.assertIn("effect-against-refusal under ref X", r["why"])
+        r = L.verify(one, rows=[("X", h1, "act")] * 2)
+        self.assertIn("duplicate-ref: ref X is on more than one effect row", r["why"])
+
+    def test_generated(self):
+        rng = random.Random(SEED)
+        L = _CedulonLedger()
+        seen = {"VALID": 0, "duplicate allow": 0, "duplicate row": 0, "other finding": 0}
+        for _ in range(400):
+            refs = [f"r{rng.randint(0, 5)}" for _ in range(rng.randint(1, 6))]
+            if rng.random() < 0.4:
+                refs = list(dict.fromkeys(refs))                                 # a ledger without a repeated ref
+            plan = [{"decision": rng.choice(["allow", "allow", "allow", "deny"]), "ref": ref,
+                     "effectHash": _h(rng.randint(0, 3)), "effectClass": rng.choice(["act", "act", "pay"])} for ref in refs]
+            allows = [p for p in plan if p["decision"] == "allow"]
+            rows = [(p["ref"], p["effectHash"], p["effectClass"]) for p in allows]
+            bend = rng.choice(["none", "none", "shuffle", "repeat", "drop", "last-wins", "other-hash"])
+            if bend == "shuffle":
+                rng.shuffle(rows)
+            elif bend == "repeat" and rows:
+                rows.insert(rng.randint(0, len(rows)), rng.choice(rows))
+            elif bend == "drop" and rows:
+                rows.pop(rng.randrange(len(rows)))
+            elif bend == "last-wins":                        # every row carries what the LAST allow under its ref named
+                last = {p["ref"]: p for p in allows}
+                rows = [(p["ref"], last[p["ref"]]["effectHash"], last[p["ref"]]["effectClass"]) for p in allows]
+            elif bend == "other-hash" and rows:
+                k = rng.randrange(len(rows))
+                rows[k] = (rows[k][0], _h("other"), rows[k][2])
+            allow_refs, row_refs = [p["ref"] for p in allows], [r[0] for r in rows]
+            refused = {p["ref"] for p in plan if p["decision"] != "allow"}
+            if len(set(allow_refs)) != len(allow_refs):                          # the rule, written out here
+                want = "duplicate allow"
+            elif len(set(row_refs)) != len(row_refs):
+                want = "duplicate row"
+            elif sorted(rows) == sorted((p["ref"], p["effectHash"], p["effectClass"]) for p in allows) \
+                    and not (set(row_refs) & refused):
+                want = "VALID"
+            else:
+                want = "other finding"
+            with self.subTest(plan=[(p["decision"], p["ref"], p["effectHash"][:4]) for p in plan], rows=[(a, b[:4], c) for a, b, c in rows]):
+                r = L.verify(plan, rows=rows)
+                if want == "VALID":
+                    self.assertEqual(r["result"], "VALID", r)
+                else:
+                    self.assertEqual((r["result"], r["stage"]), ("INVALID", "effect-binding"), r)
+                    self.assertEqual("duplicate-ref" in r["why"], want.startswith("duplicate"), r)
+                    if want == "duplicate allow":
+                        self.assertIn("more than one allow", r["why"])
+                    elif want == "duplicate row":
+                        self.assertIn("more than one effect row", r["why"])
+            seen[want] += 1
+        for k, n in seen.items():
+            self.assertGreater(n, 25, k)
+
+
+@NEEDS_CRYPTO
+class TestCedulonApprovalRelyingParty(unittest.TestCase):
+    """Rule 6: the assertion's RP ID and origin are the ones the relying party expects, or not_verified says so."""
+
+    def setUp(self):
+        import test_cedulon
+        self.TC = test_cedulon
+        self.L = test_cedulon.VeraxLedger()
+
+    def _verify(self, rp, origin, rp_member="same", **kw):
+        TC, L = self.TC, self.L
+
+        def assertion(sig, ad, cdj, pk):                   # the operator's passkey signs for another relying party
+            ad2 = hashlib.sha256(rp.encode()).digest() + ad[32:]
+            cdj2 = json.dumps({"type": "webauthn.get", "challenge": "c", "origin": origin}).encode()
+            out = {**sig, "authenticatorData": TC._b64u(ad2), "clientDataJSON": TC._b64u(cdj2),
+                   "signature": TC._b64u(pk.sign(ad2 + hashlib.sha256(cdj2).digest()))}
+            if rp_member == "same":
+                out["rpId"] = rp
+            elif rp_member == "absent":
+                out.pop("rpId")
+            else:
+                out["rpId"] = rp_member
+            return out
+        import cryptovalid_cedulon as C
+        dec, eff, cps, inp, idx, creds = L.render(bend_assertion=assertion)
+        return C.verify_ledger(dec, eff, cps, TC._pem(L.rk), TC._pem(L.xk), TC._pem(L.ck), inputs_text=inp, index_text=idx,
+                               operator_credentials=creds, **kw)
+
+    def test_assertion_for_another_relying_party(self):
+        r = self._verify("evil.example", "https://evil.example")
+        self.assertEqual(r["result"], "VALID", r)          # nothing expected was given: as 0.26.0, and now it says so
+        self.assertEqual(r["not_verified"], ["approval-challenge-binding", "approval-rp-id", "approval-origin"])
+        r = self._verify("evil.example", "https://evil.example", expected_rp_ids="localhost")
+        self.assertEqual((r["result"], r["stage"]), ("INVALID", "approval-signature"), r)
+        self.assertEqual(r["not_verified"], ["approval-challenge-binding", "approval-origin"])
+        r = self._verify("localhost", "https://evil.example", expected_rp_ids="localhost", expected_origins="http://localhost")
+        self.assertEqual((r["result"], r["stage"]), ("INVALID", "approval-signature"), r)
+        r = self._verify("localhost", "http://localhost", expected_rp_ids="localhost", expected_origins="http://localhost")
+        self.assertEqual(r["result"], "VALID", r)          # the control
+        self.assertEqual(r["not_verified"], ["approval-challenge-binding"])
+
+    def test_generated(self):
+        rng = random.Random(SEED)
+        rps = ["localhost", "evil.example", "example.org", "LOCALHOST", "localhost.", "sub.localhost", ""]
+        origins = ["http://localhost", "https://localhost", "http://localhost:4173", "https://evil.example", "http://LOCALHOST", ""]
+        counts = {"VALID": 0, "INVALID": 0}
+        for _ in range(300):
+            rp, origin = rng.choice(rps), rng.choice(origins)
+            member = rng.choice(["same", "same", "absent", rng.choice(rps)])
+            want_rps = rng.sample([x for x in rps if x], rng.randint(1, 3))
+            want_origins = rng.sample([x for x in origins if x], rng.randint(1, 3))
+            give_rp, give_origin = rng.random() < 0.8, rng.random() < 0.8
+            kw = {}
+            if give_rp:
+                kw["expected_rp_ids"] = want_rps[0] if len(want_rps) == 1 and rng.random() < 0.5 else want_rps
+            if give_origin:
+                kw["expected_origins"] = want_origins
+            stated = rp if member == "same" else None if member == "absent" else member
+            if give_rp:
+                ok = rp in want_rps and (stated is None or stated in want_rps)
+            else:
+                ok = stated == rp                           # the check of 0.26.0: against the assertion's own member
+            ok = ok and (not give_origin or origin in want_origins)
+            with self.subTest(rp=rp, origin=origin, member=member, kw=kw):
+                r = self._verify(rp, origin, member, **kw)
+                self.assertEqual(r["result"], "VALID" if ok else "INVALID", r)
+                if not ok:
+                    self.assertEqual(r["stage"], "approval-signature")
+                self.assertEqual("approval-rp-id" in r["not_verified"], not give_rp)
+                self.assertEqual("approval-origin" in r["not_verified"], not give_origin)
+            counts[r["result"]] += 1
+        self.assertGreater(counts["VALID"], 30)
+        self.assertGreater(counts["INVALID"], 150)
+
+    def test_an_empty_pin_pins_nothing(self):
+        for name in ("expected_rp_ids", "expected_origins"):
+            for bad in ("", [], [""], ["localhost", ""], 5, ["localhost", 5], {"localhost"}, b"localhost", True):
+                with self.subTest(name=name, bad=bad), self.assertRaises(ValueError):
+                    self._verify("localhost", "http://localhost", **{name: bad})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -254,15 +254,18 @@ class TestCedulon(unittest.TestCase):
         # a row under a REFUSAL is never deferred: it has a record (effect-against-refusal), whatever the allowance
         r = self.L.verify(bend_rows=lambda rows: rows + [{**rows[0], "ref": "ref-1"}])
         self.assertIn("effect-against-refusal", r["why"])
-        # a count shortfall under a ref that HAS a row stays a finding: record 2 re-signed under ref-0 (two allows, one
-        # row, bound to the second), the last allow 1 ms from the newest record; nothing is deferred
+        # two allows under one ref are never deferred: record 2 re-signed under ref-0 (two allows, one row, bound to the
+        # second), the last allow 1 ms from the newest record. Until 0.26.0 this was the count shortfall
+        # "decision-without-effect under ref ref-0"; since SPEC v0.12 §20 rule 5 (19/11/2026) the repeated ref is the
+        # finding, before any row is matched (cedulon-09 §11.4 step 7: duplicate-ref, audit fails)
         def dup(i, payload, presented):
             if i == 2:
                 payload = {k: ("ref-0" if n == "ref" else payload[k]) for k, n in V.RECORD_LABELS.items()}
                 presented = {**presented, "ref": "ref-0"}
             return payload, presented, {}
         r = self.L.verify(bend_record=dup, bend_rows=lambda rows: [{**rows[0], "effectHash": H("eff2")}])
-        self.assertIn("decision-without-effect under ref ref-0", r["why"])
+        self.assertEqual(self.stage(r), "effect-binding")
+        self.assertIn("duplicate-ref: ref ref-0 is on more than one allow", r["why"])
         self.assertEqual(r["boundary_deferred"], [])
         self.assertEqual(self.L.verify()["boundary_deferred"], [])                               # a whole ledger: none
         # 0 applies no allowance, also for an item exactly on the edge (distance 0)
@@ -387,6 +390,13 @@ class TestVeraxStages(unittest.TestCase):
 
     def test_valid_and_what_stays_unverified(self):
         r = self.L.verify()
+        self.assertEqual(r["result"], "VALID", r)
+        # SPEC v0.12 §20 rule 6 (19/11/2026): the RP ID and the origin were not compared with anything the relying
+        # party expects, and until 0.26.0 the result did not say so
+        self.assertEqual(r["not_verified"], ["approval-challenge-binding", "approval-rp-id", "approval-origin"])
+        dec, eff, cps, inp, idx, creds = self.L.render()
+        r = V.verify_ledger(dec, eff, cps, _pem(self.L.rk), _pem(self.L.xk), _pem(self.L.ck), inputs_text=inp, index_text=idx,
+                            operator_credentials=creds, expected_rp_ids="localhost", expected_origins=["http://localhost"])
         self.assertEqual(r["result"], "VALID", r)
         self.assertEqual(r["not_verified"], ["approval-challenge-binding"])
 

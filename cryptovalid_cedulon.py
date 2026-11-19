@@ -36,6 +36,15 @@ Verified only when their files are given (inputs_text, index_text, operator_cred
 approval-signature, control; each stage not given is named under `not_verified`, never silently passed, and
 "approval-challenge-binding" always stays there (sources below).
 
+Rules of 2026-11-19 (SPEC v0.12 §20 rules 4 to 6, from a security review of 0.26.0; the texts read that day:
+decision-profile-04, cedulon-09 and core-04, W3C WebAuthn Level 3 of 25 August 2026; the rest of this reader is still
+the reader of profile-03 and cedulon-08). control and approval-signature read a record's inputs only when its signed
+inputsHash binds them, and an inputs row no signed inputsHash binds is refused (until 0.26.0 one added line turned an
+INVALID at control into VALID). A ref on more than one allow, or on more than one effect row, is duplicate-ref
+(cedulon-09 §11.4 step 7, "audit fails"; until 0.26.0 the last allow under a ref replaced the others). The approval's
+assertion is checked against expected_rp_ids / expected_origins when the caller gives them (WebAuthn §7.2: the RP ID and
+the origin "expected by the Relying Party"); when not, `not_verified` names approval-rp-id and approval-origin.
+
 Backend (0.27.0, 2026-11-18). The keys and signatures are read with `cryptography` (the `[sign]` extra). When it is not
 installed, the ledger was not evaluated: `result` is `NOT_EVALUATED` (a third value of the closed set, beside VALID and
 INVALID), `stage` `backend_missing`. Until 0.26.0 the missing module was caught as hostile input: measured on
@@ -268,16 +277,27 @@ def _b64u(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def _webauthn_ok(sig: Dict[str, Any], cred: Dict[str, Any]) -> bool:
-    """W3C WebAuthn L3 §7.2 steps on an assertion: type webauthn.get, rpIdHash = SHA-256(rpId), user-present flag, and
-    the signature over authenticatorData || SHA-256(clientDataJSON) with the credential's COSE key (Ed25519 or ES256)."""
+def _webauthn_ok(sig: Dict[str, Any], cred: Dict[str, Any], rp_ids: Optional[List[str]] = None,
+                 origins: Optional[List[str]] = None) -> bool:
+    """W3C WebAuthn L3 §7.2 steps on an assertion: type webauthn.get, rpIdHash = SHA-256(RP ID), user-present flag, and
+    the signature over authenticatorData || SHA-256(clientDataJSON) with the credential's COSE key (Ed25519 or ES256).
+    The RP ID is one the relying party expects (`rp_ids`) and the origin of the client data one of `origins`, when
+    given; without `rp_ids` it is the rpId the assertion carries (verify_ledger then says approval-rp-id is not verified)."""
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     ad, cdj, sg = _b64u(sig["authenticatorData"]), _b64u(sig["clientDataJSON"]), _b64u(sig["signature"])
     cd = json.loads(cdj, object_pairs_hook=_no_dup_keys)
-    if cd.get("type") != "webauthn.get" or len(ad) < 37 or ad[:32] != hashlib.sha256(sig["rpId"].encode()).digest():
+    if not isinstance(cd, dict) or cd.get("type") != "webauthn.get" or len(ad) < 37:
+        return False
+    if rp_ids is None:
+        if not isinstance(sig.get("rpId"), str) or ad[:32] != hashlib.sha256(sig["rpId"].encode()).digest():
+            return False                              # an assertion that names no RP ID fails here, not as "malformed"
+    elif ("rpId" in sig and sig["rpId"] not in rp_ids) \
+            or not any(ad[:32] == hashlib.sha256(rp.encode()).digest() for rp in rp_ids):
+        return False
+    if origins is not None and cd.get("origin") not in origins:
         return False
     if not ad[32] & 0x01:                               # UP: user present
         return False
@@ -299,18 +319,28 @@ def _webauthn_ok(sig: Dict[str, Any], cred: Dict[str, Any]) -> bool:
 def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str, record_key_pem, extract_key_pem,
                   checkpoint_key_pem, inputs_text: Optional[str] = None, index_text: Optional[str] = None,
                   operator_credentials: Optional[Dict[str, Any]] = None,
-                  clock_skew_ms: int = DEFAULT_CLOCK_SKEW_MS) -> Dict[str, Any]:
+                  clock_skew_ms: int = DEFAULT_CLOCK_SKEW_MS, expected_rp_ids=None, expected_origins=None) -> Dict[str, Any]:
     """The verdict over one Decider's ledger. Keys are the relying party's pins (SPKI PEM); operator_credentials is the
     relying party's pin of the operator's passkeys ({"credentials": [{id, publicKey (COSE, base64url), sub}]}).
-    clock_skew_ms is the boundary allowance (see BOUNDARY above); 0 applies none."""
+    clock_skew_ms is the boundary allowance (see BOUNDARY above); 0 applies none. expected_rp_ids / expected_origins:
+    the WebAuthn RP IDs and origins the relying party expects of an approval (a string, or a non-empty list of
+    non-empty strings); not given, `not_verified` names approval-rp-id / approval-origin (SPEC v0.12 §20 rule 6)."""
     if not (isinstance(clock_skew_ms, int) and not isinstance(clock_skew_ms, bool) and 0 <= clock_skew_ms <= MAX_SAFE):
         raise ValueError("clock_skew_ms must be an integer in [0, 2^53 - 1]")
+    pins = {}
+    for name, v in (("expected_rp_ids", expected_rp_ids), ("expected_origins", expected_origins)):
+        if isinstance(v, str):
+            v = [v]
+        if v is not None and not (isinstance(v, (list, tuple)) and v and all(isinstance(x, str) and x for x in v)):
+            raise ValueError(f"{name}: a non-empty string or a non-empty list of them (an empty pin pins nothing), or None")
+        pins[name] = None if v is None else list(v)
     nv = [s for s in NOT_VERIFIED if not ((s == "inputs-binding" and inputs_text is not None)
                                           or (s == "index" and index_text is not None)
                                           or (s == "approval-signature" and operator_credentials is not None and inputs_text is not None)
                                           or (s == "control" and inputs_text is not None))]
     if operator_credentials is not None:
         nv.append("approval-challenge-binding")
+        nv += [n for n, k in (("approval-rp-id", "expected_rp_ids"), ("approval-origin", "expected_origins")) if pins[k] is None]
     out = {"result": "INVALID", "stage": None, "why": None, "not_verified": nv, "records": 0, "boundary_deferred": []}
     try:
         lines = _loads_lines(decisions_text, "decisions")
@@ -331,6 +361,12 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
                 raise CedulonError("chain", f"record {i}: prevRecordHash does not link to the previous record")
         out["records"] = len(records)
         inputs = {}
+
+        def bound(c) -> Dict[str, Any]:
+            """The context of a record, read only when its signed inputsHash binds it (verified at inputs-binding)."""
+            got = inputs.get(c["ref"]) if c["inputsHash"] is not None else None
+            return got if isinstance(got, dict) else {}
+
         if inputs_text is not None:                       # inputs-binding (profile §4.1 + CEDULON §7)
             for i, row in enumerate(_loads_lines(inputs_text, "inputs")):
                 if not (isinstance(row, dict) and isinstance(row.get("ref"), str) and "inputs" in row):
@@ -338,6 +374,10 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
                 if row["ref"] in inputs:
                     raise CedulonError("inputs-binding", f"inputs row {i}: duplicate ref")
                 inputs[row["ref"]] = row["inputs"]
+            signed_refs = {c["ref"] for c in records if c["inputsHash"] is not None}
+            for i, row in enumerate(_loads_lines(inputs_text, "inputs")):   # a row no signature covers is not evidence
+                if row["ref"] not in signed_refs:
+                    raise CedulonError("inputs-binding", f"inputs row {i}: no record's signed inputsHash binds it")
             for i, c in enumerate(records):
                 if c["inputsHash"] is None:
                     continue
@@ -357,6 +397,14 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
                 if not isinstance(pres, dict) or not any(jcs(pres) == jcs(r) for r in signed):
                     raise CedulonError("effect-binding", f"effect {i}: the row presented beside the extract is not one it signs")
             rows += signed
+        # duplicate-ref (cedulon-09 §11.4 step 7, MUST-T10-6, "audit fails"; profile §6.1): before any row is matched
+        for side, refs in (("allow", [c["ref"] for c in records if c["decision"] == "allow"]),
+                           ("effect row", [r["ref"] for r in rows])):
+            once = set()
+            for ref in refs:
+                if ref in once:
+                    raise CedulonError("effect-binding", f"duplicate-ref: ref {ref} is on more than one {side}")
+                once.add(ref)
         allows = {c["ref"]: c for c in records if c["decision"] == "allow"}
         refused = {c["ref"] for c in records if c["decision"] != "allow" and c["ref"]}
         seen = {}
@@ -365,14 +413,16 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
         oldest, newest = (min(stamps), max(stamps)) if stamps else (0, 0)
         for row in rows:
             seen[row["ref"]] = seen.get(row["ref"], 0) + 1
-            if row["ref"] in allows:
+            if row["ref"] in refused:                     # profile §6.1, as written: "a row whose ref a refusal names is
+                # effect-against-refusal" — also when an allow carries the same ref (until 0.26.0 the allow was looked
+                # up first and the refusal never seen: SPEC v0.12 §20 rule 5)
+                raise CedulonError("effect-binding", f"effect-against-refusal under ref {row['ref']}")
+            elif row["ref"] in allows:
                 a = allows[row["ref"]]
                 if row["effectHash"] != a["effectHash"]:
                     raise CedulonError("effect-binding", f"effect-mismatch under ref {row['ref']}")
                 if row["effectClass"] != a["effectClass"]:
                     raise CedulonError("effect-binding", f"effect-class-mismatch under ref {row['ref']}")
-            elif row["ref"] in refused:
-                raise CedulonError("effect-binding", f"effect-against-refusal under ref {row['ref']}")
             elif clock_skew_ms and abs(row["timestampMs"] - oldest) <= clock_skew_ms:  # opening edge: record may predate
                 deferred.append({"ref": row["ref"], "unmatched": "row", "edge": "opening",
                                  "distance_ms": abs(row["timestampMs"] - oldest)})
@@ -407,7 +457,7 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
         if operator_credentials is not None and inputs_text is not None:     # approval-signature
             creds = {c.get("id"): c for c in (operator_credentials or {}).get("credentials", []) if isinstance(c, dict)}
             for i, c in enumerate(records):
-                ap = (inputs.get(c["ref"]) or {}).get("approver") if isinstance(inputs.get(c["ref"]), dict) else None
+                ap = bound(c).get("approver")
                 if ap is None:
                     continue
                 sig = ap.get("signature") if isinstance(ap, dict) else None
@@ -417,7 +467,8 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
                 if not held or hashes[held[0]] != sig.get("deferRecordHash"):
                     raise CedulonError("approval-signature", f"record {i}: deferRecordHash is not the held defer record")
                 cred = creds.get(sig.get("credentialId"))
-                if cred is None or cred.get("sub") != sig.get("sub") or not _webauthn_ok(sig, cred):
+                if cred is None or cred.get("sub") != sig.get("sub") \
+                        or not _webauthn_ok(sig, cred, pins["expected_rp_ids"], pins["expected_origins"]):
                     raise CedulonError("approval-signature", f"record {i}: the operator's WebAuthn assertion does not verify")
         prev_cp = None
         for i, cp in enumerate(_loads_lines(checkpoints_text, "checkpoints")):
@@ -448,7 +499,7 @@ def verify_ledger(decisions_text: str, effects_text: str, checkpoints_text: str,
         if inputs_text is not None:                       # control: no allow inside a halt window
             halted = False
             for i, c in enumerate(records):
-                ctl = (inputs.get(c["ref"]) or {}).get("control") if isinstance(inputs.get(c["ref"]), dict) else None
+                ctl = bound(c).get("control")
                 action = ctl.get("action") if isinstance(ctl, dict) else None
                 if action == "halt" and c["decision"] == "allow":
                     halted = True
