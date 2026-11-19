@@ -141,8 +141,9 @@ forces a boolean where reality had none.
    read up to the size bound, however slowly.
    **v0.12, every path read:** the rule holds for every path a module of this package reads, through three readers and
    a closed list of exceptions that a test keeps (`test_every_open_is_bounded_20261118.py`: an `open()` of a path
-   outside the list fails it, and so does a path loaded without `open()`, as `ctypes.CDLL` or `zipfile` do, outside a
-   second list).
+   outside the list fails it, and so does a call of the loaders it names (`ctypes`, `zipfile`, `pathlib`
+   `read_text`/`read_bytes`, `shutil` copies, `importlib`, `runpy`, `numpy`; `tarfile`/`gzip`/`bz2`/`lzma`/`shelve`/`dbm`
+   `open`) outside a second list; no other loader of a path is used by the package (searched by hand on 2026-11-19)).
    (a) What a verifier, a checker or a report reads is a regular file, as in the first paragraph: the manifest when
    the front-end reads it again, the ledgers of a pack when their signatures and their count are read, the
    `*.sth.json`, `*.head.json` and `*.sth.tsr` of an ingest archive, the signed tip (`--tip`) and the ledger of

@@ -114,7 +114,7 @@ run by the same author, not by a third party.
   fails on an `open()` of a path outside a closed list of 14 entries (a temporary file the module has just written, a
   directory opened to fsync it, this distribution's `pyproject.toml`, the expected verdicts of `conformance.py`, the
   development tools); on 54fc7eb it lists 52 calls outside the list and 6 of its first 7 tests fail (the control
-  passes). A second closed list, of 5 entries, holds the calls that load or read a path without `open()` (`ctypes.CDLL`,
+  passes). A second closed list, of 5 entries, holds the calls of the loaders the test names (`ctypes.CDLL`,
   `zipfile`, `shutil` copies, an import by name); the test of the PKCS#11 module does not return on 55e2e3f.
   An ingest archive whose segment without STH is a directory, a device or a FIFO was `ok` (the segment is not read);
   it is now `unsealed_segment_not_regular`, judged on a descriptor without reading it.
