@@ -99,6 +99,17 @@ run by the same author, not by a third party.
   Seen and not changed: Verax's verifier at c626c68 reads the halt and resume from the signed claims (`subject`),
   not from the inputs row.
 
+- **`check_digest` raised `RecursionError` on a field of nested "@"** (SPEC v0.12 §20 rule 7, written before the
+  code; same review, re-run on 2026-11-19). `cryptovalid_httpdigest.check_digest` says it never raises on `field`;
+  its Date branch called the bare-item parser again after the "@", one call per "@", and
+  `"sha-256=" + "@" * 5000 + "1"` raised `RecursionError` (Python 3.11). RFC 9651 §4.2.9 reads an Integer after the
+  "@" (§4.2.4 fails on a character that is neither "-" nor a digit; read at rfc-editor.org on 2026-11-19): the next
+  character is now looked at before parsing, and the answer is `grammar`. No outcome changes for a field the old code
+  answered. `test_sentry_20261119.py`, 3 tests: 2 to 100,000 "@" in five positions (fails on 22d342c, 16 errors); the
+  Date grammar on 3,026 tails against a regular expression written from the RFC, and 20,000 random fields in both
+  syntaxes that must not raise (these two hold the grammar where it was and pass on 22d342c too). 3 mutants: 2
+  killed; the third (no test for the end of the field after "@") gives the same outcome, the item parser refuses it.
+
 - **A real DigiCert token was refused because its nonce is negative** (SPEC v0.12 §11 step 3, written before the code).
   `cryptovalid_tsa.parse_token` read the TSTInfo's `nonce` with the reader of non-negative INTEGERs and answered
   `invalid / malformed` ("nonce: negative INTEGER") for a TimeStampResp of DigiCert SHA256 RSA4096 Timestamp Responder

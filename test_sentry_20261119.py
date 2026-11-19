@@ -780,5 +780,66 @@ class TestCedulonApprovalRelyingParty(unittest.TestCase):
                     self._verify("localhost", "http://localhost", **{name: bad})
 
 
+# ---------------------------------------------------------------- §20 rule 7: cryptovalid_httpdigest
+
+class TestHttpDigestNeverRaises(unittest.TestCase):
+    """Rule 7: a Date is "@" and an Integer, read without recursion; check_digest never raises on `field`.
+    test_nested_dates fails on 22d342c (RecursionError); the other two hold the grammar where it was: they pass there too."""
+
+    def setUp(self):
+        import cryptovalid_httpdigest
+        self.D = cryptovalid_httpdigest
+
+    def test_nested_dates(self):
+        D = self.D
+        self.assertEqual(D.check_digest("sha-256=@1", b"x", "rfc9530")["why"], "grammar")           # the control
+        for n in (2, 10, 500, 990, 1000, 5000, 100000):
+            for field in ("sha-256=" + "@" * n + "1", "sha-256=:YQ==:;a=" + "@" * n + "1", "x=(" + "@" * n + "1)",
+                          "@" * n, "a=" + "@" * n):
+                with self.subTest(n=n, field=field[:24]):
+                    r = D.check_digest(field, b"x", "rfc9530")
+                    self.assertEqual((r["ok"], r["why"]), (False, "grammar"))
+
+    def test_date_grammar(self):
+        import re
+        D, rng = self.D, random.Random(SEED)
+        good = bad = 0
+        tails = ["1", "0", "-1", "-0", "1659578233", "9" * 15, "-" + "9" * 15, "9" * 16, "1.5", "-1.5", "1.", ".5", "", "-", "--1",
+                 "@1", "x", "?1", '"s"', ":YQ==:", "(1)", "+1", " 1", "1 ", "²", "１"]
+        tails += ["".join(rng.choice("@-0123456789.x") for _ in range(rng.randint(1, 8))) for _ in range(3000)]
+        for tail in tails:
+            tail = tail.rstrip(" ")                                            # §4.2: trailing SP of the field is discarded
+            want = re.fullmatch(r"-?[0-9]{1,15}", tail) is not None            # RFC 9651 §4.2.9 with §4.2.4, an Integer
+            with self.subTest(tail=tail):
+                try:
+                    members, _dup = D._sf_dictionary("a=@" + tail)
+                    got = True
+                    self.assertEqual(members["a"], (("date", tail), {}))
+                except D._Bad:
+                    got = False
+                self.assertEqual(got, want)
+            good += want
+            bad += not want
+        self.assertGreater(good, 100)
+        self.assertGreater(bad, 2000)
+
+    def test_generated_fields_never_raise(self):
+        D, rng = self.D, random.Random(SEED)
+        alphabet = '@@@??::""%%(());;==,,  \t-.*09azAZ/+\\\x00\x7f\u00e9'
+        seen = set()
+        for i in range(20000):
+            field = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 60)))
+            if i % 4 == 0:
+                field = "sha-256=" + field
+            for syntax in D.SYNTAXES:
+                r = D.check_digest(field, b"body", syntax)        # an exception here is the failure
+                self.assertIs(r["ok"], False)
+                self.assertIn(r["why"], D.CODES)
+                seen.add(r["why"])
+        self.assertIn("grammar", seen)
+        for deep in ("a=" + "(" * 50000, "a=(" + "(" * 50000 + ")" * 50000 + ")", "a=;" * 50000, "a=1" + ";b=@1" * 50000):
+            self.assertIn(D.check_digest(deep, b"", "rfc9530")["why"], D.CODES)
+
+
 if __name__ == "__main__":
     unittest.main()

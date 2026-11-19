@@ -126,8 +126,11 @@ def _bare(p: _P):
         return ("boolean", v == "1")
     if c == "@":                                                   # Date (§4.2.9)
         p.take()
+        nxt = p.peek()                                             # "@" then an Integer: §4.2.4 fails on anything else.
+        if not nxt or nxt not in "-0123456789":                    # Looked at BEFORE parsing: until 0.26.0 "@@@...1" nested
+            raise _Bad("date")                                     # one call per "@" (RecursionError at 5000, 19/11/2026)
         n = _bare(p)
-        if n[0] != "number" or "." in n[1]:
+        if "." in n[1]:
             raise _Bad("date")
         return ("date", n[1])
     if c == "%":                                                   # Display String (§4.2.10)

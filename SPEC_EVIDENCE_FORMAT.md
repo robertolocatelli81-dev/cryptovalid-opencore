@@ -380,7 +380,8 @@ judged on the address it reaches; a credential not sent to another origin). Rule
 the formats of others refuses an integer that is not exactly a double (until 0.26.0 rounded: two integers, the same
 signed bytes). Rules 4 to 6: the experimental Cedulon reader takes the context of `control` and of an approval only
 from inputs a signature binds, reports a repeated ref as `duplicate-ref`, and checks an approval's WebAuthn RP ID and
-origin against the caller's or says it did not. The ledger format (§2–§5), its hashes and its vectors do not change.
+origin against the caller's or says it did not. Rule 7: the digest-field check answers `grammar`, never an
+exception, for a field of nested "@". The ledger format (§2–§5), its hashes and its vectors do not change.
 
 ## 7. Conformance (normative)
 
@@ -1784,3 +1785,11 @@ not judged here.
    with an assertion for `evil.example`). The Cedulon drafts do not define the assertion (core-04, Implementation
    Status: "an approval over HTTP carries a passkey (WebAuthn) assertion bound to the held request"), and the pin file
    of the Verax vectors carries no RP ID.
+7. **A Date of a Structured Field is "@" and an Integer, read without recursion.** RFC 9651 §4.2.9 (Proposed
+   Standard, September 2024, not obsoleted; read at rfc-editor.org on 2026-11-19): after the "@" the parser runs
+   "Parsing an Integer or Decimal (Section 4.2.4)" and fails on a Decimal; §4.2.4 fails when the next character is
+   neither "-" nor a digit. `cryptovalid_httpdigest` (the `Content-Digest` / `Repr-Digest` check, whose contract is
+   "never raises on `field`") called its bare-item parser again after the "@", so "@@...@1" nested once per "@":
+   with 5,000 of them `check_digest` raised `RecursionError` (measured on 2026-11-19, Python 3.11) where every other
+   field outside the grammar is the outcome `grammar`. The character after "@" is now looked at first; no outcome
+   changes for a field the old code answered.
