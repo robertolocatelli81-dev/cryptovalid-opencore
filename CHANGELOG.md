@@ -27,6 +27,28 @@ run by the same author, not by a third party.
 
 ### Fixed
 
+- **A redirect from a remote host reached this host's loopback through another spelling of the address, and carried
+  the request's credentials to another host** (SPEC v0.12 §20 rules 1 and 2, written before the tests and the
+  CHANGELOG; from a security review of 0.26.0, each finding re-run on 2026-11-19 on the unmodified code).
+  `cryptovalid_net` compared the host of a redirect as text with `localhost`, 127.0.0.0/8 and `::1`: a redirect from a
+  remote host to `http://127.1/`, `http://0.0.0.0/`, `http://2130706433/`, `http://0x7f000001/`, `http://0177.0.0.1/`,
+  `http://[::ffff:127.0.0.1]/` or `http://[::]/` was followed (Linux, Python 3.11: a service on 127.0.0.1 answered
+  the request redirected to `127.1`). The host is now judged as the address the system connects to: every form
+  `inet_aton` reads, an IPv4-mapped IPv6 address by the address inside it, a name by every address `getaddrinfo`
+  gives; a redirect from a host that is not loopback to a loopback, unspecified or link-local address is a
+  `ValueError("url_not_allowed: ...")`, judged at every hop. `is_loopback("127.1")` is now true, so plain http to it
+  is allowed where loopback http is, and it is reached without the environment's proxy. And urllib copies every header
+  of a request to the redirected one: `X-Vault-Token`, `Authorization` (AWS SigV4, NetHSM Basic, the QEAA bearer token)
+  and `X-Amz-Security-Token` went to the host a 302 named. A redirect to another origin (scheme, host, port) is now
+  refused when the request carries a header outside a closed list of six that name no credential
+  (`cryptovalid_net.FORWARDED_ACROSS_ORIGINS`); refused, not stripped. A redirect to the same origin, and a redirect
+  of a request without such a header (the TSA client, the trusted lists, the witness, the Solana clients), is followed
+  as before. Not closed, and said in §20: a name whose answer changes between the check and the connection; a
+  redirect to a private address. `test_sentry_20261119.py`, 9 tests on these two rules: 5,416 spellings of loopback,
+  link-local, unspecified and other addresses, each compared with what this system's resolver gives for it; names
+  answered by a resolver replaced in the test; 4,000 pairs of origins with generated header sets; redirects served on
+  127.0.0.1. All 9 fail on 22d342c; 14 mutants of the changed lines, 14 killed.
+
 - **A real DigiCert token was refused because its nonce is negative** (SPEC v0.12 §11 step 3, written before the code).
   `cryptovalid_tsa.parse_token` read the TSTInfo's `nonce` with the reader of non-negative INTEGERs and answered
   `invalid / malformed` ("nonce: negative INTEGER") for a TimeStampResp of DigiCert SHA256 RSA4096 Timestamp Responder

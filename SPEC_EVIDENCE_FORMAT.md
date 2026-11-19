@@ -374,6 +374,10 @@ non-minimal form is still `malformed`. v0.12 also reads a FIFO given as the ledg
 bounded in size and in idle time: the verdict of v0.10 for `<(cat ledger.jsonl)`, never the hang of v0.10 for a pipe
 with no writer. v0.12 also adds to §5 the failure classes of a FAIL receipt (`failure_classes`),
 an added member: the verdict, the receipt of a PASS and the other verifiers do not change.
+v0.12 also adds §20 (2026-11-19), rules written after a security review of 0.26.0. Not additive where they turn an
+accepted input into a refused one; each rule says what changed. Rules 1 and 2 are about outbound URLs (a redirect
+judged on the address it reaches; a credential not sent to another origin). The ledger format (§2–§5), its hashes and
+its vectors do not change.
 
 ## 7. Conformance (normative)
 
@@ -1663,3 +1667,43 @@ reason and `record_complete`, a complete record (window, revocation checked, wit
 TSA), at least one case for every code of rule 8, built by `make_conformance.py` from these files and from a test TSA, CA,
 CRL, trusted list and witness made for the purpose (their private keys are not kept); and window cases as data. Every
 refused or invalid input is derived by code, never written by hand.
+
+## 20. Rules written after the security review of 2026-11-19 (NORMATIVE since v0.12)
+
+A review of cryptovalid-opencore 0.26.0 on 2026-11-19 (two reviewers working apart, each finding re-run on the
+unmodified code before it was accepted) found inputs that changed a verdict, or left the rule a module states, without
+any of them being named in this document. Each rule below was written here before the code. Where a format belongs to
+someone else, its own text decides and is cited with the version read; where that text is silent, the closed reading
+(a refusal with its reason) is taken and said to be this format's choice. Tests: `test_sentry_20261119.py`.
+
+1. **An outbound URL's host is judged as the address the system connects to, not as text** (`cryptovalid_net`, the
+   one module through which this package opens a URL). An IP literal is read in every form the system's resolver
+   reads: the one-to-four-part forms of `inet_aton`, each part decimal, octal or hexadecimal (`127.1`, `2130706433`,
+   `0x7f000001`, `0177.0.0.1`), the forms of IPv6, and an IPv4-mapped IPv6 address as the IPv4 address inside it
+   (`::ffff:127.0.0.1`); a non-ASCII host is read in its IDNA form first. A redirect is never followed from a host
+   that is not loopback to a loopback address (127.0.0.0/8, ::1), to the unspecified address (0.0.0.0, ::) or to a
+   link-local address (169.254.0.0/16, fe80::/10): `ValueError("url_not_allowed: a redirect from a remote host to a
+   ...")`. The target of such a redirect that is a name is resolved (`getaddrinfo`) and refused when any of its
+   addresses is one of the three. The origin of a redirect is the host of the request being redirected, at every hop,
+   and it counts as loopback only when the first URL of the call was loopback too. Until 0.26.0 the host was compared
+   as a string against `localhost`, 127.0.0.0/8 and `::1`: a redirect from a remote host to `http://127.1/`,
+   `http://0.0.0.0/`, `http://2130706433/`, `http://0x7f000001/`, `http://0177.0.0.1/`, `http://[::ffff:127.0.0.1]/`
+   or `http://[::]/` was followed (measured on 2026-11-19, Linux, Python 3.11: the system resolves the first, third,
+   fourth and fifth to 127.0.0.1 and a service on 127.0.0.1 answered the redirected request). Not closed by this rule,
+   stated: the name is resolved when the redirect is judged and again by the connection, and an answer that changes in
+   between is not seen; a name that does not resolve here is left to urllib (a proxy of the environment resolves it,
+   and without a proxy the connection fails on the same lookup); a redirect to a private address (10.0.0.0/8,
+   172.16.0.0/12, 192.168.0.0/16, fc00::/7) is followed as before; the first URL of a call is the caller's and is not
+   refused for its address (`http://0.0.0.0/` is not loopback, so plain http to it is refused where only loopback
+   http is allowed, as before).
+2. **A credential stays with the origin it was given to.** A redirect to another origin (scheme, host and port, the
+   default port of the scheme counted, the host compared as an address when it is one and without case otherwise) is
+   refused when the request carries a header outside a closed list of headers that name no credential (`Accept`,
+   `Accept-Encoding`, `Accept-Language`, `Content-Length`, `Content-Type`, `User-Agent`): `ValueError("url_not_allowed:
+   a redirect to another origin for a request that carries <header names> ...")`, the names without their values. A
+   redirect to the same origin, and one of a request that carries only headers of the list, is followed as before.
+   Refused and not stripped: a signing or key-management endpoint that redirects elsewhere is a fact its caller has to
+   see, and the request without its credential would fail there with another error. Until 0.26.0 urllib's rule
+   applied, which copies every header except the content headers: `X-Vault-Token`, `Authorization` (AWS SigV4, NetHSM
+   Basic, a QEAA bearer token) and `X-Amz-Security-Token` went to the host named by the answer (measured on
+   2026-11-19 with a 302 from one host to another).

@@ -25,9 +25,25 @@ The rule, closed by construction:
    `no_proxy`). The opener is built per call, so a proxy set after the first request of the process is read too
    (`urllib.request.urlopen` builds its opener once per process);
 4. a redirect is followed only to a URL the same rule accepts (urllib alone also follows a redirect to `ftp:`), and
-   never from a remote host to a loopback one.
+   never from a host that is not loopback to a loopback, unspecified or link-local address (rule 5 says how the
+   address is read), judged at every hop on the host of the request being redirected;
+5. (SPEC v0.12 §20 rule 1, 19/11/2026) a host is judged as the ADDRESS the system would connect to, not as a string:
+   an IP literal in any form `inet_aton` reads (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`) or `ipaddress`
+   reads, an IPv4-mapped IPv6 address by the IPv4 address inside it, and, for the target of a redirect, a name by
+   every address `getaddrinfo` gives for it. Until 0.26.0 the host was compared as text, and a redirect from a remote
+   host to `http://127.1/`, `http://0.0.0.0/` or `http://[::ffff:127.0.0.1]/` was followed (measured 19/11/2026);
+6. (SPEC v0.12 §20 rule 2) a redirect to another origin (scheme, host, port) is refused when the request carries a
+   header outside `FORWARDED_ACROSS_ORIGINS`, a closed list of headers that name no credential: urllib copies every
+   header of the request to the redirected one, so an `Authorization`, `X-Vault-Token` or `X-Amz-Security-Token`
+   went to the host the answer named (measured 19/11/2026). Refused, not stripped: the caller learns that its
+   endpoint redirects elsewhere.
+
+Not closed here, stated: a name is resolved when the redirect is judged and again when the connection is made (an
+answer that changes in between is not seen), and when the name does not resolve here the redirect is left to urllib
+(through a proxy of the environment the proxy resolves it; without one the connection fails on the same lookup).
 """
 import ipaddress
+import socket
 import urllib.parse
 import urllib.request
 
@@ -37,17 +53,84 @@ ALLOW_HTTP_OR_HTTPS = "http|https"
 _POLICIES = (ALLOW_HTTPS, ALLOW_HTTPS_OR_LOOPBACK_HTTP, ALLOW_HTTP_OR_HTTPS)
 
 
+# Headers a redirect to another origin may carry (rule 6): they describe the request, none of them is a credential.
+FORWARDED_ACROSS_ORIGINS = frozenset({"accept", "accept-encoding", "accept-language", "content-length", "content-type",
+                                      "user-agent"})
+_DEFAULT_PORT = {"http": 80, "https": 443}
+
+
+def _address(host):
+    """The IP address a host string IS, or None when it is a name. Zone identifiers are dropped; the IPv4 forms of
+    inet_aton (one to four parts, each decimal, octal or hexadecimal) are read as the system reads them; an IPv4-mapped
+    IPv6 address is the IPv4 address inside it."""
+    if not isinstance(host, str) or not host:
+        return None
+    h = host.strip("[]").split("%", 1)[0]
+    if not h.isascii():                       # the resolver is given the IDNA form: fullwidth digits become ASCII ones
+        try:
+            h = h.encode("idna").decode("ascii")
+        except UnicodeError:
+            return None
+    if not h or any(c.isspace() for c in h):  # inet_aton stops at white space and reads what came before it
+        return None
+    try:
+        a = ipaddress.ip_address(h)
+    except ValueError:
+        if ":" in h:
+            return None
+        try:
+            a = ipaddress.IPv4Address(socket.inet_aton(h))
+        except (OSError, ValueError, UnicodeError):
+            return None
+    return a.ipv4_mapped or a if a.version == 6 else a
+
+
+def _kind(a) -> str:
+    """"loopback", "unspecified", "link-local" or "other" for an address of _address."""
+    if a.is_loopback:
+        return "loopback"
+    if a.is_unspecified:
+        return "unspecified"
+    if a.is_link_local:
+        return "link-local"
+    return "other"
+
+
 def is_loopback(host) -> bool:
-    """True for `localhost` (any case, with or without the final dot), 127.0.0.0/8 and ::1 (with or without brackets)."""
+    """True for `localhost` (any case, with or without the final dot) and for an IP literal, in any form of rule 5,
+    inside 127.0.0.0/8 or equal to ::1 (with or without brackets)."""
     if not isinstance(host, str) or not host:
         return False
     h = host.strip("[]").rstrip(".").lower()
     if h == "localhost":
         return True
+    a = _address(h)
+    return a is not None and a.is_loopback
+
+
+def _redirect_target_kinds(host) -> set:
+    """The kinds (see _kind) of every address a redirect to `host` could reach: the literal's own, or one per address
+    getaddrinfo gives for a name; empty when the name does not resolve here (module docstring, "Not closed here")."""
+    if is_loopback(host):
+        return {"loopback"}
+    a = _address(host)
+    if a is not None:
+        return {_kind(a)}
     try:
-        return ipaddress.ip_address(h.split("%", 1)[0]).is_loopback
-    except ValueError:
-        return False
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        return set()
+    kinds = set()
+    for info in infos:
+        got = _address(info[4][0])
+        kinds.add(_kind(got) if got is not None else "other")
+    return kinds
+
+
+def _origin(u: urllib.parse.SplitResult):
+    scheme = u.scheme.lower()
+    a = _address(u.hostname)
+    return scheme, (str(a) if a is not None else (u.hostname or "").rstrip(".").lower()), u.port or _DEFAULT_PORT.get(scheme)
 
 
 def check_url(url, allow: str) -> urllib.parse.SplitResult:
@@ -85,8 +168,18 @@ class _Redirects(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         u = check_url(urllib.parse.urljoin(req.full_url, newurl), self._allow)
-        if is_loopback(u.hostname) and not self._loopback:
-            raise ValueError("url_not_allowed: a redirect from a remote host to a loopback host")
+        here = urllib.parse.urlsplit(req.full_url)
+        if not (self._loopback and is_loopback(here.hostname)):   # rules 4 and 5: judged at this hop, on the address
+            kinds = _redirect_target_kinds(u.hostname)
+            for kind in ("loopback", "unspecified", "link-local"):
+                if kind in kinds:
+                    raise ValueError(f"url_not_allowed: a redirect from a remote host to a {kind} "
+                                     + ("host" if kind == "loopback" else "address"))
+        if _origin(u) != _origin(here):           # rule 6
+            kept = sorted(k for k in req.headers if k.lower() not in FORWARDED_ACROSS_ORIGINS)   # the ones urllib copies
+            if kept:
+                raise ValueError("url_not_allowed: a redirect to another origin for a request that carries "
+                                 + ", ".join(kept)[:120] + " (a credential stays with the origin it was given to)")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
