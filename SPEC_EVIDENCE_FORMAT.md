@@ -383,8 +383,9 @@ from inputs a signature binds, reports a repeated ref as `duplicate-ref`, and ch
 origin against the caller's or says it did not. Rule 7: the digest-field check answers `grammar`, never an
 exception, for a field of nested "@". Rules 8 to 11, the ingest archive: with a pinned key a missing HEAD is a
 failure; the writer cuts only a last line without its line feed when it reopens a segment; a segment without a tree
-head is read, and failed or named in a warning; member-state codes are two ASCII letters. The ledger format (§2–§5),
-its hashes and its vectors do not change.
+head is read, and failed or named in a warning; member-state codes are two ASCII letters. Rule 12: the MCP server
+answers a malformed message with a JSON-RPC error and goes on. The ledger format (§2–§5), its hashes and its vectors do
+not change.
 
 ## 7. Conformance (normative)
 
@@ -1841,3 +1842,21 @@ are its own.
     2026-11-19; with a directory `lotl_X` present in the cache directory, a file placed there was read as the set of
     qualified TSA certificates, and without it the path did not resolve), a member that is not a string raised
     `AttributeError`, and the string `"ES"` was read as the two states `E` and `S`.
+
+12. **One message never stops the MCP server.** `cryptovalid_mcp.py` reads one JSON-RPC message per line. JSON-RPC
+    2.0 (jsonrpc.org/specification, updated 2013-01-04, read on 2026-11-19) §5.1: -32700 "Invalid JSON was received",
+    -32600 "The JSON sent is not a valid Request object", -32602 "Invalid method parameter(s)", -32603 "Internal
+    JSON-RPC error"; §5: when the id could not be detected the response's id "MUST be Null"; §4: an id is "a String,
+    Number, or NULL value"; §4.1: "The Server MUST NOT reply to a Notification". Applied: a line nested too deep to
+    parse is -32700; a message that is not an object (an array too: batches are not supported), or whose `id` is not
+    a string or a number, is -32600 with id null; a `method` that is not a string is -32600; a message with a method
+    and no `id` member is a notification: it is not answered and nothing is run for it (until 0.26.0 a `tools/call`
+    without an `id` ran the tool and was answered with id null); a `params` that is not an object is -32602; in
+    `tools/call` a `name` that is not a string and
+    `arguments` that is not an object (`[]`, `""`, `0`, `false` included; `null` and an absent member mean no
+    arguments) are -32602; anything else that goes wrong inside the handling of one message is -32603, and the server
+    reads the next line. Until 0.26.0 a line holding `[]`, `5`, `null`, a `params` that is an array or a string, a
+    tool `name` that is an array, or 100,000 "[" raised out of the loop (`AttributeError`, `TypeError`,
+    `RecursionError`) and the server process ended (measured on 2026-11-19); `"arguments": []` was read as no
+    arguments and then refused for the required argument that was missing (the same code, another reason).
+    `jsonrpc: "2.0"` is still not required of a message: not changed here.

@@ -1159,5 +1159,136 @@ class TestLotlMemberStates(_Archives):
         self.assertEqual(sorted(os.listdir(os.environ["HOME"])), [".cache"])       # nothing was written beside the cache
 
 
+# ---------------------------------------------------------------- §20 rule 12: the MCP server
+
+class TestMcpServerSurvivesAnyMessage(unittest.TestCase):
+    """Rule 12: a malformed message is answered with a JSON-RPC error (or not answered, a notification) and the server
+    goes on: after every message a ping is sent and must be answered by the same process."""
+
+    def setUp(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        self.p = subprocess.Popen([sys.executable, os.path.join(HERE, "cryptovalid_mcp.py")], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env={**os.environ, "HOME": home})
+        self.addCleanup(self._stop)
+        self.n = 1000
+
+    def _stop(self):
+        for f in (self.p.stdin, self.p.stdout):
+            try:
+                f.close()
+            except OSError:
+                pass
+        self.p.wait(timeout=20)
+
+    def send(self, line: str):
+        """The replies to `line` (0 or 1), read up to the answer to a ping sent after it."""
+        self.n += 1
+        try:
+            self.p.stdin.write(line + "\n" + json.dumps({"jsonrpc": "2.0", "id": self.n, "method": "ping"}) + "\n")
+            self.p.stdin.flush()
+        except OSError as e:
+            self.fail(f"the server is gone ({type(e).__name__}) before {line[:60]!r}")
+        got = []
+        while True:
+            out = self.p.stdout.readline()
+            if not out:
+                self.fail(f"the server ended (exit {self.p.wait(timeout=20)}) on {line[:60]!r}")
+            reply = json.loads(out)
+            if reply.get("id") == self.n:
+                self.assertEqual(reply.get("result"), {})
+                return got
+            got.append(reply)
+
+    @staticmethod
+    def expected(msg, has_id):
+        """The rule, written out here: (error code or "result", id of the reply), or None for no reply."""
+        if not isinstance(msg, dict):
+            return -32600, None
+        id_ = msg.get("id")
+        if isinstance(id_, bool) or not (id_ is None or isinstance(id_, (str, int, float))):
+            return -32600, None
+        if not isinstance(msg.get("method"), str):
+            return -32600, id_
+        if not has_id:
+            return None                                        # a notification: JSON-RPC 2.0 §4.1, no reply
+        params = msg.get("params")
+        if params is not None and not isinstance(params, dict):
+            return -32602, id_
+        params = params or {}
+        method = msg["method"]
+        if method in ("initialize", "ping", "tools/list"):
+            return "result", id_
+        if method == "tools/call":
+            if params.get("name") != "verify_ledger":
+                return -32602, id_
+            args = params.get("arguments", {})
+            if args is not None and not isinstance(args, dict):
+                return -32602, id_
+            return "result" if args and set(args) == {"path"} else -32602, id_   # none: the required one is missing; another: unknown
+        return (-32601, id_) if id_ is not None else None      # an unknown method with id null: no reply, as before
+
+    def test_the_review_cases(self):
+        for line in ("[]", "5", "null", '"x"', "true", '{"jsonrpc":"2.0","id":1,"method":"initialize","params":[1]}',
+                     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":"x"}',
+                     '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":["verify_ledger"]}}',
+                     '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":{"a":1},"arguments":{}}}',
+                     "[" * 100000, '{"a":' * 100000, '[{"jsonrpc":"2.0","id":5,"method":"ping"}]', "{", ""):
+            with self.subTest(line=line[:70]):
+                got = self.send(line)
+                if line == "":
+                    self.assertEqual(got, [])                      # an empty line is skipped, as before
+                    continue
+                self.assertEqual(len(got), 1)
+                self.assertIn(got[0]["error"]["code"], (-32700, -32600, -32602))
+                self.assertEqual(got[0]["jsonrpc"], "2.0")
+
+    def test_generated(self):
+        rng = random.Random(SEED)
+        values = [None, True, False, 0, 1, -1, 1.5, "", "x", "ping", [], [1], ["verify_ledger"], {}, {"a": 1}, {"path": "/nonexistent/ledger.jsonl"}]
+        methods = ["initialize", "ping", "tools/list", "tools/call", "nope", "notifications/initialized"]
+        codes = {}
+        for k in range(1500):
+            shape = rng.random()
+            if shape < 0.1:
+                msg, has_id = rng.choice(values), False
+            else:
+                msg = {"jsonrpc": "2.0"}
+                has_id = rng.random() < 0.8
+                if has_id:
+                    msg["id"] = rng.choice([k, str(k), k + 0.5]) if rng.random() < 0.8 else rng.choice(values)
+                if rng.random() < 0.95:
+                    msg["method"] = rng.choice(methods) if rng.random() < 0.85 else rng.choice(values)
+                if rng.random() < 0.8:
+                    if msg.get("method") == "tools/call" and rng.random() < 0.7:
+                        p = {}
+                        if rng.random() < 0.9:
+                            p["name"] = "verify_ledger" if rng.random() < 0.6 else rng.choice(values + ["verify_pack2"])
+                        if rng.random() < 0.8:
+                            p["arguments"] = rng.choice(values)
+                        msg["params"] = p
+                    elif msg.get("method") == "initialize" and rng.random() < 0.5:
+                        msg["params"] = {"protocolVersion": rng.choice(values)}
+                    else:
+                        msg["params"] = rng.choice(values)
+            want = self.expected(msg, has_id)
+            with self.subTest(msg=msg):
+                got = self.send(json.dumps(msg))
+                if want is None:
+                    self.assertEqual(got, [])
+                else:
+                    self.assertEqual(len(got), 1, got)
+                    code = got[0]["error"]["code"] if "error" in got[0] else "result"
+                    self.assertEqual((code, got[0].get("id")), want, got[0])
+                    if isinstance(msg, dict) and msg.get("method") == "initialize" and code == "result":
+                        self.assertIsInstance(got[0]["result"]["protocolVersion"], str)
+                        self.assertTrue(got[0]["result"]["protocolVersion"])
+            codes[want[0] if want else None] = codes.get(want[0] if want else None, 0) + 1
+        self.assertEqual(sorted(codes, key=str), sorted([-32600, -32601, -32602, "result", None], key=str))
+        for c, n in codes.items():
+            self.assertGreater(n, 20, c)
+        self.assertIsNone(self.p.poll())                            # the same process, still running
+
+
 if __name__ == "__main__":
     unittest.main()

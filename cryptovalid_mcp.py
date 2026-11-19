@@ -250,11 +250,31 @@ def _rpc_error(id_, code: int, message: str) -> Dict:
     return {"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": message}}
 
 
-def handle(msg: Dict) -> Optional[Dict]:
-    """One JSON-RPC message in, zero/one out (notifications get no reply)."""
+def handle(msg) -> Optional[Dict]:
+    """One JSON-RPC message in, zero/one out (notifications get no reply).
+    SPEC v0.12 §20 rule 12 (19/11/2026), JSON-RPC 2.0 §4, §4.2 and §5.1: a message that is not an object, an id that
+    is not a string or a number, a method that is not a string: -32600 with id null where the id could not be read; a
+    message without an id is a notification: no reply, nothing run; a `params` that is not an object, a tool name that
+    is not a string, `arguments` that is not an object: -32602.
+    Until 0.26.0 each of these raised AttributeError or TypeError out of this function and the server stopped."""
+    if not isinstance(msg, dict):
+        return _rpc_error(None, -32600, "invalid request: a message is a JSON object"
+                          + (" (batches are not supported)" if isinstance(msg, list) else ""))
     method, id_ = msg.get("method"), msg.get("id")
+    if isinstance(id_, bool) or not (id_ is None or isinstance(id_, (str, int, float))):
+        return _rpc_error(None, -32600, "invalid request: id is a string or a number")
+    if not isinstance(method, str):
+        return _rpc_error(id_, -32600, "invalid request: method is a string")
+    if "id" not in msg:                  # a notification (e.g. notifications/initialized): JSON-RPC 2.0 §4.1, "The Server
+        return None                      # MUST NOT reply"; nothing is run for it. Until 0.26.0 a tools/call without an id
+    params = msg.get("params")           # ran the tool and was answered with id null
+    if params is not None and not isinstance(params, dict):
+        return _rpc_error(id_, -32602, "invalid params: params is a JSON object")
+    params = params or {}
     if method == "initialize":
-        proto = (msg.get("params") or {}).get("protocolVersion") or PROTOCOL_FALLBACK
+        proto = params.get("protocolVersion")
+        if not isinstance(proto, str) or not proto:
+            proto = PROTOCOL_FALLBACK
         return _rpc_result(id_, {
             "protocolVersion": proto,
             "capabilities": {"tools": {}},
@@ -266,13 +286,14 @@ def handle(msg: Dict) -> Optional[Dict]:
             {"name": n, "description": t["description"], "inputSchema": t["schema"]}
             for n, t in _TOOLS.items()]})
     if method == "tools/call":
-        params = msg.get("params") or {}
         name = params.get("name")
-        tool = _TOOLS.get(name)
+        tool = _TOOLS.get(name) if isinstance(name, str) else None
         if not tool:
-            return _rpc_error(id_, -32602, f"unknown tool {name!r}")
-        args = params.get("arguments") or {}
-        if not isinstance(args, dict):
+            return _rpc_error(id_, -32602, f"unknown tool {name!r}"[:200])
+        args = params.get("arguments", {})
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):   # [] , "" , 0 and false too: until 0.26.0 `or {}` read them as "no arguments"
             return _rpc_error(id_, -32602, "arguments must be a JSON object")
         # closed by construction (SPEC v0.9 §17, 16/11/2026): an argument the tool does not take is refused, never ignored —
         # until 0.25.0 verify_ledger with {"expect_ledger_id": …} or verify_pack with a key to pin dropped it and answered PASS
@@ -317,10 +338,13 @@ def main() -> int:
             continue
         try:
             msg = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):   # RecursionError: a line nested deeper than the parser goes
             emit(json.dumps(_rpc_error(None, -32700, "parse error")), flush=True)
             continue
-        reply = handle(msg)
+        try:
+            reply = handle(msg)
+        except Exception as e:  # noqa: BLE001 - one message never stops the server: JSON-RPC 2.0 §5.1, internal error
+            reply = _rpc_error(None, -32603, f"internal error: {type(e).__name__}")
         if reply is not None:
             emit(json.dumps(reply, ensure_ascii=False), flush=True)
     return 0

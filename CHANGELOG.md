@@ -144,6 +144,23 @@ run by the same author, not by a third party.
   another chain is refused, an archive with nothing sealed) and pass there too. 15 mutants of the changed lines, 15
   killed.
 
+- **One malformed line stopped the MCP server** (SPEC v0.12 §20 rule 12; the code was drafted before the SPEC
+  paragraph, both before the tests; same review, measured on 2026-11-19). `cryptovalid_mcp.py` took for granted that
+  a message is an object and its `params` an object: a line holding `[]`, `5` or `null`, a request whose `params` is
+  an array or a string, a `tools/call` whose `name` is an array, or 100,000 "[" raised `AttributeError`, `TypeError`
+  or `RecursionError` out of the read loop, and the process ended (exit 1). Each is now a JSON-RPC 2.0 error
+  (jsonrpc.org/specification, read on 2026-11-19): -32700 for a line that cannot be parsed, -32600 for a message that
+  is not an object or whose `id` or `method` has the wrong type (id null where it could not be read), -32602 for
+  `params`, a tool `name` or `arguments` of the wrong type, -32603 for anything else inside one message; the server
+  reads the next line. One answer changes besides: a message without an `id` is a notification, not answered and
+  not run (§4.1: until now a `tools/call` without an `id` ran the tool and was answered with id null). And
+  `"arguments": []` (or `""`, `0`, `false`) is refused as not an object; it was read as no arguments and refused for
+  the required one that was missing, the same code -32602 (every tool has a required argument). `test_sentry_20261119.py`, 2 tests over
+  the real stdio transport: 14 lines named by the review and 1,500 generated messages, each followed by a ping that
+  the same process must answer, the expected code written out in the test. Both fail on 22d342c (the server ends at
+  the first such line). 10 mutants of the changed lines: 9 killed; the one that survives (falsy `arguments` read as
+  none) gives the same code, as said above.
+
 - **A real DigiCert token was refused because its nonce is negative** (SPEC v0.12 §11 step 3, written before the code).
   `cryptovalid_tsa.parse_token` read the TSTInfo's `nonce` with the reader of non-negative INTEGERs and answered
   `invalid / malformed` ("nonce: negative INTEGER") for a TimeStampResp of DigiCert SHA256 RSA4096 Timestamp Responder
