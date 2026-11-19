@@ -43,11 +43,16 @@ run by the same author, not by a third party.
   refused when the request carries a header outside a closed list of six that name no credential
   (`cryptovalid_net.FORWARDED_ACROSS_ORIGINS`); refused, not stripped. A redirect to the same origin, and a redirect
   of a request without such a header (the TSA client, the trusted lists, the witness, the Solana clients), is followed
-  as before. Not closed, and said in §20: a name whose answer changes between the check and the connection; a
-  redirect to a private address. `test_sentry_20261119.py`, 9 tests on these two rules: 5,416 spellings of loopback,
+  as before. `Proxy-Authorization` is never copied to a redirected request (RFC 9110 §11.7.2: it "applies only to the
+  next inbound proxy"; urllib puts it on a request that goes through a proxy with credentials, and the redirect
+  copied it on: measured, a host reached directly after a 302 received it) and does not count for the refusal, or
+  every redirect to another origin behind such a proxy would be refused. The address is read with the system's own
+  readers (`inet_aton`, `inet_pton`), not with `ipaddress`, which before Python 3.9.5 read `0177.0.0.1` as
+  177.0.0.1. Not closed, and said in §20: a name whose answer changes between the check and the connection; a
+  redirect to a private address. `test_sentry_20261119.py`, 10 tests on these two rules: 5,416 spellings of loopback,
   link-local, unspecified and other addresses, each compared with what this system's resolver gives for it; names
   answered by a resolver replaced in the test; 4,000 pairs of origins with generated header sets; redirects served on
-  127.0.0.1. All 9 fail on 22d342c; 14 mutants of the changed lines, 14 killed.
+  127.0.0.1. All 10 fail on 22d342c; 18 mutants of the changed lines, 18 killed.
 
 - **A signature over JCS verified after an integer beyond 2^53 was changed** (SPEC v0.12 §20 rule 3, written before
   the code; same review, re-run on 2026-11-19). `cryptovalid_acta.jcs`, the RFC 8785 serializer of the ACTA, Vaara,

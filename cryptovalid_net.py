@@ -28,15 +28,18 @@ The rule, closed by construction:
    never from a host that is not loopback to a loopback, unspecified or link-local address (rule 5 says how the
    address is read), judged at every hop on the host of the request being redirected;
 5. (SPEC v0.12 §20 rule 1, 19/11/2026) a host is judged as the ADDRESS the system would connect to, not as a string:
-   an IP literal in any form `inet_aton` reads (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`) or `ipaddress`
-   reads, an IPv4-mapped IPv6 address by the IPv4 address inside it, and, for the target of a redirect, a name by
+   an IP literal in any form `inet_aton` reads (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`) or `inet_pton`
+   reads as IPv6, an IPv4-mapped IPv6 address by the IPv4 address inside it, and, for the target of a redirect, a name by
    every address `getaddrinfo` gives for it. Until 0.26.0 the host was compared as text, and a redirect from a remote
    host to `http://127.1/`, `http://0.0.0.0/` or `http://[::ffff:127.0.0.1]/` was followed (measured 19/11/2026);
 6. (SPEC v0.12 §20 rule 2) a redirect to another origin (scheme, host, port) is refused when the request carries a
    header outside `FORWARDED_ACROSS_ORIGINS`, a closed list of headers that name no credential: urllib copies every
    header of the request to the redirected one, so an `Authorization`, `X-Vault-Token` or `X-Amz-Security-Token`
    went to the host the answer named (measured 19/11/2026). Refused, not stripped: the caller learns that its
-   endpoint redirects elsewhere.
+   endpoint redirects elsewhere. `Proxy-Authorization` is the one exception, and it is never copied to a redirected
+   request at all: it "applies only to the next inbound proxy" (RFC 9110 §11.7.2), urllib's proxy handler puts it on
+   a request that goes through a proxy with credentials and puts it again on the redirected one when that goes
+   through the proxy too; copied by the redirect, it reached a host of `no_proxy` directly.
 
 Not closed here, stated: a name is resolved when the redirect is judged and again when the connection is made (an
 answer that changes in between is not seen), and when the name does not resolve here the redirect is left to urllib
@@ -73,15 +76,13 @@ def _address(host):
             return None
     if not h or any(c.isspace() for c in h):  # inet_aton stops at white space and reads what came before it
         return None
-    try:
-        a = ipaddress.ip_address(h)
-    except ValueError:
-        if ":" in h:
-            return None
-        try:
+    try:                                      # the system's own readers, the ones a connection uses: `ipaddress` of
+        if ":" in h:                          # Python before 3.9.5 read "0177.0.0.1" as 177.0.0.1, inet_aton as 127.0.0.1
+            a = ipaddress.IPv6Address(socket.inet_pton(socket.AF_INET6, h))
+        else:
             a = ipaddress.IPv4Address(socket.inet_aton(h))
-        except (OSError, ValueError, UnicodeError):
-            return None
+    except (OSError, ValueError, UnicodeError):
+        return None
     return a.ipv4_mapped or a if a.version == 6 else a
 
 
@@ -176,11 +177,16 @@ class _Redirects(urllib.request.HTTPRedirectHandler):
                     raise ValueError(f"url_not_allowed: a redirect from a remote host to a {kind} "
                                      + ("host" if kind == "loopback" else "address"))
         if _origin(u) != _origin(here):           # rule 6
-            kept = sorted(k for k in req.headers if k.lower() not in FORWARDED_ACROSS_ORIGINS)   # the ones urllib copies
+            kept = sorted(k for k in req.headers                       # req.headers: the ones urllib copies
+                          if k.lower() not in FORWARDED_ACROSS_ORIGINS and k.lower() != "proxy-authorization")
             if kept:
                 raise ValueError("url_not_allowed: a redirect to another origin for a request that carries "
                                  + ", ".join(kept)[:120] + " (a credential stays with the origin it was given to)")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None:                       # for the proxy alone (RFC 9110 §11.7.2): the proxy handler adds it again
+            for k in [k for k in new.headers if k.lower() == "proxy-authorization"]:
+                del new.headers[k]
+        return new
 
 
 def _open(req, timeout, loopback: bool, allow: str):

@@ -286,7 +286,8 @@ class TestNetCredentialsStayWithTheirOrigin(unittest.TestCase):
                 headers["".join(c.upper() if rng.random() < 0.5 else c.lower() for c in name)] = "v"
             carried = []
             for _ in range(rng.choice([0, 0, 1, 2])):
-                name = rng.choice(self.CREDENTIALS + ["X-" + "".join(rng.choice("abcdefghij-") for _ in range(6)) + "z"])
+                name = rng.choice(self.CREDENTIALS[:1] + self.CREDENTIALS[2:]        # Proxy-Authorization: its own test
+                                  + ["X-" + "".join(rng.choice("abcdefghij-") for _ in range(6)) + "z"])
                 name = "".join(c.upper() if rng.random() < 0.5 else c.lower() for c in name)
                 headers[name] = "secret"
                 carried.append(name)
@@ -306,6 +307,24 @@ class TestNetCredentialsStayWithTheirOrigin(unittest.TestCase):
         self.assertGreater(counts["refused"], 1000)
         self.assertGreater(counts["followed"], 1000)
         self.assertEqual(N.FORWARDED_ACROSS_ORIGINS, frozenset(x.lower() for x in safe))   # the closed list, as written here
+
+    def test_proxy_authorization_is_for_the_proxy(self):
+        # urllib's ProxyHandler puts Proxy-authorization among the request's headers when the proxy URL carries
+        # credentials; the redirect handler of urllib copies it on, also to a host reached without the proxy
+        for target in ("https://other.example/x", "http://tsa.example.org/again", "https://TSA.example.org:443/again"):
+            for name in ("Proxy-authorization", "Proxy-Authorization", "PROXY-AUTHORIZATION"):
+                with self.subTest(target=target, name=name):
+                    new = self._redirect("https://tsa.example.org/tsr", target, {name: "Basic dTpw", "User-Agent": "cv"})
+                    self.assertEqual({k.lower() for k in new.headers}, {"user-agent"})
+        with self.assertRaises(ValueError) as cm:      # beside a credential for the origin, the redirect is still refused
+            self._redirect("https://tsa.example.org/tsr", "https://other.example/x",
+                           {"Proxy-authorization": "Basic dTpw", "Authorization": "Bearer t"})
+        self.assertIn("carries Authorization ", str(cm.exception))
+        import urllib.request as U                       # the control: urllib's own handler does copy it
+        old = U.HTTPRedirectHandler().redirect_request(
+            U.Request("https://tsa.example.org/tsr", headers={"Proxy-authorization": "Basic dTpw"}), None, 302, "Found", {},
+            "https://other.example/x")
+        self.assertEqual(dict(old.headers), {"Proxy-authorization": "Basic dTpw"})
 
     def test_end_to_end_on_this_host(self):
         N = self.N

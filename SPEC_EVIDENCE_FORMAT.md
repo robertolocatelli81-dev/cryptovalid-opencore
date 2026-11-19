@@ -1714,7 +1714,12 @@ someone else, its own text decides and is cited with the version read; where tha
    see, and the request without its credential would fail there with another error. Until 0.26.0 urllib's rule
    applied, which copies every header except the content headers: `X-Vault-Token`, `Authorization` (AWS SigV4, NetHSM
    Basic, a QEAA bearer token) and `X-Amz-Security-Token` went to the host named by the answer (measured on
-   2026-11-19 with a 302 from one host to another).
+   2026-11-19 with a 302 from one host to another). `Proxy-Authorization` is not judged by this rule and is never
+   copied to a redirected request, to the same origin or to another: RFC 9110 §11.7.2 (Internet Standard, June 2022,
+   read at rfc-editor.org on 2026-11-19), it "applies only to the next inbound proxy". urllib puts that header among
+   the request's own when the proxy of the environment carries credentials, and puts it again on the redirected
+   request when that one goes through the proxy; copied by the redirect as well, it went to a host reached without
+   the proxy. Without this exception the rule would refuse every redirect to another origin behind such a proxy.
 3. **JCS is applied only to numbers that are IEEE 754 doubles.** `cryptovalid_acta.jcs` is the one RFC 8785
    serializer of this package, used for formats defined elsewhere (ACTA receipts, Vaara receipts, APS action
    references and accountability records, the Cedulon effect extract and inputs); the ledger profile of §3 is not JCS.
