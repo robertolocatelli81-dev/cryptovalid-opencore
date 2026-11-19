@@ -841,5 +841,323 @@ class TestHttpDigestNeverRaises(unittest.TestCase):
             self.assertIn(D.check_digest(deep, b"", "rfc9530")["why"], D.CODES)
 
 
+# ---------------------------------------------------------------- §20 rules 8 to 11: the ingest archive
+
+class _Signer:
+    """An Ed25519 backend with the two methods Ingestor.seal uses."""
+
+    def __init__(self):
+        self.k = Ed25519PrivateKey.generate()
+
+    def sign(self, m):
+        return self.k.sign(m)
+
+    def public_key_hex(self):
+        return self.k.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
+
+
+class _Archives(unittest.TestCase):
+    def setUp(self):
+        import cryptovalid_ingest
+        self.I = cryptovalid_ingest
+        self.td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.td, True)
+        self._home = os.environ.get("HOME")           # the trusted-list cache lives under ~: never the user's own
+        os.environ["HOME"] = os.path.join(self.td, "home")
+        os.makedirs(os.environ["HOME"])
+        self.addCleanup(lambda: os.environ.__setitem__("HOME", self._home) if self._home is not None else os.environ.pop("HOME"))
+
+    def build(self, name, sealed, active=0, backend=None, per_segment=3, prefix="ledger"):
+        d = os.path.join(self.td, name)
+        w = self.I.Ingestor(d, prefix=prefix, batch_size=1, backend=backend, fsync=False)
+        for seg in range(sealed):
+            for i in range(per_segment):
+                w.append({"seg": seg, "i": i})
+            w.seal()
+        for i in range(active):
+            w.append({"active": i})
+        w.close(seal=False)
+        return d
+
+    @staticmethod
+    def reasons(r):
+        return sorted(f["reason"] for f in r["failures"])
+
+
+@NEEDS_CRYPTO
+class TestArchiveHeadMissingWithPin(_Archives):
+    """Rule 8: with a pinned key and a sealed segment, a missing HEAD is a failure."""
+
+    def test_head_and_tail_removed(self):
+        I, rng = self.I, random.Random(SEED)
+        cases = 0
+        for sealed in (1, 2, 3, 5):
+            for prefix in ("ledger", "audit"):
+                b = _Signer()
+                pk = b.public_key_hex()
+                src = self.build(f"src-{sealed}-{prefix}", sealed, active=rng.randint(0, 2), backend=b, prefix=prefix)
+                for pin in (pk, [pk], ["0" * 64, pk]):
+                    self.assertEqual(I.verify_archive(src, prefix, pin)["ok"], True)                    # the control
+                for cut in range(0, sealed):                 # remove the HEAD and the last `cut` sealed segments
+                    d = os.path.join(self.td, f"cut-{sealed}-{prefix}-{cut}")
+                    shutil.copytree(src, d)
+                    os.remove(os.path.join(d, f"{prefix}.head.json"))
+                    segs = sorted(x for x in os.listdir(d) if x.endswith(".jsonl") and os.path.exists(os.path.join(d, x + ".sth.json")))
+                    for seg in segs[len(segs) - cut:]:
+                        for f in os.listdir(d):
+                            if f.startswith(seg):
+                                os.remove(os.path.join(d, f))
+                    for pin in (pk, [pk], ["0" * 64, pk]):
+                        with self.subTest(sealed=sealed, prefix=prefix, cut=cut, pin=type(pin).__name__):
+                            r = I.verify_archive(d, prefix, pin)
+                            self.assertFalse(r["ok"])
+                            self.assertIn("head_missing_but_pubkey_expected", self.reasons(r))
+                            self.assertEqual(r["segments_verified"], sealed - cut)
+                            self.assertTrue(any(w.startswith("no_head_manifest") for w in r["warnings"]))
+                        cases += 1
+                    r = I.verify_archive(d, prefix)          # no pin: as before, a warning (an unsigned HEAD guards nothing)
+                    self.assertNotIn("head_missing_but_pubkey_expected", self.reasons(r))
+                    self.assertTrue(any(w.startswith("no_head_manifest") for w in r["warnings"]))
+        self.assertEqual(cases, (1 + 2 + 3 + 5) * 2 * 3)
+
+    def test_no_sealed_segment_is_as_before(self):
+        d = self.build("only-active", 0, active=2, backend=_Signer())
+        r = self.I.verify_archive(d, expected_pubkey_hex="ab" * 32)
+        self.assertEqual((r["ok"], self.reasons(r)), (False, []))       # nothing sealed: not ok, and no HEAD was ever due
+
+
+class TestResumeTruncatesOnlyATornTail(_Archives):
+    """Rule 9: reopening cuts a last line without its line feed, and nothing else."""
+
+    DAMAGE = {"brace dropped": lambda line: line[:-2] + b"\n", "text": lambda line: b"garbage\n", "null": lambda line: b"null\n",
+              "array": lambda line: b"[]\n", "number": lambda line: b"3\n", "string": lambda line: b'"x"\n',
+              "not utf-8": lambda line: b"\xff\xfe{}\n", "half": lambda line: line[:len(line) // 2] + b"\n",
+              "nested deep": lambda line: b"[" * 200000 + b"\n", "true": lambda line: b"true\n"}
+
+    def _segment(self, name, n):
+        d = self.build(name, 0, active=n)
+        return d, os.path.join(d, "ledger-000000.jsonl")
+
+    def test_a_complete_line_that_is_not_an_entry(self):
+        I = self.I
+        cases = 0
+        for n in (1, 2, 5, 10):
+            d, seg = self._segment(f"n{n}", n)
+            with open(seg, "rb") as f:
+                original = f.read()
+            lines = original.splitlines(keepends=True)
+            self.assertEqual(len(lines), n)
+            w = I.Ingestor(d, batch_size=1, fsync=False)                 # the control: a clean reopen
+            self.assertEqual(w.recovered_bytes, 0)
+            w.close(seal=False)
+            for at in range(n):
+                for kind, f in self.DAMAGE.items():
+                    damaged = b"".join(lines[:at] + [f(lines[at])] + lines[at + 1:])
+                    with open(seg, "wb") as fh:
+                        fh.write(damaged)
+                    with self.subTest(n=n, at=at, kind=kind):
+                        with self.assertRaises(ValueError) as cm:
+                            I.Ingestor(d, batch_size=1, fsync=False)
+                        self.assertIn("refusing to resume", str(cm.exception))
+                        with open(seg, "rb") as fh:
+                            self.assertEqual(fh.read(), damaged, "the file was changed")
+                    cases += 1
+            with open(seg, "wb") as fh:
+                fh.write(original)
+        self.assertEqual(cases, (1 + 2 + 5 + 10) * len(self.DAMAGE))
+
+    def test_a_torn_tail_is_cut(self):
+        import verifier
+        I, rng = self.I, random.Random(SEED)
+        cases = 0
+        for n in (1, 3, 8):
+            d, seg = self._segment(f"t{n}", n)
+            with open(seg, "rb") as f:
+                original = f.read()
+            lines = original.splitlines(keepends=True)
+            last = lines[-1]
+            for cut in sorted(set([1, 2, len(last) - 1] + [rng.randint(1, len(last) - 1) for _ in range(12)])):
+                for tail in (last[:cut], b"\x00" * cut, b"garbage"[:max(1, cut % 8)]):      # no line feed: a write that did not return
+                    with open(seg, "wb") as fh:
+                        fh.write(b"".join(lines[:-1]) + tail)
+                    with self.subTest(n=n, cut=cut, tail=tail[:8]):
+                        w = I.Ingestor(d, batch_size=1, fsync=False)
+                        self.assertEqual(w.recovered_bytes, len(tail))
+                        w.append({"after": "reopen"})
+                        w.close(seal=False)
+                        with open(seg, "rb") as fh:
+                            now = fh.read()
+                        self.assertTrue(now.startswith(b"".join(lines[:-1])))
+                        self.assertEqual(now.count(b"\n"), n)                   # n - 1 kept, 1 appended
+                        self.assertEqual(verifier.verify_ledger(seg)["verdict"], "PASS")
+                    cases += 1
+            # blank lines are kept, as the verifier reads them
+            with open(seg, "wb") as fh:
+                fh.write(b"\n" + b"\n".join(x.rstrip(b"\n") for x in lines) + b"\n\n")
+            w = I.Ingestor(d, batch_size=1, fsync=False)
+            self.assertEqual(w.recovered_bytes, 0)
+            self.assertEqual(w.append({"x": 1})["idx"], n)
+            w.close(seal=False)
+        self.assertGreater(cases, 100)
+
+    def test_a_line_of_another_chain_is_still_refused(self):
+        d, seg = self._segment("chain", 4)
+        with open(seg, "rb") as f:
+            lines = f.read().splitlines(keepends=True)
+        with open(seg, "wb") as f:
+            f.write(b"".join(lines[:2] + [b'{"not": "an entry"}\n'] + lines[2:]))
+        with self.assertRaises(ValueError) as cm:
+            self.I.Ingestor(d, batch_size=1, fsync=False)
+        self.assertIn("broken/tampered chain", str(cm.exception))
+
+
+@NEEDS_CRYPTO
+class TestUnsealedSegmentsAreRead(_Archives):
+    """Rule 10: a segment without a tree head is read; what verifies is named in a warning, what does not is a failure."""
+
+    def _warning(self, r):
+        return [w for w in r["warnings"] if w.startswith("unsealed_entries")]
+
+    def test_intact(self):
+        for sealed in (1, 2, 4):
+            for active in (0, 1, 3):
+                b = _Signer()
+                d = self.build(f"ok-{sealed}-{active}", sealed, active=active, backend=b)
+                with self.subTest(sealed=sealed, active=active):
+                    r = self.I.verify_archive(d, expected_pubkey_hex=b.public_key_hex())
+                    self.assertEqual((r["ok"], self.reasons(r), r["unsealed_segments"]), (True, [], 1))
+                    if active:
+                        self.assertEqual(len(self._warning(r)), 1)
+                        self.assertTrue(self._warning(r)[0].startswith(
+                            f"unsealed_entries: {active} entries in 1 segment(s) without a tree head (ledger-{sealed:06d}.jsonl)"))
+                    else:
+                        self.assertEqual(self._warning(r), [])
+
+    def test_the_review_case(self):
+        b = _Signer()
+        d = self.build("review", 2, backend=b, per_segment=2)
+        with open(os.path.join(d, "ledger-000099.jsonl"), "w") as f:
+            f.write('{"not":"a chain","forged":true}\n')
+        r = self.I.verify_archive(d, expected_pubkey_hex=b.public_key_hex())
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.reasons(r), ["unsealed_segment_chain_fail", "unsealed_segment_not_last"])
+
+    def test_generated(self):
+        I, rng = self.I, random.Random(SEED)
+        b = _Signer()
+        pk = b.public_key_hex()
+        donor = self.build("donor", 0, active=4)                 # a valid chain made by another writer
+        with open(os.path.join(donor, "ledger-000000.jsonl"), "rb") as f:
+            donor_lines = f.read().splitlines(keepends=True)
+        counts = {}
+        for k in range(120):
+            sealed, active = rng.randint(1, 3), rng.randint(0, 4)
+            d = self.build(f"g{k}", sealed, active=active, backend=b, per_segment=2)
+            seg = os.path.join(d, f"ledger-{sealed:06d}.jsonl")
+            with open(seg, "rb") as f:
+                lines = f.read().splitlines(keepends=True)
+            bend = rng.choice(["none", "edit", "drop", "swap", "foreign", "text", "torn", "blank-only", "extra-chain", "extra-text",
+                               "extra-empty", "sth-removed"])
+            want, entries = set(), active                        # the rule, written out here
+            if bend == "edit" and active:
+                at = rng.randrange(active)
+                lines[at] = lines[at].replace(b'"active":', b'"Active":')
+                want.add("unsealed_segment_chain_fail")
+            elif bend == "drop" and active >= 2:
+                lines.pop(rng.randrange(active - 1))             # not the last: the chain after it breaks
+                want.add("unsealed_segment_chain_fail")
+            elif bend == "swap" and active >= 2:
+                lines[0], lines[1] = lines[1], lines[0]
+                want.add("unsealed_segment_chain_fail")
+            elif bend == "foreign":
+                lines.insert(rng.randint(0, active), rng.choice([b'{"not":"a chain"}\n', b"null\n", b"[]\n", b"7\n"]))
+                want.add("unsealed_segment_chain_fail")
+            elif bend == "text":
+                lines.insert(rng.randint(0, active), b"garbage\n")
+                want.add("unsealed_segment_chain_fail")
+            elif bend == "torn" and active:
+                lines[-1] = lines[-1][:rng.randint(1, len(lines[-1]) - 2)]
+                want.add("unsealed_segment_chain_fail")
+            elif bend == "blank-only":
+                lines, entries = [b"\n", b"  \n"], 0
+            with open(seg, "wb") as f:
+                f.write(b"".join(lines))
+            if bend.startswith("extra"):                         # a second segment without a tree head, after the active one
+                extra = os.path.join(d, f"ledger-{sealed + rng.randint(1, 90):06d}.jsonl")
+                with open(extra, "wb") as f:
+                    f.write(b"".join(donor_lines) if bend == "extra-chain" else b"hello\n" if bend == "extra-text" else b"")
+                want.add("unsealed_segment_not_last")            # the active one is no longer the last
+                if bend == "extra-text":
+                    want.add("unsealed_segment_chain_fail")
+            if bend == "sth-removed" and sealed >= 2:            # a sealed segment loses its tree head: it is not the last
+                os.remove(os.path.join(d, "ledger-000000.jsonl.sth.json"))
+                want.add("unsealed_segment_not_last")
+            with self.subTest(k=k, bend=bend, sealed=sealed, active=active):
+                r = I.verify_archive(d, expected_pubkey_hex=pk)
+                got = {x for x in self.reasons(r) if x.startswith("unsealed_")}
+                self.assertEqual(got, want)
+                if want:
+                    self.assertFalse(r["ok"])
+                elif bend != "sth-removed":
+                    self.assertEqual((r["ok"], self.reasons(r)), (True, []))
+                    self.assertEqual(bool(self._warning(r)), entries > 0)
+                    if entries:
+                        self.assertIn(f"unsealed_entries: {entries} entries in 1 segment(s)", self._warning(r)[0])
+            counts[bend] = counts.get(bend, 0) + 1
+        self.assertEqual(sum(counts.values()), 120)
+        self.assertEqual(len(counts), 12)
+
+
+class TestLotlMemberStates(_Archives):
+    """Rule 11: member states are two ASCII letters; the cache file they name stays in the cache directory."""
+
+    @staticmethod
+    def _valid(ms):
+        return ms is None or (isinstance(ms, (list, tuple, set, frozenset))
+                              and all(type(m) is str and len(m) == 2 and all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" for c in m)
+                                      for m in ms))
+
+    def _values(self):
+        rng = random.Random(SEED)
+        vals = [None, [], ["ES"], ["es", "IT"], ("DE",), {"FR"}, frozenset({"el", "UK"}), ["ES", "ES"],
+                "ES", b"ES", ["X/../../../evil"], ["../.."], ["E/"], ["/E"], ["E\\"], ["E S"], ["ES\n"], ["\nES"], ["ES "], ["E"], ["ESP"],
+                [""], [5], [None], [["ES"]], [b"ES"], ["ÉS"], ["ｅｓ"], ["E1"], ["..",], ["E."], ["~E"], 5, {"ES": 1}, ["ES", "X/Y"],
+                ["ES", 5], iter(["ES"]), ["E\x00"], ["İT"], ["ſs"]]
+        alphabet = "ESit/.\\ ~-\n\x001Éｅ"
+        for _ in range(600):
+            vals.append([("".join(rng.choice(alphabet) for _ in range(rng.choice([1, 2, 2, 2, 3, 12])))) for _ in range(rng.randint(1, 3))])
+        letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        for _ in range(200):
+            vals.append(rng.choice([list, tuple, set])(rng.choice(letters) + rng.choice(letters) for _ in range(rng.randint(1, 5))))
+        return vals
+
+    def test_generated(self):
+        I = self.I
+        cache_dir = os.path.join(os.environ["HOME"], ".cache", "cryptovalid")
+        import re
+        good = bad = 0
+        for ms in self._values():
+            with self.subTest(ms=ms):
+                if self._valid(ms):
+                    p = I._default_lotl_cache(ms)
+                    self.assertEqual(os.path.dirname(os.path.realpath(p)), os.path.realpath(cache_dir))
+                    self.assertTrue(re.fullmatch(r"lotl_(all|[A-Z]{2}(-[A-Z]{2})*)\.json", os.path.basename(p)), p)
+                    good += 1
+                else:
+                    with self.assertRaises(ValueError) as cm:
+                        I._default_lotl_cache(ms)
+                    self.assertIn("lotl_member_states", str(cm.exception))
+                    for check in (False, True):              # refused before the archive is looked at, with or without --lotl
+                        with self.assertRaises(ValueError):
+                            I.verify_archive(os.path.join(self.td, "no-such-archive"), lotl_check=check, lotl_member_states=ms)
+                    with self.assertRaises(ValueError):
+                        I.Ingestor(os.path.join(self.td, "never-made"), lotl_member_states=ms)
+                    bad += 1
+        self.assertFalse(os.path.exists(os.path.join(self.td, "never-made")))
+        self.assertGreater(good, 200)
+        self.assertGreater(bad, 500)
+        self.assertEqual(sorted(os.listdir(os.environ["HOME"])), [".cache"])       # nothing was written beside the cache
+
+
 if __name__ == "__main__":
     unittest.main()

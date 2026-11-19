@@ -61,6 +61,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -105,11 +106,28 @@ def _write_bytes_atomic(path: str, data: bytes):
     _fsync_dir(os.path.dirname(path) or ".")
 
 
+_MEMBER_STATE = re.compile(r"[A-Za-z]{2}")
+
+
+def _member_states(member_states):
+    """None, or the codes upper-cased and sorted. SPEC v0.12 §20 rule 11 (19/11/2026): a list, tuple or set of strings
+    of exactly two ASCII letters; anything else is a ValueError. The codes name the cache file below: until 0.26.0
+    they were joined into its name as given, and ["X/../../../evil"] named ~/EVIL.json."""
+    if member_states is None:
+        return None
+    if isinstance(member_states, (str, bytes)) or not isinstance(member_states, (list, tuple, set, frozenset)) \
+            or not all(isinstance(m, str) and _MEMBER_STATE.fullmatch(m) for m in member_states):
+        raise ValueError("lotl_member_states: a list of member-state codes of two ASCII letters (e.g. [\"ES\", \"IT\"]), "
+                         "or None for every member state")
+    return sorted({m.upper() for m in member_states})
+
+
 def _default_lotl_cache(member_states) -> str:
     """Cache LOTL FUORI dall'archivio: una cache co-locata coi dati non fidati è
     avvelenabile da chi scrive nella dir (fingerprint finti -> qualified finto —
     trovato dalla review avversariale). ~/.cache è del VERIFICATORE, non dell'archivio."""
-    tag = "-".join(sorted(m.upper() for m in member_states)) if member_states else "all"
+    codes = _member_states(member_states)
+    tag = "-".join(codes) if codes else "all"
     d = os.path.join(os.path.expanduser("~"), ".cache", "cryptovalid")
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, f"lotl_{tag}.json")
@@ -136,6 +154,7 @@ class Ingestor:
         self._batch, self._rotate, self._fsync = batch_size, rotate_entries, fsync
         self._backend = backend
         self._tsa_url, self._lotl_check = tsa_url, lotl_check
+        _member_states(lotl_member_states)   # SPEC v0.12 §20 rule 11: refused here, not at the first seal
         self._lotl_ms = lotl_member_states
         self._request_timestamp = None    # iniettabile nei test; default: cryptovalid_tsa
         self.last_anchor_error: Optional[str] = None
@@ -176,7 +195,10 @@ class Ingestor:
 
     def _resume(self, path: str):
         """Fail-closed recovery: keep every complete line, truncate a torn tail (it can
-        only be an un-acknowledged write: flush() had not returned), resume the chain."""
+        only be an un-acknowledged write: flush() had not returned), resume the chain.
+        SPEC v0.12 §20 rule 9 (19/11/2026): the torn tail is the LAST line when it does not end with a line feed. A
+        complete line that is not a JSON object is damage, not a torn write: ValueError, the file left as it is. Until
+        0.26.0 it was taken for the tail and every acknowledged entry after it was cut without an error."""
         good_end, self._idx, self._prev, self._first = 0, 0, GENESIS_PREV, GENESIS_PREV
         import verifier
         with os.fdopen(verifier.open_regular(path, float("inf")), "rb") as f:   # SPEC §5 step 0: its own segment, a regular file
@@ -188,8 +210,12 @@ class Ingestor:
                     continue
                 try:
                     e = json.loads(line)
-                except json.JSONDecodeError:
-                    break                                     # torn/corrupt tail
+                except (ValueError, RecursionError):          # not JSON, not UTF-8, nested too deep to parse
+                    e = None
+                if not isinstance(e, dict):
+                    raise ValueError(f"{path}: the complete line at byte {good_end}, after {self._idx} entries, is not "
+                                     "a JSON object — refusing to resume and leaving the file as it is (only a last "
+                                     "line without its line feed is a torn tail; run the verifier on it)")
                 # the attestation fields of SPEC §3 (the verifiers' list): until 0.20.2 only the first three were
                 # left out here, so a segment carrying signature_pq/signer_pq or tsa_token was refused as tampered
                 body = {k: v for k, v in e.items()
@@ -431,6 +457,7 @@ def verify_archive(directory: str, prefix: str = "ledger",
         keys = [expected_pubkey_hex] if isinstance(expected_pubkey_hex, str) else expected_pubkey_hex
         if not keys or not all(isinstance(k, str) and k for k in keys):
             raise ValueError("expected_pubkey_hex: an empty pin pins nothing: give a key, a non-empty list of keys, or None")
+    _member_states(lotl_member_states)   # SPEC v0.12 §20 rule 11: refused before any file is read, with or without lotl_check
     import verifier
     failures: List[Dict] = []
     warnings: List[str] = []
@@ -444,15 +471,35 @@ def verify_archive(directory: str, prefix: str = "ledger",
     # SPEC §5 step 0 (review of 18/11/2026): a segment without STH is not read (nothing seals it), but one that is not a
     # regular file (a directory, a device, a FIFO in its place) is not a segment this format writes: a named failure, judged
     # on a descriptor opened without blocking, never a read and never a wait
+    # SPEC v0.12 §20 rule 10 (19/11/2026): a regular one IS read. The writer leaves at most one, the last in order: any
+    # other is a failure; one that holds entries must verify as a ledger; what verifies is named in a warning, since no
+    # tree head covers it. Until 0.26.0 it was only counted: a file of anything, added as <prefix>-000099.jsonl, left ok.
+    unsealed_entries: List = []       # (segment name, entries) of the segments without STH whose chain verifies
     for s in segs:
         if s in sealed:
             continue
+        name = os.path.basename(s)
         try:
             os.close(verifier.open_regular(s, float("inf")))
         except verifier.InputNotRegular:
-            failures.append({"segment": os.path.basename(s), "reason": "unsealed_segment_not_regular"})
+            failures.append({"segment": name, "reason": "unsealed_segment_not_regular"})
+            continue
         except OSError:
-            pass   # gone or unreadable since the listing: as before, it is not read
+            continue   # gone or unreadable since the listing: as before, it is not read
+        if s != segs[-1]:
+            failures.append({"segment": name, "reason": "unsealed_segment_not_last"})
+        try:
+            blank = not verifier.read_regular(s).strip()
+        except OSError as e:   # over the verifier's bound, or gone since the open above
+            failures.append({"segment": name, "reason": "unsealed_segment_chain_fail", "detail": f"unreadable: {type(e).__name__}"})
+            continue
+        if blank:
+            continue           # the active segment after a seal
+        r = verifier.verify_ledger(s)
+        if r["verdict"] != "PASS":
+            failures.append({"segment": name, "reason": "unsealed_segment_chain_fail"})
+        else:
+            unsealed_entries.append((name, r["entries_count"]))
     prev_sth = GENESIS_PREV
     for s in sealed:
         name = os.path.basename(s)
@@ -530,6 +577,8 @@ def verify_archive(directory: str, prefix: str = "ledger",
         elif expected_pubkey_hex:
             failures.append({"segment": "HEAD", "reason": "head_unsigned_but_pubkey_expected"})
     elif sealed and not os.path.exists(head_path):
+        if expected_pubkey_hex:   # SPEC v0.12 §20 rule 8 (19/11/2026): removing the HEAD is not weaker than unsigning it
+            failures.append({"segment": "HEAD", "reason": "head_missing_but_pubkey_expected"})
         warnings.append("no_head_manifest: tail segment removal/extension NOT detectable")
     if sealed and not head_signed:
         warnings.append("head_unsigned: tail guard only as strong as file access "
@@ -540,6 +589,11 @@ def verify_archive(directory: str, prefix: str = "ledger",
     if sealed and not expected_pubkey_hex:
         warnings.append("no_pinned_pubkey: signatures (if any) checked against their "
                         "own embedded key, not an expected signer")
+    if unsealed_entries:
+        warnings.append(f"unsealed_entries: {sum(n for _s, n in unsealed_entries)} entries in {len(unsealed_entries)} "
+                        f"segment(s) without a tree head ({', '.join(s for s, _n in unsealed_entries)}): their chain is "
+                        "verified, but no tree head, HEAD or signature covers them (entries removed from their tail are "
+                        "NOT detectable here; seal the segment)"[:400])
     # certificazione eIDAS dei token (opt-in: tocca la rete/EU Trusted Lists).
     # La cache sta FUORI dall'archivio: una cache co-locata è avvelenabile.
     # SPEC §11 (v0.6): the certificate looked up is the one that signed the token; a token whose signer is a QTST

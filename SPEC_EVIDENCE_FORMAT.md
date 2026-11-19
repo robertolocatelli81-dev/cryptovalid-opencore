@@ -381,7 +381,10 @@ the formats of others refuses an integer that is not exactly a double (until 0.2
 signed bytes). Rules 4 to 6: the experimental Cedulon reader takes the context of `control` and of an approval only
 from inputs a signature binds, reports a repeated ref as `duplicate-ref`, and checks an approval's WebAuthn RP ID and
 origin against the caller's or says it did not. Rule 7: the digest-field check answers `grammar`, never an
-exception, for a field of nested "@". The ledger format (§2–§5), its hashes and its vectors do not change.
+exception, for a field of nested "@". Rules 8 to 11, the ingest archive: with a pinned key a missing HEAD is a
+failure; the writer cuts only a last line without its line feed when it reopens a segment; a segment without a tree
+head is read, and failed or named in a warning; member-state codes are two ASCII letters. The ledger format (§2–§5),
+its hashes and its vectors do not change.
 
 ## 7. Conformance (normative)
 
@@ -1793,3 +1796,48 @@ not judged here.
    with 5,000 of them `check_digest` raised `RecursionError` (measured on 2026-11-19, Python 3.11) where every other
    field outside the grammar is the outcome `grammar`. The character after "@" is now looked at first; no outcome
    changes for a field the old code answered.
+
+Rules 8 to 11 are about the ingest archive (`cryptovalid_ingest`: the writer `Ingestor`, the verifier
+`verify_archive`, `cryptovalid-ingest verify`, the MCP tool `verify_archive`), a layout of this format: these rules
+are its own.
+
+8. **With a pinned key, an archive without its HEAD is not ok.** The HEAD manifest (`<prefix>.head.json`) commits to
+   the number of sealed segments and to the last tree head: it is what shows that segments were removed from the tail.
+   When `expected_pubkey_hex` is given and the archive holds at least one sealed segment, a missing HEAD is the
+   failure `head_missing_but_pubkey_expected` (segment `HEAD`), as a HEAD without a signature already was
+   (`head_unsigned_but_pubkey_expected`); the warning `no_head_manifest` stays. Without a pinned key a missing HEAD
+   is still a warning only: an unsigned HEAD protects against nobody who can write the directory. Until 0.26.0, with
+   the key pinned, removing the HEAD together with the last sealed segments and their tree heads left `ok: true`
+   with a warning (measured on 2026-11-19: 3 signed segments, the last one and the HEAD removed, `segments_verified`
+   2, no failure), while removing only the signature from the HEAD failed. An archive written without a HEAD by a
+   version that did not write one is, with a pinned key, not ok from this version on.
+9. **On reopening, the writer truncates only a torn tail.** A torn tail is the last line of the active segment when
+   it does not end with a line feed: a write that had not returned. Every complete line (one that ends with a line
+   feed) must be a JSON object that continues the chain, or blank; one that is not JSON, not UTF-8 or not an object
+   makes `Ingestor` raise `ValueError` ("refusing to resume") and leaves the file as it is, as a complete line that
+   breaks the chain already did. Until 0.26.0 the first complete line that was not JSON was taken for the torn tail
+   and everything from it on was cut: with 10 entries acknowledged and line 3 damaged, reopening removed 7
+   acknowledged entries without an error and the remaining 3 verified (measured on 2026-11-19); a complete line that
+   was JSON and not an object raised `AttributeError`.
+10. **A segment without a tree head is read, and the result says what no tree head covers.** The writer leaves at
+    most one segment without `.sth.json`, the last one in order (the active segment; empty after a seal). The
+    verifier reads every segment without a tree head under §5 step 0: one that is not the last segment of the
+    archive is the failure `unsealed_segment_not_last`; one that holds anything other than blank lines and does not
+    verify as a ledger of §2–§5 is `unsealed_segment_chain_fail`; one that verifies adds the warning
+    `unsealed_entries: <n> entries in <k> segment(s) without a tree head (<names>) ...`: their chain is verified, no
+    tree head, HEAD or signature covers them, and entries removed from their tail are not detectable by this check.
+    An empty one adds nothing. A torn tail in the active segment (rule 9) makes the archive not ok until the writer
+    reopens it: the verifier does not repair. Until 0.26.0 such a segment was counted (`unsealed_segments`) and never
+    read: a file `ledger-000099.jsonl` holding one line that is not an entry, added to a signed archive verified
+    with its key pinned, left `ok: true` with no warning about it (measured on 2026-11-19). A signed tip of the active
+    segment (`.tip.json`), where the writer keeps one, is checked by `cryptovalid_tip`, not by this verifier.
+11. **Member states of the trusted lists are two ASCII letters.** `lotl_member_states` (the library parameter,
+    `--lotl-ms`, the MCP argument) is `None`, or a list, tuple or set whose members are strings of exactly two ASCII
+    letters, read without case; an empty one means every member state, as before. Anything else — a bare string, a
+    code of another length, a path separator, white space, a member that is not a string — is a `ValueError` before
+    any file or network is touched, in `verify_archive` whether or not `lotl_check` is set, and in `Ingestor`. The
+    codes name the cache file of the trusted-list fingerprints (`~/.cache/cryptovalid/lotl_<codes>.json`): until
+    0.26.0 they were joined into that name as given, so `["X/../../../evil"]` named `~/EVIL.json` (measured on
+    2026-11-19; with a directory `lotl_X` present in the cache directory, a file placed there was read as the set of
+    qualified TSA certificates, and without it the path did not resolve), a member that is not a string raised
+    `AttributeError`, and the string `"ES"` was read as the two states `E` and `S`.

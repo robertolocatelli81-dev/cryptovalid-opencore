@@ -110,6 +110,40 @@ run by the same author, not by a third party.
   syntaxes that must not raise (these two hold the grammar where it was and pass on 22d342c too). 3 mutants: 2
   killed; the third (no test for the end of the field after "@") gives the same outcome, the item parser refuses it.
 
+- **An ingest archive with its key pinned was `ok` after the HEAD and the last segments were removed, and three
+  more defects of the archive** (SPEC v0.12 §20 rules 8 to 11, written before the code; same review, each re-run on
+  2026-11-19).
+  (1) `verify_archive` with `expected_pubkey_hex`: a HEAD without a signature was a failure, a HEAD that is not there
+  only the warning `no_head_manifest`. With 3 signed segments, removing `ledger.head.json` and the last segment with
+  its tree head left `ok: true`, `segments_verified` 2. A missing HEAD with a pinned key and a sealed segment is now
+  the failure `head_missing_but_pubkey_expected`. Without a pin it stays a warning. An archive that never had a HEAD
+  is, with a pin, not ok from this version.
+  (2) `Ingestor`, reopening a segment, took the first complete line that was not JSON for a torn tail and cut the
+  file there: 10 acknowledged entries with line 3 damaged became 3, without an error, and the 3 verified. Only a last
+  line without its line feed is a torn tail; a complete line that is not a JSON object is a `ValueError` ("refusing
+  to resume") and the file is left as it is (a complete line that was JSON and not an object raised
+  `AttributeError`).
+  (3) A segment without `.sth.json` was counted and never read: `ledger-000099.jsonl` holding one line that is not an
+  entry, added to a signed archive verified with its key, left `ok: true` and no warning. Such a segment is now
+  read: `unsealed_segment_not_last` when it is not the last segment (the writer leaves at most one, the active one),
+  `unsealed_segment_chain_fail` when it holds something that does not verify as a ledger, and when it verifies the
+  warning `unsealed_entries: <n> entries in <k> segment(s) without a tree head (...)`. An empty active segment adds
+  nothing; one with a torn tail is not ok until the writer reopens it.
+  (4) `lotl_member_states` named the cache file of the trusted-list fingerprints as given: `["X/../../../evil"]`
+  named `~/EVIL.json` and, with a directory `lotl_X` present in `~/.cache/cryptovalid`, a file placed there was read
+  as the set of qualified TSA certificates (without that directory the path does not resolve); the argument reaches
+  the function from the MCP tool `verify_archive`. Member states are now a list, tuple or set of strings of two
+  ASCII letters, or a `ValueError` before anything is read, in `verify_archive` and in `Ingestor`; the string `"ES"`
+  (read until now as the states `E` and `S`) is refused too.
+  `test_sentry_20261119.py`, 9 tests: 22 archives with the HEAD and 0 to 4 tail segments removed, each under three
+  forms of pin (66 verifications); 180 damaged complete lines (10 kinds at every position of segments of 1, 2, 5 and
+  10 entries) that must raise and leave the file byte for byte, and over 100 torn tails that must be cut; 120
+  generated archives with 12
+  kinds of change to the segments without a tree head, against the rule written out in the test; 840 values of
+  member states. 6 of the 9 fail on 22d342c; the other 3 hold what did not change (a torn tail is cut, a line of
+  another chain is refused, an archive with nothing sealed) and pass there too. 15 mutants of the changed lines, 15
+  killed.
+
 - **A real DigiCert token was refused because its nonce is negative** (SPEC v0.12 §11 step 3, written before the code).
   `cryptovalid_tsa.parse_token` read the TSTInfo's `nonce` with the reader of non-negative INTEGERs and answered
   `invalid / malformed` ("nonce: negative INTEGER") for a TimeStampResp of DigiCert SHA256 RSA4096 Timestamp Responder
