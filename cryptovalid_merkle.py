@@ -72,12 +72,19 @@ def inclusion_proof(m, leaves):
 
 
 def verify_inclusion(m, n, leaf_data, proof, root):
-    """Third-party verification (CT client algorithm)."""
-    if m >= n:
+    """Third-party verification, RFC 9162 §2.1.3.2 (Experimental, December 2021; read at rfc-editor.org on 2026-11-20).
+    SPEC v0.13 §21 rule 1: step 4a, "If sn is 0, then stop the iteration and fail the proof verification", is applied:
+    a proof longer than the path of (m, n) fails. Until 0.27.0 it was not: the inclusion proof of leaf 5 of a tree of 8
+    verified as leaf 1 of a tree of 4 against the root of the tree of 8. The caller still binds `n` to `root` (a signed
+    tree head): with the root of another size, a proof of the right length can verify, as RFC 9162 writes the
+    algorithm. A leaf index or a tree size that is not a non-negative integer fails too."""
+    if not all(isinstance(x, int) and not isinstance(x, bool) for x in (m, n)) or not 0 <= m < n:
         return False
     h = leaf_hash(leaf_data)
     fn, sn = m, n - 1
     for p in proof:
+        if sn == 0:
+            return False
         if fn == sn or (fn & 1):
             h = node_hash(p, h)
             while not (fn & 1) and fn != 0:
