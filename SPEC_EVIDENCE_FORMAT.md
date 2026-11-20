@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.12 (2026-11-18; v0.11 2026-11-18, v0.10 2026-11-16, v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
+# CryptoValid Evidence Format — candidate standard v0.13 (2026-11-20; v0.12 2026-11-18, v0.11 2026-11-18, v0.10 2026-11-16, v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -386,6 +386,16 @@ failure; the writer cuts only a last line without its line feed when it reopens 
 head is read, and failed or named in a warning; member-state codes are two ASCII letters. Rule 12: the MCP server
 answers a malformed message with a JSON-RPC error and goes on. The ledger format (§2–§5), its hashes and its vectors do
 not change.
+v0.13 (2026-11-20) adds §21, eight rules written after the findings of the same review were re-run on the released
+0.27.0. Not additive where they turn an accepted input into a refused one. Rule 1: an RFC 9162 inclusion proof longer
+than the path of its (index, size) fails. Rule 2: a key written twice in one object of a ledger line read by the
+signature verifier, or of a JWS header or payload, is refused. Rule 3: an XML document read without `defusedxml` is
+refused when it carries a document type declaration anywhere, in any encoding. Rule 4: the experimental Vaara reader
+verifies ES256 with a P-256 key only, and an evidence record given for a receipt that binds none is not bound. Rule 5:
+an argument of an MCP tool is of the JSON type its input schema declares. Rule 6: a body read from the network is
+bounded. Rule 7: the evidence pack checks the digest, the chain, the signatures, the count and the head of a ledger on
+the same bytes. Rule 8: `signer.py sign` signs only entries whose `self_hash` it recomputes. The ledger format (§2–§5),
+its hashes and its vectors do not change.
 
 ## 7. Conformance (normative)
 
@@ -1879,3 +1889,73 @@ are its own.
     `RecursionError`) and the server process ended (measured on 2026-11-19); `"arguments": []` was read as no
     arguments and then refused for the required argument that was missing (the same code, another reason).
     `jsonrpc: "2.0"` is still not required of a message: not changed here.
+
+## 21. Rules written after the re-measurement of 2026-11-20 (NORMATIVE since v0.13)
+
+The findings of the review of 0.26.0 (§20) that §20 did not cover were re-run on 2026-11-20 on 0.26.0 and on the
+released 0.27.0; each rule below answers one that 0.27.0 still reproduced, and was written here before the code. Where
+a format belongs to someone else its own text decides, cited with the version read; where it is silent, the closed
+reading is taken and said to be this format's choice. Tests: `test_remeasure_20261120.py` (22 tests; 18 fail on
+0.27.0, the 4 named `*_control` hold what did not change and pass there too).
+
+1. **An inclusion proof longer than its path fails** (`cryptovalid_merkle.verify_inclusion`). RFC 9162 §2.1.3.2
+   (Experimental, December 2021, not obsoleted; read at rfc-editor.org on 2026-11-20), step 4a: "If sn is 0, then
+   stop the iteration and fail the proof verification." Until 0.27.0 the step was missing: the proof of leaf 5 of a
+   tree of 8 leaves verified as leaf 1 of a tree of 4 against the root of the tree of 8; over the trees of 1 to 33
+   leaves, 1,416 of the 81,927 pairs (proof of (M, N), claimed (m, n) whose path is shorter) verified, none now. A leaf
+   index or a tree size that is not a non-negative integer (a bool included) fails too. The algorithm cannot tell a
+   tree size the root was not built with when the proof has the length of that size's path: the caller binds the size
+   to the root (a signed tree head; the callers in this repository take both from one checkpoint or recompute them).
+2. **A key written twice is refused by the signature verifier and by the JWS verifier.** §3: "duplicate object keys —
+   a strict parser MUST reject them". `signer.verify_file` (and `signer.py verify`) read each ledger line keeping the
+   last of two equal keys: a line with a key written twice, the signed value last, verified (4 of 8 generated lines,
+   one key repeated at the top and inside `data` of each of the 4 entries of a signed ledger), while `verifier.py`
+   refused the same file. Such a line is now the failure `duplicate_key` at its index. `cryptovalid_jws.verify`:
+   RFC 7515 §10.12 (read at rfc-editor.org on 2026-11-20) lets a JWS parser "either reject JWSs with duplicate Header
+   Parameter names" or keep the last; this format rejects (`header_duplicate_key: <name>`, before the signature, 22 of
+   40 generated headers were accepted); the payload is a ledger record, read under §3 (`payload_duplicate_key:
+   <name>`, with `signature_valid: true`: the signature was checked; 80 of 80 accepted until 0.27.0).
+3. **A document type declaration is refused by the XML parser.** `fundcert_canonical` parses the XML of holdings files
+   with `defusedxml` when it is installed; without it, until 0.27.0, it searched for `<!doctype` or `<!entity` in the
+   first 4096 bytes decoded as UTF-8: a declaration after a comment or a processing instruction of more than 4096 bytes,
+   or in a UTF-16 document, was missed and its internal entities were expanded (218 of 300 generated documents,
+   expat 2.5.0). The document is now read once by expat with a handler that refuses a document type declaration and
+   an entity declaration, wherever they stand and in whatever encoding the bytes declare, before ElementTree parses
+   it (as `cryptovalid_lotl` reads a trusted list). A document without one parses as before.
+4. **Vaara receipts: ES256 is P-256, and an evidence record given is bound or the receipt is not ok**
+   (`cryptovalid_vaara_receipt`, experimental). RFC 7518 §3.1 (read at rfc-editor.org on 2026-11-20): ES256 is "ECDSA
+   using P-256 and SHA-256". A JWK key was already required to be P-256; a PEM key was not, and an ES256 receipt
+   signed and verified with a key on secp192r1, secp224r1, secp256k1 or brainpoolP256r1 was ok. Another curve is now
+   refused before the signature check (`why`: "ES256 needs a P-256 key ..."). An evidence record given by the caller
+   (`evidence`) for a decision receipt without `evidenceRef` left `evidence_ok` null and the receipt ok: the binding
+   the caller asked for does not hold, `evidence_ok` is false. Without `evidence` nothing changes.
+5. **An MCP tool argument is of the type its input schema declares** (`cryptovalid_mcp.py`; §17 rule 5 already refuses
+   an argument the schema does not name). A value whose JSON type is not the property's `type` (`string`, `boolean`,
+   `object`, `array` with `items` of `string`) is JSON-RPC -32602 naming the argument, and the tool is not run. Until
+   0.27.0 types were not read: `"lotl_check": "false"` went through Python's `bool` and switched the network check of
+   the trusted lists on; over the 13 properties of the 6 tools and 17 values each (221 calls), every value of another
+   type is now refused. The description of `verify_ledger` said it checked the ledger's "Ed25519 signatures if
+   present"; it never did (the receipt counts them in `signatures_not_checked`), and the description now says so.
+6. **A body read from the network is bounded** (`cryptovalid_net.read_body`, `MAX_RESPONSE_BYTES` = 64 MiB). Until
+   0.27.0 ten reads in seven modules took a response whole (`cryptovalid_lotl`, `cryptovalid_tsa`, `evidence_pack`
+   when it stamps, `cryptovalid_qeas`, `cryptovalid_solana`, `cryptovalid_pruning_probe`, `cryptovalid_kms`: three
+   answers and one error body), however long it was. Each now reads at most the bound plus one byte and answers
+   `ValueError("response_too_large: ...")` past it (an error body: 1 MiB, then only the status is reported). The
+   largest document this package fetches is a trusted list: on 2026-11-20 the EU LOTL and the 31 lists it points to
+   were at most 5,367,120 bytes.
+7. **The evidence pack reads a ledger once** (`evidence_pack.verify_pack`). Until 0.27.0 the path of a ledger was
+   opened five times (its digest, its chain, whether it is signed, its signatures, its count and head): with another
+   file at the path only while the chain was read, a pack whose manifest commits to a ledger with a broken chain was `valid: true`
+   (measured by exchanging the file between the reads). Each ledger is now read once, bounded as §5 step 0 says, its
+   SHA-256 taken from those bytes, and the chain, the signatures, the count and the head are checked on the same bytes
+   in memory (the ledger verifier already held a whole ledger in memory).
+8. **The signer signs entries, never a hash as written** (`signer.sign_ledger`, `signer.py sign`). An entry is signed
+   over its `self_hash` as text; the tree heads and the HEAD of `cryptovalid_ingest` are signed, with the same kind of
+   key, over the hex of the SHA-256 of their canonical JSON: the same kind of message, with no tag that tells them
+   apart. Until 0.27.0 the signer signed the `self_hash` of each line as written: a "ledger" of two lines whose
+   `self_hash` were the hashes of a tree head and a HEAD made by someone else, signed with `signer.py sign`, gave the
+   two signatures of an archive the key's holder never sealed, and `verify_archive` with that key pinned answered ok
+   (measured on 0.26.0 and 0.27.0). Each line is now a JSON object with distinct keys, its members within the entry
+   schema of §2.1, and a `self_hash` recomputed from its content (§3), or the signer refuses the whole file and writes
+   nothing (`refusing to sign line <n>: ...`). An entry's content is never a tree head or a HEAD: their members are not
+   in the entry schema. A tag that separates the kinds of signed message is a change of format, not made here.
