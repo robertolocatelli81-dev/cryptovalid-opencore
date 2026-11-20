@@ -236,7 +236,9 @@ except ImportError:
     pass
 print(json.dumps(out))
 '''
-SITES = ("tsa", "lotl", "pruning", "solana", "witness", "vault", "nethsm", "aws", "refresh")
+# "lotl" is not among them since SPEC §22 rule 6: it fetches over https only, so a plain-http loopback stub is refused before
+# any request (asserted below)
+SITES = ("tsa", "pruning", "solana", "witness", "vault", "nethsm", "aws", "refresh")
 
 
 class TestLoopbackNeverThroughTheProxy(unittest.TestCase):
@@ -266,6 +268,8 @@ class TestLoopbackNeverThroughTheProxy(unittest.TestCase):
                 self.assertFalse([p for p in via_proxy if "/" + site in p], (site, via_proxy, out[site]))
                 self.assertTrue([p for p in direct if p.startswith("/" + site)], (site, direct, out[site]))
         self.assertEqual(out["open_url-loopback"], "ok")
+        self.assertTrue(out["lotl"].startswith("ValueError"), out["lotl"])          # §22 rule 6: http refused, even loopback
+        self.assertFalse([p for p in via_proxy + direct if "/lotl" in p], (via_proxy, direct))
         # a remote host still goes through the environment's proxy (which answered 403 here)
         self.assertTrue(any("cv-remote.invalid" in p for p in via_proxy), via_proxy)
         self.assertIn("403", out["open_url-remote"])

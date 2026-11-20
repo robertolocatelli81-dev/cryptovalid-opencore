@@ -31,6 +31,16 @@ run by the same author, not by a third party.
   signature, and with `manifest_signer_hex` a manifest not signed or signed by another key, left `valid: true` (SPEC §10
   said "by design"); the pack is now not valid, the reason in `producer_signature`. Of 36 combinations of manifest
   signer x ledger signer x pins, 14 change from `true` to `false`; without pins nothing changes.
+- **A trusted list counts only when its XAdES signature verifies, and only over https** (§22 rule 6;
+  `cryptovalid_lotl` is experimental). A LOTL and a list without any signature made a token qualified, and one national
+  list is served over http. The LOTL must now verify under a certificate of the Official Journal publication in force
+  (C/2026/1944, through the pivot LOTLs it names), each list under a certificate of the LOTL's pointer to it; a list over
+  http is not fetched; the signature is read closed to the shape every list had on 2026-11-20, its certificate must be
+  valid now and a `NextUpdate` present must not have passed. Exclusive C14N is written
+  in the module (the standard library's C14N 2.0 gave other bytes than the signer on 1 of 31 real documents); no
+  dependency is added. Measured on 2026-11-20: the LOTL and the 30 lists that answered verify; on each list a changed
+  byte, a removed signature, another list's certificates and a service put inside the signature's Object are refused or
+  not read. The cache rule is `/3`: caches built before are rebuilt.
 - **The MCP tool `verify_ledger` verifies the entry signatures** (§22 rule 5) when it is given `expected_pubkey_hex`:
   the chain and the signatures are checked on one read of the file, and `valid` is true only when both hold. Without
   the key it answers as before and says `signatures: {"checked": false, ...}`.

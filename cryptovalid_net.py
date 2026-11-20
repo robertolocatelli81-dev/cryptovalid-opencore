@@ -16,8 +16,8 @@ The rule, closed by construction:
 
 1. the caller names the schemes it accepts, from `ALLOW_HTTPS` (https only), `ALLOW_HTTPS_OR_LOOPBACK_HTTP` (plain
    http only towards a loopback host: credentials must not travel in clear) or `ALLOW_HTTP_OR_HTTPS` (endpoints whose
-   answer is checked by signature, or public endpoints that are http-only in practice: RFC 3161 TSAs, the trusted
-   lists the EU list of lists points to, Solana RPCs, the regulatory sources). Every other scheme, a URL without a host,
+   answer is checked by signature, or public endpoints that are http-only in practice: RFC 3161 TSAs, Solana RPCs, the
+   regulatory sources; the trusted lists the EU list of lists points to are https only since SPEC §22 rule 6). Every other scheme, a URL without a host,
    a URL with white space or a control character, a non-string URL: `ValueError` naming the reason, before any I/O;
 2. schemes are compared case-insensitively (RFC 3986 §3.1): `HTTPS://host` is https;
 3. a loopback host (`localhost`, 127.0.0.0/8, ::1) is reached directly, never through a proxy of the environment;

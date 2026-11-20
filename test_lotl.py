@@ -11,6 +11,83 @@ import unittest
 _HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, _HERE)
 import cryptovalid_lotl as L  # noqa: E402
 
+try:
+    import cryptography  # noqa: F401
+    HAVE_CRYPTO = True
+except ImportError:
+    HAVE_CRYPTO = False
+if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:
+    raise SystemExit("CV_REQUIRE_CRYPTO=1 but `cryptography` is missing: the cases that need it would be skipped")
+
+_DSNS, _XADESNS = "http://www.w3.org/2000/09/xmldsig#", "http://uri.etsi.org/01903/v1.3.2#"
+
+
+def make_signer(kind="ec", name="list signer"):
+    """(private key, certificate DER, its SHA-256) of a self-signed certificate, for lists signed in the tests."""
+    from datetime import datetime, timedelta, timezone
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec, rsa
+    from cryptography.x509.oid import NameOID
+    key = ec.generate_private_key(ec.SECP256R1()) if kind == "ec" else rsa.generate_private_key(65537, 2048)
+    n = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    now = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(n).issuer_name(n).public_key(key.public_key()).serial_number(7)
+            .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=30)).sign(key, hashes.SHA256()))
+    der = cert.public_bytes(serialization.Encoding.DER)
+    return key, der, hashlib.sha256(der).hexdigest()
+
+
+def sign_list(xml: bytes, key, cert_der: bytes, alg: str = "auto", edit=None) -> bytes:
+    """`xml` with an enveloped XAdES signature of the shape the real lists have (SPEC §22 rule 6), made with the module's
+    own exclusive C14N (checked against the 31 real lists and against lxml elsewhere). `edit(parts)` may change the
+    pieces of the signature before it is assembled, for the tests of the closed shape."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, padding, utils
+    if alg == "auto":
+        alg = "ecdsa-sha256" if isinstance(key, ec.EllipticCurvePrivateKey) else "rsa-sha256"
+    sig_uri = ("http://www.w3.org/2007/05/xmldsig-more#sha256-rsa-MGF1" if alg == "rsa-pss-sha256"
+               else "http://www.w3.org/2001/04/xmldsig-more#" + alg)
+    sha = "http://www.w3.org/2001/04/xmlenc#sha256"
+    b64 = lambda b: base64.b64encode(b).decode()   # noqa: E731
+    root, before, after = L._xml_tree(xml)
+    parts = {
+        "sp": (f'<xades:SignedProperties Id="sp-1"><xades:SignedSignatureProperties><xades:SigningTime>2026-11-20T00:00:00Z'
+               f'</xades:SigningTime><xades:SigningCertificateV2><xades:Cert><xades:CertDigest><ds:DigestMethod Algorithm="{sha}"/>'
+               f'<ds:DigestValue>{b64(hashlib.sha256(cert_der).digest())}</ds:DigestValue></xades:CertDigest></xades:Cert>'
+               '</xades:SigningCertificateV2></xades:SignedSignatureProperties></xades:SignedProperties>'),
+        "doc_transforms": ('<ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>'
+                           '<ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>'),
+        "sp_transforms": '<ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>',
+        "c14n": "http://www.w3.org/2001/10/xml-exc-c14n#", "sig_uri": sig_uri, "extra_refs": "", "sp_uri": "#sp-1",
+        "keyinfo": f"<ds:X509Data><ds:X509Certificate>{b64(cert_der)}</ds:X509Certificate></ds:X509Data>",
+        "objects": "", "doc_digest": None, "sp_digest": None,
+    }
+    if edit:
+        edit(parts)
+    wrap = f'<w xmlns:ds="{_DSNS}" xmlns:xades="{_XADESNS}">{parts["sp"]}</w>'.encode()
+    sp_digest = parts["sp_digest"] or b64(hashlib.sha256(L.exc_c14n(L._xml_tree(wrap)[0].elements()[0])).digest())
+    doc_digest = parts["doc_digest"] or b64(hashlib.sha256(L.exc_c14n(root, before=before, after=after)).digest())
+    si = (f'<ds:SignedInfo><ds:CanonicalizationMethod Algorithm="{parts["c14n"]}"/><ds:SignatureMethod Algorithm="{parts["sig_uri"]}"/>'
+          f'<ds:Reference Id="r-doc" URI=""><ds:Transforms>{parts["doc_transforms"]}</ds:Transforms>'
+          f'<ds:DigestMethod Algorithm="{sha}"/><ds:DigestValue>{doc_digest}</ds:DigestValue></ds:Reference>'
+          f'<ds:Reference Type="http://uri.etsi.org/01903#SignedProperties" URI="{parts["sp_uri"]}"><ds:Transforms>'
+          f'{parts["sp_transforms"]}</ds:Transforms><ds:DigestMethod Algorithm="{sha}"/><ds:DigestValue>{sp_digest}'
+          f'</ds:DigestValue></ds:Reference>{parts["extra_refs"]}</ds:SignedInfo>')
+    signed = L.exc_c14n(L._xml_tree(f'<w xmlns:ds="{_DSNS}">{si}</w>'.encode())[0].elements()[0])
+    if alg.startswith("ecdsa"):
+        r, s = utils.decode_dss_signature(key.sign(signed, ec.ECDSA(hashes.SHA256())))
+        sv = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+    elif alg == "rsa-pss-sha256":
+        sv = key.sign(signed, padding.PSS(padding.MGF1(hashes.SHA256()), 32), hashes.SHA256())
+    else:
+        sv = key.sign(signed, padding.PKCS1v15(), hashes.SHA256())
+    sig = (f'<ds:Signature xmlns:ds="{_DSNS}" Id="sig-1">{si}<ds:SignatureValue>{b64(sv)}</ds:SignatureValue>'
+           f'<ds:KeyInfo>{parts["keyinfo"]}</ds:KeyInfo><ds:Object><xades:QualifyingProperties xmlns:xades="{_XADESNS}" '
+           f'Target="#sig-1">{parts["sp"]}</xades:QualifyingProperties></ds:Object>{parts["objects"]}</ds:Signature>')
+    i = xml.rindex(b"</")
+    return xml[:i] + sig.encode() + xml[i:]
+
 _CERT_A = base64.b64encode(b"QUALIFIED-QTST-CERT").decode()      # stand-in DER bytes
 _CERT_B = base64.b64encode(b"SOME-OTHER-SERVICE").decode()
 _TL = f"""<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">
@@ -209,6 +286,7 @@ class TestCurrentStatusAndHistory(unittest.TestCase):
             b"</ServiceInformation>", b"")   # the fields straight under TSPService, no ServiceInformation
         self.assertEqual(L.qtst_fingerprints_at(flat, at), set())
 
+    @unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography`: a list counts only when its signature verifies (SPEC §22 rule 6)")
     def test_cache_of_another_rule_is_not_read(self):
         import json
         import tempfile
@@ -221,14 +299,17 @@ class TestCurrentStatusAndHistory(unittest.TestCase):
                        .strftime("%Y-%m-%dT%H:%M:%SZ"), "fingerprints": ["cd" * 32], "coverage": ["x"]}, f)
         calls = []
         orig = L._get
-        L._get = lambda url, timeout=45: (calls.append(url), b'<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"/>')[1]
+        k, der, fp = make_signer()
+        empty = sign_list(b'<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"></TrustServiceStatusList>', k, der)
+        L._get = lambda url, timeout=45: (calls.append(url), empty)[1]
         try:
-            fprs, cov = L.load_qualified_fingerprints(cache_path=cache)
-            fprs2, _ = L.load_qualified_fingerprints(cache_path=other)
+            fprs, cov = L.load_qualified_fingerprints(cache_path=cache, trusted_lotl_signers={fp})
+            fprs2, _ = L.load_qualified_fingerprints(cache_path=other, trusted_lotl_signers={fp})
         finally:
             L._get = orig
         self.assertEqual(calls, [L.LOTL_URL, L.LOTL_URL]); self.assertEqual(fprs, set()); self.assertEqual(fprs2, set())
 
+    @unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography`: a list counts only when its signature verifies (SPEC §22 rule 6)")
     def test_cache_older_than_its_max_age_is_not_read(self):
         # the set is the status in force when the cache was built: the ingest keeps it in ~/.cache/cryptovalid, so without an
         # age a cache built in 2026 would still call a service qualified after its withdrawal took effect
@@ -237,7 +318,8 @@ class TestCurrentStatusAndHistory(unittest.TestCase):
         from datetime import datetime, timedelta, timezone
         d = tempfile.mkdtemp(); self.addCleanup(__import__("shutil").rmtree, d, True)
         cache = os.path.join(d, "c.json")
-        empty = b'<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"/>'
+        k, der, fp = make_signer()
+        empty = sign_list(b'<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"></TrustServiceStatusList>', k, der)
         orig = L._get
         try:
             for built, used in ((timedelta(hours=1), True), (timedelta(days=2), False), (timedelta(days=-1), False), (None, False)):
@@ -248,7 +330,7 @@ class TestCurrentStatusAndHistory(unittest.TestCase):
                     json.dump(rec, f)
                 calls = []
                 L._get = lambda url, timeout=45: (calls.append(url), empty)[1]
-                fprs, _cov = L.load_qualified_fingerprints(cache_path=cache)
+                fprs, _cov = L.load_qualified_fingerprints(cache_path=cache, trusted_lotl_signers={fp})
                 self.assertEqual(fprs == {"ab" * 32}, used, built)
                 self.assertEqual(calls == [], used, built)
                 if not used:
@@ -331,29 +413,35 @@ class TestHistoryOrder(unittest.TestCase):
         self.assertEqual(L.qualification(b"t", {"ab" * 32}, {}, signer_sha256="ab" * 32),
                          ("not_qualified", "qualified_statement_malformed"))   # v0.10: b"t" has no TSTInfo to read
 
+    @unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography`: a list counts only when its signature verifies (SPEC §22 rule 6)")
     def test_loader_names_the_errors_and_caches_them(self):
         import json
         import tempfile
         d = tempfile.mkdtemp(); self.addCleanup(__import__("shutil").rmtree, d, True)
         cache = os.path.join(d, "c.json")
+        lk, lder, lfp = make_signer(name="lotl")
+        tk, tder, _tfp = make_signer(name="tl")
+        sdi = (b"<ServiceDigitalIdentities><ServiceDigitalIdentity><DigitalId><X509Certificate>" + base64.b64encode(tder)
+               + b"</X509Certificate></DigitalId></ServiceDigitalIdentity></ServiceDigitalIdentities>")
         lotl = (b'<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#" xmlns:a="http://uri.etsi.org/02231/v2/additionaltypes#">'
-                b'<SchemeInformation><PointersToOtherTSL><OtherTSLPointer><TSLLocation>https://tl.example/x.xml</TSLLocation>'
+                b'<SchemeInformation><PointersToOtherTSL><OtherTSLPointer>' + sdi + b'<TSLLocation>https://tl.example/x.xml</TSLLocation>'
                 b'<AdditionalInformation><OtherInformation><TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>'
                 b'</OtherInformation><OtherInformation><a:MimeType>application/vnd.etsi.tsl+xml</a:MimeType></OtherInformation>'
                 b'</AdditionalInformation></OtherTSLPointer></PointersToOtherTSL></SchemeInformation></TrustServiceStatusList>')
         tl = _tl(_svc(_QTST, "granted", "2026-01-01T00:00:00Z", _C1,
                       history=[(_QTST, "granted", "2020-01-01T00:00:00Z", None), (_QTST, "granted", "2020-01-01T00:00:00Z", None)]),
                  _svc(_QTST, "granted", "2017-03-01T00:00:00Z", _C2))
+        tl = sign_list(tl, tk, tder)
         orig = L._get
-        L._get = lambda url, timeout=45: lotl if url == L.LOTL_URL else tl
+        L._get = lambda url, timeout=45: sign_list(lotl, lk, lder) if url == L.LOTL_URL else tl
         try:
-            fprs, cov, errs = L.load_qualified_status(cache_path=cache)
+            fprs, cov, errs = L.load_qualified_status(cache_path=cache, trusted_lotl_signers={lfp})
             # the certificate in error is granted by another list: the error still wins
             two = lotl.replace(b"</PointersToOtherTSL>", lotl[lotl.index(b"<OtherTSLPointer>"):lotl.index(b"</PointersToOtherTSL>")]
                                .replace(b"tl.example/x.xml", b"tl.example/y.xml") + b"</PointersToOtherTSL>")
-            good = _tl(_svc(_QTST, "granted", "2017-03-01T00:00:00Z", _C1))
-            L._get = lambda url, timeout=45: two if url == L.LOTL_URL else (tl if url.endswith("x.xml") else good)
-            f2, c2, e2 = L.load_qualified_status(cache_path=os.path.join(d, "c2.json"))
+            good = sign_list(_tl(_svc(_QTST, "granted", "2017-03-01T00:00:00Z", _C1)), tk, tder)
+            L._get = lambda url, timeout=45: sign_list(two, lk, lder) if url == L.LOTL_URL else (tl if url.endswith("x.xml") else good)
+            f2, c2, e2 = L.load_qualified_status(cache_path=os.path.join(d, "c2.json"), trusted_lotl_signers={lfp})
             self.assertEqual((f2, len(c2), e2), ({_fp(b"SERVICE-2-CERT")}, 2, errs))
         finally:
             L._get = orig
@@ -363,7 +451,7 @@ class TestHistoryOrder(unittest.TestCase):
         self.assertEqual(rec["rule"], L.RULE); self.assertEqual(rec["history_errors"], errs)
         self.assertEqual(L.load_qualified_status(cache_path=cache), (fprs, cov, errs))   # read back from the cache
         self.assertEqual(L.load_qualified_fingerprints(cache_path=cache), (fprs, cov))
-        self.assertTrue(L.RULE.endswith("/2"))   # a cache of rule /1 (0.20.2-0.20.3) is rebuilt
+        self.assertTrue(L.RULE.endswith("/3"))   # a cache of rule /2 (lists whose signature was not checked) is rebuilt
 
 
 if __name__ == "__main__":

@@ -2083,4 +2083,58 @@ tests named `*_control` hold what the rule does not change.
    `ok: false`, `valid: false`. Not given, the tool answers as before and adds `signatures: {"checked": false, "note":
    "signatures NOT verified: ..."}`, with no `valid`. The input schema gains the one property: the tools now have 14
    (the 221 calls of §21 rule 5 are 238).
-
+6. **A trusted list counts only when its XAdES signature verifies, and only over https** (`cryptovalid_lotl`,
+   EXPERIMENTAL: outside the maintained core, no new scope). Until 0.27.0 a list and the LOTL were trusted for the channel
+   they came over: a LOTL and a national list without any `ds:Signature` made a token qualified, and one of the 31
+   national lists the EU LOTL points to is served over http only (`http://tl.nbu.gov.sk/kca/tsl/tsl.xml`, measured on
+   2026-11-15 and 2026-11-20): whoever sits on that path could add a qualified timestamp service. Now
+   (`verify_list_signature`, `lotl_signers`, `load_qualified_status`):
+   - **The LOTL** must carry an enveloped XAdES signature that verifies under a certificate of the Official Journal
+     publication in force, C/2026/1944 of 15.4.2026 (read at eur-lex.europa.eu on 2026-11-20: it replaces OJ C 276,
+     16.8.2019, p. 1; the LOTL of that day, sequence 398, names it first in `SchemeInformationURI`): the SHA-256 digests
+     of its six LOTL-signing certificates are `OJ_LOTL_SIGNERS_SHA256`. The publication's pivot mechanism (its section 2)
+     is followed: the URIs before the OJ's in `SchemeInformationURI` are pivot LOTLs, newest first; from the OJ's
+     certificates each pivot, oldest first and over https, must verify under the current set and gives the next one
+     (the certificates of its own pointer, `TSLType` `EUlistofthelists`). A LOTL that does not name this publication is
+     refused (`lotl_oj_unknown`): a later publication needs a later version. A LOTL that fails is a `ValueError`: no
+     qualified status is built from it.
+   - **Each national list** must carry an enveloped XAdES signature that verifies under a certificate (SHA-256 of the
+     DER) of the `ServiceDigitalIdentities` of the LOTL's pointer to that location; a list served over http is not
+     fetched; a list that fails either check is not covered and is named in the log (`TL skip: <url> (<reason>)`).
+   - **The signature read is closed** to the shape every list had on 2026-11-20, anything else refused with its reason:
+     one `ds:Signature`, a child of the list's root element; `SignedInfo` = `CanonicalizationMethod` exclusive C14N
+     1.0 without parameters, `SignatureMethod` one of RSA PKCS#1 v1.5, RSA-PSS (RFC 6931 §2.3.10 defaults: MGF1 with
+     the same hash, salt of the hash's length) or ECDSA (`r || s`) with SHA-256, -384 or -512 and no parameters, then
+     exactly two `Reference`s: `URI=""` with the transforms enveloped-signature then exclusive C14N, and
+     `Type="http://uri.etsi.org/01903#SignedProperties"` with exclusive C14N, naming by `#Id` the
+     `xades:SignedProperties` (ETSI EN 319 132-1, namespace 1.3.2) inside this signature; digests SHA-256, -384 or
+     -512; an identifier (`Id`, `ID`, `id`) on two elements refused; `KeyInfo` one `X509Data` with one
+     `X509Certificate`, whose digest `xades:SigningCertificateV2/Cert/CertDigest` must match; the signing certificate
+     valid now (`notBefore` to `notAfter`); a `NextUpdate/dateTime` of the list, when present, not passed (ETSI TS 119
+     612 5.3.14; an empty `NextUpdate`, a closed list, is read as before). Reasons: `xmldsig_missing`, `xmldsig_shape`,
+     `xmldsig_algorithm`, `xmldsig_digest_mismatch`, `xmldsig_signing_certificate`, `xmldsig_untrusted_signer`,
+     `xmldsig_certificate_not_valid`, `xmldsig_signature_invalid`, `xmldsig_malformed`, `tl_next_update_passed`.
+   - **What is read is what is signed:** the content of a list (services, statuses, pointers) is read with its
+     `ds:Signature` removed, the node set the enveloped reference covers; an element put inside `ds:Object` is never
+     read as a service.
+   - **Canonicalization.** Exclusive XML Canonicalization 1.0 (W3C Recommendation of 18 July 2002) without comments is
+     written in the module on expat. The standard library has only C14N 2.0 (`xml.etree.ElementTree.canonicalize`),
+     which writes the first prefix a namespace was bound to instead of the prefix the element uses: on the LOTL and the
+     30 lists of 2026-11-20 it gave other bytes than the signer for 1 of the 31 documents (HU, a default namespace and
+     `tsl:` bound to one URI); on 3,000 generated documents it differs from libxml2's exclusive C14N on 1,311. No external dependency is added.
+   Measured on 2026-11-20 (`prove_decisioni_D_20261120/cryptovalid/d2_liste_reali.py`, the LOTL of that day, sha256
+   `45e0827831e07754c36e456e5e01469b1b8e793c9f29571832c397ef3bde4750`, and the 30 national lists that answered; the
+   Cypriot list did not answer in 60 s, twice): the LOTL verifies under the second certificate of the OJ publication; the
+   30 lists verify under their pointer's certificates (24 RSA-SHA512, 2 RSA-SHA256, 1 RSA-PSS SHA-256, 2 ECDSA-SHA512,
+   1 ECDSA-SHA256); on each of the 30, one byte of the signed content changed, the
+   signature removed, another list's certificates as trust, and a `TSPService` put inside `ds:Object` are refused or
+   not read (30 of 30 each), and so is each list checked as of 2040-01-01 (30 of 30, every signing certificate expired);
+   the LOTL under a national list's certificates is refused; every signing certificate is valid on 2026-11-20 and every
+   `NextUpdate` present is later (the EU list of UK services has none). The canonicalization of the module
+   against lxml 6.1.1 / libxml2 2.14.6 (`d2_c14n_vs_lxml.py`): 3,000 generated documents, every element as a subtree
+   and every whole document, 8,943 canonical forms, 0 different (a mutant that drops `xmlns=""`: 4 different).
+   Not read: a revocation status of the signing certificate. The trust is the certificate itself, named by the OJ
+   publication or by the LOTL's pointer, and a certificate taken out of service leaves those lists (a new pivot, a new
+   LOTL); the publication defines no other source. After a pivot only the set it announces is accepted: the 15 days in
+   which the Commission keeps the former certificates usable (the publication's section 2.2) are not used, so a LOTL
+   still signed with a former certificate in those days is refused, never accepted wrongly.

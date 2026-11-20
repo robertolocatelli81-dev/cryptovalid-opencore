@@ -604,5 +604,220 @@ class TestPackPinsDecideValid(unittest.TestCase):
             self.assertTrue(r["valid"], r["states"])
 
 
+_TSL = "http://uri.etsi.org/02231/v2#"
+_QTST_SVC = ('<TrustServiceProviderList><TrustServiceProvider><TSPServices><TSPService><ServiceInformation>'
+             '<ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST</ServiceTypeIdentifier>'
+             '<ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus>'
+             '<StatusStartingTime>2017-03-01T00:00:00Z</StatusStartingTime><ServiceDigitalIdentity><DigitalId>'
+             '<X509Certificate>{c}</X509Certificate></DigitalId></ServiceDigitalIdentity></ServiceInformation></TSPService>'
+             '</TSPServices></TrustServiceProvider></TrustServiceProviderList>')
+
+
+def _b64(b):
+    import base64
+    return base64.b64encode(b).decode()
+
+
+def _pointer(loc, cert_der, lotl=False):
+    typ = "EUlistofthelists" if lotl else "EUgeneric"
+    return (f"<OtherTSLPointer><ServiceDigitalIdentities><ServiceDigitalIdentity><DigitalId><X509Certificate>{_b64(cert_der)}"
+            f"</X509Certificate></DigitalId></ServiceDigitalIdentity></ServiceDigitalIdentities><TSLLocation>{loc}</TSLLocation>"
+            f"<AdditionalInformation><OtherInformation><TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/{typ}</TSLType>"
+            "</OtherInformation><OtherInformation><a:MimeType>application/vnd.etsi.tsl+xml</a:MimeType></OtherInformation>"
+            "</AdditionalInformation></OtherTSLPointer>")
+
+
+def _lotl(uris, pointers):
+    return (f'<TrustServiceStatusList xmlns="{_TSL}" xmlns:a="http://uri.etsi.org/02231/v2/additionaltypes#"><SchemeInformation>'
+            "<SchemeInformationURI>" + "".join(f'<URI xml:lang="en">{u}</URI>' for u in uris) + "</SchemeInformationURI>"
+            "<PointersToOtherTSL>" + "".join(pointers) + "</PointersToOtherTSL></SchemeInformation></TrustServiceStatusList>").encode()
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+class TestTrustedListsSigned(unittest.TestCase):
+    """§22 rule 6: the LOTL under the OJ certificates (through the pivots), each list under its pointer's certificates,
+    https only, the signature read closed, the content read without the signature."""
+
+    @classmethod
+    def setUpClass(cls):
+        import cryptovalid_lotl as L
+        from test_lotl import make_signer, sign_list
+        cls.L, cls.sign = L, staticmethod(sign_list)
+        cls.oj = make_signer(name="oj")
+        cls.piv = make_signer("rsa", name="pivot")
+        cls.tl = make_signer(name="tl")
+        cls.qtst = b"QTST-CERT-DER"
+        cls.tl_url = "https://tl.example/a.xml"
+        cls.list_xml = (f'<TrustServiceStatusList xmlns="{_TSL}">' + _QTST_SVC.format(c=_b64(cls.qtst))
+                        + "</TrustServiceStatusList>").encode()
+
+    def _load(self, lotl, tl, anchors=None, http=False):
+        L = self.L
+        url = self.tl_url.replace("https:", "http:") if http else self.tl_url
+        fetched, log = [], []
+
+        def get(u, timeout=45):
+            fetched.append(u)
+            if u == L.LOTL_URL:
+                return lotl
+            if u == url:
+                return tl
+            raise OSError("not found " + u)
+        orig = L._get
+        L._get = get
+        try:
+            if isinstance(lotl, bytes) and url != self.tl_url:
+                lotl = lotl.replace(self.tl_url.encode(), url.encode())
+            fprs, cov, _e = L.load_qualified_status(log=log.append, trusted_lotl_signers=anchors)
+        finally:
+            L._get = orig
+        return fprs, cov, log, fetched
+
+    def _good(self, anchors_key=None):
+        k, der, fp = anchors_key or self.oj
+        lotl = self.sign(_lotl([self.L.OJ_LOTL_URL], [_pointer(self.tl_url, self.tl[1])]), k, der)
+        return lotl, self.sign(self.list_xml, self.tl[0], self.tl[1]), fp
+
+    def test_signed_lists_count_control(self):
+        lotl, tl, fp = self._good()
+        fprs, cov, _log, _f = self._load(lotl, tl, {fp})
+        self.assertEqual(fprs, {hashlib.sha256(self.qtst).hexdigest()})
+        self.assertEqual(cov, [self.tl_url])
+
+    def test_unsigned_lotl_is_refused(self):
+        with self.assertRaises(ValueError) as c:
+            self._load(_lotl([self.L.OJ_LOTL_URL], [_pointer(self.tl_url, self.tl[1])]), self.list_xml, {self.oj[2]})
+        self.assertIn("xmldsig_missing", str(c.exception))
+
+    def test_lotl_under_another_certificate_is_refused(self):
+        lotl, tl, _fp = self._good(self.tl)
+        with self.assertRaises(ValueError) as c:
+            self._load(lotl, tl, {self.oj[2]})
+        self.assertIn("xmldsig_untrusted_signer", str(c.exception))
+
+    def test_default_trust_is_the_official_journal(self):
+        lotl, tl, _fp = self._good()
+        with self.assertRaises(ValueError) as c:   # a LOTL signed by a key of ours is not one the OJ names
+            self._load(lotl, tl, None)
+        self.assertIn("xmldsig_untrusted_signer", str(c.exception))
+        self.assertEqual(len(self.L.OJ_LOTL_SIGNERS_SHA256), 6)
+        unnamed = self.sign(_lotl(["https://eur-lex.europa.eu/eli/C/2019/276/oj"], []), self.oj[0], self.oj[1])
+        with self.assertRaises(ValueError) as c:
+            self.L.lotl_signers(unnamed)
+        self.assertIn("lotl_oj_unknown", str(c.exception))
+
+    def test_unsigned_tampered_or_foreign_list_is_not_covered(self):
+        lotl, tl, fp = self._good()
+        other = __import__("test_lotl").make_signer(name="other")
+        cases = {"unsigned": self.list_xml,
+                 "tampered": tl.replace(b"Svcstatus/granted", b"Svcstatus/grantee"),
+                 "foreign signer": self.sign(self.list_xml, other[0], other[1])}
+        for name, x in cases.items():
+            fprs, cov, log, _f = self._load(lotl, x, {fp})
+            self.assertEqual((fprs, cov), (set(), []), name)
+            self.assertTrue(any("TL skip" in m and "xmldsig_" in m for m in log), (name, log))
+
+    def test_http_list_is_not_fetched(self):
+        lotl, tl, fp = self._good()
+        lotl = self.sign(_lotl([self.L.OJ_LOTL_URL], [_pointer(self.tl_url.replace("https:", "http:"), self.tl[1])]),
+                         self.oj[0], self.oj[1])
+        fprs, cov, log, fetched = self._load(lotl, tl, {fp}, http=True)
+        self.assertEqual((fprs, cov), (set(), []))
+        self.assertEqual(fetched, [self.L.LOTL_URL])
+        self.assertTrue(any("served over http" in m for m in log), log)
+
+    def test_a_service_inside_the_signature_object_is_not_read(self):
+        lotl, _tl, fp = self._good()
+        inj = (f'<ds:Object xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><Wrap xmlns="{_TSL}">'
+               + _QTST_SVC.format(c=_b64(b"INJECTED")) + "</Wrap></ds:Object>")
+        tl = self.sign(self.list_xml, self.tl[0], self.tl[1], edit=lambda p: p.__setitem__("objects", inj))
+        fprs, cov, _log, _f = self._load(lotl, tl, {fp})
+        self.assertEqual(cov, [self.tl_url])   # the signature verifies: the Object is outside what is signed
+        self.assertEqual(fprs, {hashlib.sha256(self.qtst).hexdigest()})   # and what is outside is not read
+
+    def test_pivot_chain(self):
+        L = self.L
+        pk, pder, pfp = self.piv
+        pivot_url = "https://ec.europa.eu/tools/lotl/eu-lotl-pivot-999.xml"
+        pivot = self.sign(_lotl([L.OJ_LOTL_URL], [_pointer(L.LOTL_URL, pder, lotl=True)]), self.oj[0], self.oj[1])
+        lotl = self.sign(_lotl([pivot_url, L.OJ_LOTL_URL], [_pointer(L.LOTL_URL, pder, lotl=True)]), pk, pder, alg="rsa-pss-sha256")
+        got = L.lotl_signers(lotl, get=lambda u, t: pivot, anchors={self.oj[2]})
+        self.assertEqual(got, {pfp})
+        L.verify_list_signature(lotl, got)
+        # the pivot signed by a key the OJ does not name: refused
+        bad_pivot = self.sign(_lotl([L.OJ_LOTL_URL], [_pointer(L.LOTL_URL, pder, lotl=True)]), pk, pder)
+        with self.assertRaises(ValueError):
+            L.lotl_signers(lotl, get=lambda u, t: bad_pivot, anchors={self.oj[2]})
+        # after a pivot the OJ key alone no longer signs the LOTL
+        old = self.sign(_lotl([pivot_url, L.OJ_LOTL_URL], []), self.oj[0], self.oj[1])
+        with self.assertRaises(ValueError):
+            L.verify_list_signature(old, L.lotl_signers(old, get=lambda u, t: pivot, anchors={self.oj[2]}))
+
+    def test_closed_shape(self):
+        L = self.L
+        k, der, fp = self.tl
+        exc = "http://www.w3.org/2001/10/xml-exc-c14n#"
+        edits = {
+            "inclusive c14n": lambda p: p.__setitem__("c14n", "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"),
+            "sha1 signature": lambda p: p.__setitem__("sig_uri", "http://www.w3.org/2000/09/xmldsig#rsa-sha1"),
+            "no enveloped transform": lambda p: p.__setitem__("doc_transforms", f'<ds:Transform Algorithm="{exc}"/>'),
+            "transforms reversed": lambda p: p.__setitem__("doc_transforms", p["doc_transforms"].split("/>")[1] + "/>"
+                                                           + p["doc_transforms"].split("/>")[0] + "/>"),
+            "InclusiveNamespaces": lambda p: p.__setitem__("sp_transforms", f'<ds:Transform Algorithm="{exc}"><ec:InclusiveNamespaces '
+                                                           f'xmlns:ec="{exc}" PrefixList="ds"/></ds:Transform>'),
+            "third reference": lambda p: p.__setitem__("extra_refs", '<ds:Reference URI="#sp-1"><ds:Transforms/><ds:DigestMethod '
+                                                       'Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/><ds:DigestValue>AA==</ds:DigestValue></ds:Reference>'),
+            "SignedProperties named elsewhere": lambda p: p.__setitem__("sp_uri", "#elsewhere"),
+            "two certificates": lambda p: p.__setitem__("keyinfo", p["keyinfo"].replace("</ds:X509Data>", "<ds:X509Certificate>"
+                                                        + _b64(b"x") + "</ds:X509Certificate></ds:X509Data>")),
+            "signing certificate of another": lambda p: p.__setitem__("sp", p["sp"].replace(
+                "<ds:DigestValue>", "<ds:DigestValue>AAAA", 1)),
+            "duplicate identifier": lambda p: p.__setitem__("objects", '<ds:Object Id="sp-1"/>'),
+            "bad doc digest": lambda p: p.__setitem__("doc_digest", _b64(b"\0" * 32)),
+            "bad SignedProperties digest": lambda p: p.__setitem__("sp_digest", _b64(b"\0" * 32)),
+        }
+        good = self.sign(self.list_xml, k, der)
+        L.verify_list_signature(good, {fp})   # control
+        for name, e in edits.items():
+            x = self.sign(self.list_xml, k, der, edit=e)
+            with self.assertRaises(ValueError, msg=name) as c:
+                L.verify_list_signature(x, {fp})
+            self.assertTrue(str(c.exception).startswith("xmldsig_"), (name, str(c.exception)))
+        from datetime import datetime, timezone
+        with self.assertRaises(ValueError) as c:   # the signing certificate is valid 30 days from today
+            L.verify_list_signature(good, {fp}, at=datetime(2099, 1, 1, tzinfo=timezone.utc))
+        self.assertTrue(str(c.exception).startswith("xmldsig_certificate_not_valid"))
+        stale = self.sign(self.list_xml.replace(b"<TrustServiceProviderList>", b"<SchemeInformation><NextUpdate><dateTime>"
+                                                b"2000-01-01T00:00:00Z</dateTime></NextUpdate></SchemeInformation>"
+                                                b"<TrustServiceProviderList>"), k, der)
+        with self.assertRaises(ValueError) as c:
+            L.verify_list_signature(stale, {fp})
+        self.assertTrue(str(c.exception).startswith("tl_next_update_passed"))
+        fresh = self.sign(self.list_xml.replace(b"<TrustServiceProviderList>", b"<SchemeInformation><NextUpdate><dateTime>"
+                                                b"2099-01-01T00:00:00Z</dateTime></NextUpdate></SchemeInformation>"
+                                                b"<TrustServiceProviderList>"), k, der)
+        L.verify_list_signature(fresh, {fp})   # control
+        moved = good.replace(b"<TrustServiceProviderList>", b"<TrustServiceProviderList>" + good[good.index(b"<ds:Signature"):
+                                                                                                   good.index(b"</ds:Signature>") + 15], 1)
+        with self.assertRaises(ValueError):   # two signatures, or one that is not a child of the root
+            L.verify_list_signature(moved, {fp})
+
+    def test_canonicalization_against_lxml(self):
+        try:
+            import lxml.etree as LE
+        except ImportError:
+            self.skipTest("lxml is not installed here (it is an oracle of this test only, not a dependency)")
+        docs = ['<a xmlns="urn:x" xmlns:p="urn:p"><b xmlns=""><p:c p:x="1" y="&#10;2"/></b><?pi d?></a>',
+                '<p:a xmlns:p="urn:p" xmlns:q="urn:p"><q:b xml:lang="it">t&amp;&#13;</q:b><!-- c --></p:a>',
+                '<a xmlns:t="urn:t" xmlns="urn:t"><t:b/><b attr="\t"/></a>']
+        for d in docs:
+            root, before, after = self.L._xml_tree(d.encode())
+            lx = LE.fromstring(d.encode())
+            mine = [self.L.exc_c14n(root)] + [self.L.exc_c14n(x) for x in list(self.L._all_nodes(root))[1:]]
+            theirs = [LE.tostring(lx, method="c14n", exclusive=True, with_comments=False)] + \
+                     [LE.tostring(x, method="c14n", exclusive=True, with_comments=False) for x in lx.iter() if isinstance(x.tag, str)][1:]
+            self.assertEqual(mine, theirs, d)
+
+
 if __name__ == "__main__":
     unittest.main()
