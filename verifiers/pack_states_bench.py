@@ -10,8 +10,8 @@ three pin policies (none, the right keys, other keys). On every receipt it check
 
   C1  no exception other than CheckNotRun (which must carry a COMPLETE receipt);
   C2  the vocabulary is closed (admission, refusal_class, three subjects, states, reasons per subject; refused ⇒ states null);
-  C3  valid ⇒ admitted ∧ no subject contradicted; admitted ∧ ¬valid ∧ no contradicted ⇒ a producer reason key_unresolved or
-      backend_missing (SPEC §10, "Disposition");
+  C3  valid ⇒ admitted ∧ no subject contradicted; admitted ∧ ¬valid ∧ no contradicted ⇒ a producer reason key_unresolved,
+      backend_missing or, with a signer or manifest pin given, not_present (SPEC §10, "Disposition"; §22 rule 4);
   C4  no `verified` on a check that did not run: sealed_content verified ⇒ an INDEPENDENT recomputation (sha256 of every file,
       the manifest digest, entry count and head, chain verdict) agrees; producer_signature verified ⇒ a pin was given;
       time_anchor is never verified;
@@ -341,8 +341,8 @@ def check(r, pack, m, pins, violations, label):
     contradicted = [k for k, s in st.items() if s.get("state") == "contradicted"]
     if r.get("valid") is True and contradicted:
         bad("C3", f"valid with {contradicted}")
-    if r.get("valid") is False and not contradicted and \
-            not ({"key_unresolved", "backend_missing"} & set(st["producer_signature"]["reasons"])):
+    allowed = {"key_unresolved", "backend_missing"} | ({"not_present"} if (pins[0] or pins[2]) else set())   # §22 rule 4
+    if r.get("valid") is False and not contradicted and not (allowed & set(st["producer_signature"]["reasons"])):
         bad("C3", f"not valid, nothing contradicted, producer {st['producer_signature']!r}")
     indep = _independent(pack, m) if isinstance(m, dict) else None
     if st["sealed_content"]["state"] == "verified" and indep is not True:

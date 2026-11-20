@@ -247,9 +247,9 @@ class TestProducerSignature(_Pack):
         r = EP.verify_pack(p, signer_pubkey_hex="ab" * 32)      # a ledger pinned to another key: not valid, not tampered
         self.assertEqual(self.st(r, "producer_signature"), ("not_evaluated", ["self_asserted", "key_unresolved"]))
         self.assertFalse(r["valid"])
-        r = EP.verify_pack(p, manifest_signer_hex="ab" * 32)    # the manifest pin does not decide valid (SPEC §10)
-        self.assertEqual(self.st(r, "producer_signature"), ("not_evaluated", ["key_unresolved", "self_asserted"]))
-        self.assertTrue(r["valid"])
+        r = EP.verify_pack(p, manifest_signer_hex="ab" * 32)    # SPEC §22 rule 4: the manifest pin decides valid (until 0.27.0
+        self.assertEqual(self.st(r, "producer_signature"), ("not_evaluated", ["key_unresolved", "self_asserted"]))   # true)
+        self.assertFalse(r["valid"])
 
     def test_manifest_signature_broken_is_signature_invalid(self):
         led, k, pub = self.signed_ledger()

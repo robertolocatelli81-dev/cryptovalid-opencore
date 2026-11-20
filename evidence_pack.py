@@ -733,6 +733,11 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
                                         pq, pq_reason)
                 if pqe is not None:
                     producer.append(pqe)
+        elif signer_pubkey_hex:
+            # SPEC §22 rule 4 (Unreleased): a pinned signer is a requirement on every ledger. Until 0.27.0 a ledger with no
+            # signature at all left sig_pass true and the pack valid under the pin, the state alone saying not_present
+            sp, pq_reason = False, "unsigned_but_signer_pinned"
+            producer.append(("not_evaluated", "not_present", f"ledger {lm['file']}: not signed, a signer is pinned"))
         # FIX B — anti-troncamento: conteggio+testa devono combaciare col manifest
         n_entries, head = _entries_and_head_data(data)
         untruncated = (n_entries == lm.get("entries") and head == lm.get("head_self_hash"))
@@ -742,8 +747,11 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
                                "untruncated": untruncated, "pq_protected": pq, **({"pq_reason": pq_reason} if pq_reason else {})})
         ledgers_ok = ledgers_ok and hp and sp and untruncated
     files_ok = all(file_ok.values()) if file_ok else False
-    if len(producer) > 1 and producer[0][1] == "not_present":
+    if len(producer) > 1 and producer[0][1] == "not_present" and not manifest_signer_hex:
         producer = producer[1:]   # an unsigned manifest next to signed ledgers: the subject is the ledgers' layers
+    # SPEC §22 rule 4 (Unreleased): a pinned manifest signer is a requirement. Until 0.27.0 a manifest not signed, or signed
+    # by another key, left `valid` as it was under the pin (SPEC §10 "by design"); the pinned element must now be verified
+    manifest_pin_holds = not manifest_signer_hex or man_elem[0] == "verified"
 
     # FIX D — RFC3161: verifica CRITTOGRAFICA del token (non credere al campo 'anchored'); 0.22.0: un token dichiarato che
     # non verifica, o dichiarato senza token, rende il pack non valido (SPEC §10)
@@ -772,7 +780,8 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
                "manifest_authenticated": manifest_authenticated,
                "ledgers_ok": ledgers_ok, "ledgers": ledger_results,
                "rfc3161": rfc,
-               "valid": bool(files_ok and manifest_ok and ledgers_ok and not signature_broken and anchor[0] != "contradicted"),
+               "valid": bool(files_ok and manifest_ok and ledgers_ok and not signature_broken and anchor[0] != "contradicted"
+                             and manifest_pin_holds),
                "admission": "admitted", "refusal_class": None, "states_vocabulary": STATES_VOCABULARY,
                "states": {"sealed_content": _subject(sealed), "producer_signature": _subject(producer),
                           "time_anchor": _subject([anchor])}}

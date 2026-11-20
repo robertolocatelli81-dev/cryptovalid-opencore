@@ -27,6 +27,10 @@ run by the same author, not by a third party.
   repository and 8 archives and packs written by the previous code: same verdicts; signed archives gain the warning
   `untagged_signatures`); `require_signature_domain=True` / `--require-signature-domain` refuses them. An archive or a
   pack written now is refused by 0.27.0 (`sth_signature_invalid`, `head_signature_invalid`, `format_unsupported`).
+- **A pin given to `verify_pack` decides `valid`** (§22 rule 4, library only): with `signer_pubkey_hex` a ledger with no
+  signature, and with `manifest_signer_hex` a manifest not signed or signed by another key, left `valid: true` (SPEC §10
+  said "by design"); the pack is now not valid, the reason in `producer_signature`. Of 36 combinations of manifest
+  signer x ledger signer x pins, 14 change from `true` to `false`; without pins nothing changes.
 - **The MCP tool `verify_ledger` verifies the entry signatures** (§22 rule 5) when it is given `expected_pubkey_hex`:
   the chain and the signatures are checked on one read of the file, and `valid` is true only when both hold. Without
   the key it answers as before and says `signatures: {"checked": false, ...}`.

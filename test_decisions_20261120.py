@@ -535,5 +535,74 @@ class TestMcpVerifyLedgerSignatures(unittest.TestCase):
             self.assertNotIn("valid", out)
 
 
+@unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+class TestPackPinsDecideValid(unittest.TestCase):
+    """§22 rule 4: with a pin given (manifest_signer_hex, signer_pubkey_hex), `valid` is false when the pinned element
+    is not verified. Every combination of manifest signer x ledger signer x pins, against an oracle written from the rule."""
+
+    @classmethod
+    def setUpClass(cls):
+        import evidence_pack as EP
+        cls.EP = EP
+        cls.d = tempfile.mkdtemp()
+        cls.k = {n: os.path.join(cls.d, n + ".key") for n in ("k1", "k2")}
+        cls.pk = {n: signer.keygen(p)["public_key_hex"] for n, p in cls.k.items()}
+        plain = os.path.join(cls.d, "plain.jsonl")
+        _ledger(plain, 3)
+        cls.led = {None: plain}
+        for n in ("k1", "k2"):
+            cls.led[n] = os.path.join(cls.d, f"signed_{n}.jsonl")
+            signer.sign_ledger(plain, cls.led[n], cls.k[n])
+        cls.packs = {}
+        for man in (None, "k1", "k2"):
+            for led in (None, "k1", "k2"):
+                out = os.path.join(cls.d, f"pack_{man}_{led}")
+                EP.build_pack([cls.led[led]], out, sign_key=cls.k[man] if man else None)
+                cls.packs[(man, led)] = out
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.d, ignore_errors=True)
+
+    @staticmethod
+    def oracle(man, led, man_pin, led_pin):
+        if led_pin and led != led_pin:
+            return False          # pinned signer: unsigned or another key (another key was already false before the rule)
+        if man_pin and man != man_pin:
+            return False          # pinned manifest signer: unsigned or another key
+        return True
+
+    def test_every_combination(self):
+        n = 0
+        for (man, led), out in self.packs.items():
+            for man_pin in (None, "k1"):
+                for led_pin in (None, "k1"):
+                    r = self.EP.verify_pack(out, manifest_signer_hex=self.pk[man_pin] if man_pin else None,
+                                            signer_pubkey_hex=self.pk[led_pin] if led_pin else None)
+                    want = self.oracle(man, led, man_pin, led_pin)
+                    self.assertEqual(r["valid"], want, (man, led, man_pin, led_pin, r["states"]))
+                    if want is False and r["admission"] == "admitted":
+                        # the reason is in the states: never a not-valid pack whose states say nothing
+                        self.assertNotEqual(r["states"]["producer_signature"]["state"], "verified", (man, led, man_pin, led_pin))
+                    n += 1
+        self.assertEqual(n, 36)
+
+    def test_the_three_findings(self):
+        r = self.EP.verify_pack(self.packs[(None, None)], signer_pubkey_hex=self.pk["k1"])
+        self.assertEqual((r["valid"], r["ledgers"][0]["sig_pass"], r["ledgers"][0].get("pq_reason")),
+                         (False, False, "unsigned_but_signer_pinned"))
+        r = self.EP.verify_pack(self.packs[(None, "k1")], manifest_signer_hex=self.pk["k1"])
+        self.assertFalse(r["valid"])
+        self.assertEqual(r["states"]["producer_signature"]["reasons"][0], "not_present")
+        r = self.EP.verify_pack(self.packs[("k2", "k1")], manifest_signer_hex=self.pk["k1"])
+        self.assertFalse(r["valid"])
+        self.assertIn("key_unresolved", r["states"]["producer_signature"]["reasons"])
+
+    def test_without_pins_nothing_changes_control(self):
+        for out in self.packs.values():
+            r = self.EP.verify_pack(out)
+            self.assertTrue(r["valid"], r["states"])
+
+
 if __name__ == "__main__":
     unittest.main()

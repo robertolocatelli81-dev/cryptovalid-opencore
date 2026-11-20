@@ -505,7 +505,8 @@ admitted and has no `contradicted` subject; an admitted pack that is not valid a
 `producer_signature` reason `key_unresolved` (a ledger signed by a key other than the one pinned) or `backend_missing` (a
 manifest signature, an Ed25519 layer, or a pinned post-quantum layer that cannot be checked here). The converse does not
 hold, by design: a manifest signed by a key other than `manifest_signer_hex` (library only; it pins the post-quantum keys the
-manifest records, as since 0.12.0) is `key_unresolved` and leaves `valid` as it was, and a post-quantum layer that nobody
+manifest records, as since 0.12.0) is `key_unresolved` and leaves `valid` as it was (until 0.27.0: since §22 rule 4,
+Unreleased, a pinned element that is not `verified` makes the pack not valid), and a post-quantum layer that nobody
 pinned and that cannot be checked here is `backend_missing` with the pack valid. The post-quantum layer of a ledger is an
 element only when the manifest claims it (`pq_protected: true`), a key pins it, or the file carries it broken; otherwise
 it is reported in `ledgers[i].pq_protected` as before and is not part of what the pack asserts.
@@ -2050,6 +2051,27 @@ tests named `*_control` hold what the rule does not change.
    the 3 signed archives gain only the warning. A document written now is refused by 0.27.0 (measured: a signed
    archive is `sth_signature_invalid`, `head_signature_invalid`; a 1.2 pack `format_unsupported`), never accepted.
    Entry signatures and the tip do not change.
+4. **A pin given to the pack verifier decides `valid`** (`evidence_pack.verify_pack`; the command line has no pins).
+   Until 0.27.0 `valid` was "not derived from `states`" (§10, Disposition): with `signer_pubkey_hex` pinned, a ledger
+   with no signature at all left `sig_pass: true` and the pack `valid: true` (its layer was simply absent); with
+   `manifest_signer_hex` pinned, a manifest not signed, or signed by another key, left `valid` as it was ("by design"):
+   a caller who pinned a key and read `valid` accepted a pack that anyone could have built. Now:
+   - with `signer_pubkey_hex`, every ledger must carry signatures: a ledger with no signature field is `sig_pass: false`,
+     `pq_reason: "unsigned_but_signer_pinned"`, a `producer_signature` element `not_evaluated / not_present` naming it,
+     and the pack is not valid (a ledger signed by another key, or broken, was already not valid);
+   - with `manifest_signer_hex`, the manifest-signature element must be `verified`: `not_present` (unsigned) and
+     `key_unresolved` (another key) make the pack not valid; the element stays in `producer_signature` even when signed
+     ledgers follow it (until 0.27.0 an unsigned manifest's element was dropped there).
+   - `pq_pubkey_b64` sits on `signer_pubkey_hex` (unchanged): a post-quantum layer it pins that is absent or broken was
+     already not valid.
+   Without pins nothing changes. The two rules of §10 Disposition become: a `valid` pack is admitted and has no
+   `contradicted` subject; an admitted pack that is not valid and has no `contradicted` subject has a
+   `producer_signature` reason `key_unresolved`, `backend_missing` or, under a pin, `not_present`. The sentence "the
+   converse does not hold, by design" no longer holds for a pinned manifest signer: it holds for a post-quantum layer
+   nobody pinned. Measured (`prove_decisioni_D_20261120/cryptovalid/d1_verdetti.py`, and the oracle of
+   `test_decisions_20261120.py`): 36 combinations of manifest signer (none, the pinned key, another) x ledger signer
+   (the same three) x each pin given or not; 14 change verdict, all from `true` to `false`, the 22 others do not; the
+   12 packs of this repository, verified without pins, give the same receipt before and after.
 5. **The MCP tool `verify_ledger` verifies the entry signatures against a key given as an argument**
    (`cryptovalid_mcp.py`). Until 0.27.0 it checked only the chain; since §21 rule 5 its description says so. It now
    takes `expected_pubkey_hex` (64 lowercase hex, an Ed25519 public key; any other string is an `error`, the tool
