@@ -209,7 +209,8 @@ class TestTipIsClosed(unittest.TestCase):
 
     def test_generated_members_same_text_in_every_verifier(self):
         rng = random.Random(20261120)
-        cases = [{k: 1} for k in _NEAR]
+        # one key of the high BMP and one astral: code-point order and UTF-16 order (JS default sort, Java String) differ
+        cases = [{k: 1} for k in _NEAR] + [{"\uffff": 1, "\U0001f600": 2}, {"\ue000": 1, "\U00010348": 2, "b": 3}]
         for _ in range(25):
             extra = {}
             for _ in range(rng.randint(1, 3)):
@@ -278,6 +279,7 @@ class TestTreeHeadAndHeadAreClosed(unittest.TestCase):
         for k in ["zz_unknown", "", "Signature", "\U0001f600"] + [_random_key(rng) for _ in range(10)]:
             if k in I.STH_MEMBERS:
                 continue
+            self.tearDown()
             self.setUp()
             self._edit(self.sth, lambda doc: doc.__setitem__(k, 1))
             r = I.verify_archive(self.d)
@@ -287,6 +289,7 @@ class TestTreeHeadAndHeadAreClosed(unittest.TestCase):
 
     def test_unknown_member_in_head(self):
         for k in ["zz_unknown", "", "Prefix", "\U0001f600"]:
+            self.tearDown()
             self.setUp()
             self._edit(self.head, lambda doc: doc.__setitem__(k, [1]))
             r = I.verify_archive(self.d)
@@ -295,6 +298,11 @@ class TestTreeHeadAndHeadAreClosed(unittest.TestCase):
             shutil.rmtree(self.d, ignore_errors=True)
 
     def test_two_unknown_members_in_code_point_order(self):
+        self._edit(self.sth, lambda doc: doc.update({"\U0001f600": 1, "\uffff": 2}))
+        r = I.verify_archive(self.d)
+        self.assertIn("sth_unknown_member:\uffff,\U0001f600", [f["reason"] for f in r["failures"]])
+        self.tearDown()
+        self.setUp()
         self._edit(self.head, lambda doc: doc.update({"\U0001f600": 1, "￿": 2, "b": 3}))
         r = I.verify_archive(self.d)
         self.assertIn("head_unknown_member:b,￿,\U0001f600", [f["reason"] for f in r["failures"]])
@@ -378,7 +386,8 @@ class TestSignatureDomains(unittest.TestCase):
         self._retag_v1()
         r = I.verify_archive(self.arch, expected_pubkey_hex=self.pk)
         self.assertTrue(r["ok"], r["failures"])
-        self.assertTrue(any(w.startswith("untagged_signatures") and "HEAD" in w for w in r["warnings"]), r["warnings"])
+        self.assertTrue(any(w.startswith("untagged_signatures: ledger-000000.jsonl") and "HEAD" in w for w in r["warnings"]),
+                        r["warnings"])
 
     def test_required_domain_refuses_the_old_signatures(self):
         self._retag_v1()
@@ -803,6 +812,74 @@ class TestTrustedListsSigned(unittest.TestCase):
                                                                                                    good.index(b"</ds:Signature>") + 15], 1)
         with self.assertRaises(ValueError):   # two signatures, or one that is not a child of the root
             L.verify_list_signature(moved, {fp})
+
+    def test_canonical_forms_of_libxml2(self):
+        # exclusive C14N 1.0 of these documents and of each element as written by lxml 6.1.1 / libxml2 2.14.6 (20/11/2026):
+        # xmlns="" undeclaring a default, a prefix rebound, attributes in (namespace, name) order, xml:lang, CR as &#xD;
+        vectors = {
+            '<a xmlns="urn:x" xmlns:p="urn:p"><b xmlns=""><p:c p:x="1" y="&#10;2" a="3"/></b><?pi d?></a>': [
+                b'<a xmlns="urn:x"><b xmlns=""><p:c xmlns:p="urn:p" a="3" y="&#xA;2" p:x="1"></p:c></b><?pi d?></a>',
+                b'<b><p:c xmlns:p="urn:p" a="3" y="&#xA;2" p:x="1"></p:c></b>', b'<p:c xmlns:p="urn:p" a="3" y="&#xA;2" p:x="1"></p:c>'],
+            '<p:a xmlns:p="urn:p" xmlns:q="urn:p"><q:b xml:lang="it" z="1" b:y="2" xmlns:b="urn:b" a="0">t&amp;&#13;\r\n&gt;</q:b>'
+            '<!-- c --></p:a>': [
+                b'<p:a xmlns:p="urn:p"><q:b xmlns:b="urn:b" xmlns:q="urn:p" a="0" z="1" xml:lang="it" b:y="2">t&amp;&#xD;\n&gt;</q:b></p:a>',
+                b'<q:b xmlns:b="urn:b" xmlns:q="urn:p" a="0" z="1" xml:lang="it" b:y="2">t&amp;&#xD;\n&gt;</q:b>'],
+            '<a xmlns:t="urn:t" xmlns="urn:t"><t:b/><b attr="\t&#13;"/></a>': [
+                b'<a xmlns="urn:t"><t:b xmlns:t="urn:t"></t:b><b attr=" &#xD;"></b></a>', b'<t:b xmlns:t="urn:t"></t:b>',
+                b'<b xmlns="urn:t" attr=" &#xD;"></b>'],
+        }
+        for d, want in vectors.items():
+            root, before, after = self.L._xml_tree(d.encode())
+            got = [self.L.exc_c14n(root, before=before, after=after)] + [self.L.exc_c14n(x) for x in list(self.L._all_nodes(root))[1:]]
+            self.assertEqual(got, want, d)
+
+    def test_a_signature_value_changed_is_refused(self):
+        rsa = __import__("test_lotl").make_signer("rsa", name="rsa")
+        for (k, der, fp), alg in ((self.tl, "auto"), (rsa, "auto"), (rsa, "rsa-pss-sha256")):
+            good = self.sign(self.list_xml, k, der, alg=alg)
+            self.L.verify_list_signature(good, {fp})
+            i = good.index(b"<ds:SignatureValue>") + len(b"<ds:SignatureValue>")
+            flip = good[:i + 5] + (b"A" if good[i + 5:i + 6] != b"A" else b"B") + good[i + 6:]
+            with self.assertRaises(ValueError) as c:
+                self.L.verify_list_signature(flip, {fp})
+            self.assertTrue(str(c.exception).startswith("xmldsig_signature_invalid"), (alg, str(c.exception)))
+
+    def test_an_identifier_twice_is_refused(self):
+        k, der, fp = self.tl
+        x = self.sign(self.list_xml.replace(b"<TrustServiceProviderList>", b'<TrustServiceProviderList Id="sp-1">'), k, der)
+        with self.assertRaises(ValueError) as c:   # the list's own element carries the Id of SignedProperties, before it
+            self.L.verify_list_signature(x, {fp})
+        self.assertIn("is on two elements", str(c.exception))
+
+    def test_one_signature_child_of_the_root(self):
+        k, der, fp = self.tl
+        good = self.sign(self.list_xml, k, der)
+        i = good.index(b"<ds:Signature ")
+        inner = good[i:good.index(b"</ds:Signature>") + len(b"</ds:Signature>")]
+        second = good.replace(b"</ds:Object></ds:Signature>", b"</ds:Object><ds:Object>" + inner + b"</ds:Object></ds:Signature>")
+        with self.assertRaises(ValueError) as c:   # a second signature inside the first one's Object (not covered)
+            self.L.verify_list_signature(second, {fp})
+        self.assertIn("one ds:Signature", str(c.exception))
+        deep = self.sign(self.list_xml, k, der, edit=lambda p: p.__setitem__("insert_before", b"</TrustServiceProviderList>"))
+        with self.assertRaises(ValueError) as c:   # digests and value verify; the signature is not a child of the root
+            self.L.verify_list_signature(deep, {fp})
+        self.assertIn("one ds:Signature", str(c.exception))
+
+    def test_signed_properties_of_this_signature(self):
+        import base64 as b
+        k, der, fp = self.tl
+        sp_c = ('<xades:SignedProperties xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" xmlns:ds="http://www.w3.org/2000/09/xmldsig#"'
+                ' Id="sp-c"><xades:SignedSignatureProperties><xades:SigningCertificateV2><xades:Cert><xades:CertDigest>'
+                '<ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/><ds:DigestValue>'
+                + b.b64encode(hashlib.sha256(der).digest()).decode() + '</ds:DigestValue></xades:CertDigest></xades:Cert>'
+                '</xades:SigningCertificateV2></xades:SignedSignatureProperties></xades:SignedProperties>')
+        content = self.list_xml.replace(b"<TrustServiceProviderList>", sp_c.encode() + b"<TrustServiceProviderList>")
+        node = [n for n in self.L._all_nodes(self.L._xml_tree(content)[0]) if n.attr("Id") == "sp-c"][0]
+        dig = b.b64encode(hashlib.sha256(self.L.exc_c14n(node)).digest()).decode()
+        x = self.sign(content, k, der, edit=lambda p: (p.__setitem__("sp_uri", "#sp-c"), p.__setitem__("sp_digest", dig)))
+        with self.assertRaises(ValueError) as c:   # a SignedProperties of the list's content, not of this signature
+            self.L.verify_list_signature(x, {fp})
+        self.assertIn("SignedProperties of this signature", str(c.exception))
 
     def test_canonicalization_against_lxml(self):
         try:

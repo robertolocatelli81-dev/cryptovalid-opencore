@@ -11,8 +11,9 @@ run by the same author, not by a third party.
 
 ### Changed by the decisions of 2026-11-20 (SPEC §22, written before the code; verdicts change)
 
-`test_decisions_20261120.py`, 42 tests (one compares the canonicalization with lxml and is skipped where lxml is absent):
-on the branch before these rules (9b81e9c) 33 fail and the 8 named `*_control` pass.
+`test_decisions_20261120.py`, 47 tests (one compares the canonicalization with lxml and is skipped where lxml is absent):
+on the branch before these rules (9b81e9c) 38 fail and the 8 named `*_control` pass. 58 mutants of the changed lines
+(Python, JS, Go, Java): all killed.
 
 - **A trusted log key makes the tip required** (§22 rule 1), in the Python, JS, Go and Java verifiers: with
   `--trusted-pubkey` and no tip the verdict was PASS, exit 0, `tip: null`; it is now FAIL with `tip_missing`, exit 1.

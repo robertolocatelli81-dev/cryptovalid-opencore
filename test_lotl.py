@@ -61,7 +61,7 @@ def sign_list(xml: bytes, key, cert_der: bytes, alg: str = "auto", edit=None) ->
         "sp_transforms": '<ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>',
         "c14n": "http://www.w3.org/2001/10/xml-exc-c14n#", "sig_uri": sig_uri, "extra_refs": "", "sp_uri": "#sp-1",
         "keyinfo": f"<ds:X509Data><ds:X509Certificate>{b64(cert_der)}</ds:X509Certificate></ds:X509Data>",
-        "objects": "", "doc_digest": None, "sp_digest": None,
+        "objects": "", "doc_digest": None, "sp_digest": None, "insert_before": None,
     }
     if edit:
         edit(parts)
@@ -85,7 +85,7 @@ def sign_list(xml: bytes, key, cert_der: bytes, alg: str = "auto", edit=None) ->
     sig = (f'<ds:Signature xmlns:ds="{_DSNS}" Id="sig-1">{si}<ds:SignatureValue>{b64(sv)}</ds:SignatureValue>'
            f'<ds:KeyInfo>{parts["keyinfo"]}</ds:KeyInfo><ds:Object><xades:QualifyingProperties xmlns:xades="{_XADESNS}" '
            f'Target="#sig-1">{parts["sp"]}</xades:QualifyingProperties></ds:Object>{parts["objects"]}</ds:Signature>')
-    i = xml.rindex(b"</")
+    i = xml.index(parts["insert_before"]) if parts["insert_before"] else xml.rindex(b"</")
     return xml[:i] + sig.encode() + xml[i:]
 
 _CERT_A = base64.b64encode(b"QUALIFIED-QTST-CERT").decode()      # stand-in DER bytes

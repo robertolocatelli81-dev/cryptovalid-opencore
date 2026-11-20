@@ -1992,8 +1992,8 @@ same day, before any release; what that review measured is said in each. Tests: 
 
 The re-measurement of 2026-11-20 (§21) left six findings to a decision of the maintainer, each a behaviour the earlier
 text of this specification allowed or a format change. The decisions were taken the same day; each rule below was
-written here before the code. Tests: `test_decisions_20261120.py`, 42 tests (one compares the canonicalization of rule
-6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 33 fail and the 8 named
+written here before the code. Tests: `test_decisions_20261120.py`, 47 tests (one compares the canonicalization of rule
+6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 38 fail and the 8 named
 `*_control`, which hold what the rules do not change, pass.
 
 1. **A trusted log key makes the tip required** (`verifier.verify_ledger(trusted_pubkey_hex=...)`, `verifier.py
