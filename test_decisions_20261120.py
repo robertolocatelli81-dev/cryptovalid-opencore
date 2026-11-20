@@ -196,9 +196,11 @@ class TestTipIsClosed(unittest.TestCase):
         r = T.check_tip(3, self.tip["tip_sha256"], self._place({"zz_unknown": 1}), self.pk, first_self_hash=self.tip["ledger_id"])
         self.assertEqual(r["error"], "tip_invalid: unknown_member:zz_unknown")
 
-    def test_the_nine_members_control(self):
+    def test_the_nine_members(self):
         self.assertEqual(T.TIP_MEMBERS, {"kind", "entries", "ledger_id", "tip_sha256", "ts", "log_pubkey_hex", "signature_hex",
                                          "signature_pq_hex", "log_pq_pubkey_b64"})
+
+    def test_a_tip_of_the_nine_members_control(self):
         self._place({})
         for name in self.bins:
             d = self.bins[name][2]
@@ -372,7 +374,7 @@ class TestSignatureDomains(unittest.TestCase):
         head["signature"] = _sign_raw(self.key, I._sth_canonical_hash(head).encode())
         self._dump(self.head, head)
 
-    def test_an_archive_of_0_27_0_verifies_named_control(self):
+    def test_an_archive_of_0_27_0_verifies_and_is_named(self):
         self._retag_v1()
         r = I.verify_archive(self.arch, expected_pubkey_hex=self.pk)
         self.assertTrue(r["ok"], r["failures"])
@@ -521,14 +523,14 @@ class TestMcpVerifyLedgerSignatures(unittest.TestCase):
         out = self.call({"path": self.plain, "expected_pubkey_hex": self.pk})
         self.assertFalse(out["valid"], out)
 
-    def test_without_key_says_not_checked_control(self):
+    def test_without_key_says_not_checked(self):
         out = self.call({"path": self.signed})
         self.assertIs(out["signatures"]["checked"], False)
         self.assertIn("NOT verified", out["signatures"]["note"])
         self.assertNotIn("valid", out)
         self.assertEqual(out["result"]["verdict"], "PASS")
 
-    def test_malformed_key_is_an_error(self):
+    def test_malformed_key_is_an_error_control(self):
         for k in ["", "AB" * 32, self.pk[:-1], self.pk + "0", " " + self.pk[1:], "\u0661" * 64]:
             out = self.call({"path": self.signed, "expected_pubkey_hex": k})
             self.assertIn("error", out, (k, out))
@@ -678,7 +680,7 @@ class TestTrustedListsSigned(unittest.TestCase):
         lotl = self.sign(_lotl([self.L.OJ_LOTL_URL], [_pointer(self.tl_url, self.tl[1])]), k, der)
         return lotl, self.sign(self.list_xml, self.tl[0], self.tl[1]), fp
 
-    def test_signed_lists_count_control(self):
+    def test_signed_lists_count(self):
         lotl, tl, fp = self._good()
         fprs, cov, _log, _f = self._load(lotl, tl, {fp})
         self.assertEqual(fprs, {hashlib.sha256(self.qtst).hexdigest()})
