@@ -52,6 +52,10 @@ from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
 KIND = "cryptovalid_tip/1"
+# SPEC §22 rule 2 (Unreleased): the tip is a CLOSED object, these members and no other (the five signed ones, the key and
+# signature of the Ed25519 layer, the two of the post-quantum layer); a member outside the list is tip_invalid naming it
+TIP_MEMBERS = frozenset({"kind", "entries", "ledger_id", "tip_sha256", "ts", "log_pubkey_hex", "signature_hex",
+                         "signature_pq_hex", "log_pq_pubkey_b64"})
 GENESIS = "0" * 64
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _HEX128 = re.compile(r"[0-9a-f]{128}")     # Ed25519 signature: lowercase, no whitespace (bytes.fromhex took "ab cd")
@@ -216,6 +220,9 @@ def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str], trusted_p
     _, Ed25519PublicKey, _ = _ed()
     if not isinstance(tip, dict) or tip.get("kind") != KIND:
         return {"ok": False, "why": "not a cryptovalid_tip/1 document", "pq_protected": False}
+    unknown = sorted(k for k in tip if k not in TIP_MEMBERS)   # SPEC §22 rule 2: until 0.27.0 ignored, PASS
+    if unknown:
+        return {"ok": False, "why": "unknown_member:" + ",".join(unknown)[:120], "pq_protected": False}
     for k in ("entries", "ledger_id", "tip_sha256", "ts", "signature_hex"):
         if k not in tip:
             return {"ok": False, "why": f"tip missing field {k}", "pq_protected": False}

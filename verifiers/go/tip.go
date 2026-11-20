@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -40,7 +41,14 @@ type Tip struct {
 	// PQFieldsPresent: one of the two optional fields exists in the document (even as null / "" / a wrong type):
 	// then both must be well-formed, as in Python/JS. json.Unmarshal into string maps null to "" (council 16/09).
 	PQFieldsPresent bool `json:"-"`
+	// Unknown: the members outside TipMembers, sorted by code point (SPEC §22 rule 2: the tip is a closed object)
+	Unknown []string `json:"-"`
 }
+
+// TipMembers is the closed member list of a tip (SPEC §22 rule 2, Unreleased; as cryptovalid_tip.TIP_MEMBERS): a member
+// outside it is tip_invalid naming it (until 0.27.0 ignored, PASS).
+var TipMembers = map[string]bool{"kind": true, "entries": true, "ledger_id": true, "tip_sha256": true, "ts": true,
+	"log_pubkey_hex": true, "signature_hex": true, "signature_pq_hex": true, "log_pq_pubkey_b64": true}
 
 // TipPath is the sidecar next to the ledger.
 func TipPath(ledger string) string { return ledger + ".tip.json" }
@@ -243,7 +251,13 @@ func AppendSigned(path string, ts time.Time, data any, algo string, key ed25519.
 // first = this file's first self_hash (Genesis for an empty file); expectLedgerID ("" = no check) = the chain the
 // relying party expects, out of band — the only defence against a whole pair file+tip of another ledger.
 func CheckTip(entries int, first, last string, t *Tip, trustedPubkeyHex, notBefore, expectLedgerID string) (ok bool, why string, trusted bool) {
-	if t == nil || t.Kind != TipKind || !isHexN(t.SignatureHex, 128) || !isHex64(t.TipSHA256) || !isHex64(t.LedgerID) || !plainTS(t.TS) || t.Entries < 0 {
+	if t == nil || t.Kind != TipKind {
+		return false, "tip_invalid: not a cryptovalid_tip/1 document", false
+	}
+	if len(t.Unknown) > 0 { // SPEC §22 rule 2: a member outside the closed list, named
+		return false, "tip_invalid: unknown_member:" + truncRunes(strings.Join(t.Unknown, ","), 120), false
+	}
+	if !isHexN(t.SignatureHex, 128) || !isHex64(t.TipSHA256) || !isHex64(t.LedgerID) || !plainTS(t.TS) || t.Entries < 0 {
 		return false, "tip_invalid: not a cryptovalid_tip/1 document", false
 	}
 	// optional hybrid fields: when PRESENT they must be well-formed whoever checks them (same rule in Python/JS)
@@ -308,10 +322,25 @@ func LoadTip(path string) (*Tip, error) {
 	}
 	// the tip is a SIGNED document: same strict acceptance profile as the entries (dup keys, floats, bounds,
 	// depth, surrogates) before the typed decode — one rule in Python, JS, Go and Java (r5)
-	if _, err := Parse(bytes.TrimSpace(raw)); err != nil {
+	doc, err := Parse(bytes.TrimSpace(raw))
+	if err != nil {
 		return nil, fmt.Errorf("tip_unreadable: %v", err)
 	}
 	var t Tip
+	if o, isObj := doc.(*Object); isObj {
+		for _, k := range o.Keys {
+			if !TipMembers[k] {
+				t.Unknown = append(t.Unknown, k)
+			}
+		}
+		if len(t.Unknown) > 0 {
+			// SPEC §22 rule 2: named by CheckTip right after the kind, before any typed decode (encoding/json matches
+			// struct tags case-insensitively: "Kind": 1 was a type error, tip_unreadable, here and unknown in Python)
+			sort.Strings(t.Unknown) // UTF-8 byte order = code-point order, as Python's sorted()
+			t.Kind, _ = o.Vals["kind"].(string)
+			return &t, nil
+		}
+	}
 	if err := json.Unmarshal(raw, &t); err != nil {
 		return nil, fmt.Errorf("tip_unreadable: %w", err)
 	}

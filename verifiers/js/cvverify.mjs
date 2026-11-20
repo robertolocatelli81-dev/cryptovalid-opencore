@@ -210,6 +210,8 @@ export function hasLoneSurrogate(text) {
 // the chain's identity). With the tip and the TRUSTED log key,
 // tail truncation / suffix rewrite / an unsealed append become named failures (a bare chain cannot see them).
 export const TIP_KIND = "cryptovalid_tip/1";
+// SPEC §22 rule 2 (Unreleased): the tip is a CLOSED object (as cryptovalid_tip.TIP_MEMBERS); another member is tip_invalid naming it
+export const TIP_MEMBERS = new Set(["kind", "entries", "ledger_id", "tip_sha256", "ts", "log_pubkey_hex", "signature_hex", "signature_pq_hex", "log_pq_pubkey_b64"]);
 export function tipPayload(entries, ledgerId, tipSha256, ts) {
   return Buffer.from(`{"entries":${entries},"kind":"${TIP_KIND}","ledger_id":"${ledgerId}","tip_sha256":"${tipSha256}","ts":"${ts}"}`, "utf-8");
 }
@@ -241,6 +243,8 @@ export function parseInstant(s) {
 export function instantBefore(a, b) { return a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]); }
 export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = null, notBefore = null, firstSelfHash = null, expectLedgerId = null) {
   if (!tip || typeof tip !== "object" || Array.isArray(tip) || tip.kind !== TIP_KIND) return { ok: false, pq_protected: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
+  const unknownTip = Object.keys(tip).filter((k) => !TIP_MEMBERS.has(k)).sort(cmp);   // SPEC §22 rule 2: until 0.27.0 ignored, PASS
+  if (unknownTip.length) return { ok: false, pq_protected: false, error: "tip_invalid: unknown_member:" + [...unknownTip.join(",")].slice(0, 120).join("") };
   for (const k of ["entries", "ledger_id", "tip_sha256", "ts", "signature_hex"]) if (!(k in tip)) return { ok: false, pq_protected: false, error: `tip_invalid: tip missing field ${k}` };
   // strict types, same as Go's decoder: entries a non-negative integer, the rest strings
   if (typeof tip.entries !== "number" || !Number.isInteger(tip.entries) || tip.entries < 0) return { ok: false, pq_protected: false, error: "tip_invalid: tip entries must be a non-negative integer" };

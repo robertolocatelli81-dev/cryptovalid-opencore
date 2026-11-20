@@ -159,7 +159,8 @@ python3 conformance.py     # exit 0 = conformant
   tip required; since SPEC §22 rule 1 the trusted log key makes it required too),
   `tail_truncated` when the file has fewer entries than the tip, `unsealed_tail` when it has more,
   `tail_rewritten` when the count matches but the last `self_hash` differs; (3) when the tip is REQUIRED, a
-  missing tip is `tip_missing`; a malformed tip is never silence (`tip_invalid` / `tip_unreadable`); (4) **without
+  missing tip is `tip_missing`; a malformed tip is never silence (`tip_invalid` / `tip_unreadable`), and a member
+  outside the nine of SPEC §22 rule 2 is `tip_invalid: unknown_member:<keys>`; (4) **without
   the trusted log key the tip is NOT checked** (`tip_untrusted`, `checked:false`; the key inside the tip proves
   nothing): the verdict is the bare chain's, and a required tip is a FAIL — never a "PASS but untrusted" an
   automation would read as exit 0; (5) `--tip-not-before` compares INSTANTS (ISO-8601 with `Z`, an offset, or

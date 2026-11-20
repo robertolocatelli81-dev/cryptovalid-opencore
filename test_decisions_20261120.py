@@ -8,6 +8,7 @@ and Go (go) verifiers when present (CV_REQUIRE_JAVA=1 / CV_REQUIRE_GO=1 make the
 import hashlib
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -141,6 +142,160 @@ class TestTrustedLogKeyRequiresTip(unittest.TestCase):
         for name in self.bins:
             rc, _doc, raw = _run(self.bins, name, self.led, [])
             self.assertEqual(rc, 0, (name, raw[-400:]))
+
+
+_NEAR = ["Kind", "kind ", "KIND", "signature_pq_HEX", "Signature_PQ_Hex", "log_pubkey", "signature", "signer", "__proto__",
+         "constructor", "toString", "", " ", "zz", "entries\u0000", "ts​", "é", "\U0001f600", "ｋｉｎｄ",
+         "a" * 130]
+
+
+def _random_key(rng):
+    alphabet = "abcXYZ_-.:/ 0éıKａ\U0001f600\U00010348\u0000\u007f"
+    return "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 8)))
+
+
+def _random_value(rng):
+    return rng.choice([None, True, 0, -1, 2 ** 40, "", "x", "\U0001f600", [], [1, "a"], {}, {"k": [None]}])
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+class TestTipIsClosed(unittest.TestCase):
+    """§22 rule 2: a member outside the nine of a tip is `tip_invalid: unknown_member:<keys>`, the same text in Python,
+    JS, Go and Java (keys in code-point order, cut to 120 code points)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.led = os.path.join(cls.tmp, "l.jsonl")
+        _ledger(cls.led, 3)
+        cls.key = os.path.join(cls.tmp, "log.key")
+        cls.pk = signer.keygen(cls.key)["public_key_hex"]
+        cls.tip = T.sign_tip(cls.led, cls.key)
+        cls.bins = _binaries(cls.tmp)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _place(self, extra):
+        doc = dict(self.tip)
+        doc.update(extra)
+        with open(self.led + ".tip.json", "w", encoding="utf-8") as f:
+            f.write(json.dumps(doc))
+        return doc
+
+    @staticmethod
+    def _want(extra):
+        return "tip_invalid: unknown_member:" + ",".join(sorted(extra))[:120]
+
+    def test_python_library_names_the_member(self):
+        self._place({"zz_unknown": 1})
+        r = V.verify_ledger(self.led, trusted_pubkey_hex=self.pk)
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertEqual(r["tip"]["error"], "tip_invalid: unknown_member:zz_unknown")
+        r = T.check_tip(3, self.tip["tip_sha256"], self._place({"zz_unknown": 1}), self.pk, first_self_hash=self.tip["ledger_id"])
+        self.assertEqual(r["error"], "tip_invalid: unknown_member:zz_unknown")
+
+    def test_the_nine_members_control(self):
+        self.assertEqual(T.TIP_MEMBERS, {"kind", "entries", "ledger_id", "tip_sha256", "ts", "log_pubkey_hex", "signature_hex",
+                                         "signature_pq_hex", "log_pq_pubkey_b64"})
+        self._place({})
+        for name in self.bins:
+            d = self.bins[name][2]
+            rc, _doc, raw = _run(self.bins, name, self.led, [d + "trusted-pubkey", self.pk])
+            self.assertEqual(rc, 0, (name, raw[-400:]))
+
+    def test_generated_members_same_text_in_every_verifier(self):
+        rng = random.Random(20261120)
+        cases = [{k: 1} for k in _NEAR]
+        for _ in range(25):
+            extra = {}
+            for _ in range(rng.randint(1, 3)):
+                k = _random_key(rng)
+                if k not in T.TIP_MEMBERS:
+                    extra[k] = _random_value(rng)
+            if extra:
+                cases.append(extra)
+        for extra in cases:
+            self._place(extra)
+            want = self._want(extra)
+            for name in self.bins:
+                d = self.bins[name][2]
+                rc, doc, raw = _run(self.bins, name, self.led, [d + "trusted-pubkey", self.pk])
+                self.assertEqual(rc, 1, (name, extra, raw[-400:]))
+                self.assertIn(want, list(_strings(doc)) if doc is not None else [], (name, extra, raw[-600:]))
+
+
+class TestTreeHeadAndHeadAreClosed(unittest.TestCase):
+    """§22 rule 2: a tree head or a HEAD with a member outside its list is `sth_unknown_member:<keys>` /
+    `head_unknown_member:<keys>`, and the archive is not ok."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        w = I.Ingestor(self.d, batch_size=1)
+        for i in range(3):
+            w.append({"i": i})
+        w.seal()
+        w.append({"i": 3})
+        w.close()
+        self.sth = os.path.join(self.d, "ledger-000000.jsonl.sth.json")
+        self.head = os.path.join(self.d, "ledger.head.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def _edit(self, path, fn):
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        fn(doc)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+
+    def test_intact_archive_control(self):
+        self.assertTrue(I.verify_archive(self.d)["ok"])
+
+    def test_an_older_tree_head_without_signed_control(self):
+        # tree heads written before 2026-09-14 had no `signed` member: a subset of the list still verifies
+        def drop(doc):
+            doc.pop("signed")
+        # the chain of tree heads and the HEAD commit to canonical hashes: rewritten as the writer of that day did
+        last = None
+        for seg in sorted(f for f in os.listdir(self.d) if f.endswith(".sth.json")):
+            p = os.path.join(self.d, seg)
+            self._edit(p, drop)
+            if last is not None:
+                self._edit(p, lambda s: s.__setitem__("prev_sth_sha256", last))
+            with open(p, encoding="utf-8") as f:
+                last = I._sth_canonical_hash(json.load(f))
+        self._edit(self.head, lambda h: h.__setitem__("last_sth_sha256", last))
+        r = I.verify_archive(self.d)
+        self.assertTrue(r["ok"], r["failures"])
+
+    def test_unknown_member_in_tree_head(self):
+        rng = random.Random(7)
+        for k in ["zz_unknown", "", "Signature", "\U0001f600"] + [_random_key(rng) for _ in range(10)]:
+            if k in I.STH_MEMBERS:
+                continue
+            self.setUp()
+            self._edit(self.sth, lambda doc: doc.__setitem__(k, 1))
+            r = I.verify_archive(self.d)
+            self.assertFalse(r["ok"])
+            self.assertIn("sth_unknown_member:" + k[:120], [f["reason"] for f in r["failures"]], (k, r["failures"]))
+            shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_unknown_member_in_head(self):
+        for k in ["zz_unknown", "", "Prefix", "\U0001f600"]:
+            self.setUp()
+            self._edit(self.head, lambda doc: doc.__setitem__(k, [1]))
+            r = I.verify_archive(self.d)
+            self.assertFalse(r["ok"])
+            self.assertIn("head_unknown_member:" + k, [f["reason"] for f in r["failures"]], (k, r["failures"]))
+            shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_two_unknown_members_in_code_point_order(self):
+        self._edit(self.head, lambda doc: doc.update({"\U0001f600": 1, "￿": 2, "b": 3}))
+        r = I.verify_archive(self.d)
+        self.assertIn("head_unknown_member:b,￿,\U0001f600", [f["reason"] for f in r["failures"]])
 
 
 if __name__ == "__main__":

@@ -71,6 +71,19 @@ from typing import Dict, List, Optional
 import cryptovalid_merkle as merkle
 
 GENESIS_PREV = "0" * 64
+# SPEC §22 rule 2 (Unreleased): a tree head (<segment>.sth.json) and the HEAD (<prefix>.head.json) are CLOSED objects, these
+# members and no other: every member this module has written since 2026-08-16 (`signed` since 2026-09-14). A member outside
+# the list is the failure sth_unknown_member:<keys> / head_unknown_member:<keys> (until 0.27.0 ignored: ok, no reason).
+STH_MEMBERS = frozenset({"tree_size", "root_sha256", "signed", "note", "segment", "sealed_utc", "last_self_hash",
+                         "prev_sth_sha256", "signature", "signer"})
+HEAD_MEMBERS = frozenset({"prefix", "segments_sealed", "last_segment", "last_sth_sha256", "updated_utc", "signature",
+                          "signer"})
+
+
+def _unknown_members(doc: Dict, members) -> Optional[str]:
+    """The members of `doc` outside `members`, in code-point order, joined and cut to 120 code points; None if none."""
+    unknown = sorted(k for k in doc if k not in members)
+    return ",".join(unknown)[:120] if unknown else None
 
 
 def _canonical(d: Dict) -> bytes:
@@ -513,6 +526,9 @@ def verify_archive(directory: str, prefix: str = "ledger",
             failures.append({"segment": name, "reason": f"sth_unreadable: {why}"})
             prev_sth = None
             continue
+        unknown = _unknown_members(sth, STH_MEMBERS)
+        if unknown is not None:   # SPEC §22 rule 2
+            failures.append({"segment": name, "reason": "sth_unknown_member:" + unknown})
         try:
             leaves = merkle.leaves_from_ledger(s)
         except OSError:   # a segment read through a pipe by the chain check cannot be read a second time for its leaves
@@ -566,6 +582,9 @@ def verify_archive(directory: str, prefix: str = "ledger",
         if head is None:
             failures.append({"segment": "HEAD", "reason": f"head_unreadable: {why}"})
     if head is not None:
+        unknown = _unknown_members(head, HEAD_MEMBERS)
+        if unknown is not None:   # SPEC §22 rule 2
+            failures.append({"segment": "HEAD", "reason": "head_unknown_member:" + unknown})
         if head.get("segments_sealed") != len(sealed):
             failures.append({"segment": "HEAD", "reason": "head_count_mismatch",
                              "expected": head.get("segments_sealed"), "found": len(sealed)})

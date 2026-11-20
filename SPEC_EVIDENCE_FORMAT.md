@@ -2001,3 +2001,23 @@ tests named `*_control` hold what the rule does not change.
    "Not changed by this section"), so a caller who pinned the log key and lost the tip was not told. Now the verdict
    is FAIL with `tip_missing`, exit 1. In the libraries an empty key is still "not given" (§17 rule 4). The Rust and
    Swift verifiers have no tip options (unchanged).
+2. **A tip, a tree head and a HEAD are closed objects.** A member outside the list of its document is a failure that
+   names it; until 0.27.0 it was ignored (a tip with `zz_unknown`: PASS; a tree head or a HEAD with `zz_unknown`:
+   `verify_archive` ok, no reason). The lists, and nothing else:
+   - tip (`cryptovalid_tip/1`): `kind`, `entries`, `ledger_id`, `tip_sha256`, `ts`, `log_pubkey_hex`, `signature_hex`,
+     and the two members of the post-quantum layer `signature_pq_hex`, `log_pq_pubkey_b64` (`cryptovalid_tip.TIP_MEMBERS`,
+     JS `TIP_MEMBERS`, Go `TipMembers`, Java `TIP_MEMBERS`). The failure is `tip_invalid: unknown_member:<keys>`, the
+     same text in Python, JS, Go and Java: the keys outside the list in code-point order, joined by `,`, cut to 120 code
+     points (as `unknown_field` of §2.1). It is checked right after `kind` (a document whose `kind` is not
+     `cryptovalid_tip/1` is still `not a cryptovalid_tip/1 document`) and before every other member: the Go verifier
+     decoded a tip into a struct whose names match case-insensitively, so `"Kind": 1` there was `tip_unreadable` and in
+     Python an ignored member; both now name it.
+   - tree head (`<segment>.sth.json` of `cryptovalid_ingest`): `tree_size`, `root_sha256`, `signed`, `note`, `segment`,
+     `sealed_utc`, `last_self_hash`, `prev_sth_sha256`, `signature`, `signer` (`cryptovalid_ingest.STH_MEMBERS`: every
+     member the writer has written since 2026-08-16; `signed` since 2026-09-14, so an older tree head without it
+     verifies as before). The failure is `sth_unknown_member:<keys>`.
+   - HEAD (`<prefix>.head.json`): `prefix`, `segments_sealed`, `last_segment`, `last_sth_sha256`, `updated_utc`,
+     `signature`, `signer` (`cryptovalid_ingest.HEAD_MEMBERS`). The failure is `head_unknown_member:<keys>`.
+   A key written twice in any of the three is already refused by the reader (§21 rule 2: `tip_unreadable`,
+   `sth_unreadable: duplicate_key`, `head_unreadable: duplicate_key`).
+

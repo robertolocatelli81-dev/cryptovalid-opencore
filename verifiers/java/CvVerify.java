@@ -27,6 +27,7 @@ public class CvVerify {
     static final long MAX_INPUT_BYTES = 256L * 1024 * 1024;   // verifier.py MAX_INPUT_BYTES
     static final String GENESIS = "0".repeat(64);
     static final String TIP_KIND = "cryptovalid_tip/1";
+    static final Set<String> TIP_MEMBERS = Set.of("kind", "entries", "ledger_id", "tip_sha256", "ts", "log_pubkey_hex", "signature_hex", "signature_pq_hex", "log_pq_pubkey_b64");
     static final Set<String> ATTEST = Set.of("self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token");   // SPEC §3; tsa_token since 0.20.2
     // SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the CLOSED entry schema (core + optional fields of §2), as verifier.py ENTRY_KEYS.
     // A top-level key outside it is the named failure `unknown_field:<keys>`, never a silent PASS (measured 2026-10-11 on this
@@ -531,7 +532,11 @@ public class CvVerify {
         if (logPkRaw != null && !(logPkRaw instanceof String)) { tc.put("why", "tip_invalid: tip fields must be strings"); return tc; }   // r5: 123 was skipped
         Object en = t.vals.get("entries"); long n = -1;
         if (en instanceof Num) { try { n = Long.parseLong(((Num) en).lexeme); } catch (Exception e) { n = -1; } }
-        if (!TIP_KIND.equals(kind) || !isHexN(sigHex, 128) || !isHexN(tipSha, 64) || !isHexN(ledgerId, 64) || n < 0 || !plainTS(ts)) { tc.put("why", "tip_invalid: not a cryptovalid_tip/1 document"); return tc; }
+        if (!TIP_KIND.equals(kind)) { tc.put("why", "tip_invalid: not a cryptovalid_tip/1 document"); return tc; }
+        List<String> unkTip = new ArrayList<>();   // SPEC §22 rule 2 (Unreleased): the tip is a CLOSED object; until 0.27.0 ignored, PASS
+        for (String k : t.keys) if (!TIP_MEMBERS.contains(k)) unkTip.add(k);
+        if (!unkTip.isEmpty()) { unkTip.sort(BY_CODEPOINT); tc.put("why", "tip_invalid: unknown_member:" + joinCut(unkTip)); return tc; }
+        if (!isHexN(sigHex, 128) || !isHexN(tipSha, 64) || !isHexN(ledgerId, 64) || n < 0 || !plainTS(ts)) { tc.put("why", "tip_invalid: not a cryptovalid_tip/1 document"); return tc; }
         boolean pqPresent = t.vals.containsKey("signature_pq_hex") || t.vals.containsKey("log_pq_pubkey_b64");
         String spq = str(t, "signature_pq_hex"), kpq = str(t, "log_pq_pubkey_b64");
         if (pqPresent && (!isHexN(spq, 6618) || b64Strict(kpq, 1952) == null)) { tc.put("why", "tip_invalid: malformed post-quantum fields (signature_pq_hex 6618 lowercase hex, log_pq_pubkey_b64 strict base64 of 1952 bytes)"); return tc; }

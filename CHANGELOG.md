@@ -15,6 +15,10 @@ run by the same author, not by a third party.
 
 - **A trusted log key makes the tip required** (§22 rule 1), in the Python, JS, Go and Java verifiers: with
   `--trusted-pubkey` and no tip the verdict was PASS, exit 0, `tip: null`; it is now FAIL with `tip_missing`, exit 1.
+- **A tip, a tree head and a HEAD are closed objects** (§22 rule 2): a member outside the list of its document was
+  ignored (PASS; `verify_archive` ok); it is now `tip_invalid: unknown_member:<keys>` (the same text in Python, JS, Go
+  and Java), `sth_unknown_member:<keys>` or `head_unknown_member:<keys>`. Every member written since 2026-08-16 is in
+  the lists, so archives and tips written by earlier versions verify as before.
 
 ### Fixed
 
