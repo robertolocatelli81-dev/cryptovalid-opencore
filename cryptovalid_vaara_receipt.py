@@ -74,7 +74,14 @@ def load_key(alg: str, key):
         raise ValueError(f"JWK does not fit alg {alg}")
     if alg == "ML-DSA-65":
         return bytes(key)
-    return ser.load_pem_public_key(key.encode("ascii") if isinstance(key, str) else bytes(key))
+    pub = ser.load_pem_public_key(key.encode("ascii") if isinstance(key, str) else bytes(key))
+    # SPEC v0.13 §21 rule 4: ES256 is "ECDSA using P-256 and SHA-256" (RFC 7518 §3.1, read at rfc-editor.org on
+    # 2026-11-20), as the JWK branch above already required; until 0.27.0 a PEM key on secp256k1 or P-224 verified an
+    # ES256 receipt its own private key had signed
+    if alg == "ES256" and not (isinstance(pub, ec.EllipticCurvePublicKey) and pub.curve.name == "secp256r1"):
+        raise ValueError("ES256 needs a P-256 key (RFC 7518 §3.1), the key is "
+                         + (f"on {pub.curve.name}" if isinstance(pub, ec.EllipticCurvePublicKey) else type(pub).__name__))
+    return pub
 
 
 def verify_signature(alg: str, key, payload: bytes, sig_hex: str) -> bool:
@@ -160,6 +167,8 @@ def verify_receipt(r: Any, key, *, alg: str, predecessor: Any = None, runtime_re
             raise ValueError(f"alg {r['alg']!r} is not the expected {alg!r}")
         payload = signed_payload(r)
         kind = out["kind"] = receipt_kind(r)
+        if alg == "ES256":
+            load_key(alg, key)   # a key on another curve is named here, before the signature (SPEC v0.13 §21 rule 4)
         out["signature_ok"] = verify_signature(r["alg"], key, payload, r.get("signature"))
         bl = r["backLink"]
         if not isinstance(bl, dict) or not isinstance(bl.get("attestationDigest"), str):
@@ -184,6 +193,10 @@ def verify_receipt(r: Any, key, *, alg: str, predecessor: Any = None, runtime_re
                     raise ValueError("evidenceRef.canonicalization is not jcs-rfc8785 / JCS / jcs-json-v1")
                 if evidence is not None:
                     out["evidence_ok"] = er.get("digest") == sha256_jcs(evidence)
+            elif evidence is not None:
+                # SPEC v0.13 §21 rule 4: the caller gave an evidence record and the receipt binds none: the binding the
+                # caller asked for does not hold (until 0.27.0 evidence_ok was None and the receipt ok)
+                out["evidence_ok"] = False
         anchors = r.get("timestampAnchors")
         if anchors is not None:
             want = "sha256:" + hashlib.sha256(payload).hexdigest()
