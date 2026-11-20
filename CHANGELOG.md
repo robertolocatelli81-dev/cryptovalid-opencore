@@ -7,7 +7,7 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
-## 0.27.0 (unreleased): reasons change
+## 0.27.0 (2026-11-20): reasons change
 
 ### Added
 
