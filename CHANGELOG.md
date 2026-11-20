@@ -13,24 +13,30 @@ run by the same author, not by a third party.
 
 Eight rules of SPEC v0.13 §21, written before the code. The findings come from the security review of 0.26.0 that
 §20 did not cover; on 2026-11-20 each was re-run on 0.26.0 and on the released 0.27.0, and each one below still
-reproduced on 0.27.0. `test_remeasure_20261120.py`, 22 tests: 18 fail on 0.27.0 (ec56b3c), the 4 named `*_control`
-hold what did not change and pass there too. 35 mutants of the changed lines: 33 killed; the 2 that live give the
-same answers (an `EntityDecl` handler: an entity is declared only inside a document type declaration, which the other
-handler refuses first: in 1,000 documents measured, never before it; a body loop without its bound: the read before it asks for 0
-bytes, and `HTTPResponse.read(0)` is `b""`).
+reproduced on 0.27.0. `test_remeasure_20261120.py`, 35 tests: 29 fail on 0.27.0 (ec56b3c), the 6 named `*_control`
+hold what did not change and pass there too. 72 mutants of the lines changed since 0.27.0: 68 killed; the 4
+that live give the same answers (an `EntityDecl` handler: an entity is declared only inside a document type
+declaration, which the other handler refuses first: in 4,000 generated documents, 869 with an entity declaration, never
+before it; a body loop without its bound: the read before it asks for 0 bytes, and `HTTPResponse.read(0)` is `b""`;
+the test that a `self_hash` is a string before it is compared with two hashes: a value of another type equals
+neither; a second test that a ledger is inside the pack, for a name whose bytes were read only because it was).
 
 - **An RFC 9162 inclusion proof longer than the path of its leaf index and tree size verified** (rule 1).
   `cryptovalid_merkle.verify_inclusion` lacked step 4a of RFC 9162 §2.1.3.2 ("If sn is 0, then stop the iteration and
   fail the proof verification"): the proof of leaf 5 of a tree of 8 verified as leaf 1 of a tree of 4 against the root
   of the tree of 8; over trees of 1 to 33 leaves, 1,416 of 81,927 such pairs verified, none now. A leaf index or a
-  tree size that is not a non-negative integer fails too. The caller still binds the size to the root (a signed tree
+  tree size that is not a non-negative integer fails too (the index -1 verified as the last leaf of a tree of 1, 2, 4, 8
+  or 16 leaves). The caller still binds the size to the root (a signed tree
   head): a proof of the right length can verify against the root of another size, as RFC 9162 writes the algorithm.
 - **A key written twice was read as its last value by the signature verifier and the JWS verifier** (rule 2).
   `signer.verify_file` and `signer.py verify` verified a ledger line with a key written twice and the signed value
   last (4 of 8 generated lines), while `verifier.py` refused the same file: now `duplicate_key` at that index (SPEC
   §3). `cryptovalid_jws.verify` refuses a header with a name twice (`header_duplicate_key`, RFC 7515 §10.12 allows a
   parser to reject; 22 of 40 generated headers were accepted) and a payload with a key twice
-  (`payload_duplicate_key`, `signature_valid: true`; 80 of 80 were accepted).
+  (`payload_duplicate_key`, `signature_valid: true`; 80 of 80 were accepted). The same for the tree heads and the HEAD of
+  an ingest archive (a signed one with a key written twice, the signed value last, left `verify_archive` ok with the
+  signer pinned: now `sth_unreadable: duplicate_key`, `head_unreadable: duplicate_key`) and for the receipt and entry
+  files of `cryptovalid_receipt.py verify` (were verified, exit 0: now `... unreadable: duplicate_key`, exit 1).
 - **Without `defusedxml`, a document type declaration past the first 4096 bytes, or in UTF-16, was not refused and its
   entities were expanded** (rule 3). `fundcert_canonical` searched the first 4096 bytes as UTF-8 text: 218 of 300
   generated documents with a declaration after a long comment, a processing instruction or blank lines, in four
@@ -51,17 +57,23 @@ bytes, and `HTTPResponse.read(0)` is `b""`).
   `cryptovalid_pruning_probe`, `cryptovalid_kms`) now go through `cryptovalid_net.read_body`: at most
   `MAX_RESPONSE_BYTES` (64 MiB; 1 MiB for an error body), else `ValueError("response_too_large: ...")`. Measured on
   2026-11-20: the EU LOTL and the 31 trusted lists it points to are at most 5,367,120 bytes.
-- **The evidence pack read a ledger's path five times, so the file checked could change between the reads** (rule 7).
+- **The evidence pack read a ledger's path up to five times, so the file checked could change between the reads** (rule 7).
   With another file at the path only while the chain was read, a pack whose manifest commits to a ledger with a broken
   chain was `valid: true`. `verify_pack` now reads each ledger once, bounded, takes its digest from those bytes and
-  runs every check on them in memory.
+  runs every check on them in memory, however the manifest spells the file's name (`./l.jsonl`, a link inside the
+  pack). A signed ledger with bytes that are not UTF-8 20,000 bytes past its entries made `verify_pack` raise
+  `UnicodeDecodeError`:
+  now a failure of its signature layer, the pack not valid.
 - **`signer.py sign` signed a `self_hash` as written, so it could be made to sign an archive's tree heads** (rule 8).
   The tree heads and the HEAD of an ingest archive are signed over the same kind of message as an entry (the hex of a
   SHA-256): a two-line "ledger" whose `self_hash` were the hashes of a tree head and a HEAD, signed with
   `signer.py sign`, gave signatures under which `verify_archive`, with that key pinned, accepted an archive the key's
-  holder never sealed (measured on 0.26.0 and 0.27.0). The signer now refuses, and writes nothing for, a ledger with
+  holder never sealed (measured on 0.26.0 and 0.27.0); the digest of a pack manifest, signed the same way, gave
+  `producer_signature: verified` under the pinned manifest signer (0.27.0). The signer now refuses, and writes nothing for, a ledger with
   a line that is not an entry: a member outside the entry schema, a key written twice, a `self_hash` that is not the
-  hash of the line's content.
+  hash of the line's content. `signer.py verify` fails a line with a member outside the entry schema
+  (`unknown_field:<keys>`): a tree head, a HEAD or a manifest the key's holder signed, written as a ledger line,
+  verified there as a signed entry.
 
 ## 0.27.0 (2026-11-20): reasons change
 

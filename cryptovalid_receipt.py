@@ -550,11 +550,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         old = json.loads(read_input_text(args.old_sth_json))   # SPEC §5 step 0: a regular file or a pipe, bounded
         r = consistency_receipt(old.get("sth", old), args.ledger, args.keyfile)
         emit(json.dumps(r, indent=1)); return 0 if r.get("ok", True) else 1
+    def _no_dup(pairs):   # SPEC v0.13 §21 rule 2: a key written twice is refused (until 0.27.0 the last value was read)
+        seen = {}
+        for k, v in pairs:
+            if k in seen:
+                raise ValueError("duplicate_key")
+            seen[k] = v
+        return seen
+
     def _load(path, what):   # unreadable / not JSON / not an object: a verdict, never a traceback (audit V1 #7)
         try:
-            obj = json.loads(read_text_regular(path))   # SPEC §5 step 0: opened once without blocking
+            obj = json.loads(read_text_regular(path), object_pairs_hook=_no_dup)   # SPEC §5 step 0: opened once without blocking
         except (OSError, ValueError, RecursionError) as e:
-            return None, f"{what} unreadable: {type(e).__name__}"
+            return None, f"{what} unreadable: " + ("duplicate_key" if str(e) == "duplicate_key" else type(e).__name__)
         return (obj, None) if isinstance(obj, dict) else (None, f"{what} is not a JSON object")
     rcpt, why = _load(args.receipt_json, "receipt")
     if why:

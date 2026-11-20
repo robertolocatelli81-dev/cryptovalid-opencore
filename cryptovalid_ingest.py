@@ -419,8 +419,10 @@ def _load_json_object(path):
     """(object, None) or (None, reason): a file that is not UTF-8 JSON, or not a JSON object, is a named failure."""
     import verifier
     try:   # SPEC §5 step 0: opened once without blocking (a FIFO as *.sth.json or *.head.json blocked here, 18/11/2026)
-        obj = json.loads(verifier.read_regular(path).decode("utf-8"))
+        obj = json.loads(verifier.read_regular(path).decode("utf-8"), object_pairs_hook=verifier._reject_dup)
     except (OSError, ValueError, RecursionError) as e:   # UnicodeDecodeError and JSONDecodeError are ValueError
+        if str(e).startswith("duplicate JSON key"):   # SPEC v0.13 §21 rule 2: a tree head or a HEAD with a key written
+            return None, "duplicate_key"              # twice is refused (until 0.27.0 the last value was read, ok true)
         return None, type(e).__name__
     return (obj, None) if isinstance(obj, dict) else (None, "not_a_json_object")
 

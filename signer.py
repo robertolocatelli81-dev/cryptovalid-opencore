@@ -326,6 +326,14 @@ def verify_ledger_signatures(entries: List[Dict], expected_pubkey_hex: Optional[
         if not isinstance(e, dict):
             failures.append({"idx": i, "reason": "not_a_json_object"})    # [], 1, "x", null — named, like the verifiers
             continue
+        # SPEC §2.1: the entry is a closed object, here as in verifier.py (`unknown_field:<keys>`). A tree head, a HEAD or
+        # a pack manifest that the key's holder signed is signed over the same kind of message as an entry: written as a
+        # line with its hash as `self_hash`, it verified here as a signed entry under the pinned key (measured on
+        # 0.27.0, 2026-11-20; verifier.py refused the same file). SPEC v0.13 §21 rule 8
+        unknown = sorted(k for k in e if k not in _ENTRY_KEYS)
+        if unknown:
+            failures.append({"idx": i, "reason": "unknown_field:" + ",".join(unknown)[:120]})
+            continue
         sig, signer, sh = e.get("signature"), e.get("signer"), e.get("self_hash")
         if not (sig and signer and sh):
             failures.append({"idx": i, "reason": "missing signature/signer/self_hash"})

@@ -599,16 +599,31 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
     # signatures and its count and head are all checked on those bytes. Until 0.27.0 the pack opened the ledger's path
     # five times: a ledger whose chain fails, committed to by the manifest, was valid when another file stood at the path
     # while the chain was read (measured with the file exchanged between the reads)
-    ledger_names = {lm["file"] for lm in leds}
+    # One file, one read, however the manifest spells its name ("l.jsonl", "./l.jsonl", a link inside the pack): the
+    # bytes are kept under the real path each name had when it was first resolved. With file_digests_sha256 naming
+    # "./l.jsonl" and ledgers naming "l.jsonl" the file was read twice, and a file exchanged between the two reads
+    # made a pack whose manifest commits to a broken chain valid (measured on the first draft of this rule, 2026-11-20)
+    key_of: Dict[str, str] = {}
+
+    def _file_key(name: str) -> str:
+        if name not in key_of:
+            # a name the system does not open as a file ("l.jsonl/", "l.jsonl/.") is not another spelling of that file:
+            # it keeps a key of its own and is read, and refused, under its own name as before
+            last = name.replace(os.sep, "/").rsplit("/", 1)[-1]
+            key_of[name] = "\0" + name if last in ("", ".") else os.path.realpath(os.path.join(pack_dir, name))
+        return key_of[name]
+    ledger_keys = {_file_key(lm["file"]) for lm in leds}
     snap_of: Dict[str, bytes] = {}
 
     def _take_snapshot(name: str, p: str) -> str:
-        snap_of[name] = verifier.read_regular(p, verifier.MAX_INPUT_BYTES)
-        return hashlib.sha256(snap_of[name]).hexdigest()
+        k = _file_key(name)
+        if k not in snap_of:
+            snap_of[k] = verifier.read_regular(p, verifier.MAX_INPUT_BYTES)
+        return hashlib.sha256(snap_of[k]).hexdigest()
     for name, dig in man.get("file_digests_sha256", {}).items():
         p = os.path.join(pack_dir, name)
         try:   # SPEC §10 (v0.11): opened once without blocking, judged on the descriptor, bounded, hashed in blocks
-            if name in ledger_names:
+            if _file_key(name) in ledger_keys:
                 file_ok[name] = _real_inside(p) and _take_snapshot(name, p) == dig
             else:
                 file_ok[name] = _real_inside(p) and _sha256_file(p, verifier.MAX_INPUT_BYTES) == dig
@@ -636,7 +651,7 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
     ledger_results, ledgers_ok = [], True
     for lm in man.get("ledgers", []):
         p = os.path.join(pack_dir, lm["file"])
-        if lm["file"] not in snap_of and _real_inside(p):
+        if _file_key(lm["file"]) not in snap_of and _real_inside(p):
             try:   # a ledger the manifest does not list in file_digests_sha256 (or one absent at that step): read once now
                 _take_snapshot(lm["file"], p)
             except verifier.InputTooLarge:
@@ -646,13 +661,13 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
                 pass   # not a regular file: refused just below, as before
             except OSError as e:
                 return _refused(f"input_unreadable: file {lm['file']}: {e.strerror or type(e).__name__}", "malformed")
-        if not (_real_inside(p) and lm["file"] in snap_of):
+        if not (_real_inside(p) and _file_key(lm["file"]) in snap_of):
             ledger_results.append({"file": lm["file"], "hash_pass": False, "sig_pass": False, "untruncated": False,
                                    "pq_protected": False, "pq_reason": "not_a_file_inside_the_pack"})
             sealed.append(("contradicted", "artifact_invalid", f"ledger {lm['file']}: not a file inside the pack"))
             ledgers_ok = False
             continue
-        data = snap_of[lm["file"]]   # the bytes read once (rule 7): every check below reads them, never the path again
+        data = snap_of[_file_key(lm["file"])]   # the bytes read once (rule 7): every check below reads them, never the path again
         hp = verifier._verify_ledger_data(p, data).get("verdict") == "PASS"
         sealed.append(("verified", None) if hp else ("contradicted", "artifact_invalid", f"ledger {lm['file']}: hash chain"))
         sp = True
@@ -670,9 +685,14 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
             if expected_pq is None and lm.get("pq_protected") is True and manifest_pinned and rec_ok:
                 expected_pq, expected_ed = rec_pq[0], rec_ed[0]   # pinned by a manifest the CALLER trusts, digest AND signature verified
             try:   # signer.verify_file(p, ...) on the bytes read once: the same lines, the same reader
-                with _lines(data) as f:
-                    sv = signer.verify_ledger_signatures([signer._load_line(ln) for ln in f if ln.strip()],
-                                                         expected_ed, expected_pq)
+                try:
+                    with _lines(data) as f:
+                        sig_lines = [signer._load_line(ln) for ln in f if ln.strip()]
+                except UnicodeDecodeError:
+                    # bytes that are not UTF-8 past the first block read (the signature field was found before them):
+                    # a named failure of the layer. Until 0.27.0 verify_pack raised UnicodeDecodeError
+                    sig_lines = [signer._Undecodable("not_utf8")]
+                sv = signer.verify_ledger_signatures(sig_lines, expected_ed, expected_pq)
             except RuntimeError as e:   # no `cryptography` here: the layer cannot be checked (0.21.0: a traceback, exit 1)
                 sp, pq, pq_reason = False, False, "signature_layer_unverifiable"
                 producer.append(("not_evaluated", "backend_missing", f"ledger {lm['file']}: {str(e)[:80]}"))

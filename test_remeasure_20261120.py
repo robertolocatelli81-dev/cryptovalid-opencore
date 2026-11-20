@@ -617,5 +617,366 @@ class Rule8SignerSignsEntriesOnly(unittest.TestCase):
             self.assertFalse(os.path.exists(out))
 
 
+def _canon(obj):
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _redigest(manifest_path, man):
+    body = {k: v for k, v in man.items() if k not in ("manifest_digest_sha256", "rfc3161_timestamp",
+                                                      "manifest_signature", "manifest_signer")}
+    man["manifest_digest_sha256"] = hashlib.sha256(_canon(body)).hexdigest()
+    with open(manifest_path, "w") as f:
+        json.dump(man, f)
+
+
+class Rule7OneReadHoweverTheNameIsSpelled(unittest.TestCase):
+    """The review of the branch (2026-11-20): one file is read once whatever name the manifest gives it, and a ledger
+    that stops being UTF-8 past the first block read is a named failure of its signature layer."""
+
+    def pack(self, broken, spelling):
+        import evidence_pack as E
+        d = tempfile.mkdtemp()
+        pack, lp, good, bad = Rule7PackReadsALedgerOnce.build(self, d, broken)
+        mp = os.path.join(pack, "MANIFEST.json")
+        with open(mp) as f:
+            man = json.load(f)
+        if spelling == "dot":        # file_digests_sha256 names "./l.jsonl", ledgers names "l.jsonl"
+            man["file_digests_sha256"] = {("./" + k if k == "l.jsonl" else k): v
+                                          for k, v in man["file_digests_sha256"].items()}
+        elif spelling == "both":     # file_digests_sha256 names the file twice, "l.jsonl" and "./l.jsonl"
+            man["file_digests_sha256"]["./l.jsonl"] = man["file_digests_sha256"]["l.jsonl"]
+        elif spelling == "link":     # ledgers names a link, inside the pack, to the file the digests name
+            os.symlink("l.jsonl", os.path.join(pack, "ln.jsonl"))
+            man["ledgers"][0]["file"] = "ln.jsonl"
+        _redigest(mp, man)
+        return E, pack, lp, good, bad
+
+    def test_one_read_and_one_verdict_for_every_spelling(self):
+        for spelling in ("same", "dot", "both", "link"):
+            for broken in (True, False):
+                E, pack, lp, good, bad = self.pack(broken, spelling)
+                committed, other = (bad, good) if broken else (good, bad)
+                want = E.verify_pack(pack)["valid"]
+                self.assertEqual(want, not broken, spelling)                             # control
+                V = E.verifier
+                saved = {n: getattr(V, n) for n in ("read_regular", "sha256_regular")}
+                reads = []
+
+                def first_then_swap(*a, _n=None, **k):
+                    r = saved[_n](*a, **k)
+                    if a and os.path.basename(str(a[0])) in ("l.jsonl", "ln.jsonl"):
+                        if not reads:
+                            _write(lp, other)         # another file at the path after the first read, to the end
+                        reads.append(str(a[0]))
+                    return r
+                for n in saved:
+                    setattr(V, n, lambda *a, _n=n, **k: first_then_swap(*a, _n=_n, **k))
+                try:
+                    got = E.verify_pack(pack)
+                finally:
+                    for n, f in saved.items():
+                        setattr(V, n, f)
+                    _write(lp, committed)
+                self.assertEqual(len(reads), 1, (spelling, broken, reads))
+                self.assertEqual(got["valid"], want, (spelling, broken, got["ledgers"]))
+
+    def test_a_name_the_system_does_not_open_is_not_another_spelling_control(self):
+        # "l.jsonl/" and "l.jsonl/." resolve to the file and are not opened as it: refused under their own name, as before
+        for name in ("l.jsonl/", "l.jsonl/."):
+            for where in ("ledgers", "digests"):
+                E, pack, _lp, _good, _bad = self.pack(False, "same")
+                mp = os.path.join(pack, "MANIFEST.json")
+                with open(mp) as f:
+                    man = json.load(f)
+                if where == "ledgers":
+                    man["ledgers"][0]["file"] = name
+                else:
+                    man["file_digests_sha256"][name] = man["file_digests_sha256"]["l.jsonl"]
+                _redigest(mp, man)
+                r = E.verify_pack(pack)
+                self.assertFalse(r["valid"], (name, where))
+                if where == "ledgers":
+                    self.assertEqual(r["ledgers"][0].get("pq_reason"), "not_a_file_inside_the_pack", r["ledgers"])
+                else:
+                    self.assertIs(r["file_ok"][name], False, r["file_ok"])
+
+    def test_a_link_out_of_the_pack_is_not_read_control(self):
+        E, pack, lp, good, _bad = self.pack(False, "same")
+        outside = os.path.join(os.path.dirname(pack), "outside.jsonl")
+        _write(outside, good)
+        os.remove(lp)
+        os.symlink(outside, lp)
+        V = E.verifier
+        saved = {n: getattr(V, n) for n in ("read_regular", "sha256_regular")}
+        seen = []
+
+        def spy(*a, _n=None, **k):
+            seen.append(os.path.realpath(str(a[0])))
+            return saved[_n](*a, **k)
+        for n in saved:
+            setattr(V, n, lambda *a, _n=n, **k: spy(*a, _n=_n, **k))
+        try:
+            got = E.verify_pack(pack)
+        finally:
+            for n, f in saved.items():
+                setattr(V, n, f)
+        self.assertGreater(len(seen), 0)                                # the spy saw the reads of the pack
+        self.assertNotIn(os.path.realpath(outside), seen)
+        self.assertFalse(got["valid"])
+        self.assertEqual(got["ledgers"][0].get("pq_reason"), "not_a_file_inside_the_pack", got["ledgers"])
+
+    @NEEDS_CRYPTO
+    def test_a_signed_ledger_not_utf8_past_the_first_block_is_a_named_failure(self):
+        import evidence_pack as E
+        import signer
+        d = tempfile.mkdtemp()
+        led, key = os.path.join(d, "u.jsonl"), os.path.join(d, "k.key")
+        _ledger(led, 3)
+        signer.keygen(key)
+        sl = os.path.join(d, "l.jsonl")
+        signer.sign_ledger(led, sl, key)
+        pack = os.path.join(d, "pack")
+        E.build_pack([sl], pack)
+        self.assertTrue(E.verify_pack(pack)["valid"])                                    # control
+        lp, mp = os.path.join(pack, "l.jsonl"), os.path.join(pack, "MANIFEST.json")
+        for pad in (0, 5000, 20000, 70000):
+            with open(lp, "rb") as f:
+                data = f.read()
+            _write(lp, data + b" " * pad + b"\xff\xfe\n")
+            with open(mp) as f:
+                man = json.load(f)
+            with open(lp, "rb") as f:
+                man["file_digests_sha256"]["l.jsonl"] = hashlib.sha256(f.read()).hexdigest()
+            _redigest(mp, man)
+            r = E.verify_pack(pack)                    # 0.27.0 and the branch before this test: UnicodeDecodeError
+            self.assertFalse(r["valid"], pad)
+            self.assertFalse(r["ledgers"][0]["hash_pass"], (pad, r["ledgers"]))
+            if pad >= 20000:   # the signature field is found before the bytes that are not UTF-8: the layer is read, and fails
+                self.assertFalse(r["ledgers"][0]["sig_pass"], (pad, r["ledgers"]))
+                self.assertEqual(r["states"]["producer_signature"]["state"], "contradicted", r["states"])
+            _write(lp, data)
+
+
+@NEEDS_CRYPTO
+class Rule8OtherSignedDocumentsAreNotEntries(unittest.TestCase):
+    """A tree head, a HEAD and a pack manifest are signed over the same kind of message as an entry: none of them is
+    signed by the signer, and none of them verifies as a signed entry."""
+
+    def setUp(self):
+        import signer
+        self.signer = signer
+        self.d = tempfile.mkdtemp()
+        self.key = os.path.join(self.d, "k.key")
+        self.pub = signer.keygen(self.key)["public_key_hex"]
+        self.led = os.path.join(self.d, "l.jsonl")
+        _ledger(self.led, 2)
+
+    def test_a_manifest_digest_is_not_signed(self):
+        import evidence_pack as E
+        pack = os.path.join(self.d, "pack")
+        E.build_pack([self.led], pack, subject="made by someone else")
+        mp = os.path.join(pack, "MANIFEST.json")
+        with open(mp) as f:
+            man = json.load(f)
+        forged = os.path.join(self.d, "forged.jsonl")
+        with open(forged, "w") as f:
+            f.write(json.dumps({"idx": 0, "ts": "2026-11-20T00:00:00Z", "data": {}, "prev_hash": "0" * 64,
+                                "self_hash": man["manifest_digest_sha256"]}) + "\n")
+        out = os.path.join(self.d, "out.jsonl")
+        with self.assertRaises(ValueError) as cm:      # 0.27.0: signed, and the pack verified with the key pinned
+            self.signer.sign_ledger(forged, out, self.key)
+        self.assertIn("is not the hash of its content", str(cm.exception))
+        self.assertFalse(os.path.exists(out))
+        r = E.verify_pack(pack, manifest_signer_hex=self.pub)
+        self.assertEqual(r["states"]["producer_signature"]["state"], "not_evaluated")    # control: nothing signed it
+
+    def test_a_signed_tree_head_head_or_manifest_is_not_a_signed_entry(self):
+        import cryptovalid_ingest as I
+        import evidence_pack as E
+        from cryptovalid_kms import FileKeyBackend
+        arc = os.path.join(self.d, "arc")
+        w = I.Ingestor(arc, batch_size=1, backend=FileKeyBackend(self.key))
+        w.append({"x": 1})
+        w.seal()
+        w.close(seal=False)
+        self.assertTrue(I.verify_archive(arc, expected_pubkey_hex=[self.pub])["ok"])     # control
+        pack = os.path.join(self.d, "pack")
+        E.build_pack([self.led], pack, sign_key=self.key)
+        docs = []
+        for p in (glob.glob(os.path.join(arc, "*.sth.json"))[0], os.path.join(arc, "ledger.head.json")):
+            with open(p) as f:
+                doc = json.load(f)
+            docs.append((dict(doc, self_hash=I._sth_canonical_hash(doc)), doc["signature"]))
+        with open(os.path.join(pack, "MANIFEST.json")) as f:
+            man = json.load(f)
+        body = {k: v for k, v in man.items() if k not in ("manifest_digest_sha256", "rfc3161_timestamp",
+                                                          "manifest_signature", "manifest_signer")}
+        docs.append((dict(body, self_hash=man["manifest_digest_sha256"], signer=self.pub), man["manifest_signature"]))
+        for i, (line, sig) in enumerate(docs):
+            line["signature"] = sig
+            p = os.path.join(self.d, "as_entry%d.jsonl" % i)
+            with open(p, "w") as f:
+                f.write(json.dumps(line) + "\n")
+            r = self.signer.verify_file(p, self.pub)   # until this rule: ok, verified 1, under the pinned key
+            self.assertFalse(r["ok"], (i, r))
+            self.assertEqual(r["verified"], 0)
+            self.assertTrue(r["failures"][0]["reason"].startswith("unknown_field:"), r["failures"])
+            self.assertEqual(verifier.verify_ledger(p)["verdict"], "FAIL")               # the two readers agree
+        signed = os.path.join(self.d, "s.jsonl")
+        self.signer.sign_ledger(self.led, signed, self.key)
+        self.assertTrue(self.signer.verify_file(signed, self.pub)["ok"])                 # control
+
+
+class _Body:
+    """An HTTP body of `data`; records the size asked for at every read."""
+
+    def __init__(self, data):
+        self.data, self.asked = data, []
+
+    def read(self, n=-1):
+        self.asked.append(n)
+        if n is None or n < 0:
+            n = len(self.data)
+        out, self.data = self.data[:n], self.data[n:]
+        return out
+
+
+class ReviewOfTheBranch(unittest.TestCase):
+    """What the mutants of the review of the branch (2026-11-20) left alive, each held here."""
+
+    def test_a_negative_index_is_not_the_last_leaf(self):
+        # rule 1: until 0.27.0 the index -1 walked the path of the last leaf of a tree of 2^k leaves, and verified
+        for n in (1, 2, 4, 8, 16):
+            lv = [b"leaf %d" % i for i in range(n)]
+            root, pr = M.mth(lv), M.inclusion_proof(n - 1, lv)
+            self.assertTrue(M.verify_inclusion(n - 1, n, lv[n - 1], pr, root))           # control
+            self.assertFalse(M.verify_inclusion(-1, n, lv[n - 1], pr, root), n)
+
+    def test_bytes_already_read_verify_at_any_caller_depth(self):
+        # rule 7: the bytes the pack hands to the ledger verifier are decoded under the same headroom as a path (SPEC §5:
+        # a line at the bound is PASS however deep the caller's stack is)
+        data = cur = {}
+        for _ in range(verifier.MAX_JSON_DEPTH - 2):
+            cur["x"] = {}
+            cur = cur["x"]
+        e = {"idx": 0, "ts": "t", "data": data, "prev_hash": "0" * 64}
+        e["self_hash"] = hashlib.sha256(verifier.canonical_payload(e)).hexdigest()
+        line = (json.dumps(e, separators=(",", ":")) + "\n").encode()
+        p = os.path.join(tempfile.mkdtemp(), "l.jsonl")
+        _write(p, line)
+
+        def deep(n, f):
+            return f() if n == 0 else deep(n - 1, f)
+        self.assertEqual(deep(700, lambda: verifier.verify_ledger(p))["verdict"], "PASS")                # control
+        self.assertEqual(deep(700, lambda: verifier._verify_ledger_data(p, line))["verdict"], "PASS")
+
+    def test_the_error_body_of_a_kms_answer_is_bounded(self):
+        # rule 6, the tenth read (cryptovalid_kms._http_error_text): never read() without a size, at most 1 MiB + 1 byte
+        import cryptovalid_kms as K
+        small = _Body(json.dumps({"errors": ["permission denied"]}).encode())
+        self.assertEqual(K._http_error_text(small), "permission denied")                  # control
+        self.assertTrue(small.asked and all(isinstance(n, int) and n >= 0 for n in small.asked), small.asked)
+        big = _Body(json.dumps({"errors": ["x"], "pad": "p" * (2 << 20)}).encode())      # valid JSON of more than 2 MiB
+        self.assertEqual(K._http_error_text(big), "")                                     # past the bound: only the status
+        self.assertTrue(all(isinstance(n, int) and n >= 0 for n in big.asked), big.asked[:3])
+        self.assertLessEqual(sum(big.asked), (1 << 20) + 1)
+
+    def test_a_schema_type_this_server_does_not_check_is_refused(self):
+        # rule 5: a property whose schema type is outside the four checked is refused, never passed unchecked
+        import cryptovalid_mcp as MCP
+        ran = []
+        MCP._TOOLS["zz_review"] = {"fn": lambda a: (ran.append(1), {"result": "stub"})[1], "readonly": True,
+                                   "description": "test", "schema": {"type": "object", "additionalProperties": False,
+                                                                     "properties": {"n": {"type": "integer"}}}}
+        try:
+            r = MCP.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                            "params": {"name": "zz_review", "arguments": {"n": 1}}})
+        finally:
+            del MCP._TOOLS["zz_review"]
+        self.assertEqual(r["error"]["code"], -32602, r)
+        self.assertIn("is not checked by this server", r["error"]["message"])
+        self.assertEqual(ran, [])
+
+    @NEEDS_CRYPTO
+    def test_the_name_of_a_key_written_twice_is_reported_in_ascii(self):
+        # rule 2: the name comes from anyone; a lone surrogate or a non-ASCII letter in it never reaches the receipt raw
+        import cryptovalid_jws as J
+        t = Rule2DuplicateKeys("test_signed_ledger_control")
+        t.setUp()
+        rec = {k: v for k, v in json.loads(t.lines[0]).items() if k not in ("signature", "signer")}
+        head = json.dumps({"alg": "EdDSA", "kid": t.pub})
+        name = '"\\ud800\u00e9"'                       # JSON text: an escaped lone surrogate, then U+00E9
+        dup_head = head[:-1] + ', %s: 1, %s: 2}' % (name, name)
+        dup_rec = json.dumps(rec)[:-1] + ', %s: 1, %s: 2}' % (name, name)
+        for jws, why in ((t._jws(dup_head, json.dumps(rec).encode()), "header_duplicate_key: "),
+                         (t._jws(head, dup_rec.encode("utf-8")), "payload_duplicate_key: ")):
+            r = J.verify(jws, t.pub)
+            self.assertFalse(r["ok"], r)
+            self.assertTrue(r["why"].startswith(why), r)
+            r["why"].encode("ascii")                   # raises if the name was copied as it came
+            self.assertIn("\\ud800", r["why"])
+
+
+@NEEDS_CRYPTO
+class Rule2TreeHeadsAndReceipts(unittest.TestCase):
+    """A key written twice in a tree head, a HEAD or a receipt file is refused."""
+
+    def setUp(self):
+        import signer
+        self.d = tempfile.mkdtemp()
+        self.key = os.path.join(self.d, "k.key")
+        self.pub = signer.keygen(self.key)["public_key_hex"]
+
+    def test_tree_head_and_head_with_a_key_twice(self):
+        import cryptovalid_ingest as I
+        from cryptovalid_kms import FileKeyBackend
+        arc = os.path.join(self.d, "arc")
+        w = I.Ingestor(arc, batch_size=1, backend=FileKeyBackend(self.key))
+        w.append({"x": 1})
+        w.seal()
+        w.close(seal=False)
+        self.assertTrue(I.verify_archive(arc, expected_pubkey_hex=[self.pub])["ok"])     # control
+        for p, member, reason in ((glob.glob(os.path.join(arc, "*.sth.json"))[0], "tree_size", "sth_unreadable: duplicate_key"),
+                                  (os.path.join(arc, "ledger.head.json"), "segments_sealed", "head_unreadable: duplicate_key")):
+            with open(p) as f:
+                text = f.read()
+            for first in (True, False):   # the other value first (the signed one is read last) or last
+                body = json.dumps(json.loads(text))[1:-1]
+                dup = '"%s": 999999' % member
+                with open(p, "w") as f:
+                    f.write("{" + (dup + ", " + body if first else body + ", " + dup) + "}")
+                r = I.verify_archive(arc, expected_pubkey_hex=[self.pub])
+                self.assertFalse(r["ok"], (member, first))
+                self.assertIn(reason, [x["reason"] for x in r["failures"]])
+            with open(p, "w") as f:
+                f.write(text)
+        self.assertTrue(I.verify_archive(arc, expected_pubkey_hex=[self.pub])["ok"])     # control: restored
+
+    def test_receipt_file_and_entry_file_with_a_key_twice(self):
+        import subprocess
+        import cryptovalid_receipt as R
+        led = os.path.join(self.d, "l.jsonl")
+        _ledger(led, 3)
+        rc = R.inclusion_receipt(led, 1, self.key)
+        with open(led) as f:
+            entry = json.loads(f.read().splitlines()[1])
+        rp, ep = os.path.join(self.d, "r.json"), os.path.join(self.d, "e.json")
+
+        def run(receipt_text, entry_text):
+            with open(rp, "w") as f:
+                f.write(receipt_text)
+            with open(ep, "w") as f:
+                f.write(entry_text)
+            cp = subprocess.run([sys.executable, os.path.join(_HERE, "cryptovalid_receipt.py"), "verify", rp, self.pub,
+                                 "--entry-json", ep], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return cp.returncode, json.loads(cp.stdout.decode("utf-8"))
+        code, out = run(json.dumps(rc), json.dumps(entry))
+        self.assertEqual((code, out["ok"]), (0, True))                                    # control
+        code, out = run('{"tree_size": 999, ' + json.dumps(rc)[1:], json.dumps(entry))
+        self.assertEqual((code, out), (1, {"ok": False, "why": "receipt unreadable: duplicate_key"}))
+        code, out = run(json.dumps(rc), '{"data": {"other": 1}, ' + json.dumps(entry)[1:])
+        self.assertEqual((code, out), (1, {"ok": False, "why": "entry unreadable: duplicate_key"}))
+
+
 if __name__ == "__main__":
     unittest.main()

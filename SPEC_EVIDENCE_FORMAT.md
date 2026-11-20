@@ -389,12 +389,13 @@ not change.
 v0.13 (2026-11-20) adds §21, eight rules written after the findings of the same review were re-run on the released
 0.27.0. Not additive where they turn an accepted input into a refused one. Rule 1: an RFC 9162 inclusion proof longer
 than the path of its (index, size) fails. Rule 2: a key written twice in one object of a ledger line read by the
-signature verifier, or of a JWS header or payload, is refused. Rule 3: an XML document read without `defusedxml` is
+signature verifier, of a JWS header or payload, of a tree head, a HEAD or a receipt file, is refused. Rule 3: an XML document read without `defusedxml` is
 refused when it carries a document type declaration anywhere, in any encoding. Rule 4: the experimental Vaara reader
 verifies ES256 with a P-256 key only, and an evidence record given for a receipt that binds none is not bound. Rule 5:
 an argument of an MCP tool is of the JSON type its input schema declares. Rule 6: a body read from the network is
 bounded. Rule 7: the evidence pack checks the digest, the chain, the signatures, the count and the head of a ledger on
-the same bytes. Rule 8: `signer.py sign` signs only entries whose `self_hash` it recomputes. The ledger format (§2–§5),
+the same bytes. Rule 8: `signer.py sign` signs only lines within the entry schema whose `self_hash` it recomputes, and
+`signer.py verify` fails a line outside that schema. The ledger format (§2–§5),
 its hashes and its vectors do not change.
 
 ## 7. Conformance (normative)
@@ -1895,15 +1896,17 @@ are its own.
 The findings of the review of 0.26.0 (§20) that §20 did not cover were re-run on 2026-11-20 on 0.26.0 and on the
 released 0.27.0; each rule below answers one that 0.27.0 still reproduced, and was written here before the code. Where
 a format belongs to someone else its own text decides, cited with the version read; where it is silent, the closed
-reading is taken and said to be this format's choice. Tests: `test_remeasure_20261120.py` (22 tests; 18 fail on
-0.27.0, the 4 named `*_control` hold what did not change and pass there too).
+reading is taken and said to be this format's choice. Rules 2, 7 and 8 were widened by the review of the branch on the
+same day, before any release; what that review measured is said in each. Tests: `test_remeasure_20261120.py` (35 tests;
+29 fail on 0.27.0, the 6 named `*_control` hold what did not change and pass there too).
 
 1. **An inclusion proof longer than its path fails** (`cryptovalid_merkle.verify_inclusion`). RFC 9162 §2.1.3.2
    (Experimental, December 2021, not obsoleted; read at rfc-editor.org on 2026-11-20), step 4a: "If sn is 0, then
    stop the iteration and fail the proof verification." Until 0.27.0 the step was missing: the proof of leaf 5 of a
    tree of 8 leaves verified as leaf 1 of a tree of 4 against the root of the tree of 8; over the trees of 1 to 33
    leaves, 1,416 of the 81,927 pairs (proof of (M, N), claimed (m, n) whose path is shorter) verified, none now. A leaf
-   index or a tree size that is not a non-negative integer (a bool included) fails too. The algorithm cannot tell a
+   index or a tree size that is not a non-negative integer (a bool included) fails too: until 0.27.0 the index -1 walked
+   the path of the last leaf of a tree of 1, 2, 4, 8 or 16 leaves and verified. The algorithm cannot tell a
    tree size the root was not built with when the proof has the length of that size's path: the caller binds the size
    to the root (a signed tree head; the callers in this repository take both from one checkpoint or recompute them).
 2. **A key written twice is refused by the signature verifier and by the JWS verifier.** §3: "duplicate object keys —
@@ -1914,7 +1917,13 @@ reading is taken and said to be this format's choice. Tests: `test_remeasure_202
    RFC 7515 §10.12 (read at rfc-editor.org on 2026-11-20) lets a JWS parser "either reject JWSs with duplicate Header
    Parameter names" or keep the last; this format rejects (`header_duplicate_key: <name>`, before the signature, 22 of
    40 generated headers were accepted); the payload is a ledger record, read under §3 (`payload_duplicate_key:
-   <name>`, with `signature_valid: true`: the signature was checked; 80 of 80 accepted until 0.27.0).
+   <name>`, with `signature_valid: true`: the signature was checked; 80 of 80 accepted until 0.27.0); the name is
+   reported in ASCII. The tree heads and the HEAD of an ingest archive, and the files of `cryptovalid_receipt.py verify`,
+   are read the same way: a signed tree head or HEAD with a key written twice, the signed value last, left
+   `verify_archive` ok with the signer pinned (measured on 0.27.0), and is now `sth_unreadable: duplicate_key` or
+   `head_unreadable: duplicate_key`; a receipt file or an `--entry-json` file with a key written twice was verified
+   (exit 0), and is now `receipt unreadable: duplicate_key` or `entry unreadable: duplicate_key`, exit 1. A signed tip
+   was already read by the strict parser (`tip_unreadable`).
 3. **A document type declaration is refused by the XML parser.** `fundcert_canonical` parses the XML of holdings files
    with `defusedxml` when it is installed; without it, until 0.27.0, it searched for `<!doctype` or `<!entity` in the
    first 4096 bytes decoded as UTF-8: a declaration after a comment or a processing instruction of more than 4096 bytes,
@@ -1924,7 +1933,8 @@ reading is taken and said to be this format's choice. Tests: `test_remeasure_202
    it (as `cryptovalid_lotl` reads a trusted list). A document without one parses as before.
 4. **Vaara receipts: ES256 is P-256, and an evidence record given is bound or the receipt is not ok**
    (`cryptovalid_vaara_receipt`, experimental). RFC 7518 §3.1 (read at rfc-editor.org on 2026-11-20): ES256 is "ECDSA
-   using P-256 and SHA-256". A JWK key was already required to be P-256; a PEM key was not, and an ES256 receipt
+   using P-256 and SHA-256" (RFC 7518 is updated by RFC 9864, October 2025, which leaves the JOSE ES256 as it is:
+   "fully specified"; read the same day). A JWK key was already required to be P-256; a PEM key was not, and an ES256 receipt
    signed and verified with a key on secp192r1, secp224r1, secp256k1 or brainpoolP256r1 was ok. Another curve is now
    refused before the signature check (`why`: "ES256 needs a P-256 key ..."). An evidence record given by the caller
    (`evidence`) for a decision receipt without `evidenceRef` left `evidence_ok` null and the receipt ok: the binding
@@ -1944,18 +1954,33 @@ reading is taken and said to be this format's choice. Tests: `test_remeasure_202
    largest document this package fetches is a trusted list: on 2026-11-20 the EU LOTL and the 31 lists it points to
    were at most 5,367,120 bytes.
 7. **The evidence pack reads a ledger once** (`evidence_pack.verify_pack`). Until 0.27.0 the path of a ledger was
-   opened five times (its digest, its chain, whether it is signed, its signatures, its count and head): with another
+   opened up to five times (its digest, its chain, whether it is signed, its signatures, its count and head; four when
+   no entry is signed): with another
    file at the path only while the chain was read, a pack whose manifest commits to a ledger with a broken chain was `valid: true`
    (measured by exchanging the file between the reads). Each ledger is now read once, bounded as §5 step 0 says, its
    SHA-256 taken from those bytes, and the chain, the signatures, the count and the head are checked on the same bytes
-   in memory (the ledger verifier already held a whole ledger in memory).
+   in memory (the ledger verifier already held a whole ledger in memory). One file is one read however the manifest
+   names it: the bytes are kept under the real path a name resolves to when it is first met, so `./l.jsonl` in
+   `file_digests_sha256` and `l.jsonl` in `ledgers`, or a link inside the pack, are the same bytes; a name the system does not open as that file (`l.jsonl/`) is not
+   another spelling of it and is refused as before (in the first draft
+   of this rule the two spellings were two reads, and a file exchanged between them made the same pack valid: measured
+   on the branch on 2026-11-20). A signed ledger with bytes that are not UTF-8 20,000 bytes past its signed entries
+   made `verify_pack` raise `UnicodeDecodeError` (measured on 0.27.0; with the bytes right after the entries it did not):
+   it is now a failure of the ledger's signature layer, and the pack is not valid.
 8. **The signer signs entries, never a hash as written** (`signer.sign_ledger`, `signer.py sign`). An entry is signed
    over its `self_hash` as text; the tree heads and the HEAD of `cryptovalid_ingest` are signed, with the same kind of
    key, over the hex of the SHA-256 of their canonical JSON: the same kind of message, with no tag that tells them
    apart. Until 0.27.0 the signer signed the `self_hash` of each line as written: a "ledger" of two lines whose
    `self_hash` were the hashes of a tree head and a HEAD made by someone else, signed with `signer.py sign`, gave the
    two signatures of an archive the key's holder never sealed, and `verify_archive` with that key pinned answered ok
-   (measured on 0.26.0 and 0.27.0). Each line is now a JSON object with distinct keys, its members within the entry
+   (measured on 0.26.0 and 0.27.0). The digest of a pack manifest is the same kind of message: signed the same way, it
+   made `verify_pack` with `manifest_signer_hex` pinned answer `producer_signature: verified` for a pack the key's
+   holder never built (measured on 0.27.0). Each line is now a JSON object with distinct keys, its members within the entry
    schema of §2.1, and a `self_hash` recomputed from its content (§3), or the signer refuses the whole file and writes
    nothing (`refusing to sign line <n>: ...`). An entry's content is never a tree head or a HEAD: their members are not
-   in the entry schema. A tag that separates the kinds of signed message is a change of format, not made here.
+   in the entry schema. The signature verifier reads the same closed object (`signer.verify_file`, `signer.py verify`,
+   and the signature layer of a pack): a tree head, a HEAD or a signed manifest of the key's holder, written as a
+   ledger line with its hash as `self_hash`, verified there under the pinned key (ok, 1 verified, while `verifier.py`
+   failed the same file; measured on 0.27.0 and on the first draft of this rule); such a line is now the failure
+   `unknown_field:<keys>` at its index. A tag that separates the kinds of signed message is a change of format, not
+   made here.
