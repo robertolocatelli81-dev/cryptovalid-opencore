@@ -195,6 +195,27 @@ class _Redirects(urllib.request.HTTPRedirectHandler):
         return new
 
 
+# SPEC v0.13 §21 rule 6: a body read from the network is bounded. Until 0.27.0 seven modules read a response whole
+# (`read()`, `json.load`), however long it was. The largest document this package fetches is a trusted list of the EU
+# LOTL: measured on 2026-11-20, the 31 lists it points to and the LOTL itself are at most 5,367,120 bytes.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
+
+def read_body(resp, limit: int = MAX_RESPONSE_BYTES) -> bytes:
+    """The body of an HTTP response, at most `limit` bytes; ValueError("response_too_large: ...") when there are more.
+    Reads `limit` + 1 bytes at most, whatever Content-Length says."""
+    chunks, n = [], 0
+    while n <= limit:
+        b = resp.read(min(1 << 20, limit + 1 - n))
+        if not b:
+            break
+        chunks.append(b)
+        n += len(b)
+    if n > limit:
+        raise ValueError(f"response_too_large: the response exceeds {limit} bytes")
+    return b"".join(chunks)
+
+
 def _open(req, timeout, loopback: bool, allow: str):
     """The single place that does I/O (tests replace it to answer without a network)."""
     handlers = [_Redirects(allow, loopback)]

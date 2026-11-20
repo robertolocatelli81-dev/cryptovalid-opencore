@@ -593,7 +593,7 @@ class AwsKmsHttpBackend:
         op = target.rsplit(".", 1)[-1]
         try:   # 08/11/2026: HTTP/network/answer errors = one readable RuntimeError (no credentials in the text)
             with _net.open_url(req, 20, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP) as r:   # fixed AWS endpoint, or loopback
-                return json.load(r)
+                return json.loads(_net.read_body(r))   # SPEC v0.13 §21 rule 6: bounded
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"AWS KMS {op} HTTP {e.code} for {self._key_id}: {_http_error_text(e)}") from None
         except urllib.error.URLError as e:
@@ -633,7 +633,7 @@ class AwsKmsHttpBackend:
 def _http_error_text(e) -> str:
     """Short reason from an HTTP error body (Vault {"errors": [...]}, AWS {"__type", "message"}); never the request."""
     try:
-        body = json.loads(e.read().decode("utf-8", "replace") or "{}")
+        body = json.loads(_net.read_body(e, 1 << 20).decode("utf-8", "replace") or "{}")   # SPEC v0.13 §21 rule 6
     except Exception:  # noqa: BLE001 — a body that is not JSON: only the status is reported
         return ""
     if isinstance(body, dict):
@@ -676,7 +676,7 @@ class VaultTransitBackend:
                                               "Content-Type": "application/json"})
         try:
             with _net.open_url(req, self._timeout, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP) as r:
-                raw = r.read()
+                raw = _net.read_body(r)   # SPEC v0.13 §21 rule 6: bounded
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"Vault HTTP {e.code} on {method} {path}: {_http_error_text(e)}") from None
         except urllib.error.URLError as e:
@@ -812,7 +812,7 @@ class NetHsmBackend:
                                      headers={"Authorization": f"Basic {self._auth}",
                                               "Content-Type": "application/json"})
         with _net.open_url(req, 30, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP) as r:
-            raw = r.read()
+            raw = _net.read_body(r)   # SPEC v0.13 §21 rule 6: bounded
             return json.loads(raw.decode()) if raw else {}
 
     def keygen(self) -> str:

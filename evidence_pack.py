@@ -171,7 +171,7 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
         http = urllib.request.Request(tsa_url, data=req, method="POST",
                                       headers={"Content-Type": "application/timestamp-query"})
         with _net.open_url(http, timeout, _net.ALLOW_HTTP_OR_HTTPS) as r:
-            resp = r.read()
+            resp = _net.read_body(r)   # SPEC v0.13 §21 rule 6: bounded
         tsr_b64 = base64.b64encode(resp).decode()
         # anchored only on a token whose imprint is THIS digest (2026-10-03: any HTTP body — an error page, a rejection, a token
         # for another digest — was recorded as anchored: True)

@@ -80,7 +80,7 @@ def _rpc(url, method, params, timeout):
                                  headers={"Content-Type": "application/json",
                                           "User-Agent": "cryptovalid-solana/1.0"})
     with _net.open_url(req, timeout, _net.ALLOW_HTTP_OR_HTTPS) as r:
-        d = json.loads(r.read().decode())
+        d = json.loads(_net.read_body(r).decode())   # SPEC v0.13 §21 rule 6: bounded
     if "error" in d:
         raise ValueError(f"rpc error: {str(d['error'])[:120]}")
     return d.get("result")

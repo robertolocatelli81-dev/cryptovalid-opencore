@@ -125,7 +125,7 @@ class HttpQeasBackend:
                                      headers={"Authorization": f"Bearer {self._token}",
                                               "Content-Type": "application/json"})
         with _net.open_url(req, self._timeout, _net.ALLOW_HTTPS) as r:
-            return json.loads(r.read().decode())
+            return json.loads(_net.read_body(r).decode())   # SPEC v0.13 §21 rule 6: bounded
 
     def deposit(self, digest_hex: str, subject: str, now: float) -> Dict:
         r = self._req("POST", "deposit", {"digest_sha256": digest_hex, "subject": subject})

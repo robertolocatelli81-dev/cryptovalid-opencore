@@ -53,7 +53,7 @@ def _rpc(url, method, params, timeout):
     req = urllib.request.Request(url, body,
                                  {"Content-Type": "application/json", "User-Agent": "cryptovalid-probe/1.0"})
     with _net.open_url(req, timeout, _net.ALLOW_HTTP_OR_HTTPS) as r:   # the rule of cryptovalid_solana._rpc
-        return json.load(r)
+        return json.loads(_net.read_body(r))   # SPEC v0.13 §21 rule 6: bounded
 
 
 def probe_retention(signature, rpcs=PROBE_RPCS, timeout=20):

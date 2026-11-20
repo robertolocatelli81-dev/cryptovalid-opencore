@@ -84,7 +84,7 @@ def request_timestamp(digest: bytes, tsa_url: str, timeout: int = 30):
                                headers={"Content-Type": "application/timestamp-query"})
     # http or https only (RFC 3161 §3.4 is HTTP; the token is signed and checked): `file:`, `ftp:`, `data:` are refused
     with _net.open_url(r, timeout, _net.ALLOW_HTTP_OR_HTTPS) as resp:
-        raw = resp.read()
+        raw = _net.read_body(resp)   # SPEC v0.13 §21 rule 6: bounded
     # TimeStampResp ::= SEQUENCE { status PKIStatusInfo, timeStampToken OPTIONAL }
     _, respval, _ = _parse_seq_children(_parse_seq_children(raw)[0][2])[0], None, None  # noqa
     top = _parse_seq_children(raw)[0][1]                       # inner of outer SEQUENCE
