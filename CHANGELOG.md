@@ -7,6 +7,62 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
+## 0.28.0 (unreleased): verdicts change
+
+### Fixed
+
+Eight rules of SPEC v0.13 §21, written before the code. The findings come from the security review of 0.26.0 that
+§20 did not cover; on 2026-11-20 each was re-run on 0.26.0 and on the released 0.27.0, and each one below still
+reproduced on 0.27.0. `test_remeasure_20261120.py`, 22 tests: 18 fail on 0.27.0 (ec56b3c), the 4 named `*_control`
+hold what did not change and pass there too. 35 mutants of the changed lines: 33 killed; the 2 that live give the
+same answers (an `EntityDecl` handler: an entity is declared only inside a document type declaration, which the other
+handler refuses first: in 1,000 documents measured, never before it; a body loop without its bound: the read before it asks for 0
+bytes, and `HTTPResponse.read(0)` is `b""`).
+
+- **An RFC 9162 inclusion proof longer than the path of its leaf index and tree size verified** (rule 1).
+  `cryptovalid_merkle.verify_inclusion` lacked step 4a of RFC 9162 §2.1.3.2 ("If sn is 0, then stop the iteration and
+  fail the proof verification"): the proof of leaf 5 of a tree of 8 verified as leaf 1 of a tree of 4 against the root
+  of the tree of 8; over trees of 1 to 33 leaves, 1,416 of 81,927 such pairs verified, none now. A leaf index or a
+  tree size that is not a non-negative integer fails too. The caller still binds the size to the root (a signed tree
+  head): a proof of the right length can verify against the root of another size, as RFC 9162 writes the algorithm.
+- **A key written twice was read as its last value by the signature verifier and the JWS verifier** (rule 2).
+  `signer.verify_file` and `signer.py verify` verified a ledger line with a key written twice and the signed value
+  last (4 of 8 generated lines), while `verifier.py` refused the same file: now `duplicate_key` at that index (SPEC
+  §3). `cryptovalid_jws.verify` refuses a header with a name twice (`header_duplicate_key`, RFC 7515 §10.12 allows a
+  parser to reject; 22 of 40 generated headers were accepted) and a payload with a key twice
+  (`payload_duplicate_key`, `signature_valid: true`; 80 of 80 were accepted).
+- **Without `defusedxml`, a document type declaration past the first 4096 bytes, or in UTF-16, was not refused and its
+  entities were expanded** (rule 3). `fundcert_canonical` searched the first 4096 bytes as UTF-8 text: 218 of 300
+  generated documents with a declaration after a long comment, a processing instruction or blank lines, in four
+  encodings or as a str, were parsed (expat 2.5.0). The document is now read by expat with handlers that refuse the declaration,
+  as `cryptovalid_lotl` reads a trusted list; a document without one parses as before.
+- **Vaara receipts: ES256 verified with a key of another curve, and an evidence record the receipt does not bind left
+  it ok** (rule 4; `cryptovalid_vaara_receipt` is experimental). A PEM key on secp192r1, secp224r1, secp256k1 or
+  brainpoolP256r1 verified an ES256 receipt its private key signed; ES256 is P-256 (RFC 7518 §3.1), as the JWK branch
+  already required: another curve is refused before the signature. An `evidence` given for a decision receipt without
+  `evidenceRef` is `evidence_ok: false` (was null, receipt ok).
+- **MCP: an argument of another JSON type than its schema's was used as it came** (rule 5). `"lotl_check": "false"`
+  went through `bool()` and switched the trusted-list network check on. Each argument is now checked against the type
+  its tool's input schema declares, `-32602` naming it and the tool not run (221 generated calls over the 13
+  properties of the 6 tools). The description of `verify_ledger` said it checked "Ed25519 signatures if present"; it
+  never did (the receipt counts them in `signatures_not_checked`): the description now says so.
+- **A network response was read whole however long it was** (rule 6). Ten reads in seven modules (`cryptovalid_lotl`,
+  `cryptovalid_tsa`, `evidence_pack` when it stamps, `cryptovalid_qeas`, `cryptovalid_solana`,
+  `cryptovalid_pruning_probe`, `cryptovalid_kms`) now go through `cryptovalid_net.read_body`: at most
+  `MAX_RESPONSE_BYTES` (64 MiB; 1 MiB for an error body), else `ValueError("response_too_large: ...")`. Measured on
+  2026-11-20: the EU LOTL and the 31 trusted lists it points to are at most 5,367,120 bytes.
+- **The evidence pack read a ledger's path five times, so the file checked could change between the reads** (rule 7).
+  With another file at the path only while the chain was read, a pack whose manifest commits to a ledger with a broken
+  chain was `valid: true`. `verify_pack` now reads each ledger once, bounded, takes its digest from those bytes and
+  runs every check on them in memory.
+- **`signer.py sign` signed a `self_hash` as written, so it could be made to sign an archive's tree heads** (rule 8).
+  The tree heads and the HEAD of an ingest archive are signed over the same kind of message as an entry (the hex of a
+  SHA-256): a two-line "ledger" whose `self_hash` were the hashes of a tree head and a HEAD, signed with
+  `signer.py sign`, gave signatures under which `verify_archive`, with that key pinned, accepted an archive the key's
+  holder never sealed (measured on 0.26.0 and 0.27.0). The signer now refuses, and writes nothing for, a ledger with
+  a line that is not an entry: a member outside the entry schema, a key written twice, a `self_hash` that is not the
+  hash of the line's content.
+
 ## 0.27.0 (2026-11-20): reasons change
 
 ### Added
