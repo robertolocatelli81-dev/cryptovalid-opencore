@@ -64,6 +64,14 @@ dfandrich/fileviewinfo decoded (MIT, Copyright (c) 2003-2026 Dan Fandrich, full
 text in LICENSE.fileviewinfo). digicert_trusted_root_g4.pem is the public root
 certificate DigiCert publishes at cacerts.digicert.com.
 
+cryptovalid_lotl.py carries the SHA-256 digests of the six LOTL-signing
+certificates published in the Official Journal of the European Union, C/2026/1944
+of 15.4.2026 (http://data.europa.eu/eli/C/2026/1944/oj), © European Union; reused
+under the Commission's reuse policy, Decision 2011/833/EU, as the EUR-Lex legal
+notice states it (read on 2026-11-20: "you can re-use the legal documents
+published in EUR-Lex for commercial or non-commercial purposes", the source
+acknowledged). The digests are copied unchanged.
+
 DCO is the Developer Certificate of Origin, version 1.1, copyright The Linux
 Foundation and its contributors, kept verbatim as its licence asks.
 
