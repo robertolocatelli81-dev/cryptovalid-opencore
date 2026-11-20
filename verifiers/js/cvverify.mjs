@@ -342,6 +342,8 @@ export function verifyLedger(text, { algo = null, pubkey = null, tip = null, tru
   }
   // SPEC v0.9 §17 rule 2: the oldest acceptable tip is a requirement on a tip, which it makes required
   if (tipNotBefore !== null && tipNotBefore !== undefined) requireTip = true;
+  // SPEC §22 rule 1 (Unreleased): the trusted log key makes the tip required too (until 0.27.0 without a tip: PASS)
+  if (trustedPubkey) requireTip = true;
   // signed chain tip: `tip` is the parsed document (or null); the CLI loads <ledger>.tip.json when present
   let tipCheck = null;
   if (tip !== null && !trustedPubkey) {

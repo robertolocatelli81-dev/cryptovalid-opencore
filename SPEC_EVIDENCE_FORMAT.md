@@ -1113,7 +1113,8 @@ of this section.
 
 Not changed by this section: a trusted log key (`--trusted-pubkey`) given without a tip file. It is the key a tip is
 checked with when there is one; the tip is required only with `--require-tip` (or rule 2, or a trusted post-quantum
-key), and without it the receipt's `tip` is `null` and its `scope` says the tail is not covered. The Rust and Swift
+key), and without it the receipt's `tip` is `null` and its `scope` says the tail is not covered. Changed by §22 rule 1
+(Unreleased): the trusted log key makes the tip required too. The Rust and Swift
 verifiers have none of these options and refuse them as unknown flags, exit 2 (Rust measured on 2026-11-16; Swift by
 its code, `main.swift` takes only `--algo` and `--pubkey`).
 
@@ -1984,3 +1985,19 @@ same day, before any release; what that review measured is said in each. Tests: 
    failed the same file; measured on 0.27.0 and on the first draft of this rule); such a line is now the failure
    `unknown_field:<keys>` at its index. A tag that separates the kinds of signed message is a change of format, not
    made here.
+
+## 22. Rules written for the decisions of 2026-11-20 (Unreleased)
+
+The re-measurement of 2026-11-20 (§21) left six findings to a decision of the maintainer, each a behaviour the earlier
+text of this specification allowed or a format change. The decisions were taken the same day; each rule below was
+written here before the code. Tests: `test_decisions_20261120.py`; each class fails on the branch before it and the
+tests named `*_control` hold what the rule does not change.
+
+1. **A trusted log key makes the tip required** (`verifier.verify_ledger(trusted_pubkey_hex=...)`, `verifier.py
+   --trusted-pubkey`, the JS `verifyLedger({trustedPubkey})` and `cvverify.mjs --trusted-pubkey`, the Go
+   `VerifyLedgerWithTip*`/`VerifyLedgerFull` and `cvverify -trusted-pubkey`, the Java `CvVerify -trusted-pubkey`), as
+   the oldest acceptable tip (§17 rule 2) and the trusted post-quantum key already did. Until 0.27.0 the key was used
+   only when a tip happened to be there: with no tip file the four verifiers answered PASS, exit 0, `tip: null` (§17,
+   "Not changed by this section"), so a caller who pinned the log key and lost the tip was not told. Now the verdict
+   is FAIL with `tip_missing`, exit 1. In the libraries an empty key is still "not given" (§17 rule 4). The Rust and
+   Swift verifiers have no tip options (unchanged).

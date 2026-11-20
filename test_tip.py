@@ -86,8 +86,9 @@ class TestTip(unittest.TestCase):
         _write(self.led, self.base[:-1]); T.sign_tip(self.led, self.other)   # re-signed with a different key
         r = self._v(); self.assertEqual(r["verdict"], "FAIL"); self.assertIn("tip_invalid", self._errors(r))
         os.remove(self.led + ".tip.json")
-        self.assertEqual(self._v()["verdict"], "PASS")                       # not required: limit applies in full
-        self.assertIsNone(self._v()["tip"])
+        # SPEC §22 rule 1: the trusted log key makes the tip required (until 0.27.0 PASS here, `tip: null`)
+        r = self._v(); self.assertEqual(r["verdict"], "FAIL"); self.assertIn("tip_missing", self._errors(r))
+        self.assertIsNone(r["tip"])
         r = self._v(require_tip=True); self.assertEqual(r["verdict"], "FAIL"); self.assertIn("tip_missing", self._errors(r))
         T.sign_tip(self.led, self.k)
         r = V.verify_ledger(self.led)                                        # no trusted key: tip NOT checked, chain verdict only

@@ -447,6 +447,7 @@ public class CvVerify {
         }
         // signed chain tip; SPEC v0.9 §17 rule 2: the oldest acceptable tip makes the tip required (until 0.25.0: without a tip, PASS)
         if (!nb.isEmpty()) reqTip = true;
+        if (!tpk.isEmpty()) reqTip = true;   // SPEC §22 rule 1 (Unreleased): the trusted log key makes the tip required (until 0.27.0 without a tip: PASS)
         if (!tpq.isEmpty()) { reqTip = true; if (tpk.isEmpty()) { failures.add("pq_key_without_log_key: -trusted-pq-pubkey needs -trusted-pubkey (the post-quantum layer sits on top of the Ed25519 tip, never instead of it)"); v.put("verdict", "FAIL"); v.put("scope", SCOPE); return v; } }
         if (tipPath.isEmpty() && Files.exists(Path.of(ledgerPath + ".tip.json"))) tipPath = ledgerPath + ".tip.json";
         if (tipPath.isEmpty()) {

@@ -1,8 +1,8 @@
 // cvverify — Go verifier for cryptovalid ledgers. Exit 0 = PASS, 1 = FAIL (an empty ledger is FAIL too), 2 = usage,
 // 74 = the receipt was not written whole (stdout full or a reader gone; 0.20.3), whatever the verdict.
 // With a signed chain tip (-tip, or <ledger>.tip.json next to the file) truncation / suffix rewrite / unsealed
-// appends are named failures; -trusted-pubkey <hex> is the log key the relying party trusts; -require-tip makes
-// a missing tip a failure.
+// appends are named failures; -trusted-pubkey <hex> is the log key the relying party trusts and makes the tip required
+// (SPEC §22 rule 1); -require-tip makes a missing tip a failure.
 package main
 
 import (
@@ -43,7 +43,7 @@ func main() {
 	// a reader that is gone must be an EPIPE error the program sees, not a SIGPIPE death (exit 141, no message: 0.20.2)
 	signal.Ignore(syscall.SIGPIPE)
 	tip := onceString("tip", "signed chain tip to check (default: <ledger>.tip.json if present)")
-	pk := onceString("trusted-pubkey", "log key (hex) the tip must be signed with")
+	pk := onceString("trusted-pubkey", "log key (hex) the tip must be signed with; makes the tip required (SPEC §22 rule 1)")
 	req := flag.Bool("require-tip", false, "FAIL when no signed tip is available")
 	nb := onceString("tip-not-before", "refuse a tip dated before this ISO-8601 instant (rollback)")
 	lid := onceString("expect-ledger-id", "the chain identity (self_hash of entry 0) you expect")

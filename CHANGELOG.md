@@ -9,6 +9,13 @@ run by the same author, not by a third party.
 
 ## 0.28.0 (unreleased): verdicts change
 
+### Changed by the decisions of 2026-11-20 (SPEC §22, written before the code; verdicts change)
+
+`test_decisions_20261120.py`: each class fails on the branch before its rule; the tests named `*_control` pass there too.
+
+- **A trusted log key makes the tip required** (§22 rule 1), in the Python, JS, Go and Java verifiers: with
+  `--trusted-pubkey` and no tip the verdict was PASS, exit 0, `tip: null`; it is now FAIL with `tip_missing`, exit 1.
+
 ### Fixed
 
 Eight rules of SPEC v0.13 §21, written before the code. The findings come from the security review of 0.26.0 that

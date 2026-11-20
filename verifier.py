@@ -867,7 +867,7 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
     `tip`: path of a signed chain tip (cryptovalid_tip.py); None = use `<path>.tip.json` when it exists. With a
     tip the tail limit moves: truncation, suffix rewrite and unsealed appends become named FAILs (the chain
     alone cannot see them). `require_tip`: a missing tip is a FAIL. `trusted_pubkey_hex`: the log key the
-    relying party trusts (without it the tip's own key is used and the receipt says so: NOT trusted).
+    relying party trusts; given, it makes the tip required (SPEC §22 rule 1); without it a tip is not checked.
     The recursion headroom covers the whole verification (the entries decoded at the bound are hashed again), and the
     caller's recursion limit is back when this returns (15/11/2026).
     `expect_ledger_id` (SPEC v0.9 §17): compared with the self_hash of entry 0 with or without a tip (until 0.25.0 only
@@ -1047,6 +1047,10 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
     if tip_not_before is not None:
         # SPEC v0.9 §17 rule 2: the oldest acceptable tip is a requirement on a tip, which it makes required (until 0.25.0
         # it was read only inside the tip check: without a tip, PASS)
+        require_tip = True
+    if trusted_pubkey_hex:
+        # SPEC §22 rule 1 (Unreleased): the trusted log key is a requirement on a tip, as the oldest tip and the trusted
+        # post-quantum key are (until 0.27.0 it was used only when a tip happened to be there: without one, PASS)
         require_tip = True
     if trusted_pq_pubkey_b64:
         # a trusted post-quantum key is a REQUIREMENT: it implies a required tip, and it is meaningless without the
@@ -1242,7 +1246,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--out", default=None, help="also write the JSON receipt to this file")
     parser.add_argument("--tip", default=None, action=_Once, help="signed chain tip to check (default: <ledger>.tip.json if present)")
-    parser.add_argument("--trusted-pubkey", default=None, action=_Once, help="log key (hex) the tip must be signed with")
+    parser.add_argument("--trusted-pubkey", default=None, action=_Once, help="log key (hex) the tip must be signed with; makes the tip required (SPEC §22 rule 1)")
     parser.add_argument("--trusted-pq-pubkey", default=None, action=_Once,
                         help="ML-DSA-65 log key (base64) a hybrid tip must ALSO be signed with (FAIL if missing/invalid)")
     parser.add_argument("--require-tip", action="store_true", help="FAIL when no signed tip is available")

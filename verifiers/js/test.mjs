@@ -154,6 +154,7 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
   ok("tip payload bytes = Python oracle", tipPayload(3, "cd".repeat(32), "ab".repeat(32), "T").toString() === '{"entries":3,"kind":"cryptovalid_tip/1","ledger_id":"' + "cd".repeat(32) + '","tip_sha256":"' + "ab".repeat(32) + '","ts":"T"}');
   ok("tip: another ledger's tip named", verifyLedger(text(6), { tip: sign(6, chain[5].self_hash, "2026-09-15T07:00:00Z", "ef".repeat(32)), trustedPubkey: pkHex }).errors.some((e) => e.error.startsWith("tip_of_another_ledger")));
   ok("tip: expected ledger id enforced", verifyLedger(text(6), { tip, trustedPubkey: pkHex, expectLedgerId: "ef".repeat(32) }).errors.some((e) => e.error.startsWith("ledger_id_mismatch")) && verifyLedger(text(6), { tip, trustedPubkey: pkHex, expectLedgerId: chain[0].self_hash }).verdict === "PASS");
+  ok("tip: a trusted log key makes the tip required (SPEC §22 rule 1)", (() => { const r = verifyLedger(text(6), { trustedPubkey: pkHex }); return r.verdict === "FAIL" && r.tip === null && r.errors.some((e) => e.error.startsWith("tip_missing")); })() && verifyLedger(text(6), {}).verdict === "PASS");
   ok("tip: intact PASS trusted", (() => { const r = verifyLedger(text(6), { tip, trustedPubkey: pkHex }); return r.verdict === "PASS" && r.tip.ok && r.tip.trusted; })());
   ok("positive control: bare chain PASSES on truncated file", verifyLedger(text(5)).verdict === "PASS");
   ok("tip: truncation named", verifyLedger(text(5), { tip, trustedPubkey: pkHex }).errors.some((e) => e.error.startsWith("tail_truncated")));

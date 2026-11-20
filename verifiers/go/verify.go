@@ -259,6 +259,10 @@ func VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64,
 		// it was read only inside CheckTip: without a tip, PASS)
 		requireTip = true
 	}
+	if trustedPubkeyHex != "" {
+		// SPEC §22 rule 1 (Unreleased): the trusted log key is a requirement on a tip too (until 0.27.0 without a tip: PASS)
+		requireTip = true
+	}
 	if trustedPQPubkeyB64 != "" {
 		// a trusted post-quantum key is a REQUIREMENT: it implies a required tip and needs the trusted log key
 		// (council 15/09: PQ key alone returned before CheckTipPQ → PASS, a fail-open)

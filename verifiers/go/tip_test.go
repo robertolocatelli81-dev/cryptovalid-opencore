@@ -183,10 +183,13 @@ func TestTipMovesTheTailLimit(t *testing.T) {
 	if _, err := SignTip(p, key, ts); err != nil {
 		t.Fatal(err)
 	}
-	// tip removed: fine unless required
+	// tip removed: SPEC §22 rule 1, the trusted log key makes the tip required (until 0.27.0 PASS); without the key PASS
 	os.Remove(TipPath(p))
-	if v := VerifyLedgerWithTip(p, "", pk, false, "", ""); v.Verdict != "PASS" || v.Tip != nil {
-		t.Fatalf("no tip, not required: %+v", v)
+	if v := VerifyLedgerWithTip(p, "", pk, false, "", ""); v.Verdict != "FAIL" || v.Tip != nil || !strings.Contains(strings.Join(v.Failures, " "), "tip_missing") {
+		t.Fatalf("no tip with a trusted log key not named: %+v", v)
+	}
+	if v := VerifyLedgerWithTip(p, "", "", false, "", ""); v.Verdict != "PASS" || v.Tip != nil {
+		t.Fatalf("no tip, no trusted key, not required: %+v", v)
 	}
 	if v := VerifyLedgerWithTip(p, "", pk, true, "", ""); v.Verdict != "FAIL" || !strings.Contains(strings.Join(v.Failures, " "), "tip_missing") {
 		t.Fatalf("required tip missing not named: %+v", v)
