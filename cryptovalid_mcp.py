@@ -184,8 +184,10 @@ def t_seal_segment(args: Dict) -> Dict:
 _TOOLS = {
     "verify_ledger": {
         "fn": t_verify_ledger, "readonly": True,
-        "description": ("Verify one hash-chained JSONL ledger (and its Ed25519 signatures "
-                        "if present). READ-ONLY; returns verdict + provenance (path, SHA-256, UTC)."),
+        "description": ("Verify one hash-chained JSONL ledger: every self_hash and prev_hash link (SPEC §5). "
+                        "Signatures are NOT checked by this tool: the receipt counts the signed entries in "
+                        "signatures_not_checked (check them with signer.py verify --pubkey, or verify_pack). "
+                        "READ-ONLY; returns verdict + provenance (path, SHA-256, UTC)."),
         "schema": {"type": "object", "additionalProperties": False, "required": ["path"],
                    "properties": {"path": {"type": "string",
                                            "description": "path to the .jsonl ledger"}}}},
@@ -250,6 +252,30 @@ def _rpc_error(id_, code: int, message: str) -> Dict:
     return {"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": message}}
 
 
+_JSON_TYPES = {"string": str, "boolean": bool, "object": dict, "array": list}
+
+
+def _argument_type_problem(args: Dict, properties: Dict) -> Optional[str]:
+    """SPEC v0.13 §21 rule 5: an argument is of the JSON type its tool's input schema declares (`string`, `boolean`,
+    `object`, `array` with `items` of a declared type); None, or what is wrong. Until 0.27.0 the types were not read:
+    `"lotl_check": "false"` went through bool() and switched the network check ON."""
+    for k, v in args.items():
+        sch = properties.get(k, {})
+        want = sch.get("type")
+        if want is None:
+            continue
+        typ = _JSON_TYPES.get(want)
+        if typ is None:   # a schema of this server with a type this check does not know: refused, never skipped
+            return f"{k!r}: the schema type {want!r} is not checked by this server"
+        if not isinstance(v, typ):
+            return f"{k!r} must be a JSON {want}, got {type(v).__name__}"
+        if want == "array" and "items" in sch:
+            ityp = _JSON_TYPES.get(sch["items"].get("type"))
+            if ityp is None or not all(isinstance(x, ityp) for x in v):
+                return f"{k!r} must be an array of JSON {sch['items'].get('type')}"
+    return None
+
+
 def handle(msg) -> Optional[Dict]:
     """One JSON-RPC message in, zero/one out (notifications get no reply).
     SPEC v0.12 §20 rule 12 (19/11/2026), JSON-RPC 2.0 §4, §4.2 and §5.1: a message that is not an object, an id that
@@ -301,6 +327,9 @@ def handle(msg) -> Optional[Dict]:
         if unknown:
             return _rpc_error(id_, -32602, f"unknown argument(s) for {name}: {', '.join(repr(k) for k in unknown)[:200]} "
                                            f"(it takes: {', '.join(sorted(tool['schema'].get('properties', {})))})")
+        bad = _argument_type_problem(args, tool["schema"].get("properties", {}))
+        if bad:
+            return _rpc_error(id_, -32602, f"invalid argument for {name}: {bad}"[:300])
         try:
             out = tool["fn"](args)
             is_err = bool(out.get("blocked") or out.get("error"))
