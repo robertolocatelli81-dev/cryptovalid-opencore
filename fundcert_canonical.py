@@ -573,12 +573,21 @@ def _safe_fromstring(data):
         return _dfs(data)
     except ImportError:
         import xml.etree.ElementTree as ET  # nosec B405 - input filtrato sotto
-        head = (data[:4096].decode("utf-8", "replace") if isinstance(data, bytes)
-                else data[:4096])
-        low = head.lower()
-        if "<!doctype" in low or "<!entity" in low:
-            raise ValueError("XML with DOCTYPE/ENTITY refused (XML-bomb/XXE risk; "
-                             "install defusedxml to parse it)")
+        import xml.parsers.expat as expat
+        # SPEC v0.13 §21 rule 3: the document type declaration is refused by the XML parser itself, wherever it stands in
+        # the prolog and in whatever encoding the bytes are (as cryptovalid_lotl._parse_tl does). Until 0.27.0 a
+        # text search in the first 4096 bytes, decoded as UTF-8, missed one after a comment of 5000 bytes and one in a
+        # UTF-16 document: the entities they declared were expanded.
+
+        def _refuse(*_a):
+            raise ValueError("XML with DOCTYPE/ENTITY refused (XML-bomb/XXE risk; install defusedxml to parse it)")
+        pre = expat.ParserCreate()
+        pre.StartDoctypeDeclHandler = _refuse
+        pre.EntityDeclHandler = _refuse
+        try:
+            pre.Parse(data, True)
+        except expat.ExpatError:
+            pass   # not well-formed: ElementTree below raises its own ParseError at the same place
         return ET.fromstring(data)  # nosec B314 - DOCTYPE/ENTITY già rifiutati sopra
 
 
