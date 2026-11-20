@@ -201,7 +201,7 @@ def mutations(m):
                 x = copy.deepcopy(m)
                 get(x)[key] = copy.deepcopy(v)
                 yield f"{where}.{key}=V{i}", x
-    for fmt in (None, "cryptovalid-evidence-pack/1.0", "cryptovalid-evidence-pack/1.2", "CRYPTOVALID-EVIDENCE-PACK/1.1",
+    for fmt in (None, "cryptovalid-evidence-pack/1.0", "cryptovalid-evidence-pack/1.3", "CRYPTOVALID-EVIDENCE-PACK/1.1",
                 "cryptovalid-evidence-pack/1.1 ", 1.1):
         x = copy.deepcopy(m)
         if fmt is None:

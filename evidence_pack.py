@@ -262,7 +262,7 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
             signers.update(sv["signers"])
         ledgers_meta.append(entry)
     manifest = {
-        "pack_format": "cryptovalid-evidence-pack/1.1", "subject": subject,
+        "pack_format": PACK_FORMAT, "subject": subject,
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "ledgers": ledgers_meta, "file_digests_sha256": file_digests,
         "signer_pubkeys": sorted(signers),
@@ -281,8 +281,8 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
                 verifier.read_input_text(sign_key, verifier.KEY_MAX_BYTES).strip()))
             manifest["manifest_signer"] = sk.public_key().public_bytes(
                 _ser.Encoding.Raw, _ser.PublicFormat.Raw).hex()
-            manifest["manifest_signature"] = base64.b64encode(
-                sk.sign(manifest["manifest_digest_sha256"].encode())).decode()
+            manifest["manifest_signature"] = base64.b64encode(   # SPEC §22 rule 3: the tagged message of format 1.2
+                sk.sign(manifest_signed_message(PACK_FORMAT, manifest["manifest_digest_sha256"]))).decode()
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(f"manifest signing failed: {e}")
     manifest["rfc3161_timestamp"] = (_rfc3161_stamp(manifest["manifest_digest_sha256"], tsa_url)
@@ -319,7 +319,20 @@ STATES_VOCABULARY = "cryptovalid-evidence-pack/states-1"   # 0.22.0 — SPEC §1
 # SPEC v0.8 §10: a receipt computed with pinned TSA certificates (`tsa_certs`): states-1 plus `verified` and `tsa_unresolved`
 # on time_anchor and the wider `token_invalid`. A receipt without a pin keeps states-1.
 STATES_VOCABULARY_PINNED_TSA = "cryptovalid-evidence-pack/states-2"
-PACK_FORMAT = "cryptovalid-evidence-pack/1.1"                 # the one format this verifier admits (SPEC §10: 1.0 is refused)
+# SPEC §22 rule 3 (Unreleased): format 1.2 has the members of 1.1; its manifest signature is over the domain-tagged message
+# "cryptovalid-pack-manifest/2:" + manifest_digest_sha256, never a bare hash an entry signature could also be over.
+# build_pack writes 1.2; a pack of 1.1 (signature over the bare digest) verifies as before. 1.0 is refused (SPEC §10).
+PACK_FORMAT = "cryptovalid-evidence-pack/1.2"
+PACK_FORMAT_1_1 = "cryptovalid-evidence-pack/1.1"
+PACK_FORMATS = (PACK_FORMAT_1_1, PACK_FORMAT)                   # the formats this verifier admits
+MANIFEST_SIGNATURE_DOMAIN = "cryptovalid-pack-manifest/2"
+
+
+def manifest_signed_message(pack_format: str, digest_hex: str) -> bytes:
+    """The bytes the manifest signature is over (SPEC §22 rule 3): tagged in format 1.2, the bare digest in 1.1."""
+    if pack_format == PACK_FORMAT_1_1:
+        return digest_hex.encode()
+    return (MANIFEST_SIGNATURE_DOMAIN + ":" + digest_hex).encode()
 _SIG_FIELDS = ("signature", "signer", "signature_pq", "signer_pq")   # SPEC §5 step 5: any of them opens the layer
 
 
@@ -411,7 +424,8 @@ def _manifest_signature_element(man: Dict, manifest_signer_hex: Optional[str]) -
     why = signer._edo().strict_problem(bytes.fromhex(pub), raw_sig)   # 0.22.0: small/mixed-order key or R refused
     if why is None:
         try:
-            _Pk.from_public_bytes(bytes.fromhex(pub)).verify(raw_sig, man["manifest_digest_sha256"].encode())
+            _Pk.from_public_bytes(bytes.fromhex(pub)).verify(
+                raw_sig, manifest_signed_message(man.get("pack_format"), man["manifest_digest_sha256"]))
         except Exception:  # noqa: BLE001
             why = "bad_signature"
     if why is not None:
@@ -501,11 +515,13 @@ def _pinned_time_anchor(tsr_b64: str, digest_hex: str, tsa_certs, tsa_crls=None)
 
 def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubkey_hex: Optional[str] = None,
                 manifest_signer_hex: Optional[str] = None, tsa_certs: Optional[List] = None,
-                tsa_crls: Optional[List] = None) -> Dict:
+                tsa_crls: Optional[List] = None, require_signature_domain: bool = False) -> Dict:
     """The evidence pack's verify (SPEC §10). `tsa_certs` (SPEC v0.8): the TSA certificates the caller pins (paths or bytes,
     PEM or DER: the TSA certificate or a CA above it, as SPEC §11); then a token that binds the manifest digest is checked
     by §11, `time_anchor` can be `verified`, and the receipt names `states_vocabulary` states-2. None: as before v0.8.
-    `tsa_crls` (SPEC v0.10 §11 step 8, needs `tsa_certs`): CRLs the caller pins for the TSA certificate's revocation."""
+    `tsa_crls` (SPEC v0.10 §11 step 8, needs `tsa_certs`): CRLs the caller pins for the TSA certificate's revocation.
+    `require_signature_domain` (SPEC §22 rule 3): admit format 1.2 only (a 1.1 pack, whose manifest signature is over the
+    bare digest, is format_unsupported); by default both are admitted."""
     if tsa_crls is not None and tsa_certs is None:
         raise ValueError("tsa_crls need tsa_certs: revocation is checked only for a token verified under pinned certificates")
     if tsa_certs is not None:
@@ -514,7 +530,8 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
             raise ValueError("tsa_certs: a non-empty list of certificate files or bytes, or None for no pin")
         _T._pem_certs(tsa_certs)   # a path that is not a readable file of certificates: ValueError naming it
     try:
-        r = _verify_pack(pack_dir, pq_pubkey_b64, signer_pubkey_hex, manifest_signer_hex, tsa_certs, tsa_crls)
+        r = _verify_pack(pack_dir, pq_pubkey_b64, signer_pubkey_hex, manifest_signer_hex, tsa_certs, tsa_crls,
+                         require_signature_domain)
     except CheckNotRun as e:
         if tsa_certs is not None and isinstance(getattr(e, "receipt", None), dict):
             e.receipt["states_vocabulary"] = STATES_VOCABULARY_PINNED_TSA
@@ -525,7 +542,7 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
 
 
 def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex: Optional[str],
-                 manifest_signer_hex: Optional[str], tsa_certs, tsa_crls=None) -> Dict:
+                 manifest_signer_hex: Optional[str], tsa_certs, tsa_crls=None, require_signature_domain: bool = False) -> Dict:
     """Verifica INDIPENDENTE dell'intero pack (l'auditor non usa alcun vendor): digest dei file ==
     manifest, manifest auto-consistente, ogni ledger passa hash + firme. Fail-closed.
     Post-quantum (council 16/09 round 2 — no circular pin): the layer is confirmed ONLY against keys the caller
@@ -574,9 +591,10 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
         return _refused("manifest_not_an_object", "malformed")
     # 0.22.0 — SPEC §10: the format first (until 0.21.0 the field was not read). A later revision may add members: its
     # pack is format_unsupported, not unknown_member (the order of ap2-evidence-pack 1.6.0; NEMESIS 19/10/2026)
-    if man.get("pack_format") != PACK_FORMAT:
+    admitted = (PACK_FORMAT,) if require_signature_domain else PACK_FORMATS
+    if man.get("pack_format") not in admitted:
         return _refused(f"pack_format_unsupported: {json.dumps(man.get('pack_format'), ensure_ascii=False)[:80]} "
-                        f"(this verifier admits {PACK_FORMAT})", "format_unsupported")
+                        f"(this verifier admits {', '.join(admitted)})", "format_unsupported")
     unknown = _manifest_unknown_fields(man)
     if unknown:   # SPEC §2.1: the manifest is a closed object — named, never silent
         return _refused("manifest_unknown_field: " + ", ".join(unknown)[:200], "unknown_member")

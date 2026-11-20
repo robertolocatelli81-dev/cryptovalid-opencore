@@ -75,9 +75,15 @@ GENESIS_PREV = "0" * 64
 # members and no other: every member this module has written since 2026-08-16 (`signed` since 2026-09-14). A member outside
 # the list is the failure sth_unknown_member:<keys> / head_unknown_member:<keys> (until 0.27.0 ignored: ok, no reason).
 STH_MEMBERS = frozenset({"tree_size", "root_sha256", "signed", "note", "segment", "sealed_utc", "last_self_hash",
-                         "prev_sth_sha256", "signature", "signer"})
+                         "prev_sth_sha256", "signature", "signer", "sig_domain"})
 HEAD_MEMBERS = frozenset({"prefix", "segments_sealed", "last_segment", "last_sth_sha256", "updated_utc", "signature",
-                          "signer"})
+                          "signer", "sig_domain"})
+# SPEC §22 rule 3 (Unreleased): a tree head or a HEAD signed from now on carries `sig_domain`, inside the hashed body, and
+# its signature is over the UTF-8 bytes of "<sig_domain>:<hex of the SHA-256 of the canonical body>": never 64 hex
+# characters alone, the message of an entry signature (§2). Without `sig_domain` (written until 0.27.0) the signature is
+# over the bare hex, as before, and verify_archive names those documents in a warning; require_signature_domain refuses them.
+STH_SIG_DOMAIN = "cryptovalid-sth/2"
+HEAD_SIG_DOMAIN = "cryptovalid-head/2"
 
 
 def _unknown_members(doc: Dict, members) -> Optional[str]:
@@ -97,6 +103,13 @@ def _utc_now() -> str:
 def _sth_canonical_hash(sth: Dict) -> str:
     body = {k: v for k, v in sth.items() if k not in ("signature", "signer")}
     return hashlib.sha256(_canonical(body)).hexdigest()
+
+
+def _signed_message(doc: Dict, domain: str) -> bytes:
+    """The bytes the signature of a tree head or a HEAD is over (SPEC §22 rule 3): tagged when `sig_domain` is there."""
+    if "sig_domain" in doc:
+        return (domain + ":" + _sth_canonical_hash(doc)).encode()
+    return _sth_canonical_hash(doc).encode()
 
 
 def _fsync_dir(path: str):
@@ -299,8 +312,8 @@ class Ingestor:
                         "prev_sth_sha256": self._prev_sth_hash()})
             if self._backend is not None:
                 import base64
-                # stessa convenzione di signer.py: si firmano i byte della stringa hex
-                sig = self._backend.sign(_sth_canonical_hash(sth).encode())
+                sth["sig_domain"] = STH_SIG_DOMAIN   # SPEC §22 rule 3: in the hashed body, and the message is tagged
+                sig = self._backend.sign(_signed_message(sth, STH_SIG_DOMAIN))
                 sth["signature"] = base64.b64encode(sig).decode()
                 sth["signer"] = self._backend.public_key_hex()
             _write_json_atomic(path + ".sth.json", sth)
@@ -371,7 +384,8 @@ class Ingestor:
                 "updated_utc": _utc_now()}
         if self._backend is not None:
             import base64
-            sig = self._backend.sign(_sth_canonical_hash(head).encode())
+            head["sig_domain"] = HEAD_SIG_DOMAIN   # SPEC §22 rule 3
+            sig = self._backend.sign(_signed_message(head, HEAD_SIG_DOMAIN))
             head["signature"] = base64.b64encode(sig).decode()
             head["signer"] = self._backend.public_key_hex()
         _write_json_atomic(os.path.join(self._dir, f"{self._prefix}.head.json"), head)
@@ -398,7 +412,8 @@ class Ingestor:
 
 
 # ── auditor path (read-only) ─────────────────────────────────────────────────
-def _check_signature(doc: Dict, expected_pubkey_hex) -> Optional[str]:
+def _check_signature(doc: Dict, expected_pubkey_hex, domain: str = STH_SIG_DOMAIN,
+                     require_signature_domain: bool = False) -> Optional[str]:
     """None se la firma del doc (STH o HEAD) è valida; altrimenti la ragione.
     expected_pubkey_hex: None, UNA chiave hex, o un ITERABILE di chiavi fidate —
     la rotazione delle chiavi (es. file→HSM) lascia in archivio segmenti firmati
@@ -422,7 +437,9 @@ def _check_signature(doc: Dict, expected_pubkey_hex) -> Optional[str]:
             return "signature_invalid"
         if _sg._edo().strict_problem(bytes.fromhex(pub), raw_sig) is not None:
             return "signature_invalid"
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(raw_sig, _sth_canonical_hash(doc).encode())
+        if "sig_domain" not in doc and require_signature_domain:   # SPEC §22 rule 3
+            return "signature_domain_untagged"
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(raw_sig, _signed_message(doc, domain))
         return None
     except Exception:
         return "signature_invalid"
@@ -453,7 +470,8 @@ _SIGNATURE_ONLY = "signature valid with the certificate contained in the token, 
 
 def verify_archive(directory: str, prefix: str = "ledger",
                    expected_pubkey_hex=None,
-                   lotl_check: bool = False, lotl_member_states=None, tsa_certs=None) -> Dict:
+                   lotl_check: bool = False, lotl_member_states=None, tsa_certs=None,
+                   require_signature_domain: bool = False) -> Dict:
     """Third-party verification of a whole archive: every sealed segment's hash chain
     (verifier.py rules), Merkle root vs sidecar, STH chain across segments, the HEAD
     manifest (segment count + last STH — the tail-truncation guard), and signatures.
@@ -465,7 +483,9 @@ def verify_archive(directory: str, prefix: str = "ledger",
     `lotl_check`, when the certificate that signed it is a QTST certificate of the EU trusted lists; a token whose
     signature verifies only with the certificate it carries is reported (`tsa_tokens`, a warning), not counted.
     An empty pin ("" or an empty list, or a list holding an empty or non-string key) pins nothing and is a ValueError
-    (SPEC v0.9 §17, 16/11/2026: until 0.25.0 it meant "not pinned", ok true with the warning no_pinned_pubkey)."""
+    (SPEC v0.9 §17, 16/11/2026: until 0.25.0 it meant "not pinned", ok true with the warning no_pinned_pubkey).
+    `require_signature_domain` (SPEC §22 rule 3): a signed tree head or HEAD without `sig_domain` (signed over the bare
+    hash, as until 0.27.0) is a failure (`..._signature_domain_untagged`); by default it verifies and is named in a warning."""
     if expected_pubkey_hex is not None:
         if not isinstance(expected_pubkey_hex, str):
             expected_pubkey_hex = list(expected_pubkey_hex)
@@ -478,6 +498,7 @@ def verify_archive(directory: str, prefix: str = "ledger",
     warnings: List[str] = []
     signers: set = set()
     signed_count = 0
+    untagged: List[str] = []          # signed documents without sig_domain (SPEC §22 rule 3)
     timestamped: List = []            # segments whose token counts (SPEC §11: pinned, or LOTL-qualified signer below)
     checked: List = []                # (segment name, token DER, verify_token outcome) for every token that is not invalid
     tsa_tokens: List[Dict] = []       # one line per token: segment, status, reason, gen_time, signer_sha256
@@ -529,6 +550,8 @@ def verify_archive(directory: str, prefix: str = "ledger",
         unknown = _unknown_members(sth, STH_MEMBERS)
         if unknown is not None:   # SPEC §22 rule 2
             failures.append({"segment": name, "reason": "sth_unknown_member:" + unknown})
+        if "sig_domain" in sth and sth["sig_domain"] != STH_SIG_DOMAIN:   # SPEC §22 rule 3: present = exactly the tag
+            failures.append({"segment": name, "reason": "sth_signature_domain_mismatch"})
         try:
             leaves = merkle.leaves_from_ledger(s)
         except OSError:   # a segment read through a pipe by the chain check cannot be read a second time for its leaves
@@ -544,9 +567,11 @@ def verify_archive(directory: str, prefix: str = "ledger",
             signed_count += 1
             if isinstance(sth.get("signer"), str):   # NEMESIS 19/10/2026: a list or object here was a TypeError traceback
                 signers.add(sth.get("signer"))       # (0.21.0 and 0.22.0 draft); any other type is sth_signature_invalid below
-            reason = _check_signature(sth, expected_pubkey_hex)
+            reason = _check_signature(sth, expected_pubkey_hex, STH_SIG_DOMAIN, require_signature_domain)
             if reason:
                 failures.append({"segment": name, "reason": f"sth_{reason}"})
+            elif "sig_domain" not in sth:
+                untagged.append(name)
         elif expected_pubkey_hex:
             failures.append({"segment": name, "reason": "sth_unsigned_but_pubkey_expected"})
         prev_sth = _sth_canonical_hash(sth)
@@ -585,6 +610,8 @@ def verify_archive(directory: str, prefix: str = "ledger",
         unknown = _unknown_members(head, HEAD_MEMBERS)
         if unknown is not None:   # SPEC §22 rule 2
             failures.append({"segment": "HEAD", "reason": "head_unknown_member:" + unknown})
+        if "sig_domain" in head and head["sig_domain"] != HEAD_SIG_DOMAIN:   # SPEC §22 rule 3
+            failures.append({"segment": "HEAD", "reason": "head_signature_domain_mismatch"})
         if head.get("segments_sealed") != len(sealed):
             failures.append({"segment": "HEAD", "reason": "head_count_mismatch",
                              "expected": head.get("segments_sealed"), "found": len(sealed)})
@@ -592,9 +619,11 @@ def verify_archive(directory: str, prefix: str = "ledger",
             failures.append({"segment": "HEAD", "reason": "head_last_sth_mismatch"})
         if head.get("signature"):
             head_signed = True
-            reason = _check_signature(head, expected_pubkey_hex)
+            reason = _check_signature(head, expected_pubkey_hex, HEAD_SIG_DOMAIN, require_signature_domain)
             if reason:
                 failures.append({"segment": "HEAD", "reason": f"head_{reason}"})
+            elif "sig_domain" not in head:
+                untagged.append("HEAD")
         elif expected_pubkey_hex:
             failures.append({"segment": "HEAD", "reason": "head_unsigned_but_pubkey_expected"})
     elif sealed and not os.path.exists(head_path):
@@ -610,6 +639,9 @@ def verify_archive(directory: str, prefix: str = "ledger",
     if sealed and not expected_pubkey_hex:
         warnings.append("no_pinned_pubkey: signatures (if any) checked against their "
                         "own embedded key, not an expected signer")
+    if untagged:   # SPEC §22 rule 3: verified, over the bare hash an entry signature could also be over
+        warnings.append(f"untagged_signatures: {', '.join(untagged)} signed without sig_domain (written before SPEC §22 "
+                        "rule 3): verified over the bare hash; require_signature_domain refuses them"[:400])
     if unsealed_entries:
         warnings.append(f"unsealed_entries: {sum(n for _s, n in unsealed_entries)} entries in {len(unsealed_entries)} "
                         f"segment(s) without a tree head ({', '.join(s for s, _n in unsealed_entries)}): their chain is "
@@ -688,6 +720,8 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
     sub = p.add_subparsers(dest="cmd", required=True)
     v = sub.add_parser("verify"); v.add_argument("directory")
     v.add_argument("--prefix", default="ledger"); v.add_argument("--pubkey", action=_Once)
+    v.add_argument("--require-signature-domain", action="store_true",
+                   help="refuse a tree head or HEAD signed without sig_domain, over the bare hash (SPEC §22 rule 3)")
     v.add_argument("--lotl", action="store_true",
                    help="qualify the RFC 3161 tokens as eIDAS-qualified through the EU Trusted Lists (network)")
     v.add_argument("--lotl-ms", nargs="*", default=None, help="restrict to these member states (e.g. ES IT)")
@@ -701,7 +735,8 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
         if a.pubkey is not None and (a.pubkey == "" or a.pubkey.startswith("-")):   # one grammar (verifier.py): "" is not "not given"
             p.error(f"--pubkey needs a value (got {a.pubkey!r})")
         r = verify_archive(a.directory, a.prefix, a.pubkey,
-                           lotl_check=a.lotl, lotl_member_states=a.lotl_ms, tsa_certs=a.tsa_cert)
+                           lotl_check=a.lotl, lotl_member_states=a.lotl_ms, tsa_certs=a.tsa_cert,
+                           require_signature_domain=a.require_signature_domain)
         emit(json.dumps(r, indent=1)); return 0 if r["ok"] else 1
     ing = Ingestor(a.directory, prefix="bench", batch_size=a.batch,
                    rotate_entries=a.n + 1)

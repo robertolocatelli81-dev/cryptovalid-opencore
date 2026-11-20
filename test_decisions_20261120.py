@@ -298,5 +298,177 @@ class TestTreeHeadAndHeadAreClosed(unittest.TestCase):
         self.assertIn("head_unknown_member:b,￿,\U0001f600", [f["reason"] for f in r["failures"]])
 
 
+def _sign_raw(keyfile, msg):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    with open(keyfile, encoding="utf-8") as f:
+        sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(f.read().strip()))
+    import base64
+    return base64.b64encode(sk.sign(msg)).decode()
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+class TestSignatureDomains(unittest.TestCase):
+    """§22 rule 3: tree heads, HEADs and pack manifests are signed over a domain-tagged message; documents signed over the
+    bare hash (until 0.27.0) verify as before, named, and are refused on request."""
+
+    def setUp(self):
+        from cryptovalid_kms import FileKeyBackend
+        self.d = tempfile.mkdtemp()
+        self.key = os.path.join(self.d, "k.key")
+        self.pk = signer.keygen(self.key)["public_key_hex"]
+        self.arch = os.path.join(self.d, "arch")
+        w = I.Ingestor(self.arch, batch_size=1, backend=FileKeyBackend(self.key))
+        for i in range(3):
+            w.append({"i": i})
+        w.close()
+        self.sth = os.path.join(self.arch, "ledger-000000.jsonl.sth.json")
+        self.head = os.path.join(self.arch, "ledger.head.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def _load(self, p):
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+
+    def _dump(self, p, doc):
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+
+    def test_written_tagged_and_verified(self):
+        sth, head = self._load(self.sth), self._load(self.head)
+        self.assertEqual((sth["sig_domain"], head["sig_domain"]), ("cryptovalid-sth/2", "cryptovalid-head/2"))
+        r = I.verify_archive(self.arch, expected_pubkey_hex=self.pk, require_signature_domain=True)
+        self.assertTrue(r["ok"], r["failures"])
+        self.assertFalse(any(w.startswith("untagged_signatures") for w in r["warnings"]))
+
+    def test_the_signature_is_not_over_the_bare_hash(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        import base64
+        for p, tag in ((self.sth, "cryptovalid-sth/2"), (self.head, "cryptovalid-head/2")):
+            doc = self._load(p)
+            pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(self.pk))
+            h = I._sth_canonical_hash(doc)
+            sig = base64.b64decode(doc["signature"])
+            pub.verify(sig, (tag + ":" + h).encode())
+            with self.assertRaises(Exception):   # the message of an entry signature (64 hex) is never signed here
+                pub.verify(sig, h.encode())
+
+    def _retag_v1(self):
+        """Rewrite the archive as the writer of 0.27.0 did: no sig_domain, signature over the bare hex."""
+        last = None
+        for seg in sorted(f for f in os.listdir(self.arch) if f.endswith(".sth.json")):
+            p = os.path.join(self.arch, seg)
+            doc = self._load(p)
+            doc.pop("sig_domain")
+            if last is not None:
+                doc["prev_sth_sha256"] = last
+            doc["signature"] = _sign_raw(self.key, I._sth_canonical_hash(doc).encode())
+            self._dump(p, doc)
+            last = I._sth_canonical_hash(doc)
+        head = self._load(self.head)
+        head.pop("sig_domain")
+        head["last_sth_sha256"] = last
+        head["signature"] = _sign_raw(self.key, I._sth_canonical_hash(head).encode())
+        self._dump(self.head, head)
+
+    def test_an_archive_of_0_27_0_verifies_named_control(self):
+        self._retag_v1()
+        r = I.verify_archive(self.arch, expected_pubkey_hex=self.pk)
+        self.assertTrue(r["ok"], r["failures"])
+        self.assertTrue(any(w.startswith("untagged_signatures") and "HEAD" in w for w in r["warnings"]), r["warnings"])
+
+    def test_required_domain_refuses_the_old_signatures(self):
+        self._retag_v1()
+        r = I.verify_archive(self.arch, expected_pubkey_hex=self.pk, require_signature_domain=True)
+        self.assertFalse(r["ok"])
+        reasons = {f["reason"] for f in r["failures"]}
+        self.assertIn("sth_signature_domain_untagged", reasons)
+        self.assertIn("head_signature_domain_untagged", reasons)
+
+    def test_a_tag_of_another_kind_fails(self):
+        for other, name in (("cryptovalid-head/2", "sth"), ("cryptovalid-sth/2", "head")):
+            self.tearDown()
+            self.setUp()
+            p = self.sth if name == "sth" else self.head
+            doc = self._load(p)
+            doc["sig_domain"] = other
+            doc["signature"] = _sign_raw(self.key, (other + ":" + I._sth_canonical_hash(doc)).encode())
+            self._dump(p, doc)
+            r = I.verify_archive(self.arch, expected_pubkey_hex=self.pk)
+            reasons = {f["reason"] for f in r["failures"]}
+            self.assertIn(name + "_signature_domain_mismatch", reasons)
+            self.assertIn(name + "_signature_invalid", reasons)
+
+    def test_the_tag_removed_from_a_tagged_document_fails(self):
+        doc = self._load(self.sth)
+        doc.pop("sig_domain")   # the signature stays the tagged one: over the bare hash it does not verify
+        self._dump(self.sth, doc)
+        r = I.verify_archive(self.arch, expected_pubkey_hex=self.pk)
+        self.assertIn("sth_signature_invalid", {f["reason"] for f in r["failures"]})
+
+    def _pack(self, sign=True):
+        import evidence_pack as EP
+        led = os.path.join(self.d, "p.jsonl")
+        _ledger(led, 3)
+        out = os.path.join(self.d, "pack")
+        EP.build_pack([led], out, sign_key=self.key if sign else None)
+        return EP, out
+
+    def test_pack_format_1_2_and_tagged_manifest_signature(self):
+        EP, out = self._pack()
+        man = self._load(os.path.join(out, "MANIFEST.json"))
+        self.assertEqual(man["pack_format"], "cryptovalid-evidence-pack/1.2")
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        import base64
+        pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(self.pk))
+        pub.verify(base64.b64decode(man["manifest_signature"]),
+                   ("cryptovalid-pack-manifest/2:" + man["manifest_digest_sha256"]).encode())
+        r = EP.verify_pack(out, manifest_signer_hex=self.pk, require_signature_domain=True)
+        self.assertTrue(r["valid"], r)
+        self.assertEqual(r["states"]["producer_signature"]["state"], "verified")
+
+    def _as_1_1(self, out, tagged=False):
+        """The pack as 0.27.0 wrote it: format 1.1, the manifest signed over the bare digest (or, wrongly, tagged)."""
+        import evidence_pack as EP
+        p = os.path.join(out, "MANIFEST.json")
+        man = self._load(p)
+        man["pack_format"] = "cryptovalid-evidence-pack/1.1"
+        body = {k: v for k, v in man.items() if k not in ("manifest_digest_sha256", "rfc3161_timestamp", "manifest_signature",
+                                                         "manifest_signer")}
+        man["manifest_digest_sha256"] = hashlib.sha256(EP._canon(body)).hexdigest()
+        msg = ("cryptovalid-pack-manifest/2:" if tagged else "") + man["manifest_digest_sha256"]
+        man["manifest_signature"] = _sign_raw(self.key, msg.encode())
+        self._dump(p, man)
+
+    def test_a_pack_of_format_1_1_verifies_as_before_control(self):
+        EP, out = self._pack()
+        self._as_1_1(out)
+        r = EP.verify_pack(out, manifest_signer_hex=self.pk)
+        self.assertTrue(r["valid"], r)
+        self.assertEqual(r["states"]["producer_signature"]["state"], "verified")
+
+    def test_required_domain_refuses_format_1_1(self):
+        EP, out = self._pack()
+        self._as_1_1(out)
+        r = EP.verify_pack(out, manifest_signer_hex=self.pk, require_signature_domain=True)
+        self.assertEqual((r["admission"], r["refusal_class"], r["valid"]), ("refused", "format_unsupported", False))
+
+    def test_the_message_follows_the_format(self):
+        EP, out = self._pack()
+        self._as_1_1(out, tagged=True)   # 1.1 with the tagged message: not the message of 1.1
+        r = EP.verify_pack(out, manifest_signer_hex=self.pk)
+        self.assertFalse(r["valid"])
+        self.assertEqual(r["states"]["producer_signature"]["state"], "contradicted")
+        EP, out2 = self._pack()
+        p = os.path.join(out2, "MANIFEST.json")
+        man = self._load(p)   # 1.2 with the bare digest signed: not the message of 1.2
+        man["manifest_signature"] = _sign_raw(self.key, man["manifest_digest_sha256"].encode())
+        self._dump(p, man)
+        r = EP.verify_pack(out2, manifest_signer_hex=self.pk)
+        self.assertFalse(r["valid"])
+        self.assertEqual(r["states"]["producer_signature"]["state"], "contradicted")
+
+
 if __name__ == "__main__":
     unittest.main()

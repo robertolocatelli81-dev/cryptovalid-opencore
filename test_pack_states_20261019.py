@@ -117,7 +117,8 @@ class TestAdmission(_Pack):
         self.assertTrue(r["valid"])
 
     def test_format_unsupported(self):
-        for fmt in ("cryptovalid-evidence-pack/1.0", "cryptovalid-evidence-pack/1.2", "x", 1.1, None, "DELETE"):
+        # 1.2 is admitted since SPEC §22 rule 3: the next unknown revision is 1.3
+        for fmt in ("cryptovalid-evidence-pack/1.0", "cryptovalid-evidence-pack/1.3", "x", 1.1, 1.2, None, "DELETE"):
             with self.subTest(fmt=fmt):
                 p = self.build()
                 self.man(p, lambda m: m.pop("pack_format") if fmt == "DELETE" else m.update(pack_format=fmt), redigest=True)
@@ -128,7 +129,8 @@ class TestAdmission(_Pack):
     def test_a_later_revision_with_a_new_member_is_format_unsupported(self):
         # NEMESIS 19/10/2026: the format is read before the members (as ap2-evidence-pack 1.6.0) — a revision that adds a
         # member is format_unsupported, not unknown_member; with 1.1 the same member stays unknown_member
-        for fmt, cls in (("cryptovalid-evidence-pack/1.2", "format_unsupported"), ("cryptovalid-evidence-pack/1.1", "unknown_member")):
+        for fmt, cls in (("cryptovalid-evidence-pack/1.3", "format_unsupported"), ("cryptovalid-evidence-pack/1.1", "unknown_member"),
+                         ("cryptovalid-evidence-pack/1.2", "unknown_member")):
             for where in ("top", "ledger", "rfc3161"):
                 with self.subTest(fmt=fmt, where=where):
                     p = self.build()

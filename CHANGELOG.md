@@ -19,6 +19,14 @@ run by the same author, not by a third party.
   ignored (PASS; `verify_archive` ok); it is now `tip_invalid: unknown_member:<keys>` (the same text in Python, JS, Go
   and Java), `sth_unknown_member:<keys>` or `head_unknown_member:<keys>`. Every member written since 2026-08-16 is in
   the lists, so archives and tips written by earlier versions verify as before.
+- **Tree heads, HEADs and pack manifests are signed over a domain-tagged message** (§22 rule 3, a format change). They
+  were signed over a bare SHA-256 hex, the same kind of message as an entry signature. A tree head or HEAD signed now
+  carries `sig_domain` (`cryptovalid-sth/2`, `cryptovalid-head/2`) and is signed over `<sig_domain>:<hex>`; packs are
+  written in format `cryptovalid-evidence-pack/1.2`, whose manifest signature is over
+  `cryptovalid-pack-manifest/2:<digest>`. Archives and 1.1 packs written before verify as before (the 12 packs of this
+  repository and 8 archives and packs written by the previous code: same verdicts; signed archives gain the warning
+  `untagged_signatures`); `require_signature_domain=True` / `--require-signature-domain` refuses them. An archive or a
+  pack written now is refused by 0.27.0 (`sth_signature_invalid`, `head_signature_invalid`, `format_unsupported`).
 
 ### Fixed
 

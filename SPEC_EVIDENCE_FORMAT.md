@@ -448,7 +448,8 @@ tokens with the same meaning, the same precedence. It is aligned with draft-krau
 of meaning is a new identifier).
 
 **Admission.** `admission` is `"admitted"` or `"refused"`. A refused pack has `refusal_class` — `format_unsupported`
-(`pack_format` absent, not a string, or not `cryptovalid-evidence-pack/1.1`; packs of format 1.0 included), `unknown_member`
+(`pack_format` absent, not a string, or neither `cryptovalid-evidence-pack/1.1` nor, since §22 rule 3,
+`cryptovalid-evidence-pack/1.2`; packs of format 1.0 included), `unknown_member`
 (a key outside §2.1's lists: `manifest_unknown_field`), `malformed` (anything else that makes the manifest unreadable as this
 format: not readable (not a regular file, §5 step 0, since v0.11), not UTF-8 JSON, a key twice in one object, nested deeper than the bound, larger than the bound, not an
 object, `file_digests_sha256` not an object of names inside the pack to strings, `ledgers` not a list of objects naming a file inside the pack, `rfc3161_timestamp` not an object,
@@ -1984,7 +1985,7 @@ same day, before any release; what that review measured is said in each. Tests: 
    ledger line with its hash as `self_hash`, verified there under the pinned key (ok, 1 verified, while `verifier.py`
    failed the same file; measured on 0.27.0 and on the first draft of this rule); such a line is now the failure
    `unknown_field:<keys>` at its index. A tag that separates the kinds of signed message is a change of format, not
-   made here.
+   made here: it is §22 rule 3.
 
 ## 22. Rules written for the decisions of 2026-11-20 (Unreleased)
 
@@ -2020,4 +2021,33 @@ tests named `*_control` hold what the rule does not change.
      `signature`, `signer` (`cryptovalid_ingest.HEAD_MEMBERS`). The failure is `head_unknown_member:<keys>`.
    A key written twice in any of the three is already refused by the reader (§21 rule 2: `tip_unreadable`,
    `sth_unreadable: duplicate_key`, `head_unreadable: duplicate_key`).
+3. **Tree heads, HEADs and pack manifests are signed over a domain-tagged message.** An entry signature is over the
+   `self_hash` as text, 64 lowercase hex characters (§2); until 0.27.0 the tree heads and the HEAD of
+   `cryptovalid_ingest` were signed over the hex of the SHA-256 of their canonical body, and a pack manifest over its
+   `manifest_digest_sha256`, with the same kind of key: four kinds of document over one kind of message. §21 rule 8
+   closed the one oracle found (`signer.sign_ledger`) and the one confusion on the verifying side (`signer.verify_file`);
+   this rule makes the separation part of the signed bytes. The new form:
+   - a tree head or a HEAD signed from now on carries the member `sig_domain`, `"cryptovalid-sth/2"` or
+     `"cryptovalid-head/2"`, inside the body that is hashed, and its signature is over the UTF-8 bytes of
+     `<sig_domain> + ":" + <hex of the SHA-256 of the canonical body>` (the body is, as before, the document without
+     `signature` and `signer`). `sig_domain`, when present, MUST be exactly the tag of its document, signed or not:
+     another value is `sth_signature_domain_mismatch` / `head_signature_domain_mismatch` (and the signature, checked
+     over the document's own tag, fails). A document without `sig_domain` is checked as before, over the bare hex.
+   - pack format `cryptovalid-evidence-pack/1.2` has the members of 1.1; its `manifest_signature` is over the UTF-8
+     bytes of `"cryptovalid-pack-manifest/2:" + manifest_digest_sha256`. `build_pack` writes 1.2. In a 1.1 pack the
+     signature is over the bare digest, as before. The message follows the format: a 1.1 pack signed over the tagged
+     message, or a 1.2 pack signed over the bare digest, is `producer_signature: contradicted / signature_invalid`.
+   - Every message of the new form is longer than 64 characters and starts with its tag, so no entry signature, no other
+     kind of these documents, and no tip (signed over a JSON object, `{"entries":...`) is over the same bytes.
+   Documents written until 0.27.0 verify as before, and are named: `verify_archive` adds the warning
+   `untagged_signatures: <segments>, HEAD signed without sig_domain ...`; a 1.1 pack names its format. A caller who
+   wants the separation of every signature passes `require_signature_domain=True` (`verify_archive`, `verify_pack`;
+   `cryptovalid_ingest.py verify --require-signature-domain`): a signed tree head or HEAD without `sig_domain` is then
+   `sth_signature_domain_untagged` / `head_signature_domain_untagged`, and a 1.1 pack is refused `format_unsupported`.
+   Measured on the branch (`prove_decisioni_D_20261120/cryptovalid/d5_vecchi_archivi.py`): the 12 packs of this
+   repository give the same `valid`, `admission`, `states` and `ledgers` before and after; 8 archives and packs written
+   by the code before this rule (signed and unsigned, 1 to 3 segments) give the same verdict, failures and states, and
+   the 3 signed archives gain only the warning. A document written now is refused by 0.27.0 (measured: a signed
+   archive is `sth_signature_invalid`, `head_signature_invalid`; a 1.2 pack `format_unsupported`), never accepted.
+   Entry signatures and the tip do not change.
 

@@ -61,6 +61,7 @@ def verify_pack(
     manifest_signer_hex: Optional[str] = None,
     tsa_certs: Optional[Sequence[Union[str, bytes]]] = None,
     tsa_crls: Optional[Sequence[Union[str, bytes]]] = None,
+    require_signature_domain: bool = False,
 ) -> Dict[str, Any]: ...
 def verify_ledger_signatures(
     entries: List[Dict[str, Any]],
