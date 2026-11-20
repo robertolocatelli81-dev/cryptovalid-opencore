@@ -1688,7 +1688,13 @@ someone else, its own text decides and is cited with the version read; where tha
    one module through which this package opens a URL). An IP literal is read in every form the system's resolver
    reads: the one-to-four-part forms of `inet_aton`, each part decimal, octal or hexadecimal (`127.1`, `2130706433`,
    `0x7f000001`, `0177.0.0.1`), the forms of IPv6, and an IPv4-mapped IPv6 address as the IPv4 address inside it
-   (`::ffff:127.0.0.1`); a non-ASCII host is read in its IDNA form first. A redirect is never followed from a host
+   (`::ffff:127.0.0.1`); a non-ASCII host is read in its IDNA form first. A host with a percent sign is refused
+   under every policy, the first URL and every redirect alike (`ValueError("url_not_allowed: a percent sign in the
+   host ...")`): urllib decodes `%XX` in the host before it connects, so the host judged would not be the host
+   reached (measured on 2026-11-20 on the first draft of this rule: a redirect to `http://%31%32%37.0.0.1/` reached
+   127.0.0.1). The `%25` zone of an IPv6 literal is refused with it: RFC 9844 (Proposed Standard, August 2025, read
+   at rfc-editor.org on 2026-11-20) obsoleted RFC 6874 and "reverts the change that it made to the URI syntax".
+   A redirect is never followed from a host
    that is not loopback to a loopback address (127.0.0.0/8, ::1), to the unspecified address (0.0.0.0, ::) or to a
    link-local address (169.254.0.0/16, fe80::/10): `ValueError("url_not_allowed: a redirect from a remote host to a
    ...")`. The target of such a redirect that is a name is resolved (`getaddrinfo`) and refused when any of its
@@ -1789,7 +1795,9 @@ not judged here.
    `origin` of the client data must be one of the origins, else `approval-signature` fails. Not given, the check of
    0.26.0 stays (the `rpIdHash` against the `rpId` the assertion itself carries, no check of the origin) and
    `not_verified` names `approval-rp-id` and `approval-origin`, beside `approval-challenge-binding`, which no
-   parameter resolves. Until 0.26.0 the RP ID was always the assertion's own and `not_verified` did not say so: an
+   parameter resolves; in that case an assertion with no `rpId` member fails `approval-signature` (it was
+   `malformed`), while with `expected_rp_ids` the member is not needed. Until 0.26.0 the RP ID was always the
+   assertion's own and `not_verified` did not say so: an
    assertion made for any other relying party with the operator's passkey passed the stage (measured on 2026-11-19
    with an assertion for `evil.example`). The Cedulon drafts do not define the assertion (core-04, Implementation
    Status: "an approval over HTTP carries a passkey (WebAuthn) assertion bound to the held request"), and the pin file
@@ -1852,11 +1860,17 @@ are its own.
     2.0 (jsonrpc.org/specification, updated 2013-01-04, read on 2026-11-19) §5.1: -32700 "Invalid JSON was received",
     -32600 "The JSON sent is not a valid Request object", -32602 "Invalid method parameter(s)", -32603 "Internal
     JSON-RPC error"; §5: when the id could not be detected the response's id "MUST be Null"; §4: an id is "a String,
-    Number, or NULL value"; §4.1: "The Server MUST NOT reply to a Notification". Applied: a line nested too deep to
-    parse is -32700; a message that is not an object (an array too: batches are not supported), or whose `id` is not
+    Number, or NULL value"; §4.1: "The Server MUST NOT reply to a Notification". Applied: a line that is not UTF-8,
+    that holds `NaN` or `Infinity` (RFC 8259 §6: "not permitted"), or that is nested too deep to parse is -32700; a
+    reply that carries a lone surrogate taken from the message (an id, a method, a path) is written with JSON
+    escapes, never left unwritable; a message that is not an object (an array too: batches are not supported), or
+    whose `id` is not
     a string or a number, is -32600 with id null; a `method` that is not a string is -32600; a message with a method
     and no `id` member is a notification: it is not answered and nothing is run for it (until 0.26.0 a `tools/call`
-    without an `id` ran the tool and was answered with id null); a `params` that is not an object is -32602; in
+    without an `id` ran the tool and was answered with id null); a message whose `id` is null is a Request, not a
+    notification, and is answered (§5: "the Server MUST reply with a Response, except for in the case of
+    Notifications"; until 2026-11-20 an unknown method with id null had no reply); a `params` that is not an object
+    is -32602; in
     `tools/call` a `name` that is not a string and
     `arguments` that is not an object (`[]`, `""`, `0`, `false` included; `null` and an absent member mean no
     arguments) are -32602; anything else that goes wrong inside the handling of one message is -32603, and the server

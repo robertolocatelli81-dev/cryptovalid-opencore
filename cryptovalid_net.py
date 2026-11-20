@@ -30,7 +30,9 @@ The rule, closed by construction:
 5. (SPEC v0.12 §20 rule 1, 19/11/2026) a host is judged as the ADDRESS the system would connect to, not as a string:
    an IP literal in any form `inet_aton` reads (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`) or `inet_pton`
    reads as IPv6, an IPv4-mapped IPv6 address by the IPv4 address inside it, and, for the target of a redirect, a name by
-   every address `getaddrinfo` gives for it. Until 0.26.0 the host was compared as text, and a redirect from a remote
+   every address `getaddrinfo` gives for it; a host with a percent sign (`%31%32%37.0.0.1`, which urllib decodes to 127.0.0.1
+   before it connects; the "%25" zone of an IPv6 literal too, out of the URI syntax since RFC 9844) is refused. Until
+   0.26.0 the host was compared as text, and a redirect from a remote
    host to `http://127.1/`, `http://0.0.0.0/` or `http://[::ffff:127.0.0.1]/` was followed (measured 19/11/2026);
 6. (SPEC v0.12 §20 rule 2) a redirect to another origin (scheme, host, port) is refused when the request carries a
    header outside `FORWARDED_ACROSS_ORIGINS`, a closed list of headers that name no credential: urllib copies every
@@ -155,6 +157,10 @@ def check_url(url, allow: str) -> urllib.parse.SplitResult:
                             " or http to a loopback host" if allow == ALLOW_HTTPS_OR_LOOPBACK_HTTP else "") + ")")
     if not host:
         raise ValueError("url_not_allowed: no host")
+    if "%" in host:   # SPEC v0.12 §20 rule 1: urllib decodes %XX in the host before it connects (Request.host is unquoted);
+        # no zone either: RFC 9844 (2025) obsoleted RFC 6874 and with it the "%25" zone of an IPv6 literal in a URI
+        raise ValueError("url_not_allowed: a percent sign in the host (urllib decodes %XX before it connects: the address "
+                         "it reaches is not the one written)")
     if scheme == "http" and allow == ALLOW_HTTPS:
         raise ValueError("url_not_allowed: plain http (https only)")
     if scheme == "http" and allow == ALLOW_HTTPS_OR_LOOPBACK_HTTP and not is_loopback(host):

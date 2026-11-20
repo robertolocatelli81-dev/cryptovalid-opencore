@@ -319,8 +319,8 @@ def handle(msg) -> Optional[Dict]:
                 {"type": "text",
                  "text": json.dumps({"error": f"{type(e).__name__}: {str(e)[:200]}"})}],
                 "isError": True})
-    if id_ is None:                      # notification (e.g. notifications/initialized)
-        return None
+    # a notification (no "id" member) was answered above with nothing; an id null is a Request (JSON-RPC 2.0 §4, §5:
+    # the Server MUST reply): until 2026-11-20 an unknown method with id null was left without a reply
     return _rpc_error(id_, -32601, f"method not found: {method}")
 
 
@@ -332,12 +332,16 @@ except ImportError:   # python3 -m opencore.<module> from the parent directory
 
 @receipt_cli
 def main() -> int:
-    for line in sys.stdin:
-        line = line.strip()
+    for raw in getattr(sys.stdin, "buffer", sys.stdin):   # bytes: a line that is not UTF-8 is one bad message, not the end
+        try:
+            line = (raw.decode("utf-8") if isinstance(raw, bytes) else raw).strip()
+        except UnicodeDecodeError:
+            emit(json.dumps(_rpc_error(None, -32700, "parse error: the line is not UTF-8")), flush=True)
+            continue
         if not line:
             continue
-        try:
-            msg = json.loads(line)
+        try:   # NaN / Infinity are not JSON (RFC 8259 §6): a parse error, never an id echoed back as NaN
+            msg = json.loads(line, parse_constant=_not_json)
         except (ValueError, RecursionError):   # RecursionError: a line nested deeper than the parser goes
             emit(json.dumps(_rpc_error(None, -32700, "parse error")), flush=True)
             continue
@@ -346,8 +350,17 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001 - one message never stops the server: JSON-RPC 2.0 §5.1, internal error
             reply = _rpc_error(None, -32603, f"internal error: {type(e).__name__}")
         if reply is not None:
-            emit(json.dumps(reply, ensure_ascii=False), flush=True)
+            text = json.dumps(reply, ensure_ascii=False)
+            try:
+                text.encode("utf-8")
+            except UnicodeEncodeError:   # a lone surrogate ("\ud800" in an id, a method, a path): written escaped
+                text = json.dumps(reply)
+            emit(text, flush=True)
     return 0
+
+
+def _not_json(constant: str):
+    raise ValueError(f"{constant} is not JSON")
 
 
 if __name__ == "__main__":

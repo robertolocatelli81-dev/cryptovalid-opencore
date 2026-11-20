@@ -36,7 +36,11 @@ run by the same author, not by a third party.
   the request redirected to `127.1`). The host is now judged as the address the system connects to: every form
   `inet_aton` reads, an IPv4-mapped IPv6 address by the address inside it, a name by every address `getaddrinfo`
   gives; a redirect from a host that is not loopback to a loopback, unspecified or link-local address is a
-  `ValueError("url_not_allowed: ...")`, judged at every hop. `is_loopback("127.1")` is now true, so plain http to it
+  `ValueError("url_not_allowed: ...")`, judged at every hop. A host with a percent sign is refused under every policy,
+  first URL and redirect alike: urllib decodes `%XX` in the host before it connects, so `http://%31%32%37.0.0.1/`
+  reaches 127.0.0.1 (measured 2026-11-20 on the first draft of this rule, which judged the host still encoded); the
+  `%25` zone of an IPv6 literal is refused with it (RFC 9844, August 2025, obsoleted RFC 6874 and its zone syntax).
+  `is_loopback("127.1")` is now true, so plain http to it
   is allowed where loopback http is, and it is reached without the environment's proxy. And urllib copies every header
   of a request to the redirected one: `X-Vault-Token`, `Authorization` (AWS SigV4, NetHSM Basic, the QEAA bearer token)
   and `X-Amz-Security-Token` went to the host a 302 named. A redirect to another origin (scheme, host, port) is now
@@ -52,7 +56,9 @@ run by the same author, not by a third party.
   redirect to a private address. `test_sentry_20261119.py`, 10 tests on these two rules: 5,416 spellings of loopback,
   link-local, unspecified and other addresses, each compared with what this system's resolver gives for it; names
   answered by a resolver replaced in the test; 4,000 pairs of origins with generated header sets; redirects served on
-  127.0.0.1. All 10 fail on 22d342c; 18 mutants of the changed lines, 18 killed.
+  127.0.0.1. All 10 fail on 22d342c; 18 mutants of the changed lines, 18 killed. `test_net_mcp_review_20261120.py`, 4
+  tests on the percent sign (800 encoded hosts, each under 2 schemes and 3 policies; IPv6 zones; redirects served on
+  127.0.0.1); 3 of them fail on the first draft of the rule, the fourth checks that urllib decodes the host.
 
 - **A signature over JCS verified after an integer beyond 2^53 was changed** (SPEC v0.12 §20 rule 3, written before
   the code; same review, re-run on 2026-11-19). `cryptovalid_acta.jcs`, the RFC 8785 serializer of the ACTA, Vaara,
@@ -95,7 +101,9 @@ run by the same author, not by a third party.
   not at all, without the result saying so: an assertion made with the operator's passkey for `evil.example` passed.
   `verify_ledger` takes `expected_rp_ids` and `expected_origins` (WebAuthn §7.2: "expected by the Relying Party");
   without them the check is the one of 0.26.0 and `not_verified` now names `approval-rp-id` and `approval-origin`
-  (`test_cedulon.py` changed there). An assertion with no `rpId` member fails `approval-signature` (was `malformed`).
+  (`test_cedulon.py` changed there). Without `expected_rp_ids`, an assertion with no `rpId` member fails
+  `approval-signature` (was `malformed`); with them, the RP ID is the expected one whose SHA-256 is the `rpIdHash`,
+  and the member is not needed.
   `test_sentry_20261119.py`, 8 tests: 250 generated ledgers with halts and resumes against an oracle that reads only
   what the Decider signed, each with 4 unsigned rows added (1,000); 400 ledgers with repeated refs and bent rows; 300
   assertions over 7 RP IDs and 6 origins. All 8 fail on 22d342c; 13 mutants of the changed lines, 12 killed. The one
@@ -154,17 +162,23 @@ run by the same author, not by a third party.
   a message is an object and its `params` an object: a line holding `[]`, `5` or `null`, a request whose `params` is
   an array or a string, a `tools/call` whose `name` is an array, or 100,000 "[" raised `AttributeError`, `TypeError`
   or `RecursionError` out of the read loop, and the process ended (exit 1). Each is now a JSON-RPC 2.0 error
-  (jsonrpc.org/specification, read on 2026-11-19): -32700 for a line that cannot be parsed, -32600 for a message that
+  (jsonrpc.org/specification, read on 2026-11-19): -32700 for a line that cannot be parsed (not UTF-8, `NaN` or
+  `Infinity`, which RFC 8259 §6 does not permit, or nested too deep), -32600 for a message that
   is not an object or whose `id` or `method` has the wrong type (id null where it could not be read), -32602 for
   `params`, a tool `name` or `arguments` of the wrong type, -32603 for anything else inside one message; the server
   reads the next line. One answer changes besides: a message without an `id` is a notification, not answered and
-  not run (§4.1: until now a `tools/call` without an `id` ran the tool and was answered with id null). And
+  not run (§4.1: until now a `tools/call` without an `id` ran the tool and was answered with id null); a message with
+  `"id": null` is a Request and is answered (§5), also for an unknown method (-32601), which had no reply. And
   `"arguments": []` (or `""`, `0`, `false`) is refused as not an object; it was read as no arguments and refused for
   the required one that was missing, the same code -32602 (every tool has a required argument). `test_sentry_20261119.py`, 2 tests over
   the real stdio transport: 14 lines named by the review and 1,500 generated messages, each followed by a ping that
   the same process must answer, the expected code written out in the test. Both fail on 22d342c (the server ends at
-  the first such line). 10 mutants of the changed lines: 9 killed; the one that survives (falsy `arguments` read as
-  none) gives the same code, as said above.
+  the first such line). A reply that carries a lone surrogate taken from the message (`"\ud800"` as an id, a method or
+  a path) is written with JSON escapes: written as UTF-8 it ended the server (exit 74), and a line that is not UTF-8
+  ended it too (exit 1), measured 2026-11-20 on the first draft of this rule; an id `NaN` was echoed as `NaN`.
+  `test_net_mcp_review_20261120.py`, 2 tests over stdio (9 named lines and 300 generated ones, every line written
+  back read as strict JSON); both fail on the first draft. 10 mutants of the changed lines: 9 killed; the one that
+  survives (falsy `arguments` read as none) gives the same code, as said above.
 
 - **A real DigiCert token was refused because its nonce is negative** (SPEC v0.12 §11 step 3, written before the code).
   `cryptovalid_tsa.parse_token` read the TSTInfo's `nonce` with the reader of non-negative INTEGERs and answered

@@ -1245,7 +1245,7 @@ class TestMcpServerSurvivesAnyMessage(unittest.TestCase):
             if args is not None and not isinstance(args, dict):
                 return -32602, id_
             return "result" if args and set(args) == {"path"} else -32602, id_   # none: the required one is missing; another: unknown
-        return (-32601, id_) if id_ is not None else None      # an unknown method with id null: no reply, as before
+        return -32601, id_                                     # id null is a Request (JSON-RPC 2.0 §4, §5): answered
 
     def test_the_review_cases(self):
         for line in ("[]", "5", "null", '"x"', "true", '{"jsonrpc":"2.0","id":1,"method":"initialize","params":[1]}',
