@@ -70,6 +70,13 @@ def _sha256_file(p: str, limit: Optional[int] = None) -> str:
     return verifier.sha256_regular(p, 1 << 62 if limit is None else limit)
 
 
+def _lines(data: bytes):
+    """The lines of `data` as open(path, encoding="utf-8") gives them (strict UTF-8, universal newlines): what the readers
+    of a ledger read from its path until 0.27.0, here from bytes read once (SPEC v0.13 §21 rule 7)."""
+    import io
+    return io.TextIOWrapper(io.BytesIO(data), encoding="utf-8")
+
+
 def _canon(obj: Dict) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
 
@@ -85,9 +92,17 @@ def _first_entry(path: str) -> Dict:
 def _entries_and_head(path: str):
     """Ritorna (numero_entry, self_hash dell'ultima entry). Serve a rilevare il TRONCAMENTO: una catena
     append-only troncata resta valida da sola, ma non combacia con conteggio+testa impegnati nel manifest."""
+    try:
+        return _entries_and_head_data(verifier.read_regular(path))   # SPEC §5 step 0
+    except OSError:
+        return 0, None
+
+
+def _entries_and_head_data(data: bytes):
+    """_entries_and_head on the bytes of the file (SPEC v0.13 §21 rule 7)."""
     n, head = 0, None
     try:
-        with os.fdopen(verifier.open_regular(path), encoding="utf-8") as f:   # SPEC §5 step 0
+        with _lines(data) as f:
             for ln in f:
                 if ln.strip():
                     n += 1
@@ -357,7 +372,15 @@ def _manifest_type_problem(man: Dict) -> Optional[str]:
 def _has_signature_field(path: str) -> bool:
     """SPEC §5 step 5: the signature layer is opened by a signature field on ANY entry (0.21.0 read entry 0 only)."""
     try:
-        with os.fdopen(verifier.open_regular(path), encoding="utf-8") as f:   # SPEC §5 step 0
+        return _has_signature_field_data(verifier.read_regular(path))   # SPEC §5 step 0
+    except OSError:
+        return False
+
+
+def _has_signature_field_data(data: bytes) -> bool:
+    """_has_signature_field on the bytes of the file (SPEC v0.13 §21 rule 7)."""
+    try:
+        with _lines(data) as f:
             for ln in f:
                 if not ln.strip():
                     continue
@@ -572,10 +595,23 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
         return rp == root or rp.startswith(root + os.sep)
     sealed: List[tuple] = []
     file_ok = {}
+    # SPEC v0.13 §21 rule 7: a ledger is read ONCE (bounded, as §5 step 0 says), and its digest, its chain, its
+    # signatures and its count and head are all checked on those bytes. Until 0.27.0 the pack opened the ledger's path
+    # five times: a ledger whose chain fails, committed to by the manifest, was valid when another file stood at the path
+    # while the chain was read (measured with the file exchanged between the reads)
+    ledger_names = {lm["file"] for lm in leds}
+    snap_of: Dict[str, bytes] = {}
+
+    def _take_snapshot(name: str, p: str) -> str:
+        snap_of[name] = verifier.read_regular(p, verifier.MAX_INPUT_BYTES)
+        return hashlib.sha256(snap_of[name]).hexdigest()
     for name, dig in man.get("file_digests_sha256", {}).items():
         p = os.path.join(pack_dir, name)
         try:   # SPEC §10 (v0.11): opened once without blocking, judged on the descriptor, bounded, hashed in blocks
-            file_ok[name] = _real_inside(p) and _sha256_file(p, verifier.MAX_INPUT_BYTES) == dig
+            if name in ledger_names:
+                file_ok[name] = _real_inside(p) and _take_snapshot(name, p) == dig
+            else:
+                file_ok[name] = _real_inside(p) and _sha256_file(p, verifier.MAX_INPUT_BYTES) == dig
         except verifier.InputTooLarge:
             return _refused(f"input_too_large: file {name} exceeds the verifier's size bound ({verifier.MAX_INPUT_BYTES} "
                             "bytes)", "malformed")
@@ -600,17 +636,28 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
     ledger_results, ledgers_ok = [], True
     for lm in man.get("ledgers", []):
         p = os.path.join(pack_dir, lm["file"])
-        if not (_real_inside(p) and os.path.isfile(p)):
+        if lm["file"] not in snap_of and _real_inside(p):
+            try:   # a ledger the manifest does not list in file_digests_sha256 (or one absent at that step): read once now
+                _take_snapshot(lm["file"], p)
+            except verifier.InputTooLarge:
+                return _refused(f"input_too_large: file {lm['file']} exceeds the verifier's size bound "
+                                f"({verifier.MAX_INPUT_BYTES} bytes)", "malformed")
+            except (verifier.InputNotRegular, FileNotFoundError, NotADirectoryError):
+                pass   # not a regular file: refused just below, as before
+            except OSError as e:
+                return _refused(f"input_unreadable: file {lm['file']}: {e.strerror or type(e).__name__}", "malformed")
+        if not (_real_inside(p) and lm["file"] in snap_of):
             ledger_results.append({"file": lm["file"], "hash_pass": False, "sig_pass": False, "untruncated": False,
                                    "pq_protected": False, "pq_reason": "not_a_file_inside_the_pack"})
             sealed.append(("contradicted", "artifact_invalid", f"ledger {lm['file']}: not a file inside the pack"))
             ledgers_ok = False
             continue
-        hp = os.path.exists(p) and verifier.verify_ledger(p).get("verdict") == "PASS"
+        data = snap_of[lm["file"]]   # the bytes read once (rule 7): every check below reads them, never the path again
+        hp = verifier._verify_ledger_data(p, data).get("verdict") == "PASS"
         sealed.append(("verified", None) if hp else ("contradicted", "artifact_invalid", f"ledger {lm['file']}: hash chain"))
         sp = True
         pq, pq_reason = False, ""
-        if _has_signature_field(p):
+        if _has_signature_field_data(data):
             expected_pq, expected_ed = pq_pubkey_b64, signer_pubkey_hex
             # council 16/09 round 3: the manifest signature covers the DECLARED digest string; the body is bound to it
             # only by manifest_ok — both must hold before any key recorded in the body is trusted, and the recorded
@@ -622,10 +669,10 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
                       and isinstance(rec_ed, list) and len(rec_ed) == 1 and isinstance(rec_ed[0], str) and signer._HEX64.fullmatch(rec_ed[0]))
             if expected_pq is None and lm.get("pq_protected") is True and manifest_pinned and rec_ok:
                 expected_pq, expected_ed = rec_pq[0], rec_ed[0]   # pinned by a manifest the CALLER trusts, digest AND signature verified
-            try:
-                sv = signer.verify_file(p, expected_ed, expected_pq)
-            except OSError as e:   # the ledger stopped being a readable regular file after its digest was checked
-                return _refused(f"input_unreadable: file {lm['file']}: {e.strerror or type(e).__name__}", "malformed")
+            try:   # signer.verify_file(p, ...) on the bytes read once: the same lines, the same reader
+                with _lines(data) as f:
+                    sv = signer.verify_ledger_signatures([signer._load_line(ln) for ln in f if ln.strip()],
+                                                         expected_ed, expected_pq)
             except RuntimeError as e:   # no `cryptography` here: the layer cannot be checked (0.21.0: a traceback, exit 1)
                 sp, pq, pq_reason = False, False, "signature_layer_unverifiable"
                 producer.append(("not_evaluated", "backend_missing", f"ledger {lm['file']}: {str(e)[:80]}"))
@@ -649,7 +696,7 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
                 if pqe is not None:
                     producer.append(pqe)
         # FIX B — anti-troncamento: conteggio+testa devono combaciare col manifest
-        n_entries, head = _entries_and_head(p)
+        n_entries, head = _entries_and_head_data(data)
         untruncated = (n_entries == lm.get("entries") and head == lm.get("head_self_hash"))
         if not untruncated:
             sealed.append(("contradicted", "binding_mismatch", f"ledger {lm['file']}: entry count or head"))

@@ -879,15 +879,23 @@ def verify_ledger(path: str, algo: Optional[str] = None, tip: Optional[str] = No
                               trusted_pq_pubkey_b64)
 
 
+def _verify_ledger_data(path: str, data: bytes) -> Dict:
+    """verify_ledger(path) for a file that held `data`, bytes the caller has already read once (the evidence pack, SPEC
+    v0.13 §21 rule 7): the file is not opened again; `path` names it in the receipt and locates its tip, as there."""
+    with _RecursionHeadroom():
+        return _verify_ledger(path, None, None, None, False, None, None, None, _data=data)
+
+
 def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_before, expect_ledger_id,
-                   trusted_pq_pubkey_b64) -> Dict:
+                   trusted_pq_pubkey_b64, _data: Optional[bytes] = None) -> Dict:
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     errors: List[Dict] = []
 
     try:
         # SPEC §5 step 0 (v0.11): opened once without blocking, judged on the descriptor (a FIFO hung until 0.26.0);
         # v0.12: a FIFO is read to its end, bounded in size and in idle time (`<(cat ledger)`, the six verifiers since 0.20.2)
-        fd, piped = open_ledger_input(path, MAX_INPUT_BYTES)   # the module value at call time
+        # v0.13 §21 rule 7: bytes already read by the caller (_verify_ledger_data) are not read again
+        fd, piped = (None, _data) if _data is not None else open_ledger_input(path, MAX_INPUT_BYTES)   # the module value at call time
     except InputIdle:
         return {"verdict": "FAIL", "path": path, "verified_utc": started, "entries_count": 0,
                 "parse_errors": [{"line": -1, "error": f"unreadable: FIFO idle for {FIFO_IDLE_SECONDS} s"}]}
