@@ -305,7 +305,7 @@ def verify_ledger_signatures(entries: List[Dict], expected_pubkey_hex: Optional[
     key_cache: Dict[bytes, Optional[str]] = {}   # 0.21.0: ed25519_order.key_problem once per distinct key
     for i, e in enumerate(entries):
         if isinstance(e, _Undecodable):
-            failures.append({"idx": i, "reason": "json_decode"})          # audit V1 #4 (30/09/2026): never a traceback
+            failures.append({"idx": i, "reason": e.reason})               # audit V1 #4 (30/09/2026): never a traceback
             continue
         if not isinstance(e, dict):
             failures.append({"idx": i, "reason": "not_a_json_object"})    # [], 1, "x", null — named, like the verifiers
@@ -399,12 +399,33 @@ def verify_ledger_signatures(entries: List[Dict], expected_pubkey_hex: Optional[
 
 
 class _Undecodable:
-    """A ledger line that is not JSON: kept in place so the failure keeps its index."""
+    """A ledger line that is not JSON (`json_decode`), or holds a key twice in one object (`duplicate_key`): kept in
+    place so the failure keeps its index."""
+
+    def __init__(self, reason: str = "json_decode"):
+        self.reason = reason
+
+
+def _no_duplicate_keys(pairs):
+    seen = {}
+    for k, v in pairs:
+        if k in seen:
+            raise _DuplicateKey(k)
+        seen[k] = v
+    return seen
+
+
+class _DuplicateKey(ValueError):
+    pass
 
 
 def _load_line(ln):
+    # SPEC §3: "duplicate object keys — a strict parser MUST reject them"; SPEC v0.13 §21 rule 2: until 0.27.0 this
+    # reader kept the last of two equal keys and verified the signature over it (verifier.py refused the same line)
     try:
-        return json.loads(ln)
+        return json.loads(ln, object_pairs_hook=_no_duplicate_keys)
+    except _DuplicateKey:
+        return _Undecodable("duplicate_key")
     except (ValueError, RecursionError):
         return _Undecodable()
 

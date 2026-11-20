@@ -84,6 +84,19 @@ def sign_entry(entry: Dict, keyfile: str, x5c: Optional[List[str]] = None) -> st
     return f"{h}.{p}.{_b64u(sig)}"
 
 
+class _DuplicateKey(ValueError):
+    pass
+
+
+def _no_duplicate_keys(pairs):
+    seen = {}
+    for k, v in pairs:
+        if k in seen:   # the name comes from anyone: ascii, or a lone surrogate stops the receipt (exit 74)
+            raise _DuplicateKey(repr(k).encode("ascii", "backslashreplace").decode("ascii")[:80])
+        seen[k] = v
+    return seen
+
+
 SUPPORTED_CRIT: frozenset = frozenset()   # JOSE extensions this verifier understands when listed in "crit": none
 
 
@@ -93,7 +106,12 @@ def verify(jws: str, trusted_pubkey_hex: Optional[str] = None) -> Dict:
     _, Ed25519PublicKey, _ = _ed()
     try:
         h, p, s = jws.split(".")
-        header = json.loads(_b64u_dec(h))
+        # RFC 7515 §10.12 (read at rfc-editor.org on 2026-11-20): "JWS parsers MUST either reject JWSs with duplicate
+        # Header Parameter names" or keep the lexically last; rejected here (SPEC v0.13 §21 rule 2)
+        try:
+            header = json.loads(_b64u_dec(h), object_pairs_hook=_no_duplicate_keys)
+        except _DuplicateKey as e:
+            return {"ok": False, "why": f"header_duplicate_key: {e}"[:160]}
         if not isinstance(header, dict):
             return {"ok": False, "why": "header_not_an_object"}
         # RFC 7515 §4.1.11 + Appendix E: a critical extension that is not understood makes the JWS invalid; an empty,
@@ -117,7 +135,10 @@ def verify(jws: str, trusted_pubkey_hex: Optional[str] = None) -> Dict:
         if trusted_pubkey_hex and kid != trusted_pubkey_hex:
             return {"ok": False, "why": "kid differs from the trusted key"}
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(pk)).verify(_b64u_dec(s), f"{h}.{p}".encode("ascii"))
-        payload = json.loads(_b64u_dec(p))
+        try:   # the payload is a ledger record: SPEC §3, a key twice in one object is refused (until 0.27.0 the last won)
+            payload = json.loads(_b64u_dec(p), object_pairs_hook=_no_duplicate_keys)
+        except _DuplicateKey as e:
+            return {"ok": False, "signature_valid": True, "why": f"payload_duplicate_key: {e}"[:160]}
         return {"ok": bool(trusted_pubkey_hex), "signature_valid": True, "header": header, "record": payload,
                 "x5c_present": "x5c" in header,
                 "why": ("signature valid under the trusted key" if trusted_pubkey_hex else
