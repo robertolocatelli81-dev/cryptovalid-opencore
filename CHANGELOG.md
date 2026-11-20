@@ -27,6 +27,9 @@ run by the same author, not by a third party.
   repository and 8 archives and packs written by the previous code: same verdicts; signed archives gain the warning
   `untagged_signatures`); `require_signature_domain=True` / `--require-signature-domain` refuses them. An archive or a
   pack written now is refused by 0.27.0 (`sth_signature_invalid`, `head_signature_invalid`, `format_unsupported`).
+- **The MCP tool `verify_ledger` verifies the entry signatures** (§22 rule 5) when it is given `expected_pubkey_hex`:
+  the chain and the signatures are checked on one read of the file, and `valid` is true only when both hold. Without
+  the key it answers as before and says `signatures: {"checked": false, ...}`.
 
 ### Fixed
 

@@ -111,10 +111,43 @@ def _backend():
 
 # ────────────────────────────────────────────────────────────── tools (read)
 
+_HEX_DIGITS = "0123456789abcdef"
+
+
 def t_verify_ledger(args: Dict) -> Dict:
+    """SPEC §22 rule 5 (Unreleased): with `expected_pubkey_hex` the Ed25519 signature of every entry is verified against
+    that key, on the same bytes the chain was checked on (one read), and `valid` says whether both hold; without it the
+    chain is checked as before and `signatures.checked: false` says the signatures were not."""
     path = args["path"]
-    r = verifier.verify_ledger(path)
-    return {"result": r, "provenance": _prov(path, _sha256_file(path))}
+    pk = args.get("expected_pubkey_hex")
+    if pk is None:
+        r = verifier.verify_ledger(path)
+        return {"result": r,
+                "signatures": {"checked": False,
+                               "note": "signatures NOT verified: pass expected_pubkey_hex (the Ed25519 key you trust) "
+                                       "to verify the signature of every entry"},
+                "provenance": _prov(path, _sha256_file(path))}
+    if len(pk) != 64 or any(c not in _HEX_DIGITS for c in pk):
+        return {"error": "expected_pubkey_hex must be 64 lowercase hex characters (an Ed25519 public key)"}
+    try:
+        data = verifier.read_regular(path)   # SPEC §5 step 0, read once: the chain and the signatures on the same bytes
+    except OSError as e:
+        return {"error": f"unreadable: {type(e).__name__}"}
+    r = verifier._verify_ledger_data(path, data)
+    import signer
+    try:
+        try:
+            with evidence_pack._lines(data) as f:
+                lines = [signer._load_line(ln) for ln in f if ln.strip()]
+        except UnicodeDecodeError:
+            lines = [signer._Undecodable("not_utf8")]
+        sv = signer.verify_ledger_signatures(lines, pk)
+        sigs = {"checked": True, "pinned_key": pk, **sv}
+    except RuntimeError as e:   # no `cryptography` here: the signatures cannot be checked, never a pass
+        sigs = {"checked": False, "pinned_key": pk, "ok": False, "error": f"backend_missing: {str(e)[:120]}"}
+    return {"result": r, "signatures": sigs,
+            "valid": r.get("verdict") == "PASS" and sigs.get("ok") is True,
+            "provenance": {**_prov(path, None), "sha256": hashlib.sha256(data).hexdigest()}}
 
 
 def t_verify_pack(args: Dict) -> Dict:
@@ -185,12 +218,17 @@ _TOOLS = {
     "verify_ledger": {
         "fn": t_verify_ledger, "readonly": True,
         "description": ("Verify one hash-chained JSONL ledger: every self_hash and prev_hash link (SPEC §5). "
-                        "Signatures are NOT checked by this tool: the receipt counts the signed entries in "
-                        "signatures_not_checked (check them with signer.py verify --pubkey, or verify_pack). "
+                        "With expected_pubkey_hex, also the Ed25519 signature of every entry against that key "
+                        "(signatures, and valid = chain and signatures both hold); without it the signatures are "
+                        "NOT checked and the answer says so (signatures.checked: false). "
                         "READ-ONLY; returns verdict + provenance (path, SHA-256, UTC)."),
         "schema": {"type": "object", "additionalProperties": False, "required": ["path"],
                    "properties": {"path": {"type": "string",
-                                           "description": "path to the .jsonl ledger"}}}},
+                                           "description": "path to the .jsonl ledger"},
+                                  "expected_pubkey_hex": {
+                                      "type": "string",
+                                      "description": "the Ed25519 public key (64 lowercase hex) every entry must be "
+                                                     "signed by; absent = signatures not checked"}}}},
     "verify_pack": {
         "fn": t_verify_pack, "readonly": True,
         "description": ("Independently verify a CryptoValid evidence pack (file digests, "

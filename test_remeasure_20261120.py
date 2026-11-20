@@ -321,7 +321,8 @@ class Rule5McpArgumentTypes(unittest.TestCase):
                                 self.assertIn(repr(prop), r["error"]["message"])
                                 self.assertEqual(ran, [], (name, prop, v))
                             checked += 1
-            self.assertEqual(checked, 221)   # 6 tools, 13 properties, 17 values each (14 of six types, 3 more arrays)
+            # 6 tools, 14 properties (13 until SPEC §22 rule 5 gave verify_ledger expected_pubkey_hex), 17 values each
+            self.assertEqual(checked, 238)
         finally:
             for n, fn in saved.items():
                 MCP._TOOLS[n]["fn"] = fn
@@ -329,7 +330,7 @@ class Rule5McpArgumentTypes(unittest.TestCase):
     def test_verify_ledger_description_does_not_claim_signatures(self):
         import cryptovalid_mcp as MCP
         d = MCP._TOOLS["verify_ledger"]["description"]
-        self.assertIn("Signatures are NOT checked", d)
+        self.assertIn("without it the signatures are NOT checked", d)   # SPEC §22 rule 5: checked with expected_pubkey_hex
         self.assertNotIn("and its Ed25519 signatures", d)
 
 

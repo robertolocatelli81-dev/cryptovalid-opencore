@@ -2050,4 +2050,15 @@ tests named `*_control` hold what the rule does not change.
    the 3 signed archives gain only the warning. A document written now is refused by 0.27.0 (measured: a signed
    archive is `sth_signature_invalid`, `head_signature_invalid`; a 1.2 pack `format_unsupported`), never accepted.
    Entry signatures and the tip do not change.
+5. **The MCP tool `verify_ledger` verifies the entry signatures against a key given as an argument**
+   (`cryptovalid_mcp.py`). Until 0.27.0 it checked only the chain; since §21 rule 5 its description says so. It now
+   takes `expected_pubkey_hex` (64 lowercase hex, an Ed25519 public key; any other string is an `error`, the tool
+   does nothing else). Given, the file is read once (§5 step 0), the chain is checked on those bytes and the signature
+   of every entry against that key on the same bytes (`signer.verify_ledger_signatures`, the closed entry of §2.1, as
+   `signer.py verify --pubkey`); the answer carries `signatures` (`checked: true`, `pinned_key`, the counts and failures)
+   and `valid`, true only when the chain is PASS and every entry is signed by that key and verifies (an unsigned entry,
+   another key, a broken signature: false). Without `cryptography` the signatures cannot be checked: `checked: false`,
+   `ok: false`, `valid: false`. Not given, the tool answers as before and adds `signatures: {"checked": false, "note":
+   "signatures NOT verified: ..."}`, with no `valid`. The input schema gains the one property: the tools now have 14
+   (the 221 calls of §21 rule 5 are 238).
 

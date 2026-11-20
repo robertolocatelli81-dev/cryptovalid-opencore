@@ -470,5 +470,70 @@ class TestSignatureDomains(unittest.TestCase):
         self.assertEqual(r["states"]["producer_signature"]["state"], "contradicted")
 
 
+@unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+class TestMcpVerifyLedgerSignatures(unittest.TestCase):
+    """§22 rule 5: the MCP tool verify_ledger verifies the entry signatures against a pinned key passed as an argument;
+    without it, the answer says that the signatures were not verified."""
+
+    def setUp(self):
+        import cryptovalid_mcp as M
+        self.M = M
+        self.d = tempfile.mkdtemp()
+        self.key = os.path.join(self.d, "k.key")
+        self.pk = signer.keygen(self.key)["public_key_hex"]
+        self.other = signer.keygen(os.path.join(self.d, "o.key"))["public_key_hex"]
+        self.plain = os.path.join(self.d, "plain.jsonl")
+        _ledger(self.plain, 4)
+        self.signed = os.path.join(self.d, "signed.jsonl")
+        signer.sign_ledger(self.plain, self.signed, self.key)
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def call(self, args):
+        r = self.M.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "verify_ledger", "arguments": args}})
+        return json.loads(r["result"]["content"][0]["text"]) if "result" in r else r
+
+    def test_pinned_key_verifies(self):
+        out = self.call({"path": self.signed, "expected_pubkey_hex": self.pk})
+        self.assertTrue(out["valid"], out)
+        self.assertTrue(out["signatures"]["checked"])
+        self.assertEqual(out["signatures"]["verified"], 4)
+
+    def test_other_key_fails(self):
+        out = self.call({"path": self.signed, "expected_pubkey_hex": self.other})
+        self.assertFalse(out["valid"])
+        self.assertEqual({f["reason"] for f in out["signatures"]["failures"]}, {"signer_mismatch"})
+        self.assertEqual(out["result"]["verdict"], "PASS")   # the chain itself holds: the signatures are what fails
+
+    def test_a_forged_signature_fails(self):
+        lines = open(self.signed, encoding="utf-8").read().splitlines()
+        e = json.loads(lines[2])
+        e["signature"] = e["signature"][:10] + ("A" if e["signature"][10] != "A" else "B") + e["signature"][11:]
+        lines[2] = json.dumps(e)
+        with open(self.signed, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        out = self.call({"path": self.signed, "expected_pubkey_hex": self.pk})
+        self.assertFalse(out["valid"])
+        self.assertEqual(out["result"]["verdict"], "PASS")
+
+    def test_unsigned_ledger_with_a_pin_is_not_valid(self):
+        out = self.call({"path": self.plain, "expected_pubkey_hex": self.pk})
+        self.assertFalse(out["valid"], out)
+
+    def test_without_key_says_not_checked_control(self):
+        out = self.call({"path": self.signed})
+        self.assertIs(out["signatures"]["checked"], False)
+        self.assertIn("NOT verified", out["signatures"]["note"])
+        self.assertNotIn("valid", out)
+        self.assertEqual(out["result"]["verdict"], "PASS")
+
+    def test_malformed_key_is_an_error(self):
+        for k in ["", "AB" * 32, self.pk[:-1], self.pk + "0", " " + self.pk[1:], "\u0661" * 64]:
+            out = self.call({"path": self.signed, "expected_pubkey_hex": k})
+            self.assertIn("error", out, (k, out))
+            self.assertNotIn("valid", out)
+
+
 if __name__ == "__main__":
     unittest.main()
