@@ -88,6 +88,10 @@ def _b64_strict(s, n: int):
     return raw if len(raw) == n and base64.b64encode(raw).decode() == s else None
 
 
+_ENTRY_KEYS = frozenset({"idx", "ts", "data", "prev_hash", "self_hash", "signature", "signer", "tsa_token", "signature_pq",
+                         "signer_pq"})   # SPEC §2.1, as verifier.ENTRY_KEYS (signer.py also runs vendored alone)
+
+
 def _content_self_hash_ok(entry: Dict) -> bool:
     """Ricomputa self_hash dal CONTENUTO (esclude self_hash/signature/signer) e lo confronta.
     Così la verifica di firma cattura anche la manomissione del contenuto: contenuto→self_hash→firma."""
@@ -251,13 +255,25 @@ def sign_ledger(in_path: str, out_path: str, keyfile: Optional[str] = None,
     out: List[Dict] = []
     import io
     with io.StringIO(_read_input_text(in_path)) as f:   # SPEC §5 step 0: a regular file or a pipe, bounded
-        for ln in f:
+        for n, ln in enumerate(f, 1):
             if not ln.strip():
                 continue
-            e = json.loads(ln)
+            # SPEC v0.13 §21 rule 8: what is signed is the self_hash of an ENTRY, recomputed here. The tree heads and
+            # the HEAD of cryptovalid_ingest are signed over the same kind of message (the hex of a SHA-256): until
+            # 0.27.0 this function signed the self_hash as written, so a "ledger" whose self_hash values were the hashes
+            # of a tree head and a HEAD made of the signer a signer of an archive it never sealed (measured)
+            e = _load_line(ln)
+            if isinstance(e, _Undecodable) or not isinstance(e, dict):
+                raise ValueError(f"refusing to sign line {n}: not a JSON object with distinct keys")
+            unknown = sorted(k for k in e if k not in _ENTRY_KEYS)
+            if unknown:
+                raise ValueError(f"refusing to sign line {n}: member(s) outside the entry schema (SPEC §2.1): "
+                                 + ", ".join(map(repr, unknown))[:120])
             sh = e.get("self_hash")
             if not sh:
                 raise ValueError("entry without self_hash: sign a ledger that is already hash-chained")
+            if not (isinstance(sh, str) and _content_self_hash_ok(e)):
+                raise ValueError(f"refusing to sign line {n}: its self_hash is not the hash of its content (SPEC §3)")
             sig = backend.sign(sh.encode())
             pub.verify(sig, sh.encode())   # fail-fast se il backend firma con altra chiave
             e["signature"] = base64.b64encode(sig).decode()
