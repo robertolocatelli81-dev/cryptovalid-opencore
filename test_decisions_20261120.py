@@ -898,5 +898,91 @@ class TestTrustedListsSigned(unittest.TestCase):
             self.assertEqual(mine, theirs, d)
 
 
+@unittest.skipUnless(HAVE_CRYPTO and shutil.which("openssl"), "needs `cryptography` and openssl (a local TSA)")
+class TestTsaPinDecides(unittest.TestCase):
+    """§22 rule 7: pinned TSA certificates decide `valid` (pack) and `ok` (archive): a token not verified under them, or
+    no token, is not valid. Until 0.27.0 (SPEC v0.8) the pack stayed valid and the archive ok."""
+
+    @classmethod
+    def setUpClass(cls):
+        import base64
+        import evidence_pack as EP
+        sys.path.insert(0, os.path.join(HERE, "verifiers"))
+        from pack_states_bench import LocalTsa
+        cls.EP, cls.b64 = EP, base64
+        cls.td = tempfile.mkdtemp()
+        cls.tsa = {}
+        for n in ("A", "B"):
+            os.makedirs(os.path.join(cls.td, "tsa" + n))
+            cls.tsa[n] = LocalTsa(os.path.join(cls.td, "tsa" + n))
+        cls.pin = {n: [t.j("ca.crt")] for n, t in cls.tsa.items()}
+        led = os.path.join(cls.td, "l.jsonl")
+        _ledger(led, 3)
+        cls.packs = {}
+        for name in ("A", "B", "none"):
+            p = os.path.join(cls.td, "pack_" + name)
+            EP.build_pack([led], p)
+            if name != "none":
+                mp = os.path.join(p, "MANIFEST.json")
+                with open(mp, encoding="utf-8") as f:
+                    m = json.load(f)
+                m["rfc3161_timestamp"] = {"anchored": True, "tsa": "local", "tsr_b64": cls.tsa[name].token(m["manifest_digest_sha256"])}
+                with open(mp, "w", encoding="utf-8") as f:
+                    json.dump(m, f)
+            cls.packs[name] = p
+        cls.arch = {}
+        for name in ("A", "none"):
+            d = os.path.join(cls.td, "arch_" + name)
+            w = I.Ingestor(d, batch_size=1, tsa_url="http://local.tsa" if name == "A" else None)
+            if name == "A":
+                w._request_timestamp = lambda digest, url, t=cls.tsa["A"]: (True, base64.b64decode(t.token(digest.hex())), None)
+            for i in range(3):
+                w.append({"i": i})
+            w.close()
+            cls.arch[name] = d
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.td, ignore_errors=True)
+
+    def test_pack_under_its_own_tsa_control(self):
+        r = self.EP.verify_pack(self.packs["A"], tsa_certs=self.pin["A"])
+        self.assertEqual((r["valid"], r["states"]["time_anchor"]["state"]), (True, "verified"))
+        self.assertTrue(self.EP.verify_pack(self.packs["B"])["valid"])   # without a pin: as before
+
+    def test_pack_token_of_another_tsa(self):
+        r = self.EP.verify_pack(self.packs["B"], tsa_certs=self.pin["A"])
+        self.assertEqual((r["valid"], r["states"]["time_anchor"]["reasons"]), (False, ["tsa_unresolved"]))
+
+    def test_pack_without_token_under_a_pin(self):
+        r = self.EP.verify_pack(self.packs["none"], tsa_certs=self.pin["A"])
+        self.assertEqual((r["valid"], r["states"]["time_anchor"]["reasons"]), (False, ["not_present"]))
+
+    def test_pack_token_not_checked_under_a_pin(self):
+        from unittest import mock
+        import cryptovalid_tsa as T
+        with mock.patch.object(T, "token_signer", return_value=("not_evaluated", None, "openssl absent")):
+            r = self.EP.verify_pack(self.packs["A"], tsa_certs=self.pin["A"])
+        self.assertEqual((r["valid"], r["states"]["time_anchor"]["reasons"]), (False, ["instrument_failure"]))
+
+    def test_archive_under_its_own_tsa_control(self):
+        r = I.verify_archive(self.arch["A"], tsa_certs=self.pin["A"])
+        self.assertTrue(r["ok"], r["failures"])
+        self.assertTrue(I.verify_archive(self.arch["none"])["ok"])   # without a pin: as before
+
+    def test_archive_without_token_under_a_pin(self):
+        r = I.verify_archive(self.arch["none"], tsa_certs=self.pin["A"])
+        self.assertFalse(r["ok"])
+        self.assertEqual({f["reason"] for f in r["failures"]}, {"tsa_token_missing_but_tsa_pinned"})
+
+    def test_archive_token_not_checked_under_a_pin(self):
+        from unittest import mock
+        import cryptovalid_tsa as T
+        with mock.patch.object(T, "token_signer", return_value=("not_evaluated", None, "openssl absent")):
+            r = I.verify_archive(self.arch["A"], tsa_certs=self.pin["A"])
+        self.assertFalse(r["ok"])
+        self.assertEqual({f["reason"] for f in r["failures"]}, {"tsa_token_not_verified_under_pin"})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -482,6 +482,8 @@ def verify_archive(directory: str, prefix: str = "ledger",
     timestamped only when its token is `verified` against `tsa_certs` (the TSA certificates the caller pins) or, with
     `lotl_check`, when the certificate that signed it is a QTST certificate of the EU trusted lists; a token whose
     signature verifies only with the certificate it carries is reported (`tsa_tokens`, a warning), not counted.
+    SPEC §22 rule 7: with `tsa_certs` every sealed segment needs a token verified under them (`tsa_token_missing_but_tsa_pinned`,
+    `tsa_token_not_verified_under_pin`); until 0.27.0 such an archive was ok.
     An empty pin ("" or an empty list, or a list holding an empty or non-string key) pins nothing and is a ValueError
     (SPEC v0.9 §17, 16/11/2026: until 0.25.0 it meant "not pinned", ok true with the warning no_pinned_pubkey).
     `require_signature_domain` (SPEC §22 rule 3): a signed tree head or HEAD without `sig_domain` (signed over the bare
@@ -597,6 +599,11 @@ def verify_archive(directory: str, prefix: str = "ledger",
                 checked.append((name, token, chk))
                 if chk["status"] == "verified":
                     timestamped.append(name)
+                elif tsa_certs is not None:   # SPEC §22 rule 7: under a TSA pin a token not verified is a failure
+                    failures.append({"segment": name, "reason": "tsa_token_not_verified_under_pin",
+                                     "detail": f"{chk['status']}: {chk['reason']}"[:300]})
+        elif tsa_certs is not None:   # SPEC §22 rule 7: under a TSA pin a sealed segment without a token is a failure
+            failures.append({"segment": name, "reason": "tsa_token_missing_but_tsa_pinned"})
 
     # HEAD manifest: guardia della CODA (conteggio + ultimo STH)
     head_path = os.path.join(directory, f"{prefix}.head.json")

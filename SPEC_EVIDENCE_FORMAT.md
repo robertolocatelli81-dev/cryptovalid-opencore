@@ -492,7 +492,8 @@ HASH_FAILURE, FORMAT_FAILURE) is `contradicted`, as a token over another digest 
 a token for which no chain to the pinned certificates is found
 (INDETERMINATE: NO_CERTIFICATE_CHAIN_FOUND, "no certificate chain has been found for the identified signing
 certificate") is `not_evaluated / tsa_unresolved`, as `key_unresolved` for the producer: a pin for another TSA does not
-make the pack false. The receipt's `rfc3161` object gains `tsa_check` = `{status, reason, detail, gen_time,
+make the pack false (until 0.27.0; replaced by §22 rule 7, Unreleased: the state stays `tsa_unresolved`, the pack is not
+valid). The receipt's `rfc3161` object gains `tsa_check` = `{status, reason, detail, gen_time,
 signer_sha256, sha1_signature_legacy}` of §11 whenever §11 ran (`sha1_signature_legacy` since v0.10, §11 step 7); a receipt computed with a pin names `states_vocabulary:
 "cryptovalid-evidence-pack/states-2"` (states-1 with `verified` and `tsa_unresolved` reachable on `time_anchor` and the
 wider `token_invalid` above); a receipt without a pin keeps `states-1` and does not change. ap2-evidence-pack 1.7.x
@@ -1990,10 +1991,11 @@ same day, before any release; what that review measured is said in each. Tests: 
 
 ## 22. Rules written for the decisions of 2026-11-20 (Unreleased)
 
-The re-measurement of 2026-11-20 (§21) left six findings to a decision of the maintainer, each a behaviour the earlier
-text of this specification allowed or a format change. The decisions were taken the same day; each rule below was
-written here before the code. Tests: `test_decisions_20261120.py`, 47 tests (one compares the canonicalization of rule
-6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 38 fail and the 8 named
+The re-measurement of 2026-11-20 (§21) left six findings to a decision of the maintainer (rules 1-6; rule 7 applies
+the principle of rule 4 to the TSA pin, decided on 2026-11-21), each a behaviour the earlier
+text of this specification allowed or a format change. The six decisions were taken the same day; each rule below was
+written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one compares the canonicalization of rule
+6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 43 fail and the 10 named
 `*_control`, which hold what the rules do not change, pass.
 
 1. **A trusted log key makes the tip required** (`verifier.verify_ledger(trusted_pubkey_hex=...)`, `verifier.py
@@ -2139,3 +2141,24 @@ written here before the code. Tests: `test_decisions_20261120.py`, 47 tests (one
    LOTL); the publication defines no other source. After a pivot only the set it announces is accepted: the 15 days in
    which the Commission keeps the former certificates usable (the publication's section 2.2) are not used, so a LOTL
    still signed with a former certificate in those days is refused, never accepted wrongly.
+7. **Pinned TSA certificates decide `valid` and `ok`** (`evidence_pack.verify_pack(tsa_certs=...)`, `evidence_pack.py
+   verify --tsa-cert`, `cryptovalid_ingest.verify_archive(tsa_certs=...)`,
+   `cryptovalid_ingest.py verify --tsa-cert`). This rule replaces the sentence of v0.8 in §10 "a pin for another TSA
+   does not make the pack false", as rule 4 replaced the Disposition for the signer pins. Until 0.27.0, with TSA
+   certificates pinned, a pack whose token was issued by another TSA (`tsa_unresolved`), a pack without a token
+   (`not_present`), and a pack whose token openssl could not check (`instrument_failure`) were `valid: true`; an
+   archive whose sealed segments had no token, or a token that could not be checked, was `ok: true`. Now:
+   - **pack**: with `tsa_certs` given, `valid` is true only when `time_anchor` is `verified`; the state and its reason
+     do not change (`not_evaluated / tsa_unresolved`, `not_present`, `instrument_failure`), only `valid`.
+   - **archive**: with `tsa_certs` given, every sealed segment must carry a token `verified` under them: a segment
+     without one is the failure `tsa_token_missing_but_tsa_pinned`, a token whose check did not run
+     (`not_evaluated`, openssl absent) is `tsa_token_not_verified_under_pin`. A token of another TSA was already the
+     failure `tsa_token_not_issued_by_pinned_tsa` (§11, unchanged).
+   Without a TSA pin nothing changes. The verifiers that already required a verified token under the pin are unchanged:
+   the beacon window (§19: `time_anchor_not_verified`) and `cryptovalid_heterogeneous` (a timestamp counts only
+   when `verified`). `eidas_ledger_check` counts tokens per status in a self-assessment and gives no `valid`: not
+   changed. Measured (`prove_decisioni_D_20261120/cryptovalid/d7_tsa_pin_verdetti.py`, two local TSAs made with
+   openssl): 33 combinations of token (the pinned TSA's, another TSA's, none, `anchored: false`, broken, over another
+   digest; openssl absent at the check) x pin (none, TSA A, TSA B) x pack or archive; 12 change verdict, all from
+   valid/ok to not, 21 do not; none becomes valid.
+

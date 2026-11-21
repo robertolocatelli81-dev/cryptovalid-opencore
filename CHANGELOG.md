@@ -11,9 +11,9 @@ run by the same author, not by a third party.
 
 ### Changed by the decisions of 2026-11-20 (SPEC §22, written before the code; verdicts change)
 
-`test_decisions_20261120.py`, 47 tests (one compares the canonicalization with lxml and is skipped where lxml is absent):
-on the branch before these rules (9b81e9c) 38 fail and the 8 named `*_control` pass. 58 mutants of the changed lines
-(Python, JS, Go, Java): all killed.
+`test_decisions_20261120.py`, 54 tests (one compares the canonicalization with lxml and is skipped where lxml is absent):
+on the branch before these rules (9b81e9c) 43 fail and the 10 named `*_control` pass. 62 mutants of the changed lines (Python,
+JS, Go, Java): all killed.
 
 - **A trusted log key makes the tip required** (§22 rule 1), in the Python, JS, Go and Java verifiers: with
   `--trusted-pubkey` and no tip the verdict was PASS, exit 0, `tip: null`; it is now FAIL with `tip_missing`, exit 1.
@@ -43,6 +43,11 @@ on the branch before these rules (9b81e9c) 38 fail and the 8 named `*_control` p
   dependency is added. Measured on 2026-11-20: the LOTL and the 30 lists that answered verify; on each list a changed
   byte, a removed signature, another list's certificates and a service put inside the signature's Object are refused or
   not read. The cache rule is `/3`: caches built before are rebuilt.
+- **Pinned TSA certificates decide `valid` and `ok`** (§22 rule 7, replacing the v0.8 sentence "a pin for another TSA does
+  not make the pack false"): with `tsa_certs` / `--tsa-cert`, a pack whose token is another TSA's, absent, or not
+  checked, was `valid: true`, and an archive with a sealed segment without a token, or with one not checked, was ok;
+  now not valid (`time_anchor` keeps its state) and `tsa_token_missing_but_tsa_pinned` /
+  `tsa_token_not_verified_under_pin`. Of 33 combinations of token x pin x pack/archive, 12 change from valid/ok to not.
 - **The MCP tool `verify_ledger` verifies the entry signatures** (§22 rule 5) when it is given `expected_pubkey_hex`:
   the chain and the signatures are checked on one read of the file, and `valid` is true only when both hold. Without
   the key it answers as before and says `signatures: {"checked": false, ...}`.

@@ -519,6 +519,7 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
     """The evidence pack's verify (SPEC §10). `tsa_certs` (SPEC v0.8): the TSA certificates the caller pins (paths or bytes,
     PEM or DER: the TSA certificate or a CA above it, as SPEC §11); then a token that binds the manifest digest is checked
     by §11, `time_anchor` can be `verified`, and the receipt names `states_vocabulary` states-2. None: as before v0.8.
+    SPEC §22 rule 7: with `tsa_certs` the pack is valid only when `time_anchor` is `verified`.
     `tsa_crls` (SPEC v0.10 §11 step 8, needs `tsa_certs`): CRLs the caller pins for the TSA certificate's revocation.
     `require_signature_domain` (SPEC §22 rule 3): admit format 1.2 only (a 1.1 pack, whose manifest signature is over the
     bare digest, is format_unsupported); by default both are admitted."""
@@ -781,7 +782,11 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
                "ledgers_ok": ledgers_ok, "ledgers": ledger_results,
                "rfc3161": rfc,
                "valid": bool(files_ok and manifest_ok and ledgers_ok and not signature_broken and anchor[0] != "contradicted"
-                             and manifest_pin_holds),
+                             and manifest_pin_holds
+                             # SPEC §22 rule 7 (Unreleased): pinned TSA certificates are a requirement, as the signer pins of
+                             # rule 4: the token must be verified under them (until 0.27.0 a token of another TSA, no token, or
+                             # a token openssl could not check left `valid` as it was, SPEC v0.8)
+                             and (tsa_certs is None or anchor[0] == "verified")),
                "admission": "admitted", "refusal_class": None, "states_vocabulary": STATES_VOCABULARY,
                "states": {"sealed_content": _subject(sealed), "producer_signature": _subject(producer),
                           "time_anchor": _subject([anchor])}}

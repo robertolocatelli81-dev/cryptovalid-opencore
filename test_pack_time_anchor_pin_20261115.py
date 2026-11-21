@@ -172,9 +172,10 @@ class PackWithPinnedTsa(unittest.TestCase):
         self.assertNotIn("tsa_check", r["rfc3161"])
         self.assertEqual(r, EP.verify_pack(p, tsa_certs=None))
 
-    def test_another_tsa_pinned_is_unresolved_and_the_pack_stays_valid(self):
+    def test_another_tsa_pinned_is_unresolved_and_the_pack_is_not_valid(self):
+        # SPEC §22 rule 7 (Unreleased): the TSA pin decides valid (until 0.27.0, SPEC v0.8: the pack stayed valid)
         r = EP.verify_pack(self.pack("other"), tsa_certs=[self.other.j("ca.crt")])
-        self.assertEqual((self.ta(r), r["valid"]), (("not_evaluated", "tsa_unresolved"), True))
+        self.assertEqual((self.ta(r), r["valid"]), (("not_evaluated", "tsa_unresolved"), False))
         self.assertEqual((r["rfc3161"]["tsa_check"]["status"], r["rfc3161"]["tsa_check"]["reason"]),
                          ("invalid", "not_issued_by_pinned_tsa"))
 
@@ -202,7 +203,8 @@ class PackWithPinnedTsa(unittest.TestCase):
             r0, r = EP.verify_pack(p), EP.verify_pack(p, tsa_certs=pin)
             self.assertEqual(self.ta(r), want, name)
             self.assertEqual(r0["states"], r["states"], name)
-            self.assertEqual(r0["valid"], r["valid"], name)
+            # SPEC §22 rule 7: no token under a TSA pin is not valid (until 0.27.0 as without the pin); the rest as before
+            self.assertEqual(r["valid"], False if name == "none" else r0["valid"], name)
             self.assertNotIn("tsa_check", r["rfc3161"], name)
 
     def test_openssl_absent_with_a_pin_is_instrument_failure(self):
@@ -215,7 +217,7 @@ class PackWithPinnedTsa(unittest.TestCase):
         p = self.pack("noossl2")   # the imprint was read (openssl present), the signature check finds no openssl
         with mock.patch.object(T, "token_signer", return_value=("not_evaluated", None, "openssl absent")):
             r = EP.verify_pack(p, tsa_certs=[self.tsa.j("ca.crt")])
-        self.assertEqual((self.ta(r), r["valid"]), (("not_evaluated", "instrument_failure"), True))
+        self.assertEqual((self.ta(r), r["valid"]), (("not_evaluated", "instrument_failure"), False))   # §22 rule 7
         self.assertEqual(r["rfc3161"]["tsa_check"]["status"], "not_evaluated")
 
     def test_the_pin_is_given_or_refused(self):
