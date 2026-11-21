@@ -174,9 +174,12 @@ def _svc(typ, status, start, cert, history=()):
 
 
 def _tl(*svcs):
-    return ('<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"><TrustServiceProviderList><TrustServiceProvider>'
+    return ('<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#">' + _SEQ + '<TrustServiceProviderList><TrustServiceProvider>'
             "<TSPServices>" + "".join(svcs) + "</TSPServices></TrustServiceProvider></TrustServiceProviderList>"
             "</TrustServiceStatusList>").encode()
+
+
+_SEQ = '<SchemeInformation><TSLSequenceNumber>1</TSLSequenceNumber></SchemeInformation>'   # TS 119 612 5.3.3, read since SPEC §22 rule 6
 
 
 def _fp(b):
@@ -300,7 +303,7 @@ class TestCurrentStatusAndHistory(unittest.TestCase):
         calls = []
         orig = L._get
         k, der, fp = make_signer()
-        empty = sign_list(b'<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"></TrustServiceStatusList>', k, der)
+        empty = sign_list(b'<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"><SchemeInformation><TSLSequenceNumber>1</TSLSequenceNumber></SchemeInformation></TrustServiceStatusList>', k, der)
         L._get = lambda url, timeout=45: (calls.append(url), empty)[1]
         try:
             fprs, cov = L.load_qualified_fingerprints(cache_path=cache, trusted_lotl_signers={fp})
@@ -319,7 +322,7 @@ class TestCurrentStatusAndHistory(unittest.TestCase):
         d = tempfile.mkdtemp(); self.addCleanup(__import__("shutil").rmtree, d, True)
         cache = os.path.join(d, "c.json")
         k, der, fp = make_signer()
-        empty = sign_list(b'<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"></TrustServiceStatusList>', k, der)
+        empty = sign_list(b'<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"><SchemeInformation><TSLSequenceNumber>1</TSLSequenceNumber></SchemeInformation></TrustServiceStatusList>', k, der)
         orig = L._get
         try:
             for built, used in ((timedelta(hours=1), True), (timedelta(days=2), False), (timedelta(days=-1), False), (None, False)):
@@ -424,7 +427,7 @@ class TestHistoryOrder(unittest.TestCase):
         sdi = (b"<ServiceDigitalIdentities><ServiceDigitalIdentity><DigitalId><X509Certificate>" + base64.b64encode(tder)
                + b"</X509Certificate></DigitalId></ServiceDigitalIdentity></ServiceDigitalIdentities>")
         lotl = (b'<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#" xmlns:a="http://uri.etsi.org/02231/v2/additionaltypes#">'
-                b'<SchemeInformation><PointersToOtherTSL><OtherTSLPointer>' + sdi + b'<TSLLocation>https://tl.example/x.xml</TSLLocation>'
+                b'<SchemeInformation><TSLSequenceNumber>1</TSLSequenceNumber><PointersToOtherTSL><OtherTSLPointer>' + sdi + b'<TSLLocation>https://tl.example/x.xml</TSLLocation>'
                 b'<AdditionalInformation><OtherInformation><TSLType>http://uri.etsi.org/TrstSvc/TrustedList/TSLType/EUgeneric</TSLType>'
                 b'</OtherInformation><OtherInformation><a:MimeType>application/vnd.etsi.tsl+xml</a:MimeType></OtherInformation>'
                 b'</AdditionalInformation></OtherTSLPointer></PointersToOtherTSL></SchemeInformation></TrustServiceStatusList>')

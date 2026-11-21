@@ -5,7 +5,8 @@ rules showed missing in `test_decisions_20261120.py`, and the sentences of the s
 Rule 6 says the signature of a trusted list is read closed, "anything else refused with its reason": each refusal held
 here is one a mutant that dropped its check survived. So are the cut of the names of rule 2, the command-line option of
 rule 3 and three answers of the MCP tool of rule 5. TestSentencesOfSection22 also holds sentences of §22 as measured
-(the pivot chain and the limit stated in rule 6, rule 4 with rule 7); the last class, the empty pin of rule 4."""
+(the pivot chain of rule 6, rule 4 with rule 7) and the sequence number of rule 6; the last class, the empty pin of
+rule 4."""
 import base64
 import hashlib
 import os
@@ -305,12 +306,74 @@ class TestSignatureShapeIsClosed(unittest.TestCase):
 class TestSentencesOfSection22(unittest.TestCase):
     """Sentences of §22 as the review measured them."""
 
-    def test_an_earlier_list_verifies_like_the_current_one(self):
-        # rule 6, "Not read either: the sequence number of a list": no state is kept between two calls
+    def test_an_earlier_list_verifies_unless_a_minimum_sequence_is_given(self):
+        # rule 6: no state is kept between two calls; the sequence number is reported, and a minimum refuses an earlier list
         from test_lotl import make_signer, sign_list
         key, der, fp = make_signer(name="tl")
-        for seq in ("9", "8"):
-            L.verify_list_signature(sign_list(_LIST.replace("SEQ", seq).encode(), key, der), {fp})
+        nine, eight = (sign_list(_LIST.replace("SEQ", s).encode(), key, der) for s in ("9", "8"))
+        self.assertEqual(L.verify_list_signature(nine, {fp})["sequence_number"], 9)
+        self.assertEqual(L.verify_list_signature(eight, {fp})["sequence_number"], 8)   # earlier: verifies without a minimum
+        self.assertEqual(L.verify_list_signature(nine, {fp}, min_sequence=9)["sequence_number"], 9)
+        with self.assertRaises(ValueError) as c:
+            L.verify_list_signature(eight, {fp}, min_sequence=9)
+        self.assertTrue(str(c.exception).startswith("tl_sequence_rolled_back: TSLSequenceNumber 8"), str(c.exception))
+        for bad in (0, -1, True, "9", 9.0):
+            with self.assertRaises(ValueError):
+                L.verify_list_signature(nine, {fp}, min_sequence=bad)
+
+    def test_a_sequence_number_is_required_and_well_formed(self):
+        from test_lotl import make_signer, sign_list
+        key, der, fp = make_signer(name="tl")
+        for seq in ("0", "-1", "", "x", "1.0", "\u0661", "1 2"):
+            x = sign_list(_LIST.replace("SEQ", seq).encode(), key, der)
+            with self.assertRaises(ValueError) as c:
+                L.verify_list_signature(x, {fp})
+            self.assertTrue(str(c.exception).startswith("tl_sequence_malformed"), (seq, str(c.exception)))
+        for xml in (_LIST.replace("<TSLSequenceNumber>SEQ</TSLSequenceNumber>", ""),
+                    _LIST.replace("<TSLSequenceNumber>SEQ</TSLSequenceNumber>", "<TSLSequenceNumber>1</TSLSequenceNumber>" * 2)):
+            with self.assertRaises(ValueError) as c:
+                L.verify_list_signature(sign_list(xml.encode(), key, der), {fp})
+            self.assertTrue(str(c.exception).startswith("tl_sequence_malformed"), str(c.exception))
+        self.assertEqual(L.verify_list_signature(sign_list(_LIST.replace("SEQ", " 12\n").encode(), key, der), {fp})
+                         ["sequence_number"], 12)   # white space around the number, as the lists write it
+
+    def test_the_loader_reports_and_enforces_sequences(self):
+        import json
+        from test_decisions_20261120 import _lotl, _pointer, _QTST_SVC, _b64 as b64
+        from test_lotl import make_signer, sign_list
+        lk, lder, lfp = make_signer(name="lotl")
+        tk, tder, _tfp = make_signer(name="tl")
+        url = "https://tl.example/a.xml"
+        lotl = sign_list(_lotl([L.OJ_LOTL_URL], [_pointer(url, tder)]).replace(b"<TSLSequenceNumber>1<", b"<TSLSequenceNumber>7<"), lk, lder)
+        tl = sign_list((f'<TrustServiceStatusList xmlns="{_TSL}"><SchemeInformation><TSLSequenceNumber>4</TSLSequenceNumber>'
+                        "</SchemeInformation>" + _QTST_SVC.format(c=b64(b"Q")) + "</TrustServiceStatusList>").encode(), tk, tder)
+        orig = L._get
+        L._get = lambda u, timeout=45: lotl if u == L.LOTL_URL else tl
+        tmp = tempfile.mkdtemp()
+        try:
+            seqs, log = {}, []
+            cache = os.path.join(tmp, "c.json")
+            fprs, cov, _e = L.load_qualified_status(cache_path=cache, trusted_lotl_signers={lfp}, sequences_out=seqs, log=log.append)
+            self.assertEqual((seqs, cov), ({L.LOTL_URL: 7, url: 4}, [url]))
+            with open(cache, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["sequences"], {L.LOTL_URL: 7, url: 4})
+            again = {}
+            L.load_qualified_status(cache_path=cache, trusted_lotl_signers={lfp}, sequences_out=again)   # from the cache
+            self.assertEqual(again, seqs)
+            # with a minimum the fresh cache (built above, sequence 4) is not read: the list is fetched and refused
+            fprs2, cov2, _e = L.load_qualified_status(cache_path=cache, trusted_lotl_signers={lfp}, min_sequences={url: 5},
+                                                      log=log.append)
+            self.assertEqual((fprs2, cov2), (set(), []))
+            self.assertTrue(any("tl_sequence_rolled_back" in m for m in log), log)
+            with self.assertRaises(ValueError) as c:
+                L.load_qualified_status(trusted_lotl_signers={lfp}, min_sequences={L.LOTL_URL: 8})
+            self.assertTrue(str(c.exception).startswith("tl_sequence_rolled_back"))
+            for bad in ({url: 0}, {url: "5"}, {1: 5}, [url]):
+                with self.assertRaises(ValueError):
+                    L.load_qualified_status(trusted_lotl_signers={lfp}, min_sequences=bad)
+        finally:
+            L._get = orig
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_two_pivots_are_followed_oldest_first_and_a_pivot_without_certificates_is_named(self):
         # rule 6, the pivot mechanism: OJ certificate A -> pivot 1 (signed by A, announces B) -> pivot 2 (signed by B,

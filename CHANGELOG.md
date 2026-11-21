@@ -15,8 +15,9 @@ run by the same author, not by a third party.
 on the branch before these rules (9b81e9c) 43 fail (44 where lxml is installed) and the 10 named `*_control` pass. 62 mutants
 of the changed lines (Python, JS, Go, Java): all killed.
 
-After the review of the branch (2026-11-21), `test_review_20261121.py`, 37 tests: 34 pass on 650c198 (they hold what the
-code already did and no test held), three fail there. 58 further mutants of the lines of rule 6 (`cryptovalid_lotl.py`): 33
+After the review of the branch (2026-11-21), `test_review_20261121.py`, 39 tests: 33 pass on 650c198 (they hold what the
+code already did and no test held), six fail there (the instant without a time zone, two of the empty pin, three of the
+sequence number). 58 further mutants of the lines of rule 6 (`cryptovalid_lotl.py`): 33
 were killed by the tests above and 25 lived. 24 of the 25 dropped a check that the code made (each refusal measured)
 and no test held: the closed shape of the signature (the children of `ds:Signature`, `SignedInfo`, a `Reference` and
 `KeyInfo`, an algorithm with parameters, the transforms, a SHA-1 digest), a certificate not yet valid, `NextUpdate` at
@@ -35,6 +36,11 @@ points of the names of the unknown members of a tree head and of a HEAD, the opt
 answer without `cryptography` (the tests of rule 5 are skipped without the package and do not reach that branch with
 it), and a ledger that is not UTF-8 (one failure `not_utf8`, not "no entry").
 `verify_list_signature(at=...)` with an instant without a time zone was a `TypeError`; it is a `ValueError` that says so.
+The sequence number of a trusted list (`TSLSequenceNumber`) is now read: required and well formed (`tl_sequence_malformed`;
+all 31 documents of 2026-11-20 have one), reported (`sequence_number`, `sequences_out`, the cache's `sequences`), and a
+minimum the caller gives (`min_sequence`, `min_sequences`) refuses an earlier list (`tl_sequence_rolled_back`): the
+review had found that an earlier list still within its `NextUpdate` verified like the current one, with nothing to
+tell them apart.
 Sentences corrected by the review: the README said that a token of another TSA under `--tsa-cert` is "not a failure"
 (since rule 7 the pack is not valid, exit 1); rule 2 listed the members of a tree head and of a HEAD without
 `sig_domain`; rule 4 gave the reasons of an admitted pack that is not valid without the case of rule 7; "a document

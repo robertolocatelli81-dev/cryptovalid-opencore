@@ -1998,9 +1998,10 @@ text of this specification allowed or a format change. The six decisions were ta
 written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one compares the canonicalization of rule
 6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 43 fail (44 where lxml is
 installed: that comparison fails there too) and the 10 named `*_control`, which hold what the rules do not change, pass. After the review of the branch (2026-11-21):
-`test_review_20261121.py`, 37 tests, the cases that mutants of the lines of rules 2, 3, 5 and 6 showed missing, three sentences of
-this section and the empty pin of rule 4; 34 pass on 650c198 (the code already answered so, no test held it), three fail
-there (rule 6, `at`; rule 4, an empty pin and a pin that is not a string).
+`test_review_20261121.py`, 39 tests, the cases that mutants of the lines of rules 2, 3, 5 and 6 showed missing, two sentences of
+this section, the empty pin of rule 4 and the sequence number of rule 6; 33 pass on 650c198 (the code already answered so,
+no test held it), six fail there (rule 6, `at` and the three tests of the sequence number; rule 4, an empty pin and a pin
+that is not a string).
 
 1. **A trusted log key makes the tip required** (`verifier.verify_ledger(trusted_pubkey_hex=...)`, `verifier.py
    --trusted-pubkey`, the JS `verifyLedger({trustedPubkey})` and `cvverify.mjs --trusted-pubkey`, the Go
@@ -2157,10 +2158,17 @@ there (rule 6, `at`; rule 4, an empty pin and a pin that is not a string).
    LOTL); the publication defines no other source. After a pivot only the set it announces is accepted: the 15 days in
    which the Commission keeps the former certificates usable (the publication's section 2.2) are not used, so a LOTL
    that names the pivot and is still signed with a former certificate in those days is refused, never accepted wrongly.
-   Not read either: the sequence number of a list. No state is kept between two calls, so an earlier LOTL or national
-   list, signed with a certificate that is still trusted and valid and not past its own `NextUpdate`, verifies like the
-   current one (a LOTL written before a pivot does not name it, and the certificates of the publication are then the
-   trust): the channel (https to the location the publication names) is what gives the current document.
+   **The sequence number** (`TSLSequenceNumber` of `SchemeInformation`, ETSI TS 119 612 5.3.3: an integer, 1 for the
+   first issue, incremented at each) is read since the review of 2026-11-21: exactly one, decimal digits, at least 1, or
+   the list is refused (`tl_sequence_malformed`; every one of the 31 documents of 2026-11-20 has one). It is reported
+   (`verify_list_signature(...)["sequence_number"]`; `load_qualified_status(sequences_out={})` fills {location: number}
+   for the LOTL and every list that verified, and the cache records them as `sequences`). A minimum given by the caller
+   (`verify_list_signature(min_sequence=n)`, `load_qualified_status(min_sequences={location: n})`, the LOTL under its
+   location; with it the cache is not read) refuses an earlier list: `tl_sequence_rolled_back` (the LOTL: `ValueError`;
+   a national list: not covered, named in the log). Without a minimum no state is kept between two calls, so an earlier
+   LOTL or national list, signed with a certificate that is still trusted and valid and not past its own `NextUpdate`,
+   verifies like the current one: a verifier without memory cannot tell them apart, and a caller who keeps the numbers
+   of one run and gives them back as minimums at the next makes it a failure.
 7. **Pinned TSA certificates decide `valid` and `ok`** (`evidence_pack.verify_pack(tsa_certs=...)`, `evidence_pack.py
    verify --tsa-cert`, `cryptovalid_ingest.verify_archive(tsa_certs=...)`,
    `cryptovalid_ingest.py verify --tsa-cert`). This rule replaces the sentence of v0.8 in §10 "a pin for another TSA

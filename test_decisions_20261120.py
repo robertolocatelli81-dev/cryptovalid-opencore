@@ -640,7 +640,7 @@ def _pointer(loc, cert_der, lotl=False):
 
 def _lotl(uris, pointers):
     return (f'<TrustServiceStatusList xmlns="{_TSL}" xmlns:a="http://uri.etsi.org/02231/v2/additionaltypes#"><SchemeInformation>'
-            "<SchemeInformationURI>" + "".join(f'<URI xml:lang="en">{u}</URI>' for u in uris) + "</SchemeInformationURI>"
+            "<TSLSequenceNumber>1</TSLSequenceNumber><SchemeInformationURI>" + "".join(f'<URI xml:lang="en">{u}</URI>' for u in uris) + "</SchemeInformationURI>"
             "<PointersToOtherTSL>" + "".join(pointers) + "</PointersToOtherTSL></SchemeInformation></TrustServiceStatusList>").encode()
 
 
@@ -659,7 +659,8 @@ class TestTrustedListsSigned(unittest.TestCase):
         cls.tl = make_signer(name="tl")
         cls.qtst = b"QTST-CERT-DER"
         cls.tl_url = "https://tl.example/a.xml"
-        cls.list_xml = (f'<TrustServiceStatusList xmlns="{_TSL}">' + _QTST_SVC.format(c=_b64(cls.qtst))
+        cls.list_xml = (f'<TrustServiceStatusList xmlns="{_TSL}"><SchemeInformation><TSLSequenceNumber>1</TSLSequenceNumber>'
+                        '</SchemeInformation>' + _QTST_SVC.format(c=_b64(cls.qtst))
                         + "</TrustServiceStatusList>").encode()
 
     def _load(self, lotl, tl, anchors=None, http=False):

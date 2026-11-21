@@ -378,13 +378,29 @@ def _transforms(ref):
     return out
 
 
-def verify_list_signature(xml: bytes, trusted_sha256, at=None) -> dict:
+def _sequence_number(root) -> int:
+    """TSLSequenceNumber of SchemeInformation (ETSI TS 119 612 5.3.3: an integer, 1 for the first list, incremented at each
+    issue): exactly one, decimal digits, >= 1; else ValueError (every one of the 31 documents of 2026-11-20 has one)."""
+    si = root.find(_q("SchemeInformation"))
+    seq = si.findall(_q("TSLSequenceNumber")) if si is not None else []
+    text = (seq[0].text or "").strip() if len(seq) == 1 else ""
+    if not (text.isascii() and text.isdigit()) or int(text) < 1:
+        raise ValueError("tl_sequence_malformed: SchemeInformation must hold one TSLSequenceNumber, an integer >= 1")
+    return int(text)
+
+
+def verify_list_signature(xml: bytes, trusted_sha256, at=None, min_sequence=None) -> dict:
     """The enveloped XAdES signature of a trusted list or of the LOTL (SPEC §22 rule 6): {"signer_sha256", "signing_time",
     "signature_method"} when it verifies under a certificate whose SHA-256 is in `trusted_sha256`; else ValueError naming
     why (xmldsig_missing, xmldsig_shape, xmldsig_algorithm, xmldsig_digest_mismatch, xmldsig_signature_invalid,
     xmldsig_signing_certificate, xmldsig_untrusted_signer, xmldsig_certificate_not_valid, xmldsig_malformed,
-    tl_next_update_passed). `at` (aware datetime, default now): the instant the signing certificate must be valid at and
-    the list's NextUpdate must not be before."""
+    tl_next_update_passed, tl_sequence_malformed, tl_sequence_rolled_back). `at` (aware datetime, default now): the
+    instant the signing certificate must be valid at and the list's NextUpdate must not be before. The result carries
+    the list's TSLSequenceNumber (`sequence_number`); `min_sequence` (an int >= 1, e.g. the number a caller kept from an
+    earlier run): a list with a lower number is refused, `tl_sequence_rolled_back` (an earlier list, still signed with
+    a trusted certificate and within its NextUpdate, verifies otherwise: no state is kept here)."""
+    if min_sequence is not None and (isinstance(min_sequence, bool) or not isinstance(min_sequence, int) or min_sequence < 1):
+        raise ValueError("min_sequence: an integer >= 1, or None")
     import hashlib as _h
     from datetime import datetime, timezone
     at = at or datetime.now(timezone.utc)
@@ -499,8 +515,11 @@ def verify_list_signature(xml: bytes, trusted_sha256, at=None) -> dict:
     except Exception:  # noqa: BLE001 — a key of another type, a length, a signature that fails: one verdict
         raise ValueError("xmldsig_signature_invalid: the signature value does not verify") from None
     st = ssp.kids(_XADES, "SigningTime")
+    seqn = _sequence_number(_parse_tl(bytes(xml)))   # read once the signature holds: a forged list is named as such
+    if min_sequence is not None and seqn < min_sequence:
+        raise ValueError(f"tl_sequence_rolled_back: TSLSequenceNumber {seqn}, below the minimum {min_sequence} given")
     return {"signer_sha256": signer_sha256, "signing_time": st[0].text() if st else None,
-            "signature_method": si.elements()[1].attr("Algorithm")}
+            "signature_method": si.elements()[1].attr("Algorithm"), "sequence_number": seqn}
 
 
 def _ancestors(n):
@@ -673,7 +692,8 @@ def load_qualified_fingerprints(member_states=None, cache_path=None, timeout=45,
     return fprs, coverage
 
 def load_qualified_status(member_states=None, cache_path=None, timeout=45, log=lambda *_: None,
-                          cache_max_age_s=CACHE_MAX_AGE_S, trusted_lotl_signers=None):
+                          cache_max_age_s=CACHE_MAX_AGE_S, trusted_lotl_signers=None, min_sequences=None,
+                          sequences_out=None):
     """Build the set of qualified-TSA cert fingerprints from the EU LOTL, with the history errors (fingerprint ->
     "<reason> <list url>", qtst_status_at): returns (fingerprints, coverage, errors).
     member_states: optional iterable of 2-letter codes to restrict fetching (else all).
@@ -682,9 +702,17 @@ def load_qualified_status(member_states=None, cache_path=None, timeout=45, log=l
     SPEC §22 rule 6: the LOTL's XAdES signature must verify under `trusted_lotl_signers` (SHA-256 of certificates; None =
     those of the Official Journal publication in force, OJ_LOTL_SIGNERS_SHA256, through the pivot LOTLs it names), else
     ValueError and nothing is built; each list's under the certificates the LOTL's pointer to it names, else it is
-    skipped and logged; a list served over http is skipped."""
+    skipped and logged; a list served over http is skipped.
+    `min_sequences` ({location: int}, the LOTL under LOTL_URL): a list whose TSLSequenceNumber is lower is refused (the
+    LOTL: ValueError; a national list: skipped and logged, `tl_sequence_rolled_back`); with it the cache is not read.
+    `sequences_out` (a dict): filled with {location: TSLSequenceNumber} of every list that verified, so a caller can keep
+    them and give them back as `min_sequences` next time; the cache records them too (`sequences`)."""
     from datetime import datetime, timezone
-    if cache_path and os.path.exists(cache_path):
+    if min_sequences is not None:
+        if not isinstance(min_sequences, dict) or not all(isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)
+                                                         and v >= 1 for k, v in min_sequences.items()):
+            raise ValueError("min_sequences: a dict of list location -> integer >= 1, or None")
+    if cache_path and os.path.exists(cache_path) and min_sequences is None:
         try:   # SPEC §5 step 0: a regular file, opened once without blocking
             from verifier import read_text_regular
         except ImportError:   # python3 -m opencore.<module> from the parent directory
@@ -695,15 +723,21 @@ def load_qualified_status(member_states=None, cache_path=None, timeout=45, log=l
         if isinstance(d, dict) and d.get("rule") == RULE and isinstance(d.get("fingerprints"), list) \
                 and age is not None and 0 <= age <= cache_max_age_s:
             errs = d.get("history_errors", {})
+            if sequences_out is not None:
+                sq = d.get("sequences")
+                sequences_out.clear()
+                sequences_out.update(sq if isinstance(sq, dict) else {})
             return set(d["fingerprints"]), d.get("coverage", []), dict(errs) if isinstance(errs, dict) else {}
         log(f"LOTL cache {cache_path} not used (rule {d.get('rule') if isinstance(d, dict) else None!r}, "
             f"built_at {d.get('built_at') if isinstance(d, dict) else None!r}): rebuilt")
     lotl = _get(LOTL_URL, timeout)
     # SPEC §22 rule 6: the LOTL counts only under a certificate of the OJ publication (or of a pivot it leads to), and
     # each list only under a certificate of the LOTL's pointer to it; a list that fails is not covered, and named
+    mins = min_sequences or {}
     v = verify_list_signature(lotl, lotl_signers(lotl, timeout=timeout) if trusted_lotl_signers is None
-                              else set(trusted_lotl_signers))
-    log(f"LOTL signature verified (signer certificate sha256 {v['signer_sha256']})")
+                              else set(trusted_lotl_signers), min_sequence=mins.get(LOTL_URL))
+    log(f"LOTL signature verified (signer certificate sha256 {v['signer_sha256']}, sequence {v['sequence_number']})")
+    seqs = {LOTL_URL: v["sequence_number"]}
     ptr_certs = _pointer_certs(lotl)
     ptrs = lotl_pointers(lotl)
     from datetime import datetime as _dt, timezone as _tz
@@ -718,7 +752,8 @@ def load_qualified_status(member_states=None, cache_path=None, timeout=45, log=l
             continue
         try:
             tl = _get(url, timeout)
-            verify_list_signature(tl, ptr_certs.get(url, set()))
+            tv = verify_list_signature(tl, ptr_certs.get(url, set()), min_sequence=mins.get(url))
+            seqs[url] = tv["sequence_number"]
             n0 = len(fprs); st = qtst_status_at(tl, now); fprs |= st["granted"]
             errors.update({f: f"{why} {url}" for f, why in st["errors"].items()})
             coverage.append(url); log(f"TL ok: {url} (+{len(fprs)-n0} QTST cert)"
@@ -728,7 +763,11 @@ def load_qualified_status(member_states=None, cache_path=None, timeout=45, log=l
     if cache_path:
         write_output(cache_path, json.dumps({"rule": RULE, "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                                              "fingerprints": sorted(fprs - set(errors)), "coverage": coverage,
-                                             "history_errors": dict(sorted(errors.items()))}))   # whole, or not at all (0.20.3)
+                                             "history_errors": dict(sorted(errors.items())),
+                                             "sequences": dict(sorted(seqs.items()))}))   # whole, or not at all (0.20.3)
+    if sequences_out is not None:
+        sequences_out.clear()
+        sequences_out.update(seqs)
     return fprs - set(errors), coverage, errors
 
 def token_cert_fingerprints(token_der: bytes):
