@@ -52,8 +52,16 @@ are {location: integer >= 1}. The clauses of ETSI TS 119 612 V2.4.1 (2025-08) ci
 `NextUpdate` were 5.3.3 and 5.3.14; they are 5.3.2 and 5.3.15.
 The Go verifier answered `tip_unreadable: json: cannot unmarshal ...` to a tip whose `kind` was an integer, a boolean, an
 array or an object, where Python, JS and Java answer `tip_invalid: not a cryptovalid_tip/1 document` (exit 1 in the
-four); it answers as they do now. The reasons of a tip with a right `kind` and a member of a wrong type still differ
-between the four verifiers, and SPEC §22 rule 2 says so.
+four); it answers as they do now. The reasons of a tip with a right `kind` and a member of a wrong type, missing or
+malformed, and of a tip file that cannot be read or is not a JSON object, differed between the four verifiers (of 72
+such tips one text in the four for 3, of 10 files for 1); SPEC §22 rule 2 now has a table, form -> reason, and the four
+give its text for each form: Python, JS, Go and Java check the rows in the same order (Go before any typed decode, JS
+with an integer beyond 2^53-1 refused as in an entry, Go trimming only JSON white space around the file), and the Python
+reference takes the shorter words of the other three for `tip signature invalid`, `tip_rolled_back`, `unsealed_tail`
+and `bad_not_before`. Measured on 251 generated tip files (`d4b_testi_tip.py`): one text in the four for 40 before, for
+all 245 that fail after (the other 6 pass in the four). One verdict changes: the JS verifier read a `log_pubkey_hex` of
+`false` or `0` as absent and passed the tip (exit 0) where the other three refused it; now exit 1, `tip fields must be
+strings`, as they do.
 Sentences corrected by the review: the README said that a token of another TSA under `--tsa-cert` is "not a failure"
 (since rule 7 the pack is not valid, exit 1); rule 2 listed the members of a tree head and of a HEAD without
 `sig_domain`; rule 4 gave the reasons of an admitted pack that is not valid without the case of rule 7; "a document

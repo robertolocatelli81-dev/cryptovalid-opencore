@@ -522,24 +522,46 @@ public class CvVerify {
         return sc;
     }
 
+    // SPEC §22 rule 2, rows 4-13: the first reason (without "tip_invalid: ") or null when every row holds
+    static String tipShape(Obj t) {
+        if (!TIP_KIND.equals(str(t, "kind"))) return "not a cryptovalid_tip/1 document";
+        List<String> unk = new ArrayList<>();
+        for (String k : t.keys) if (!TIP_MEMBERS.contains(k)) unk.add(k);
+        if (!unk.isEmpty()) { unk.sort(BY_CODEPOINT); return "unknown_member:" + joinCut(unk); }
+        for (String k : new String[]{"entries", "ledger_id", "tip_sha256", "ts", "signature_hex"}) if (!t.vals.containsKey(k)) return "tip missing field " + k;
+        Object en = t.vals.get("entries"); long n = -1;
+        if (en instanceof Num) { try { n = Long.parseLong(((Num) en).lexeme); } catch (NumberFormatException e) { n = -1; } }
+        if (n < 0) return "tip entries must be a non-negative integer";
+        String ledgerId = str(t, "ledger_id"), tipSha = str(t, "tip_sha256"), ts = str(t, "ts"), sigHex = str(t, "signature_hex");
+        Object lpk = t.vals.get("log_pubkey_hex");
+        if (ledgerId == null || tipSha == null || ts == null || sigHex == null || (lpk != null && !(lpk instanceof String))) return "tip fields must be strings";
+        if (!isHexN(ledgerId, 64) || !isHexN(tipSha, 64)) return "ledger_id / tip_sha256 must be 64 lowercase hex characters";
+        if (!isHexN(sigHex, 128)) return "signature_hex must be 128 lowercase hex characters";
+        if (t.vals.containsKey("signature_pq_hex") || t.vals.containsKey("log_pq_pubkey_b64")) {
+            String spq = str(t, "signature_pq_hex"), kpq = str(t, "log_pq_pubkey_b64");
+            if (spq == null || !isHexN(spq, 6618)) return "signature_pq_hex must be 6618 lowercase hex characters (ML-DSA-65)";
+            if (kpq == null || b64Strict(kpq, 1952) == null) return "log_pq_pubkey_b64 must be strict base64 of a 1952-byte ML-DSA-65 public key";
+        }
+        if (!plainTS(ts)) return "ts outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|±hh:mm)";
+        return null;
+    }
+
     static Map<String, Object> checkTip(String path, int entries, String first, String last, String tpk, String tpq, String nb, String lid) {
         Map<String, Object> tc = new LinkedHashMap<>(); tc.put("ok", false); tc.put("checked", true); tc.put("trusted", false); tc.put("tip_path", path); tc.put("pq_protected", false);
-        Obj t;
-        try { Object o = parse(Files.readAllBytes(Path.of(path))); if (!(o instanceof Obj)) throw new Bad("not an object"); t = (Obj) o; }
-        catch (Exception e) { tc.put("why", "tip_unreadable: " + e.getMessage()); return tc; }
-        String kind = str(t, "kind"), ledgerId = str(t, "ledger_id"), tipSha = str(t, "tip_sha256"), ts = str(t, "ts"), sigHex = str(t, "signature_hex"), logPk = str(t, "log_pubkey_hex");
-        Object logPkRaw = t.vals.get("log_pubkey_hex");
-        if (logPkRaw != null && !(logPkRaw instanceof String)) { tc.put("why", "tip_invalid: tip fields must be strings"); return tc; }   // r5: 123 was skipped
-        Object en = t.vals.get("entries"); long n = -1;
-        if (en instanceof Num) { try { n = Long.parseLong(((Num) en).lexeme); } catch (Exception e) { n = -1; } }
-        if (!TIP_KIND.equals(kind)) { tc.put("why", "tip_invalid: not a cryptovalid_tip/1 document"); return tc; }
-        List<String> unkTip = new ArrayList<>();   // SPEC §22 rule 2 (Unreleased): the tip is a CLOSED object; until 0.27.0 ignored, PASS
-        for (String k : t.keys) if (!TIP_MEMBERS.contains(k)) unkTip.add(k);
-        if (!unkTip.isEmpty()) { unkTip.sort(BY_CODEPOINT); tc.put("why", "tip_invalid: unknown_member:" + joinCut(unkTip)); return tc; }
-        if (!isHexN(sigHex, 128) || !isHexN(tipSha, 64) || !isHexN(ledgerId, 64) || n < 0 || !plainTS(ts)) { tc.put("why", "tip_invalid: not a cryptovalid_tip/1 document"); return tc; }
-        boolean pqPresent = t.vals.containsKey("signature_pq_hex") || t.vals.containsKey("log_pq_pubkey_b64");
+        // SPEC §22 rule 2: the table of the reasons of a tip, rows 1-14 in order, the same words as Python, JS and Go
+        byte[] rawTip;
+        try { rawTip = Files.readAllBytes(Path.of(path)); }
+        catch (Exception e) { tc.put("why", "tip_unreadable: the tip file cannot be read"); return tc; }
+        Object parsed;
+        try { parsed = parse(rawTip); }
+        catch (Bad | RuntimeException e) { tc.put("why", "tip_unreadable: not a JSON text of the profile of SPEC §3"); return tc; }
+        if (!(parsed instanceof Obj)) { tc.put("why", "tip_unreadable: not a JSON object"); return tc; }
+        Obj t = (Obj) parsed;
+        String shape = tipShape(t);
+        if (shape != null) { tc.put("why", "tip_invalid: " + shape); return tc; }
+        String ledgerId = str(t, "ledger_id"), tipSha = str(t, "tip_sha256"), ts = str(t, "ts"), sigHex = str(t, "signature_hex"), logPk = str(t, "log_pubkey_hex");
+        long n = Long.parseLong(((Num) t.vals.get("entries")).lexeme);
         String spq = str(t, "signature_pq_hex"), kpq = str(t, "log_pq_pubkey_b64");
-        if (pqPresent && (!isHexN(spq, 6618) || b64Strict(kpq, 1952) == null)) { tc.put("why", "tip_invalid: malformed post-quantum fields (signature_pq_hex 6618 lowercase hex, log_pq_pubkey_b64 strict base64 of 1952 bytes)"); return tc; }
         if (logPk != null && !logPk.isEmpty() && !logPk.equals(tpk)) { tc.put("why", "tip_invalid: tip log key differs from the trusted log key"); return tc; }
         byte[] payload = ("{\"entries\":" + n + ",\"kind\":\"" + TIP_KIND + "\",\"ledger_id\":\"" + ledgerId + "\",\"tip_sha256\":\"" + tipSha + "\",\"ts\":\"" + ts + "\"}").getBytes(StandardCharsets.UTF_8);
         if (!isHexN(tpk, 64)) { tc.put("why", "tip_invalid: tip signature invalid"); return tc; }

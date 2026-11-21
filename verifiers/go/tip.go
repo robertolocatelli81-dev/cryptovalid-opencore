@@ -41,8 +41,8 @@ type Tip struct {
 	// PQFieldsPresent: one of the two optional fields exists in the document (even as null / "" / a wrong type):
 	// then both must be well-formed, as in Python/JS. json.Unmarshal into string maps null to "" (council 16/09).
 	PQFieldsPresent bool `json:"-"`
-	// Unknown: the members outside TipMembers, sorted by code point (SPEC §22 rule 2: the tip is a closed object)
-	Unknown []string `json:"-"`
+	// Shape: the reason of the first row 4-13 of the table of SPEC §22 rule 2 the document fails, "" if none
+	Shape string `json:"-"`
 }
 
 // TipMembers is the closed member list of a tip (SPEC §22 rule 2, Unreleased; as cryptovalid_tip.TIP_MEMBERS): a member
@@ -251,18 +251,29 @@ func AppendSigned(path string, ts time.Time, data any, algo string, key ed25519.
 // first = this file's first self_hash (Genesis for an empty file); expectLedgerID ("" = no check) = the chain the
 // relying party expects, out of band — the only defence against a whole pair file+tip of another ledger.
 func CheckTip(entries int, first, last string, t *Tip, trustedPubkeyHex, notBefore, expectLedgerID string) (ok bool, why string, trusted bool) {
-	if t == nil || t.Kind != TipKind {
+	if t == nil {
 		return false, "tip_invalid: not a cryptovalid_tip/1 document", false
 	}
-	if len(t.Unknown) > 0 { // SPEC §22 rule 2: a member outside the closed list, named
-		return false, "tip_invalid: unknown_member:" + truncRunes(strings.Join(t.Unknown, ","), 120), false
+	if t.Shape != "" { // SPEC §22 rule 2, rows 4-13, read by LoadTip from the document
+		return false, "tip_invalid: " + t.Shape, false
 	}
-	if !isHexN(t.SignatureHex, 128) || !isHex64(t.TipSHA256) || !isHex64(t.LedgerID) || !plainTS(t.TS) || t.Entries < 0 {
+	// a Tip built by a caller without LoadTip: the same rows on its fields, the same words
+	pq := t.PQFieldsPresent || t.SignaturePQHex != "" || t.LogPQPubkeyB64 != ""
+	switch {
+	case t.Kind != TipKind:
 		return false, "tip_invalid: not a cryptovalid_tip/1 document", false
-	}
-	// optional hybrid fields: when PRESENT they must be well-formed whoever checks them (same rule in Python/JS)
-	if (t.PQFieldsPresent || t.SignaturePQHex != "" || t.LogPQPubkeyB64 != "") && !pqFieldsWellFormed(t) {
-		return false, "tip_invalid: malformed post-quantum fields (signature_pq_hex 6618 lowercase hex, log_pq_pubkey_b64 strict base64 of 1952 bytes)", false
+	case t.Entries < 0:
+		return false, "tip_invalid: tip entries must be a non-negative integer", false
+	case !isHex64(t.LedgerID) || !isHex64(t.TipSHA256):
+		return false, "tip_invalid: ledger_id / tip_sha256 must be 64 lowercase hex characters", false
+	case !isHexN(t.SignatureHex, 128):
+		return false, "tip_invalid: signature_hex must be 128 lowercase hex characters", false
+	case pq && !isHexN(t.SignaturePQHex, 6618):
+		return false, "tip_invalid: signature_pq_hex must be 6618 lowercase hex characters (ML-DSA-65)", false
+	case pq && decodeB64Strict(t.LogPQPubkeyB64, 1952) == nil:
+		return false, "tip_invalid: log_pq_pubkey_b64 must be strict base64 of a 1952-byte ML-DSA-65 public key", false
+	case !plainTS(t.TS):
+		return false, "tip_invalid: ts outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|±hh:mm)", false
 	}
 
 	// the key inside the tip proves nothing: without the trusted log key there is NO verification (never a
@@ -314,59 +325,108 @@ func CheckTip(entries int, first, last string, t *Tip, trustedPubkeyHex, notBefo
 	return true, "tip matches the verified chain", trusted
 }
 
-// LoadTip reads a sidecar; any malformation is an error (never a silent "no tip").
+// The texts of SPEC §22 rule 2, rows 1-3 (the same in the four verifiers).
+const (
+	TipUnreadableFile   = "tip_unreadable: the tip file cannot be read"
+	TipUnreadableJSON   = "tip_unreadable: not a JSON text of the profile of SPEC §3"
+	TipUnreadableObject = "tip_unreadable: not a JSON object"
+)
+
+// tipShape applies rows 4-13 of the table of SPEC §22 rule 2 to the decoded object, in that order, before any typed
+// decode, and returns the first reason (without "tip_invalid: ") or "" when every row holds.
+func tipShape(o *Object) string {
+	if kind, isStr := o.Vals["kind"].(string); !isStr || kind != TipKind {
+		return "not a cryptovalid_tip/1 document"
+	}
+	var unknown []string
+	for _, k := range o.Keys {
+		if !TipMembers[k] {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown) // UTF-8 byte order = code-point order, as Python's sorted()
+		return "unknown_member:" + truncRunes(strings.Join(unknown, ","), 120)
+	}
+	for _, k := range []string{"entries", "ledger_id", "tip_sha256", "ts", "signature_hex"} {
+		if _, ok := o.Vals[k]; !ok {
+			return "tip missing field " + k
+		}
+	}
+	num, isNum := o.Vals["entries"].(json.Number)
+	if n, err := strconv.ParseInt(string(num), 10, 64); !isNum || err != nil || n < 0 {
+		return "tip entries must be a non-negative integer"
+	}
+	str := func(k string) (string, bool) { v, ok := o.Vals[k].(string); return v, ok }
+	lid, a := str("ledger_id")
+	tsh, b := str("tip_sha256")
+	ts, c := str("ts")
+	sig, d := str("signature_hex")
+	lpk, present := o.Vals["log_pubkey_hex"]
+	_, lpkStr := lpk.(string)
+	if !(a && b && c && d) || (present && lpk != nil && !lpkStr) {
+		return "tip fields must be strings"
+	}
+	if !isHex64(lid) || !isHex64(tsh) {
+		return "ledger_id / tip_sha256 must be 64 lowercase hex characters"
+	}
+	if !isHexN(sig, 128) {
+		return "signature_hex must be 128 lowercase hex characters"
+	}
+	_, hasSpq := o.Vals["signature_pq_hex"]
+	_, hasKpq := o.Vals["log_pq_pubkey_b64"]
+	if hasSpq || hasKpq {
+		if spq, ok := str("signature_pq_hex"); !ok || !isHexN(spq, 6618) {
+			return "signature_pq_hex must be 6618 lowercase hex characters (ML-DSA-65)"
+		}
+		if kpq, ok := str("log_pq_pubkey_b64"); !ok || decodeB64Strict(kpq, 1952) == nil {
+			return "log_pq_pubkey_b64 must be strict base64 of a 1952-byte ML-DSA-65 public key"
+		}
+	}
+	if !plainTS(ts) {
+		return "ts outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|±hh:mm)"
+	}
+	return ""
+}
+
+// LoadTip reads a sidecar; any malformation is an error (never a silent "no tip"). SPEC §22 rule 2: a file that cannot
+// be read, is not a JSON text of the profile, or is not an object is an error carrying one of the three texts above; a
+// tip that fails a row 4-13 of the table is returned with Shape set, and CheckTip names it.
 func LoadTip(path string) (*Tip, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("tip_unreadable: %w", err)
+		return nil, errors.New(TipUnreadableFile)
 	}
 	// the tip is a SIGNED document: same strict acceptance profile as the entries (dup keys, floats, bounds,
-	// depth, surrogates) before the typed decode — one rule in Python, JS, Go and Java (r5)
-	doc, err := Parse(bytes.TrimSpace(raw))
+	// depth, surrogates) before the typed decode — one rule in Python, JS, Go and Java (r5); only JSON white space
+	// around it (bytes.TrimSpace also took a form feed, a vertical tab, U+0085 and U+00A0)
+	doc, err := Parse(bytes.Trim(raw, " \t\r\n"))
 	if err != nil {
-		return nil, fmt.Errorf("tip_unreadable: %v", err)
+		return nil, errors.New(TipUnreadableJSON)
+	}
+	o, isObj := doc.(*Object)
+	if !isObj {
+		return nil, errors.New(TipUnreadableObject)
 	}
 	var t Tip
-	if o, isObj := doc.(*Object); isObj {
-		if kind, _ := o.Vals["kind"].(string); kind != TipKind {
-			// SPEC §22 rule 2: a document whose kind is not the string cryptovalid_tip/1 is named so by CheckTip, as in
-			// Python, JS and Java, before any typed decode ("kind": 1 was a type error of encoding/json, tip_unreadable)
-			t.Kind = kind
-			return &t, nil
-		}
-		for _, k := range o.Keys {
-			if !TipMembers[k] {
-				t.Unknown = append(t.Unknown, k)
-			}
-		}
-		if len(t.Unknown) > 0 {
-			// SPEC §22 rule 2: named by CheckTip right after the kind, before any typed decode (encoding/json matches
-			// struct tags case-insensitively: "Kind": 1 was a type error, tip_unreadable, here and unknown in Python)
-			sort.Strings(t.Unknown) // UTF-8 byte order = code-point order, as Python's sorted()
-			t.Kind, _ = o.Vals["kind"].(string)
-			return &t, nil
-		}
+	if why := tipShape(o); why != "" {
+		t.Shape = why
+		return &t, nil
 	}
-	if err := json.Unmarshal(raw, &t); err != nil {
-		return nil, fmt.Errorf("tip_unreadable: %w", err)
-	}
-	// the optional PQ fields are read CASE-SENSITIVELY from the raw map (encoding/json matches struct tags
-	// case-insensitively: "Signature_PQ_Hex" would fill the field here and be ignored by Python/JS — round 3);
-	// present but not a JSON string = present and malformed
-	var keys map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &keys); err != nil {
-		return nil, fmt.Errorf("tip_unreadable: %w", err)
-	}
-	t.SignaturePQHex, t.LogPQPubkeyB64 = "", ""
-	ra, a := keys["signature_pq_hex"]
-	rb, b := keys["log_pq_pubkey_b64"]
+	// every member was checked above, by its exact name: the fields are taken from the object, never from a
+	// case-insensitive typed decode
+	n, _ := strconv.ParseInt(string(o.Vals["entries"].(json.Number)), 10, 64)
+	t.Kind, t.Entries = TipKind, int(n)
+	t.LedgerID, _ = o.Vals["ledger_id"].(string)
+	t.TipSHA256, _ = o.Vals["tip_sha256"].(string)
+	t.TS, _ = o.Vals["ts"].(string)
+	t.SignatureHex, _ = o.Vals["signature_hex"].(string)
+	t.LogPubkeyHex, _ = o.Vals["log_pubkey_hex"].(string)
+	_, a := o.Vals["signature_pq_hex"]
+	_, b := o.Vals["log_pq_pubkey_b64"]
 	t.PQFieldsPresent = a || b
-	if a {
-		_ = json.Unmarshal(ra, &t.SignaturePQHex) // a non-string stays "" → malformed
-	}
-	if b {
-		_ = json.Unmarshal(rb, &t.LogPQPubkeyB64)
-	}
+	t.SignaturePQHex, _ = o.Vals["signature_pq_hex"].(string)
+	t.LogPQPubkeyB64, _ = o.Vals["log_pq_pubkey_b64"].(string)
 	return &t, nil
 }
 
@@ -377,15 +437,6 @@ func formatTS(ts time.Time) string {
 		return u.Format("2006-01-02T15:04:05+00:00")
 	}
 	return u.Format("2006-01-02T15:04:05.999999999+00:00")
-}
-
-// pqFieldsWellFormed: signature_pq_hex = 6618 lowercase hex (3309-byte ML-DSA-65 signature), log_pq_pubkey_b64 =
-// strict standard base64 of 1952 bytes (canonical: re-encodes to the same string).
-func pqFieldsWellFormed(t *Tip) bool {
-	if !isHexN(t.SignaturePQHex, 6618) {
-		return false
-	}
-	return decodeB64Strict(t.LogPQPubkeyB64, 1952) != nil
 }
 
 func decodeB64Strict(s string, n int) []byte {

@@ -1079,8 +1079,9 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
                                        first_self_hash=first if isinstance(first, str) else "",
                                        expect_ledger_id=expect_ledger_id,
                                        trusted_pq_pubkey_b64=trusted_pq_pubkey_b64)
-        except (OSError, ValueError, ImportError) as e:
-            tip_check = {"ok": False, "error": f"tip_unreadable: {type(e).__name__}: {str(e)[:120]}", "pq_protected": False}
+        except (OSError, ValueError, ImportError) as e:   # SPEC §22 rule 2, rows 1-3: load_tip's ValueError carries the text
+            tip_check = {"ok": False, "error": (str(e) if str(e).startswith("tip_unreadable:")
+                                                else f"tip_unreadable: {type(e).__name__}: {str(e)[:120]}"), "pq_protected": False}
         tip_check["tip_path"] = tip_file
         tip_check["checked"] = True
         if not tip_check["ok"]:

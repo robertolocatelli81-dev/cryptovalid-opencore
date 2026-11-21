@@ -230,7 +230,8 @@ def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str], trusted_p
     # + a plain timestamp — a signed tip with ts="garbage" was ok here and tip_invalid there)
     if isinstance(tip["entries"], bool) or not isinstance(tip["entries"], int) or tip["entries"] < 0:
         return {"ok": False, "why": "tip entries must be a non-negative integer", "pq_protected": False}
-    if not all(isinstance(tip[k], str) for k in ("ledger_id", "tip_sha256", "ts", "signature_hex")):
+    if not all(isinstance(tip[k], str) for k in ("ledger_id", "tip_sha256", "ts", "signature_hex")) \
+            or not isinstance(tip.get("log_pubkey_hex", ""), (str, type(None))):   # SPEC §22 rule 2, row 8
         return {"ok": False, "why": "tip fields must be strings", "pq_protected": False}
     if not (_HEX64.fullmatch(tip["ledger_id"]) and _HEX64.fullmatch(tip["tip_sha256"])):
         return {"ok": False, "why": "ledger_id / tip_sha256 must be 64 lowercase hex characters", "pq_protected": False}
@@ -246,8 +247,8 @@ def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str], trusted_p
             return {"ok": False, "why": "log_pq_pubkey_b64 must be strict base64 of a 1952-byte ML-DSA-65 public key", "pq_protected": False}
     try:
         parse_instant(tip["ts"])          # format AND value, by hand, identical in the three checkers
-    except ValueError as e:
-        return {"ok": False, "why": f"ts outside the profile: {e}", "pq_protected": False}
+    except ValueError:   # SPEC §22 rule 2, row 13: one text in the four verifiers
+        return {"ok": False, "why": "ts outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|±hh:mm)", "pq_protected": False}
     # The key INSIDE the tip is informative only: verifying against it proves nothing (anyone can sign a tip
     # with a key of their own and put it there). Without the trusted log key there is NO verification —
     # ok=False, never a "PASS but untrusted" an automation would read as 0 (council 15/09).
@@ -256,7 +257,7 @@ def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str], trusted_p
                                     "the tip cannot be trusted", "trusted": False, "pq_protected": False}
     if not _HEX64.fullmatch(trusted_pubkey_hex):   # the VERIFIER's argument, validated like every other hex field
         return {"ok": False, "why": "bad_trusted_key: --trusted-pubkey must be 64 lowercase hex characters", "trusted": False, "pq_protected": False}
-    if tip.get("log_pubkey_hex") not in (None, "", trusted_pubkey_hex):   # "" = absent, as in Go/JS
+    if tip.get("log_pubkey_hex") not in (None, "", trusted_pubkey_hex):   # "" = absent, as in Go/JS (a string: row 8)
         return {"ok": False, "why": "tip log key differs from the trusted log key", "pq_protected": False}
     payload = tip_payload(int(tip["entries"]), tip["ledger_id"], tip["tip_sha256"], tip["ts"])
     try:   # 0.21.0: a key or an R of small order, a key of mixed order or not decodable, named (ed25519_order)
@@ -264,12 +265,12 @@ def verify_tip_signature(tip: Dict, trusted_pubkey_hex: Optional[str], trusted_p
     except ImportError:   # python3 -m opencore.<module> from the parent directory
         from opencore import ed25519_order as _edo
     why = _edo.strict_problem(bytes.fromhex(trusted_pubkey_hex), bytes.fromhex(tip["signature_hex"]))
-    if why is not None:
-        return {"ok": False, "why": f"tip signature invalid: {why}", "pq_protected": False}
+    if why is not None:   # SPEC §22 rule 2, row 15: the words of JS, Go and Java
+        return {"ok": False, "why": f"tip signature invalid ({why})", "pq_protected": False}
     try:
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(trusted_pubkey_hex)).verify(bytes.fromhex(tip["signature_hex"]), payload)
-    except Exception as e:  # noqa: BLE001 — any failure is one verdict
-        return {"ok": False, "why": f"tip signature invalid: {type(e).__name__}", "pq_protected": False}
+    except Exception:  # noqa: BLE001 — any failure is one verdict
+        return {"ok": False, "why": "tip signature invalid", "pq_protected": False}
     pq: Optional[bool] = None
     if trusted_pq_pubkey_b64:
         sig_pq = tip.get("signature_pq_hex")
@@ -328,18 +329,17 @@ def check_tip(entries_count: int, last_self_hash: str, tip: Dict, trusted_pubkey
             nb = parse_instant(not_before)   # same profile as the tip's ts, in the three checkers (review: py/js took a date-only)
         except ValueError as e:
             # the VERIFIER's argument is wrong, not the tip: never blame the file (independent review)
-            return {"ok": False, "error": f"bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm) ({str(e)[:60]})",
+            return {"ok": False, "error": "bad_not_before: --tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm)",
                     "signature": sig["why"], "pq_protected": False}
         if parse_instant(tip["ts"]) < nb:
-            return {"ok": False, "error": f"tip_rolled_back: the tip is dated {tip['ts']}, before the required {not_before} "
-                                          "(an older genuine tip restored after a truncation looks exactly like this)",
+            return {"ok": False, "error": f"tip_rolled_back: the tip is dated {tip['ts']}, before the required {not_before}",
                     "signature": sig["why"], "pq_protected": False}
     if entries_count < n:
         return {"ok": False, "error": f"tail_truncated: file has {entries_count} entries, the signed tip commits to {n}",
                 "signature": sig["why"], "pq_protected": False}
     if entries_count > n:
         return {"ok": False, "error": f"unsealed_tail: file has {entries_count} entries, the signed tip commits to {n} "
-                                      "(appended after the last signed head: stale tip, or an append without the key)",
+                                      "(appended after the last signed head)",
                 "signature": sig["why"], "pq_protected": False}
     if last_self_hash != tip["tip_sha256"]:
         return {"ok": False, "error": "tail_rewritten: same entry count but the last self_hash differs from the signed tip",
@@ -354,11 +354,23 @@ def load_tip(path: str) -> Dict:
     duplicate keys, no floats, bounded integers, depth/surrogate pre-scan) — one rule in Python, JS, Go and Java
     (council 16/09 r5: Java was strict, Python and Go were lax)."""
     from verifier import _loads_strict, read_regular
-    # SPEC §5 step 0: a regular file, opened once without blocking (a FIFO given as --tip blocked here until 0.26.0)
-    doc = _loads_strict(read_regular(path).decode("utf-8").strip(" \t\r\n"))
+    # SPEC §22 rule 2, rows 1-3: one text for each in the four verifiers (a ValueError carrying it)
+    try:   # SPEC §5 step 0: a regular file, opened once without blocking (a FIFO given as --tip blocked here until 0.26.0)
+        raw = read_regular(path)
+    except OSError:
+        raise ValueError(TIP_UNREADABLE_FILE) from None
+    try:
+        doc = _loads_strict(raw.decode("utf-8").strip(" \t\r\n"))
+    except (ValueError, RecursionError):   # UnicodeDecodeError is a ValueError
+        raise ValueError(TIP_UNREADABLE_JSON) from None
     if not isinstance(doc, dict):
-        raise ValueError("tip file is not a JSON object")
+        raise ValueError(TIP_UNREADABLE_OBJECT)
     return doc
+
+
+TIP_UNREADABLE_FILE = "tip_unreadable: the tip file cannot be read"
+TIP_UNREADABLE_JSON = "tip_unreadable: not a JSON text of the profile of SPEC §3"
+TIP_UNREADABLE_OBJECT = "tip_unreadable: not a JSON object"
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
@@ -402,7 +414,8 @@ def main(argv=None) -> int:
         t = chain_tip(a.ledger)
         tip = load_tip(a.tip or tip_path_for(a.ledger))
     except (OSError, ValueError) as e:      # a missing/malformed file is a JSON error, never a traceback
-        emit(json.dumps({"ok": False, "error": f"tip_unreadable: {type(e).__name__}: {str(e)[:160]}"}, indent=1))
+        err = str(e) if str(e).startswith("tip_unreadable:") else f"tip_unreadable: {type(e).__name__}: {str(e)[:160]}"
+        emit(json.dumps({"ok": False, "error": err}, indent=1))
         return 1
     r = check_tip(t["entries"], t["tip_sha256"], tip, a.trusted_pubkey, a.not_before,
                   first_self_hash=t["ledger_id"], expect_ledger_id=a.expect_ledger_id,

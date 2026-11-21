@@ -241,22 +241,34 @@ export function parseInstant(s) {
   return [Math.floor(dt.getTime() / 1000) - offSec, nanos];
 }
 export function instantBefore(a, b) { return a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]); }
+// SPEC §22 rule 2, rows 1-3: a tip file that could not be read carries one of these texts (the same in the four verifiers)
+export const TIP_UNREADABLE = Symbol("tip_unreadable");
+export const TIP_UNREADABLE_FILE = "tip_unreadable: the tip file cannot be read";
+export const TIP_UNREADABLE_JSON = "tip_unreadable: not a JSON text of the profile of SPEC §3";
+export const TIP_UNREADABLE_OBJECT = "tip_unreadable: not a JSON object";
+const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = null, notBefore = null, firstSelfHash = null, expectLedgerId = null) {
-  if (!tip || typeof tip !== "object" || Array.isArray(tip) || tip.kind !== TIP_KIND) return { ok: false, pq_protected: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
+  if (tip && tip[TIP_UNREADABLE]) return { ok: false, pq_protected: false, error: tip[TIP_UNREADABLE] };
+  if (!tip || typeof tip !== "object" || Array.isArray(tip) || !own(tip, "kind") || tip.kind !== TIP_KIND) return { ok: false, pq_protected: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
   const unknownTip = Object.keys(tip).filter((k) => !TIP_MEMBERS.has(k)).sort(cmp);   // SPEC §22 rule 2: until 0.27.0 ignored, PASS
   if (unknownTip.length) return { ok: false, pq_protected: false, error: "tip_invalid: unknown_member:" + [...unknownTip.join(",")].slice(0, 120).join("") };
-  for (const k of ["entries", "ledger_id", "tip_sha256", "ts", "signature_hex"]) if (!(k in tip)) return { ok: false, pq_protected: false, error: `tip_invalid: tip missing field ${k}` };
+  for (const k of ["entries", "ledger_id", "tip_sha256", "ts", "signature_hex"]) if (!own(tip, k)) return { ok: false, pq_protected: false, error: `tip_invalid: tip missing field ${k}` };
   // strict types, same as Go's decoder: entries a non-negative integer, the rest strings
   if (typeof tip.entries !== "number" || !Number.isInteger(tip.entries) || tip.entries < 0) return { ok: false, pq_protected: false, error: "tip_invalid: tip entries must be a non-negative integer" };
-  if (!["ledger_id", "tip_sha256", "ts", "signature_hex"].every((k) => typeof tip[k] === "string")) return { ok: false, pq_protected: false, error: "tip_invalid: tip fields must be strings" };
-  // ONE timestamp profile in the three checkers: RFC 3339 with seconds and a zone (Z or ±hh:mm)
-  if (!HEX64.test(tip.ledger_id) || !HEX64.test(tip.tip_sha256) || parseInstant(tip.ts) === null) return { ok: false, pq_protected: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
+  // SPEC §22 rule 2, rows 8-13: the order and the words of the table, as Python, Go and Java
+  if (!["ledger_id", "tip_sha256", "ts", "signature_hex"].every((k) => typeof tip[k] === "string")
+      || (own(tip, "log_pubkey_hex") && tip.log_pubkey_hex !== null && typeof tip.log_pubkey_hex !== "string")) return { ok: false, pq_protected: false, error: "tip_invalid: tip fields must be strings" };
+  if (!HEX64.test(tip.ledger_id) || !HEX64.test(tip.tip_sha256)) return { ok: false, pq_protected: false, error: "tip_invalid: ledger_id / tip_sha256 must be 64 lowercase hex characters" };
   if (!HEX128.test(tip.signature_hex)) return { ok: false, pq_protected: false, error: "tip_invalid: signature_hex must be 128 lowercase hex characters" };
   // optional hybrid fields: when PRESENT they must be well-formed whoever checks them (same rule in Python/Go)
-  if ("signature_pq_hex" in tip || "log_pq_pubkey_b64" in tip) {
-    if (typeof tip.signature_pq_hex !== "string" || !HEX6618.test(tip.signature_pq_hex) || b64Strict(tip.log_pq_pubkey_b64, 1952) === null)
-      return { ok: false, pq_protected: false, error: "tip_invalid: malformed post-quantum fields (signature_pq_hex 6618 lowercase hex, log_pq_pubkey_b64 strict base64 of 1952 bytes)" };
+  if (own(tip, "signature_pq_hex") || own(tip, "log_pq_pubkey_b64")) {
+    if (typeof tip.signature_pq_hex !== "string" || !HEX6618.test(tip.signature_pq_hex))
+      return { ok: false, pq_protected: false, error: "tip_invalid: signature_pq_hex must be 6618 lowercase hex characters (ML-DSA-65)" };
+    if (b64Strict(tip.log_pq_pubkey_b64, 1952) === null)
+      return { ok: false, pq_protected: false, error: "tip_invalid: log_pq_pubkey_b64 must be strict base64 of a 1952-byte ML-DSA-65 public key" };
   }
+  // ONE timestamp profile in the four checkers: RFC 3339 with seconds and a zone (Z or ±hh:mm)
+  if (parseInstant(tip.ts) === null) return { ok: false, pq_protected: false, error: "tip_invalid: ts outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|±hh:mm)" };
   // the key inside the tip proves nothing: without the trusted log key there is NO verification (never a
   // "PASS but untrusted" an automation reads as exit 0 — council 15/09)
   if (!trustedPubkeyHex) return { ok: false, pq_protected: false, trusted: false, error: "tip_untrusted: no trusted log key given (--trusted-pubkey); the key inside the tip cannot be trusted" };
@@ -484,15 +496,22 @@ if (argv[0] === "--conformance") {
   let tip = null;
   const tipPath = opts["--tip"] !== undefined ? opts["--tip"] : (existsSync(argv[0] + ".tip.json") ? argv[0] + ".tip.json" : null);
   if (tipPath !== null) {
-    try {   // the tip is a SIGNED document: the same strict profile as the entries (r5: Java was strict, JS lax)
-      const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(tipPath));
-      const d = jsonNestingDepth(raw); if (d > MAX_JSON_DEPTH) throw new Error("json_too_deep");
-      if (hasLoneSurrogate(raw)) throw new Error("lone_surrogate");
-      if (hasDuplicateKeys(raw)) throw new Error("duplicate_key");
-      if (/[0-9][.eE]/.test(raw.replace(/"(?:[^"\\]|\\.)*"/g, '""'))) throw new Error("float_forbidden");
-      tip = JSON.parse(raw); if (!tip || typeof tip !== "object" || Array.isArray(tip)) throw new Error("not an object");
+    // the tip is a SIGNED document: the same strict profile as the entries (r5: Java was strict, JS lax); SPEC §22 rule 2,
+    // rows 1-3: one text for each way it cannot be read, the same in the four verifiers
+    let bytesTip = null;
+    try { bytesTip = readFileSync(tipPath); } catch (e) { tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_FILE }; }
+    if (bytesTip !== null) {
+      try {
+        const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytesTip);
+        const d = jsonNestingDepth(raw); if (d > MAX_JSON_DEPTH) throw new Error("json_too_deep");
+        if (hasLoneSurrogate(raw)) throw new Error("lone_surrogate");
+        if (hasDuplicateKeys(raw)) throw new Error("duplicate_key");
+        if (hasFloatLexeme(raw)) throw new Error("float_forbidden");
+        tip = JSON.parse(raw);
+        canon(tip);   // an integer beyond ±(2^53-1) is outside the profile, as in an entry
+        if (!tip || typeof tip !== "object" || Array.isArray(tip)) tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_OBJECT };
+      } catch (e) { tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_JSON }; }
     }
-    catch (e) { tip = { kind: "unreadable:" + (e.code || e.message) }; }
   }
   const r = verifyLedger(text, { algo, pubkey, tip, trustedPubkey, requireTip, tipNotBefore, expectLedgerId });
   emitReceipt(r, r.verdict === "PASS" ? 0 : 1);   // exit code after the write is drained (see emitReceipt)

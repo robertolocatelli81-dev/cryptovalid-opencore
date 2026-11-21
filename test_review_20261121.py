@@ -673,5 +673,198 @@ class TestATipOfAnotherKindIsNamedAlikeInTheFourVerifiers(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+_ROW = {
+    1: "tip_unreadable: the tip file cannot be read",
+    2: "tip_unreadable: not a JSON text of the profile of SPEC §3",
+    3: "tip_unreadable: not a JSON object",
+    4: "tip_invalid: not a cryptovalid_tip/1 document",
+    7: "tip_invalid: tip entries must be a non-negative integer",
+    8: "tip_invalid: tip fields must be strings",
+    9: "tip_invalid: ledger_id / tip_sha256 must be 64 lowercase hex characters",
+    10: "tip_invalid: signature_hex must be 128 lowercase hex characters",
+    11: "tip_invalid: signature_pq_hex must be 6618 lowercase hex characters (ML-DSA-65)",
+    12: "tip_invalid: log_pq_pubkey_b64 must be strict base64 of a 1952-byte ML-DSA-65 public key",
+    13: "tip_invalid: ts outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|±hh:mm)",
+    14: "tip_invalid: tip log key differs from the trusted log key",
+    15: "tip_invalid: tip signature invalid",
+}
+_MEMBERS = ("kind", "entries", "ledger_id", "tip_sha256", "ts", "log_pubkey_hex", "signature_hex", "signature_pq_hex",
+            "log_pq_pubkey_b64")
+_TS = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(\.[0-9]{1,9})?(Z|[+-]([0-9]{2}):([0-9]{2}))")
+
+
+def _ts_ok(v):
+    """The timestamp profile of spec/CONFORMANCE.md, written here again from its text (not imported)."""
+    m = _TS.fullmatch(v) if isinstance(v, str) else None
+    if not m:
+        return False
+    y, mo, d, h, mi, s = (int(m.group(i)) for i in range(1, 7))
+    if not (1 <= y <= 9999 and 1 <= mo <= 12 and h <= 23 and mi <= 59 and s <= 59):
+        return False
+    leap = y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+    if d < 1 or d > [31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1]:
+        return False
+    return m.group(8) == "Z" or (int(m.group(9)) <= 23 and int(m.group(10)) <= 59)
+
+
+def _hex(v, n):
+    return isinstance(v, str) and re.fullmatch("[0-9a-f]{%d}" % n, v) is not None
+
+
+def _b64n(v, n):
+    if not isinstance(v, str) or len(v) != ((n + 2) // 3) * 4:
+        return False
+    try:
+        raw = base64.b64decode(v, validate=True)
+    except ValueError:
+        return False
+    return len(raw) == n and base64.b64encode(raw).decode() == v
+
+
+def _oracle(doc, pk, signed_ok):
+    """The reason SPEC §22 rule 2 gives a tip that is a JSON object (rows 4-15), from the table alone."""
+    if doc.get("kind") != "cryptovalid_tip/1" or not isinstance(doc.get("kind"), str):
+        return _ROW[4]
+    unknown = sorted(k for k in doc if k not in _MEMBERS)
+    if unknown:
+        return "tip_invalid: unknown_member:" + ",".join(unknown)[:120]
+    for k in ("entries", "ledger_id", "tip_sha256", "ts", "signature_hex"):
+        if k not in doc:
+            return "tip_invalid: tip missing field " + k
+    e = doc["entries"]
+    if isinstance(e, bool) or not isinstance(e, int) or e < 0:
+        return _ROW[7]
+    if not all(isinstance(doc[k], str) for k in ("ledger_id", "tip_sha256", "ts", "signature_hex")) or \
+            ("log_pubkey_hex" in doc and doc["log_pubkey_hex"] is not None and not isinstance(doc["log_pubkey_hex"], str)):
+        return _ROW[8]
+    if not (_hex(doc["ledger_id"], 64) and _hex(doc["tip_sha256"], 64)):
+        return _ROW[9]
+    if not _hex(doc["signature_hex"], 128):
+        return _ROW[10]
+    if "signature_pq_hex" in doc or "log_pq_pubkey_b64" in doc:
+        if not _hex(doc.get("signature_pq_hex"), 6618):
+            return _ROW[11]
+        if not _b64n(doc.get("log_pq_pubkey_b64"), 1952):
+            return _ROW[12]
+    if not _ts_ok(doc["ts"]):
+        return _ROW[13]
+    if isinstance(doc.get("log_pubkey_hex"), str) and doc["log_pubkey_hex"] and doc["log_pubkey_hex"] != pk:
+        return _ROW[14]
+    import ed25519_order   # the strict rule of SPEC §5 step 5, whose reason row 15 names
+    why = ed25519_order.strict_problem(bytes.fromhex(pk), bytes.fromhex(doc["signature_hex"]))
+    if why is not None:
+        return _ROW[15] + " (" + why + ")"
+    return None if signed_ok(doc) else _ROW[15]
+
+
+def _reason(name, out):
+    tip = (out or {}).get("tip") or {}
+    return tip.get("error") if name in ("python", "js") else tip.get("why")
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+class TestTheReasonsOfATipAreTheSameInTheFourVerifiers(unittest.TestCase):
+    """SPEC §22 rule 2, the table of the reasons of a tip: every form generated here gets, in Python, JS, Go and Java,
+    exit 1 and the text the table gives (an oracle written from the table, not from a verifier). Until 2026-11-21 a tip
+    with a right `kind` and another member wrong, and a file that is not an object, got each verifier's own words."""
+
+    def test_every_form_one_text(self):
+        import json
+        import random
+        import signer
+        import cryptovalid_tip as T
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from test_decisions_20261120 import _binaries, _ledger, _run
+        tmp = tempfile.mkdtemp()
+        try:
+            led = os.path.join(tmp, "l.jsonl")
+            _ledger(led, 3)
+            key = os.path.join(tmp, "log.key")
+            pk = signer.keygen(key)["public_key_hex"]
+            other = signer.keygen(os.path.join(tmp, "o.key"))["public_key_hex"]
+            tip = T.sign_tip(led, key)
+            bins = _binaries(tmp)
+            pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(pk))
+
+            def signed_ok(d):
+                try:
+                    pub.verify(bytes.fromhex(d["signature_hex"]), T.tip_payload(d["entries"], d["ledger_id"], d["tip_sha256"], d["ts"]))
+                    return True
+                except Exception:  # noqa: BLE001
+                    return False
+            values = [None, True, False, 0, -1, 3, 2 ** 53 - 1, "", "x", "3", [], {}, ["a"], {"k": 1}, "A" * 64, "a" * 64,
+                      "0" * 128, "2026-11-21T00:00:00Z", "2026-02-30T00:00:00Z", "2026-11-21", "ab" * 3309, "A" * 2604]
+            docs = []
+            for m in _MEMBERS:
+                docs.append({k: v for k, v in tip.items() if k != m})
+                docs += [dict(tip, **{m: v}) for v in values]
+            docs += [dict(tip, log_pubkey_hex=other), dict(tip, log_pubkey_hex=""), dict(tip, log_pubkey_hex=None),
+                     dict(tip, entries=4), dict(tip, signature_hex="0" * 128), dict(tip, ts="2026-11-21T00:00:00+24:00"),
+                     dict(tip, signature_pq_hex="ab" * 3309), dict(tip, log_pq_pubkey_b64="A" * 2604),
+                     dict(tip, zz=1, entries="x"), dict(tip, ledger_id="A" * 64, signature_hex="x")]
+            rng = random.Random(21)
+            for _ in range(30):   # two or three members wrong at once: the order of the table decides
+                d = dict(tip)
+                for m in rng.sample(_MEMBERS, rng.randint(2, 3)):
+                    if rng.random() < 0.2:
+                        d.pop(m, None)
+                    else:
+                        d[m] = rng.choice(values)
+                docs.append(d)
+            cases = [(json.dumps(d).encode(), _oracle(d, pk, signed_ok)) for d in docs]
+            raw = json.dumps(tip)
+            cases += [(b, _ROW[2]) for b in (b"", b"{", raw.encode() + b"x", b"\xef\xbb\xbf" + raw.encode(), b"\xff" + raw.encode(),
+                                               raw.replace('"entries": 3', '"entries": 3.0').encode(),
+                                               raw.replace('"entries": 3', '"entries": 3, "entries": 3').encode(),
+                                               raw.replace('"entries": 3', '"entries": 9007199254740993').encode(),
+                                               raw.replace('"x"', '"x"').replace('"ts": "', '"ts": "\\ud800').encode(),
+                                               b"\x0c" + raw.encode(), " ".encode() + raw.encode(),
+                                               b"[" * 600 + b"]" * 600)]
+            cases += [(b, _ROW[3]) for b in (b"[]", b"1", b'"x"', b"null", b"true", b'[{"kind": "cryptovalid_tip/1"}]')]
+            cases += [(b" \t\r\n" + raw.encode() + b"\n ", None)]   # JSON white space around it: read as the tip (control)
+            self.assertTrue(any(w is None for _b, w in cases) and len(cases) > 250, len(cases))
+            seen = {}
+            for body, want in cases:
+                with open(led + ".tip.json", "wb") as f:
+                    f.write(body)
+                for name in bins:
+                    rc, out, rawout = _run(bins, name, led, [bins[name][2] + "trusted-pubkey", pk])
+                    if want is None:
+                        self.assertEqual(rc, 0, (name, body[:120], rawout[-300:]))
+                        continue
+                    self.assertEqual(rc, 1, (name, body[:120], rawout[-300:]))
+                    got = _reason(name, out)
+                    self.assertEqual(got, want, (name, body[:160], got))
+                    seen[want] = seen.get(want, 0) + 1
+            os.remove(led + ".tip.json")
+            os.mkdir(led + ".tip.json")   # row 1: a path that is not a file that can be read
+            for name in bins:
+                rc, out, rawout = _run(bins, name, led, [bins[name][2] + "trusted-pubkey", pk])
+                self.assertEqual((rc, _reason(name, out)), (1, _ROW[1]), (name, rawout[-300:]))
+            for row in (2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15):
+                self.assertGreater(seen.get(_ROW[row], 0), 0, row)   # every row of the table was reached
+            os.rmdir(led + ".tip.json")
+            # after the table, the comparisons: the same words in the four (Python had a longer tail until 2026-11-21)
+            short = os.path.join(tmp, "short.jsonl")
+            with open(led, encoding="utf-8") as f:
+                lines = f.readlines()
+            with open(short, "w", encoding="utf-8") as f:
+                f.writelines(lines[:2])
+            T.sign_tip(short, key, tip_path=led + ".tip.json")
+            for name in bins:
+                rc, out, rawout = _run(bins, name, led, [bins[name][2] + "trusted-pubkey", pk])
+                self.assertEqual((rc, _reason(name, out)), (1, "unsealed_tail: file has 3 entries, the signed tip commits to 2 "
+                                                              "(appended after the last signed head)"), name)
+            with open(led + ".tip.json", "w", encoding="utf-8") as f:
+                json.dump(tip, f)
+            for name in bins:
+                d = bins[name][2]
+                rc, out, rawout = _run(bins, name, led, [d + "trusted-pubkey", pk, d + "tip-not-before", "2099-01-01T00:00:00Z"])
+                self.assertEqual((rc, _reason(name, out)), (1, f"tip_rolled_back: the tip is dated {tip['ts']}, before the "
+                                                              "required 2099-01-01T00:00:00Z"), name)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

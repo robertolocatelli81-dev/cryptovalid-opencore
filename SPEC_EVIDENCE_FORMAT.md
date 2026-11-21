@@ -2024,11 +2024,44 @@ that is not a string; rule 2, the tip of another kind in the Go verifier: withou
      decoded a tip into a struct whose names match case-insensitively, so `"Kind": 1` there was `tip_unreadable` and in
      Python an ignored member; both now name it. The same decoding made the Go verifier answer `tip_unreadable: json:
      cannot unmarshal ...` to a `kind` that was an integer, a boolean, an array or an object; it reads `kind` first now
-     and answers `tip_invalid: not a cryptovalid_tip/1 document` as the other three. Only these two texts are the
-     same in the four. For a tip whose `kind` is right and another member is of a wrong type, missing or malformed,
-     and for a tip file that is not a JSON object, the four give one verdict and each its own words (measured on
-     2026-11-21: 72 such tips, the same exit code in the four for each, one text in the four for 3; 10 files that are
-     not an object, exit 1 in the four, one text for 1).
+     and answers `tip_invalid: not a cryptovalid_tip/1 document` as the other three.
+   - **One reason for each form of a tip, the same text in the four verifiers** (Python, JS, Go, Java; decided on
+     2026-11-21). Until then a tip whose `kind` is right and another member is of a wrong type, missing or malformed,
+     and a tip file that is not a JSON object, got one verdict and each verifier's own words (measured by the second
+     review: of 72 such tips one text in the four for 3; of 10 files that are not an object, for 1). The checks run in
+     the order of this table and the first that holds gives the reason; the verdict is FAIL, exit 1:
+
+     | # | the tip | reason |
+     |---|---|---|
+     | 1 | the file cannot be read (absent, not a regular file, too large, an error of the system) | `tip_unreadable: the tip file cannot be read` |
+     | 2 | its bytes are not one JSON text of the profile of §3 (strict UTF-8, no byte-order mark, no key written twice, no float lexeme, an integer within ±(2^53-1), nesting within the bound, no lone surrogate; JSON white space around it allowed) | `tip_unreadable: not a JSON text of the profile of SPEC §3` |
+     | 3 | the JSON value is not an object | `tip_unreadable: not a JSON object` |
+     | 4 | `kind` absent or not the string `cryptovalid_tip/1` | `tip_invalid: not a cryptovalid_tip/1 document` |
+     | 5 | a member outside the nine | `tip_invalid: unknown_member:<keys>` (as above) |
+     | 6 | `entries`, `ledger_id`, `tip_sha256`, `ts`, `signature_hex`: the first absent, in this order | `tip_invalid: tip missing field <name>` |
+     | 7 | `entries` not an integer >= 0 (a boolean is not one) | `tip_invalid: tip entries must be a non-negative integer` |
+     | 8 | `ledger_id`, `tip_sha256`, `ts` or `signature_hex` not a string, or `log_pubkey_hex` present and neither null nor a string | `tip_invalid: tip fields must be strings` |
+     | 9 | `ledger_id` or `tip_sha256` not 64 lowercase hex characters | `tip_invalid: ledger_id / tip_sha256 must be 64 lowercase hex characters` |
+     | 10 | `signature_hex` not 128 lowercase hex characters | `tip_invalid: signature_hex must be 128 lowercase hex characters` |
+     | 11 | `signature_pq_hex` or `log_pq_pubkey_b64` present, and `signature_pq_hex` not 6618 lowercase hex characters | `tip_invalid: signature_pq_hex must be 6618 lowercase hex characters (ML-DSA-65)` |
+     | 12 | as 11, and `log_pq_pubkey_b64` not strict base64 of 1952 bytes | `tip_invalid: log_pq_pubkey_b64 must be strict base64 of a 1952-byte ML-DSA-65 public key` |
+     | 13 | `ts` outside the profile of `spec/CONFORMANCE.md` | `tip_invalid: ts outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z\|±hh:mm)` |
+     | 14 | `log_pubkey_hex` a non-empty string other than the trusted log key | `tip_invalid: tip log key differs from the trusted log key` |
+     | 15 | the Ed25519 signature does not verify under the trusted log key | `tip_invalid: tip signature invalid`, with ` (<reason>)` when the strict rule of §5 step 5 names one (`small_order_key`, `mixed_order_key`, `key_not_decodable`, `small_order_r`, `r_not_decodable`) |
+
+     Measured on 2026-11-21 (`prove_decisioni_D_20261120/cryptovalid/d4b_testi_tip.py`, 251 generated tip files: each
+     member absent or of 22 other values, 30 with two or three members wrong, 14 files that are not a tip object): one
+     text in the four for 40 before this table, for all 245 that fail after (the other 6 pass in the four); one exit
+     code changed, the JS verifier's for a `log_pubkey_hex` of `false` or `0`, read as absent (exit 0) where the other
+     three refused it (now row 8, exit 1). Held by `test_review_20261121.py`
+     (`TestTheReasonsOfATipAreTheSameInTheFourVerifiers`, an oracle written from this table).
+     After them, the comparisons with the file keep the texts of JS, Go and Java (`ledger_id_mismatch`,
+     `tip_of_another_ledger`, `tip_rolled_back`, `tail_truncated`, `unsealed_tail`, `tail_rewritten`,
+     `bad_not_before`); in the Python reference `tip_rolled_back`, `unsealed_tail` and `bad_not_before` carried a longer
+     tail and now have their words (the same text in the four measured for `unsealed_tail` and `tip_rolled_back`, read
+     in the code for the others). A text that names a
+     command-line option spells it as that verifier does (`--trusted-pubkey`, `-trusted-pubkey`). Not in this table:
+     the post-quantum layer checked under a trusted ML-DSA-65 key, which the JS verifier does not check (§15).
    - tree head (`<segment>.sth.json` of `cryptovalid_ingest`): `tree_size`, `root_sha256`, `signed`, `note`, `segment`,
      `sealed_utc`, `last_self_hash`, `prev_sth_sha256`, `signature`, `signer`, and `sig_domain` of rule 3
      (`cryptovalid_ingest.STH_MEMBERS`, eleven members: every member the writer has written since 2026-08-16; `signed`
@@ -2037,9 +2070,8 @@ that is not a string; rule 2, the tip of another kind in the Go verifier: withou
    - HEAD (`<prefix>.head.json`): `prefix`, `segments_sealed`, `last_segment`, `last_sth_sha256`, `updated_utc`,
      `signature`, `signer`, and `sig_domain` of rule 3 (`cryptovalid_ingest.HEAD_MEMBERS`, eight members). The failure
      is `head_unknown_member:<keys>`.
-   A key written twice in any of the three is already refused by the reader (§21 rule 2: `tip_unreadable` in the
-   Python, Go and Java verifiers, `tip_invalid: not a cryptovalid_tip/1 document` in the JS verifier, exit 1 in the
-   four; `sth_unreadable: duplicate_key`, `head_unreadable: duplicate_key`).
+   A key written twice in any of the three is already refused by the reader (§21 rule 2: for a tip row 2 of the table
+   above, the same text in the four since 2026-11-21; `sth_unreadable: duplicate_key`, `head_unreadable: duplicate_key`).
 3. **Tree heads, HEADs and pack manifests are signed over a domain-tagged message.** An entry signature is over the
    `self_hash` as text, 64 lowercase hex characters (§2); until 0.27.0 the tree heads and the HEAD of
    `cryptovalid_ingest` were signed over the hex of the SHA-256 of their canonical body, and a pack manifest over its
