@@ -522,7 +522,14 @@ def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubke
     SPEC §22 rule 7: with `tsa_certs` the pack is valid only when `time_anchor` is `verified`.
     `tsa_crls` (SPEC v0.10 §11 step 8, needs `tsa_certs`): CRLs the caller pins for the TSA certificate's revocation.
     `require_signature_domain` (SPEC §22 rule 3): admit format 1.2 only (a 1.1 pack, whose manifest signature is over the
-    bare digest, is format_unsupported); by default both are admitted."""
+    bare digest, is format_unsupported); by default both are admitted.
+    An empty pin (`pq_pubkey_b64`, `signer_pubkey_hex` or `manifest_signer_hex` given as "" or as a value that is not a
+    string) pins nothing and is a ValueError (SPEC §22 rule 4, as §17 rule 4 for the archive verifier): until 0.27.0 it
+    meant "not pinned", and an unsigned pack verified with signer_pubkey_hex="" was valid."""
+    for _name, _pin in (("pq_pubkey_b64", pq_pubkey_b64), ("signer_pubkey_hex", signer_pubkey_hex),
+                        ("manifest_signer_hex", manifest_signer_hex)):
+        if _pin is not None and not (isinstance(_pin, str) and _pin):
+            raise ValueError(f"{_name}: a pin is a key, a non-empty string; None for no pin (an empty pin pins nothing)")
     if tsa_crls is not None and tsa_certs is None:
         raise ValueError("tsa_crls need tsa_certs: revocation is checked only for a token verified under pinned certificates")
     if tsa_certs is not None:

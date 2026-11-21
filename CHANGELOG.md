@@ -15,8 +15,8 @@ run by the same author, not by a third party.
 on the branch before these rules (9b81e9c) 43 fail (44 where lxml is installed) and the 10 named `*_control` pass. 62 mutants
 of the changed lines (Python, JS, Go, Java): all killed.
 
-After the review of the branch (2026-11-21), `test_review_20261121.py`, 33 tests: 32 pass on 650c198 (they hold what the
-code already did and no test held), one fails there. 58 further mutants of the lines of rule 6 (`cryptovalid_lotl.py`): 33
+After the review of the branch (2026-11-21), `test_review_20261121.py`, 37 tests: 34 pass on 650c198 (they hold what the
+code already did and no test held), three fail there. 58 further mutants of the lines of rule 6 (`cryptovalid_lotl.py`): 33
 were killed by the tests above and 25 lived. 24 of the 25 dropped a check that the code made (each refusal measured)
 and no test held: the closed shape of the signature (the children of `ds:Signature`, `SignedInfo`, a `Reference` and
 `KeyInfo`, an algorithm with parameters, the transforms, a SHA-1 digest), a certificate not yet valid, `NextUpdate` at
@@ -25,6 +25,9 @@ without certificates, and canonical forms the ones copied from libxml2 did not h
 instruction after the document element); each has its test and is killed now. One gives the same answers: a second
 `Transforms` in a `Reference` is refused first by the check of the children of a `Reference` (1,562 generated references
 and 3,000 random ones, no different answer; a mutant of that other check, as control, differs on 1,558 and on 3,000).
+`verify_pack` refuses an empty pin (`""`, or a value that is not a string, as `signer_pubkey_hex`, `manifest_signer_hex`
+or `pq_pubkey_b64`: `ValueError`, as the archive verifier since SPEC §17 rule 4); it meant "not pinned", and an unsigned
+pack was `valid: true` under `signer_pubkey_hex=""`.
 Of 37 further mutants of the other lines of §22 (`evidence_pack.py`, `cryptovalid_ingest.py`, `cryptovalid_mcp.py`,
 `verifier.py`, `cryptovalid_tip.py`) 32 were killed and 5 lived, each a case without a test, now held: the cut at 120 code
 points of the names of the unknown members of a tree head and of a HEAD, the option `--require-signature-domain` of
@@ -72,6 +75,10 @@ said the deepest of the lists of 2026-11-20 is 12 elements deep (17, of 31 docum
   checked, was `valid: true`, and an archive with a sealed segment without a token, or with one not checked, was ok;
   now not valid (`time_anchor` keeps its state) and `tsa_token_missing_but_tsa_pinned` /
   `tsa_token_not_verified_under_pin`. Of 33 combinations of token x pin x pack/archive, 12 change from valid/ok to not.
+- **An empty pin given to `verify_pack` is refused** (§22 rule 4, after the review): `signer_pubkey_hex`,
+  `manifest_signer_hex` or `pq_pubkey_b64` given as `""` or as a value that is not a string meant "not pinned" (an unsigned
+  pack was `valid: true` under `signer_pubkey_hex=""`, on 0.27.0 too); it is now a `ValueError` before the pack is read,
+  as the archive verifier since SPEC §17 rule 4 and `tsa_certs=[]` since v0.8. `None` is still "no pin".
 - **The MCP tool `verify_ledger` verifies the entry signatures** (§22 rule 5) when it is given `expected_pubkey_hex`:
   the chain and the signatures are checked on one read of the file, and `valid` is true only when both hold. Without
   the key it answers as before and says `signatures: {"checked": false, ...}`.

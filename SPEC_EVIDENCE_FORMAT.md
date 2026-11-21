@@ -1998,8 +1998,9 @@ text of this specification allowed or a format change. The six decisions were ta
 written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one compares the canonicalization of rule
 6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 43 fail (44 where lxml is
 installed: that comparison fails there too) and the 10 named `*_control`, which hold what the rules do not change, pass. After the review of the branch (2026-11-21):
-`test_review_20261121.py`, 33 tests, the cases that mutants of the lines of rules 2, 3, 5 and 6 showed missing and three sentences of
-this section; 32 pass on 650c198 (the code already answered so, no test held it), one fails there (rule 6, `at`).
+`test_review_20261121.py`, 37 tests, the cases that mutants of the lines of rules 2, 3, 5 and 6 showed missing, three sentences of
+this section and the empty pin of rule 4; 34 pass on 650c198 (the code already answered so, no test held it), three fail
+there (rule 6, `at`; rule 4, an empty pin and a pin that is not a string).
 
 1. **A trusted log key makes the tip required** (`verifier.verify_ledger(trusted_pubkey_hex=...)`, `verifier.py
    --trusted-pubkey`, the JS `verifyLedger({trustedPubkey})` and `cvverify.mjs --trusted-pubkey`, the Go
@@ -2075,6 +2076,10 @@ this section; 32 pass on 650c198 (the code already answered so, no test held it)
      ledgers follow it (until 0.27.0 an unsigned manifest's element was dropped there).
    - `pq_pubkey_b64` sits on `signer_pubkey_hex` (unchanged): a post-quantum layer it pins that is absent or broken was
      already not valid.
+   - an empty pin is not "no pin" (as §17 rule 4 in the archive verifier, and as `tsa_certs=[]` since v0.8): `""`, or a
+     value that is not a string, given as `signer_pubkey_hex`, `manifest_signer_hex` or `pq_pubkey_b64` is a `ValueError`
+     before the pack is read. Until 0.27.0 it meant "not pinned": an unsigned pack verified with `signer_pubkey_hex=""`
+     was `valid: true` (measured on 0.27.0 and on 650c198).
    Without pins nothing changes. The two rules of §10 Disposition become: a `valid` pack is admitted and has no
    `contradicted` subject; an admitted pack that is not valid and has no `contradicted` subject has a
    `producer_signature` reason `key_unresolved`, `backend_missing` or, under a pin, `not_present`, or, under pinned

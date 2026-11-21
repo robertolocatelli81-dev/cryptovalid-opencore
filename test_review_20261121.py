@@ -5,7 +5,7 @@ rules showed missing in `test_decisions_20261120.py`, and the sentences of the s
 Rule 6 says the signature of a trusted list is read closed, "anything else refused with its reason": each refusal held
 here is one a mutant that dropped its check survived. So are the cut of the names of rule 2, the command-line option of
 rule 3 and three answers of the MCP tool of rule 5. TestSentencesOfSection22 also holds sentences of §22 as measured
-(the pivot chain and the limit stated in rule 6, rule 4 with rule 7)."""
+(the pivot chain and the limit stated in rule 6, rule 4 with rule 7); the last class, the empty pin of rule 4."""
 import base64
 import hashlib
 import os
@@ -457,6 +457,40 @@ class TestSentencesOfSection22(unittest.TestCase):
             self.assertEqual((states["time_anchor"]["state"], states["time_anchor"]["reasons"]), ("not_evaluated", ["not_present"]))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestAnEmptyPinOfThePackVerifier(unittest.TestCase):
+    """§22 rule 4: a pin given to verify_pack decides `valid`; an empty one is not "no pin" (as §17 rule 4)."""
+
+    def setUp(self):
+        import evidence_pack as EP
+        self.EP = EP
+        self.tmp = tempfile.mkdtemp()
+        self.pack = os.path.join(self.tmp, "pack")
+        EP.build_pack([os.path.join(HERE, "examples", "sample_ledger.jsonl")], self.pack)   # unsigned
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_no_pin_control(self):
+        self.assertIs(self.EP.verify_pack(self.pack)["valid"], True)
+        self.assertIs(self.EP.verify_pack(self.pack, signer_pubkey_hex=None, manifest_signer_hex=None, pq_pubkey_b64=None)["valid"], True)
+
+    def test_an_empty_pin_is_refused_before_the_pack_is_read(self):
+        for name in ("signer_pubkey_hex", "manifest_signer_hex", "pq_pubkey_b64"):
+            for empty in ("", b"", 0, [], False):
+                for where in (self.pack, os.path.join(self.tmp, "no such pack")):
+                    with self.assertRaises(ValueError) as c:
+                        self.EP.verify_pack(where, **{name: empty})
+                    self.assertEqual(str(c.exception), f"{name}: a pin is a key, a non-empty string; None for no pin (an empty pin pins nothing)")
+
+    def test_a_pin_of_another_type_is_refused(self):
+        for bad in (b"00" * 32, 5, ["00" * 32], {"k": 1}):
+            with self.assertRaises(ValueError):
+                self.EP.verify_pack(self.pack, signer_pubkey_hex=bad)
+
+    def test_a_real_pin_on_the_unsigned_pack_is_not_valid(self):
+        self.assertIs(self.EP.verify_pack(self.pack, signer_pubkey_hex="00" * 32)["valid"], False)
 
 
 if __name__ == "__main__":
