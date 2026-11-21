@@ -12,8 +12,31 @@ run by the same author, not by a third party.
 ### Changed by the decisions of 2026-11-20 (SPEC §22, written before the code; verdicts change)
 
 `test_decisions_20261120.py`, 54 tests (one compares the canonicalization with lxml and is skipped where lxml is absent):
-on the branch before these rules (9b81e9c) 43 fail and the 10 named `*_control` pass. 62 mutants of the changed lines (Python,
-JS, Go, Java): all killed.
+on the branch before these rules (9b81e9c) 43 fail (44 where lxml is installed) and the 10 named `*_control` pass. 62 mutants
+of the changed lines (Python, JS, Go, Java): all killed.
+
+After the review of the branch (2026-11-21), `test_review_20261121.py`, 33 tests: 32 pass on 650c198 (they hold what the
+code already did and no test held), one fails there. 58 further mutants of the lines of rule 6 (`cryptovalid_lotl.py`): 33
+were killed by the tests above and 25 lived. 24 of the 25 dropped a check that the code made (each refusal measured)
+and no test held: the closed shape of the signature (the children of `ds:Signature`, `SignedInfo`, a `Reference` and
+`KeyInfo`, an algorithm with parameters, the transforms, a SHA-1 digest), a certificate not yet valid, `NextUpdate` at
+its own instant and malformed, the length of an ECDSA value, the salt of RSA-PSS, base64, two pivots in a row, a pivot
+without certificates, and canonical forms the ones copied from libxml2 did not have (a TAB in an attribute, a processing
+instruction after the document element); each has its test and is killed now. One gives the same answers: a second
+`Transforms` in a `Reference` is refused first by the check of the children of a `Reference` (1,562 generated references
+and 3,000 random ones, no different answer; a mutant of that other check, as control, differs on 1,558 and on 3,000).
+Of 37 further mutants of the other lines of §22 (`evidence_pack.py`, `cryptovalid_ingest.py`, `cryptovalid_mcp.py`,
+`verifier.py`, `cryptovalid_tip.py`) 32 were killed and 5 lived, each a case without a test, now held: the cut at 120 code
+points of the names of the unknown members of a tree head and of a HEAD, the option `--require-signature-domain` of
+`cryptovalid_ingest.py verify`, the `valid` of the MCP tool when every signature holds and the chain is broken, its
+answer without `cryptography` (the tests of rule 5 are skipped without the package and do not reach that branch with
+it), and a ledger that is not UTF-8 (one failure `not_utf8`, not "no entry").
+`verify_list_signature(at=...)` with an instant without a time zone was a `TypeError`; it is a `ValueError` that says so.
+Sentences corrected by the review: the README said that a token of another TSA under `--tsa-cert` is "not a failure"
+(since rule 7 the pack is not valid, exit 1); rule 2 listed the members of a tree head and of a HEAD without
+`sig_domain`; rule 4 gave the reasons of an admitted pack that is not valid without the case of rule 7; "a document
+written now is refused by 0.27.0" holds for a signed archive and for a pack, not for an unsigned archive; a comment
+said the deepest of the lists of 2026-11-20 is 12 elements deep (17, of 31 documents).
 
 - **A trusted log key makes the tip required** (§22 rule 1), in the Python, JS, Go and Java verifiers: with
   `--trusted-pubkey` and no tip the verdict was PASS, exit 0, `tip: null`; it is now FAIL with `tip_missing`, exit 1.
@@ -27,8 +50,9 @@ JS, Go, Java): all killed.
   written in format `cryptovalid-evidence-pack/1.2`, whose manifest signature is over
   `cryptovalid-pack-manifest/2:<digest>`. Archives and 1.1 packs written before verify as before (the 12 packs of this
   repository and 8 archives and packs written by the previous code: same verdicts; signed archives gain the warning
-  `untagged_signatures`); `require_signature_domain=True` / `--require-signature-domain` refuses them. An archive or a
-  pack written now is refused by 0.27.0 (`sth_signature_invalid`, `head_signature_invalid`, `format_unsupported`).
+  `untagged_signatures`); `require_signature_domain=True` / `--require-signature-domain` refuses them. A signed archive
+  or a pack written now is refused by 0.27.0 (`sth_signature_invalid`, `head_signature_invalid`, `format_unsupported`);
+  an unsigned archive written now is the document 0.27.0 wrote, and 0.27.0 verifies it.
 - **A pin given to `verify_pack` decides `valid`** (§22 rule 4, library only): with `signer_pubkey_hex` a ledger with no
   signature, and with `manifest_signer_hex` a manifest not signed or signed by another key, left `valid: true` (SPEC §10
   said "by design"); the pack is now not valid, the reason in `producer_signature`. Of 36 combinations of manifest

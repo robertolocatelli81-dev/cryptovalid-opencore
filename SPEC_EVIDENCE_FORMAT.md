@@ -528,7 +528,8 @@ states the rule since v0.7): its answer for the same reply changes when a certif
 
 **What no state can say.** The RFC 3161 block and the manifest signature lie outside the manifest digest: a copy with the
 block removed has the states of a pack that never had one (`time_anchor: not_present`), and a copy with the manifest
-signature removed those of an unsigned pack. Only a pinned manifest signer or a hash of the whole folder tells them apart.
+signature removed those of an unsigned pack. Only a pinned manifest signer or a hash of the whole folder tells them apart;
+since §22 rule 7 (Unreleased) pinned TSA certificates also make the copy without the block not valid (the states are the same).
 
 ## 11. RFC 3161 token check (NORMATIVE since v0.6, 2026-11-13)
 
@@ -1995,8 +1996,10 @@ The re-measurement of 2026-11-20 (§21) left six findings to a decision of the m
 the principle of rule 4 to the TSA pin, decided on 2026-11-21), each a behaviour the earlier
 text of this specification allowed or a format change. The six decisions were taken the same day; each rule below was
 written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one compares the canonicalization of rule
-6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 43 fail and the 10 named
-`*_control`, which hold what the rules do not change, pass.
+6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 43 fail (44 where lxml is
+installed: that comparison fails there too) and the 10 named `*_control`, which hold what the rules do not change, pass. After the review of the branch (2026-11-21):
+`test_review_20261121.py`, 33 tests, the cases that mutants of the lines of rules 2, 3, 5 and 6 showed missing and three sentences of
+this section; 32 pass on 650c198 (the code already answered so, no test held it), one fails there (rule 6, `at`).
 
 1. **A trusted log key makes the tip required** (`verifier.verify_ledger(trusted_pubkey_hex=...)`, `verifier.py
    --trusted-pubkey`, the JS `verifyLedger({trustedPubkey})` and `cvverify.mjs --trusted-pubkey`, the Go
@@ -2018,13 +2021,16 @@ written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one
      decoded a tip into a struct whose names match case-insensitively, so `"Kind": 1` there was `tip_unreadable` and in
      Python an ignored member; both now name it.
    - tree head (`<segment>.sth.json` of `cryptovalid_ingest`): `tree_size`, `root_sha256`, `signed`, `note`, `segment`,
-     `sealed_utc`, `last_self_hash`, `prev_sth_sha256`, `signature`, `signer` (`cryptovalid_ingest.STH_MEMBERS`: every
-     member the writer has written since 2026-08-16; `signed` since 2026-09-14, so an older tree head without it
-     verifies as before). The failure is `sth_unknown_member:<keys>`.
+     `sealed_utc`, `last_self_hash`, `prev_sth_sha256`, `signature`, `signer`, and `sig_domain` of rule 3
+     (`cryptovalid_ingest.STH_MEMBERS`, eleven members: every member the writer has written since 2026-08-16; `signed`
+     since 2026-09-14, so an older tree head without it verifies as before). The failure is `sth_unknown_member:<keys>`
+     (the keys as for the tip: code-point order, joined by `,`, cut to 120 code points; the same for the HEAD).
    - HEAD (`<prefix>.head.json`): `prefix`, `segments_sealed`, `last_segment`, `last_sth_sha256`, `updated_utc`,
-     `signature`, `signer` (`cryptovalid_ingest.HEAD_MEMBERS`). The failure is `head_unknown_member:<keys>`.
-   A key written twice in any of the three is already refused by the reader (§21 rule 2: `tip_unreadable`,
-   `sth_unreadable: duplicate_key`, `head_unreadable: duplicate_key`).
+     `signature`, `signer`, and `sig_domain` of rule 3 (`cryptovalid_ingest.HEAD_MEMBERS`, eight members). The failure
+     is `head_unknown_member:<keys>`.
+   A key written twice in any of the three is already refused by the reader (§21 rule 2: `tip_unreadable` in the
+   Python, Go and Java verifiers, `tip_invalid: not a cryptovalid_tip/1 document` in the JS verifier, exit 1 in the
+   four; `sth_unreadable: duplicate_key`, `head_unreadable: duplicate_key`).
 3. **Tree heads, HEADs and pack manifests are signed over a domain-tagged message.** An entry signature is over the
    `self_hash` as text, 64 lowercase hex characters (§2); until 0.27.0 the tree heads and the HEAD of
    `cryptovalid_ingest` were signed over the hex of the SHA-256 of their canonical body, and a pack manifest over its
@@ -2051,8 +2057,10 @@ written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one
    Measured on the branch (`prove_decisioni_D_20261120/cryptovalid/d5_vecchi_archivi.py`): the 12 packs of this
    repository give the same `valid`, `admission`, `states` and `ledgers` before and after; 8 archives and packs written
    by the code before this rule (signed and unsigned, 1 to 3 segments) give the same verdict, failures and states, and
-   the 3 signed archives gain only the warning. A document written now is refused by 0.27.0 (measured: a signed
-   archive is `sth_signature_invalid`, `head_signature_invalid`; a 1.2 pack `format_unsupported`), never accepted.
+   the 3 signed archives gain only the warning. A signed archive or a pack written now is refused by 0.27.0 (measured:
+   a signed archive is `sth_signature_invalid`, `head_signature_invalid`; a 1.2 pack `format_unsupported`), never
+   accepted. An archive written now without a signing key carries no `sig_domain`: it is the document 0.27.0 wrote, and
+   0.27.0 verifies it (measured: ok).
    Entry signatures and the tip do not change.
 4. **A pin given to the pack verifier decides `valid`** (`evidence_pack.verify_pack`; the command line has no pins).
    Until 0.27.0 `valid` was "not derived from `states`" (§10, Disposition): with `signer_pubkey_hex` pinned, a ledger
@@ -2069,7 +2077,9 @@ written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one
      already not valid.
    Without pins nothing changes. The two rules of §10 Disposition become: a `valid` pack is admitted and has no
    `contradicted` subject; an admitted pack that is not valid and has no `contradicted` subject has a
-   `producer_signature` reason `key_unresolved`, `backend_missing` or, under a pin, `not_present`. The sentence "the
+   `producer_signature` reason `key_unresolved`, `backend_missing` or, under a pin, `not_present`, or, under pinned
+   TSA certificates (rule 7), a `time_anchor` that is not `verified` (measured: a pack signed by the pinned keys, without a
+   token, verified with a TSA pin, is admitted, not valid, nothing `contradicted`, `producer_signature: verified`). The sentence "the
    converse does not hold, by design" no longer holds for a pinned manifest signer: it holds for a post-quantum layer
    nobody pinned. Measured (`prove_decisioni_D_20261120/cryptovalid/d1_verdetti.py`, and the oracle of
    `test_decisions_20261120.py`): 36 combinations of manifest signer (none, the pinned key, another) x ledger signer
@@ -2116,7 +2126,8 @@ written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one
      valid now (`notBefore` to `notAfter`); a `NextUpdate/dateTime` of the list, when present, not passed (ETSI TS 119
      612 5.3.14; an empty `NextUpdate`, a closed list, is read as before). Reasons: `xmldsig_missing`, `xmldsig_shape`,
      `xmldsig_algorithm`, `xmldsig_digest_mismatch`, `xmldsig_signing_certificate`, `xmldsig_untrusted_signer`,
-     `xmldsig_certificate_not_valid`, `xmldsig_signature_invalid`, `xmldsig_malformed`, `tl_next_update_passed`.
+     `xmldsig_certificate_not_valid`, `xmldsig_signature_invalid`, `xmldsig_malformed`, `tl_next_update_passed`. The instant the list is checked at (`at`,
+     default now) is a timezone-aware datetime: another value is a `ValueError`.
    - **What is read is what is signed:** the content of a list (services, statuses, pointers) is read with its
      `ds:Signature` removed, the node set the enveloped reference covers; an element put inside `ds:Object` is never
      read as a service.
@@ -2140,7 +2151,11 @@ written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one
    publication or by the LOTL's pointer, and a certificate taken out of service leaves those lists (a new pivot, a new
    LOTL); the publication defines no other source. After a pivot only the set it announces is accepted: the 15 days in
    which the Commission keeps the former certificates usable (the publication's section 2.2) are not used, so a LOTL
-   still signed with a former certificate in those days is refused, never accepted wrongly.
+   that names the pivot and is still signed with a former certificate in those days is refused, never accepted wrongly.
+   Not read either: the sequence number of a list. No state is kept between two calls, so an earlier LOTL or national
+   list, signed with a certificate that is still trusted and valid and not past its own `NextUpdate`, verifies like the
+   current one (a LOTL written before a pivot does not name it, and the certificates of the publication are then the
+   trust): the channel (https to the location the publication names) is what gives the current document.
 7. **Pinned TSA certificates decide `valid` and `ok`** (`evidence_pack.verify_pack(tsa_certs=...)`, `evidence_pack.py
    verify --tsa-cert`, `cryptovalid_ingest.verify_archive(tsa_certs=...)`,
    `cryptovalid_ingest.py verify --tsa-cert`). This rule replaces the sentence of v0.8 in §10 "a pin for another TSA

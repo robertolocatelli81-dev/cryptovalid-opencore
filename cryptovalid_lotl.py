@@ -178,7 +178,7 @@ _SIG_ALGS = {   # RFC 6931 identifiers: (family, hash)
     "http://www.w3.org/2007/05/xmldsig-more#sha384-rsa-MGF1": ("rsa-pss", "sha384"),
     "http://www.w3.org/2007/05/xmldsig-more#sha512-rsa-MGF1": ("rsa-pss", "sha512"),
 }
-_MAX_DEPTH = 64   # the deepest of the 32 lists of 2026-11-20 is 12 elements deep
+_MAX_DEPTH = 64   # the deepest of the 31 documents of 2026-11-20 (the LOTL and 30 lists) is 17 elements deep
 
 
 class _Node:
@@ -388,6 +388,8 @@ def verify_list_signature(xml: bytes, trusted_sha256, at=None) -> dict:
     import hashlib as _h
     from datetime import datetime, timezone
     at = at or datetime.now(timezone.utc)
+    if not isinstance(at, datetime) or at.tzinfo is None:   # as qtst_status_at: a naive instant cannot be compared
+        raise ValueError("`at` must be a timezone-aware datetime")
     if not isinstance(xml, (bytes, bytearray)):
         raise ValueError("trusted list must be bytes")
     _parse_tl(bytes(xml))   # UTF-8, no DTD, a TrustServiceStatusList: the checks of the content's parser come first
