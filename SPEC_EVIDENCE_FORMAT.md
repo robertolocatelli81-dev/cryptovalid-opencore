@@ -1998,11 +1998,11 @@ text of this specification allowed or a format change. The six decisions were ta
 written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one compares the canonicalization of rule
 6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 43 fail (44 where lxml is
 installed: that comparison fails there too) and the 10 named `*_control`, which hold what the rules do not change, pass. After the review of the branch (2026-11-21):
-`test_review_20261121.py`, 42 tests, the cases that mutants of the lines of rules 2, 3, 5 and 6 showed missing, two sentences of
-this section, the empty pin of rule 4 and the sequence number of rule 6; 33 pass on 9b25d32 (the code already answered so,
-no test held it), nine fail there (rule 6, `at` and the five tests of the sequence number; rule 4, an empty pin and a pin
-that is not a string; rule 2, the tip of another kind in the Go verifier: without the Go toolchain that test passes there,
-34 and eight).
+`test_review_20261121.py`, 43 tests, the cases that mutants of the lines of rules 2, 3, 5 and 6 showed missing, two sentences of
+this section, the empty pin of rule 4, the sequence number of rule 6 and the table of the reasons of a tip of rule 2; 33
+pass on 9b25d32 (the code already answered so, no test held it), ten fail there (rule 6, `at` and the five tests of the
+sequence number; rule 4, an empty pin and a pin that is not a string; rule 2, the tip of another kind in the Go verifier,
+and the table: without the Go toolchain the first of these two passes there, 34 and nine).
 
 1. **A trusted log key makes the tip required** (`verifier.verify_ledger(trusted_pubkey_hex=...)`, `verifier.py
    --trusted-pubkey`, the JS `verifyLedger({trustedPubkey})` and `cvverify.mjs --trusted-pubkey`, the Go
