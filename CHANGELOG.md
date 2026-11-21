@@ -15,7 +15,7 @@ run by the same author, not by a third party.
 on the branch before these rules (9b81e9c) 43 fail (44 where lxml is installed) and the 10 named `*_control` pass. 62 mutants
 of the changed lines (Python, JS, Go, Java): all killed.
 
-After the review of the branch (2026-11-21), `test_review_20261121.py`, 39 tests: 33 pass on 650c198 (they hold what the
+After the review of the branch (2026-11-21), `test_review_20261121.py`, 39 tests: 33 pass on 9b25d32 (they hold what the
 code already did and no test held), six fail there (the instant without a time zone, two of the empty pin, three of the
 sequence number). 58 further mutants of the lines of rule 6 (`cryptovalid_lotl.py`): 33
 were killed by the tests above and 25 lived. 24 of the 25 dropped a check that the code made (each refusal measured)
