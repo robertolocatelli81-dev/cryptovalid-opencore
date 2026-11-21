@@ -328,6 +328,12 @@ func LoadTip(path string) (*Tip, error) {
 	}
 	var t Tip
 	if o, isObj := doc.(*Object); isObj {
+		if kind, _ := o.Vals["kind"].(string); kind != TipKind {
+			// SPEC §22 rule 2: a document whose kind is not the string cryptovalid_tip/1 is named so by CheckTip, as in
+			// Python, JS and Java, before any typed decode ("kind": 1 was a type error of encoding/json, tip_unreadable)
+			t.Kind = kind
+			return &t, nil
+		}
 		for _, k := range o.Keys {
 			if !TipMembers[k] {
 				t.Unknown = append(t.Unknown, k)

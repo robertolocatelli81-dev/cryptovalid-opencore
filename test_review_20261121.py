@@ -375,6 +375,84 @@ class TestSentencesOfSection22(unittest.TestCase):
             L._get = orig
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_the_sequence_number_is_read_closed(self):
+        # rule 6: one SchemeInformation, one TSLSequenceNumber without child elements, 1 to 18 ASCII digits between XML
+        # white space; the second review found a second SchemeInformation, a child element, a no-break space and 19 digits
+        # accepted, and 4301 digits refused in the words of the interpreter
+        from test_lotl import make_signer, sign_list
+        key, der, fp = make_signer(name="tl")
+        why = lambda xml: self._why_seq(sign_list(xml.encode("utf-8"), key, der), fp)   # noqa: E731
+        for seq in ("\u00a07", "7\u00a0", "\u20037", "\u00857", "\u20287", "5<x/>", "5<x/>6", "5<x>6</x>", "9" * 19,
+                    "0" * 18 + "7", "9" * 4301):
+            self.assertTrue(why(_LIST.replace("SEQ", seq)).startswith("tl_sequence_malformed"), (seq[:20], why(_LIST.replace("SEQ", seq))))
+        second = _LIST.replace("SEQ", "9").replace("</TrustServiceStatusList>", "<SchemeInformation><TSLSequenceNumber>8"
+                                                   "</TSLSequenceNumber></SchemeInformation></TrustServiceStatusList>")
+        self.assertTrue(why(second).startswith("tl_sequence_malformed"), why(second))
+        for seq, n in (("9" * 18, 10 ** 18 - 1), ("007", 7), ("\t7\r\n ", 7), ("1<!--c-->2", 12)):
+            self.assertEqual(L.verify_list_signature(sign_list(_LIST.replace("SEQ", seq).encode(), key, der), {fp})
+                             ["sequence_number"], n)
+        # the number is read once the signature holds: a list that is not signed, or signed by another, is named as such
+        bad = _LIST.replace("SEQ", "x").encode()
+        self.assertTrue(self._why_seq(bad, fp).startswith("xmldsig_missing"), self._why_seq(bad, fp))
+        other = make_signer(name="other")
+        self.assertTrue(self._why_seq(sign_list(bad, other[0], other[1]), fp).startswith("xmldsig_untrusted_signer"))
+
+    @staticmethod
+    def _why_seq(xml, fp):
+        try:
+            L.verify_list_signature(xml, {fp})
+            return "ok"
+        except ValueError as e:
+            return str(e)
+
+    def test_the_loader_refuses_a_minimum_for_no_list_and_a_sequences_out_that_is_not_a_dict(self):
+        import json
+        from test_decisions_20261120 import _lotl, _pointer, _QTST_SVC, _b64 as b64
+        from test_lotl import make_signer, sign_list
+        lk, lder, lfp = make_signer(name="lotl")
+        tk, tder, _tfp = make_signer(name="tl")
+        url = "https://tl.example/a.xml"
+        lotl = sign_list(_lotl([L.OJ_LOTL_URL], [_pointer(url, tder)]), lk, lder)
+        tl = sign_list((f'<TrustServiceStatusList xmlns="{_TSL}"><SchemeInformation><TSLSequenceNumber>4</TSLSequenceNumber>'
+                        "</SchemeInformation>" + _QTST_SVC.format(c=b64(b"Q")) + "</TrustServiceStatusList>").encode(), tk, tder)
+        orig, calls = L._get, []
+        L._get = lambda u, timeout=45: (calls.append(u), lotl if u == L.LOTL_URL else tl)[1]
+        tmp = tempfile.mkdtemp()
+        try:
+            cache = os.path.join(tmp, "c.json")
+            for key in (url + " ", "https://tl.example/A.xml", "x"):   # a minimum that would apply to no list
+                with self.assertRaises(ValueError) as c:
+                    L.load_qualified_status(cache_path=cache, trusted_lotl_signers={lfp}, min_sequences={key: 99})
+                self.assertTrue(str(c.exception).startswith("min_sequences: " + repr(key)), str(c.exception))
+                self.assertFalse(os.path.exists(cache))
+            stale = {"stale": 1}
+            _f, cov, _e = L.load_qualified_status(trusted_lotl_signers={lfp}, min_sequences={url: 4, L.LOTL_URL: 1},
+                                                  sequences_out=stale)
+            self.assertEqual((cov, stale), ([url], {L.LOTL_URL: 1, url: 4}))
+            del calls[:]
+            for bad in ({url: True}, {1: 5}, {None: 5}):   # refused as an argument, before anything is fetched
+                with self.assertRaises(ValueError) as c:
+                    L.load_qualified_status(trusted_lotl_signers={lfp}, min_sequences=bad)
+                self.assertTrue(str(c.exception).startswith("min_sequences: a dict"), str(c.exception))
+            for bad in ([], "x", set(), 5):
+                with self.assertRaises(ValueError) as c:
+                    L.load_qualified_status(trusted_lotl_signers={lfp}, sequences_out=bad)
+                self.assertTrue(str(c.exception).startswith("sequences_out"), str(c.exception))
+            self.assertEqual(calls, [])   # refused before anything is fetched
+            L.load_qualified_status(cache_path=cache, trusted_lotl_signers={lfp})
+            with open(cache, encoding="utf-8") as f:
+                d = json.load(f)
+            for bad in ({"k": "v"}, {"k": -5}, {"k": 0}, {"k": True}, {"k": 1.5}, ["k"]):
+                d["sequences"] = bad
+                with open(cache, "w", encoding="utf-8") as f:
+                    json.dump(d, f)
+                out = {"kept": 1}
+                L.load_qualified_status(cache_path=cache, trusted_lotl_signers={lfp}, sequences_out=out)
+                self.assertEqual(out, {}, bad)
+        finally:
+            L._get = orig
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_two_pivots_are_followed_oldest_first_and_a_pivot_without_certificates_is_named(self):
         # rule 6, the pivot mechanism: OJ certificate A -> pivot 1 (signed by A, announces B) -> pivot 2 (signed by B,
         # announces C) -> the LOTL, signed by C. The tests of test_decisions_20261120.py have one pivot: no order to get wrong
@@ -554,6 +632,45 @@ class TestAnEmptyPinOfThePackVerifier(unittest.TestCase):
 
     def test_a_real_pin_on_the_unsigned_pack_is_not_valid(self):
         self.assertIs(self.EP.verify_pack(self.pack, signer_pubkey_hex="00" * 32)["valid"], False)
+
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+class TestATipOfAnotherKindIsNamedAlikeInTheFourVerifiers(unittest.TestCase):
+    """§22 rule 2: "a document whose `kind` is not `cryptovalid_tip/1` is still `not a cryptovalid_tip/1 document`". The
+    second review found the Go verifier answering `tip_unreadable: json: cannot unmarshal ...` when `kind` was a number,
+    a boolean, an array or an object (exit 1 in the four, the text different)."""
+
+    def test_a_kind_that_is_not_the_string(self):
+        import json
+        import cryptovalid_tip as T
+        import signer
+        from test_decisions_20261120 import _binaries, _ledger, _run, _strings
+        tmp = tempfile.mkdtemp()
+        try:
+            led = os.path.join(tmp, "l.jsonl")
+            _ledger(led, 3)
+            key = os.path.join(tmp, "log.key")
+            pk = signer.keygen(key)["public_key_hex"]
+            tip = T.sign_tip(led, key)
+            bins = _binaries(tmp)
+            docs = [dict(tip, kind=k) for k in (1, True, [], {}, ["cryptovalid_tip/1"], None, "cryptovalid_tip/2", "")]
+            docs += [{k: v for k, v in tip.items() if k != "kind"}, dict(tip, kind=1, entries="3"), dict(tip, kind="x", ts=5)]
+            for doc in docs:
+                with open(led + ".tip.json", "w", encoding="utf-8") as f:
+                    json.dump(doc, f)
+                for name in bins:
+                    rc, out, raw = _run(bins, name, led, [bins[name][2] + "trusted-pubkey", pk])
+                    self.assertEqual(rc, 1, (name, doc.get("kind"), raw[-300:]))
+                    self.assertIn("tip_invalid: not a cryptovalid_tip/1 document",
+                                  [s.replace("ValueError: ", "") for s in _strings(out)] if out is not None else [],
+                                  (name, doc.get("kind"), raw[-400:]))
+            with open(led + ".tip.json", "w", encoding="utf-8") as f:
+                json.dump(tip, f)
+            for name in bins:   # control: the tip as signed passes in each
+                self.assertEqual(_run(bins, name, led, [bins[name][2] + "trusted-pubkey", pk])[0], 0, name)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

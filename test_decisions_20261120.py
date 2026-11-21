@@ -799,15 +799,13 @@ class TestTrustedListsSigned(unittest.TestCase):
         with self.assertRaises(ValueError) as c:   # the signing certificate is valid 30 days from today
             L.verify_list_signature(good, {fp}, at=datetime(2099, 1, 1, tzinfo=timezone.utc))
         self.assertTrue(str(c.exception).startswith("xmldsig_certificate_not_valid"))
-        stale = self.sign(self.list_xml.replace(b"<TrustServiceProviderList>", b"<SchemeInformation><NextUpdate><dateTime>"
-                                                b"2000-01-01T00:00:00Z</dateTime></NextUpdate></SchemeInformation>"
-                                                b"<TrustServiceProviderList>"), k, der)
+        stale = self.sign(self.list_xml.replace(b"</TSLSequenceNumber>", b"</TSLSequenceNumber><NextUpdate><dateTime>"
+                                                b"2000-01-01T00:00:00Z</dateTime></NextUpdate>"), k, der)
         with self.assertRaises(ValueError) as c:
             L.verify_list_signature(stale, {fp})
         self.assertTrue(str(c.exception).startswith("tl_next_update_passed"))
-        fresh = self.sign(self.list_xml.replace(b"<TrustServiceProviderList>", b"<SchemeInformation><NextUpdate><dateTime>"
-                                                b"2099-01-01T00:00:00Z</dateTime></NextUpdate></SchemeInformation>"
-                                                b"<TrustServiceProviderList>"), k, der)
+        fresh = self.sign(self.list_xml.replace(b"</TSLSequenceNumber>", b"</TSLSequenceNumber><NextUpdate><dateTime>"
+                                                b"2099-01-01T00:00:00Z</dateTime></NextUpdate>"), k, der)
         L.verify_list_signature(fresh, {fp})   # control
         moved = good.replace(b"<TrustServiceProviderList>", b"<TrustServiceProviderList>" + good[good.index(b"<ds:Signature"):
                                                                                                    good.index(b"</ds:Signature>") + 15], 1)

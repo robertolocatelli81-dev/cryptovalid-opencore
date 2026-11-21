@@ -179,7 +179,7 @@ def _tl(*svcs):
             "</TrustServiceStatusList>").encode()
 
 
-_SEQ = '<SchemeInformation><TSLSequenceNumber>1</TSLSequenceNumber></SchemeInformation>'   # TS 119 612 5.3.3, read since SPEC §22 rule 6
+_SEQ = '<SchemeInformation><TSLSequenceNumber>1</TSLSequenceNumber></SchemeInformation>'   # TS 119 612 5.3.2, read since SPEC §22 rule 6
 
 
 def _fp(b):

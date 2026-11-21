@@ -378,14 +378,20 @@ def _transforms(ref):
     return out
 
 
+_SEQ_MAX_DIGITS = 18   # XML Schema Part 2, 3.2.3: a processor supports at least 18 decimal digits and documents its limit
+
+
 def _sequence_number(root) -> int:
-    """TSLSequenceNumber of SchemeInformation (ETSI TS 119 612 5.3.3: an integer, 1 for the first list, incremented at each
-    issue): exactly one, decimal digits, >= 1; else ValueError (every one of the 31 documents of 2026-11-20 has one)."""
-    si = root.find(_q("SchemeInformation"))
-    seq = si.findall(_q("TSLSequenceNumber")) if si is not None else []
-    text = (seq[0].text or "").strip() if len(seq) == 1 else ""
-    if not (text.isascii() and text.isdigit()) or int(text) < 1:
-        raise ValueError("tl_sequence_malformed: SchemeInformation must hold one TSLSequenceNumber, an integer >= 1")
+    """TSLSequenceNumber of SchemeInformation (ETSI TS 119 612 5.3.2: an integer, 1 for the first list, incremented at each
+    issue): one SchemeInformation child of the root holding exactly one TSLSequenceNumber, which has no child element
+    and whose text, XML white space (space, tab, CR, LF) around it apart, is 1 to 18 ASCII digits, the number >= 1; else
+    ValueError (every one of the 31 documents of 2026-11-20 has one, the largest 398)."""
+    sis = root.findall(_q("SchemeInformation"))
+    seq = sis[0].findall(_q("TSLSequenceNumber")) if len(sis) == 1 else []
+    text = (seq[0].text or "").strip(" \t\r\n") if len(seq) == 1 and len(seq[0]) == 0 else ""
+    if not (text.isascii() and text.isdigit()) or len(text) > _SEQ_MAX_DIGITS or int(text) < 1:
+        raise ValueError("tl_sequence_malformed: one SchemeInformation must hold one TSLSequenceNumber, an integer >= 1 "
+                         f"of at most {_SEQ_MAX_DIGITS} digits")
     return int(text)
 
 
@@ -488,7 +494,7 @@ def verify_list_signature(xml: bytes, trusted_sha256, at=None, min_sequence=None
         raise ValueError(f"xmldsig_certificate_not_valid: the signing certificate is valid from {nvb:%Y-%m-%dT%H:%M:%SZ} "
                          f"to {nva:%Y-%m-%dT%H:%M:%SZ}")
     nu = [d for n in _parse_tl(bytes(xml)).iter(_q("NextUpdate")) for d in n.findall(_q("dateTime"))]
-    if nu:   # ETSI TS 119 612 5.3.14; an empty NextUpdate (a closed list, 5.3.15) is read as before
+    if nu:   # ETSI TS 119 612 5.3.15; an empty NextUpdate (a closed list, the same clause) is read as before
         when = _when((nu[0].text or "").strip())
         if len(nu) != 1 or when is None:
             raise ValueError("xmldsig_malformed: NextUpdate is not one dateTime of the form of TS 119 612 5.1.3")
@@ -704,14 +710,19 @@ def load_qualified_status(member_states=None, cache_path=None, timeout=45, log=l
     ValueError and nothing is built; each list's under the certificates the LOTL's pointer to it names, else it is
     skipped and logged; a list served over http is skipped.
     `min_sequences` ({location: int}, the LOTL under LOTL_URL): a list whose TSLSequenceNumber is lower is refused (the
-    LOTL: ValueError; a national list: skipped and logged, `tl_sequence_rolled_back`); with it the cache is not read.
-    `sequences_out` (a dict): filled with {location: TSLSequenceNumber} of every list that verified, so a caller can keep
-    them and give them back as `min_sequences` next time; the cache records them too (`sequences`)."""
+    LOTL: ValueError; a national list: skipped and logged, `tl_sequence_rolled_back`); with it the cache is not read. A
+    location that is neither the LOTL's nor one the verified LOTL points to is a ValueError (a minimum that would apply
+    to no list is not ignored).
+    `sequences_out` (a dict, else ValueError): filled with {location: TSLSequenceNumber} of every list that verified, so a
+    caller can keep them and give them back as `min_sequences` next time; the cache records them too (`sequences`, read
+    back only when they are {location: integer >= 1})."""
     from datetime import datetime, timezone
     if min_sequences is not None:
         if not isinstance(min_sequences, dict) or not all(isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)
                                                          and v >= 1 for k, v in min_sequences.items()):
             raise ValueError("min_sequences: a dict of list location -> integer >= 1, or None")
+    if sequences_out is not None and not isinstance(sequences_out, dict):
+        raise ValueError("sequences_out: a dict to fill, or None")
     if cache_path and os.path.exists(cache_path) and min_sequences is None:
         try:   # SPEC §5 step 0: a regular file, opened once without blocking
             from verifier import read_text_regular
@@ -726,7 +737,8 @@ def load_qualified_status(member_states=None, cache_path=None, timeout=45, log=l
             if sequences_out is not None:
                 sq = d.get("sequences")
                 sequences_out.clear()
-                sequences_out.update(sq if isinstance(sq, dict) else {})
+                sequences_out.update(sq if isinstance(sq, dict) and all(
+                    isinstance(n, int) and not isinstance(n, bool) and n >= 1 for n in sq.values()) else {})
             return set(d["fingerprints"]), d.get("coverage", []), dict(errs) if isinstance(errs, dict) else {}
         log(f"LOTL cache {cache_path} not used (rule {d.get('rule') if isinstance(d, dict) else None!r}, "
             f"built_at {d.get('built_at') if isinstance(d, dict) else None!r}): rebuilt")
@@ -740,6 +752,9 @@ def load_qualified_status(member_states=None, cache_path=None, timeout=45, log=l
     seqs = {LOTL_URL: v["sequence_number"]}
     ptr_certs = _pointer_certs(lotl)
     ptrs = lotl_pointers(lotl)
+    unknown = sorted(set(mins) - {LOTL_URL} - set(ptrs))
+    if unknown:
+        raise ValueError(f"min_sequences: {unknown[0]!r} is neither the LOTL's location nor a list the LOTL points to")
     from datetime import datetime as _dt, timezone as _tz
     now = _dt.now(_tz.utc)
     fprs, coverage, errors = set(), [], {}

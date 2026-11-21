@@ -15,9 +15,9 @@ run by the same author, not by a third party.
 on the branch before these rules (9b81e9c) 43 fail (44 where lxml is installed) and the 10 named `*_control` pass. 62 mutants
 of the changed lines (Python, JS, Go, Java): all killed.
 
-After the review of the branch (2026-11-21), `test_review_20261121.py`, 39 tests: 33 pass on 9b25d32 (they hold what the
-code already did and no test held), six fail there (the instant without a time zone, two of the empty pin, three of the
-sequence number). 58 further mutants of the lines of rule 6 (`cryptovalid_lotl.py`): 33
+After the review of the branch (2026-11-21), `test_review_20261121.py`, 42 tests: 33 pass on 9b25d32 (they hold what the
+code already did and no test held), nine fail there (the instant without a time zone, two of the empty pin, five of the
+sequence number, and the tip of another kind in the Go verifier: without the Go toolchain that test passes, 34 and eight). 58 further mutants of the lines of rule 6 (`cryptovalid_lotl.py`): 33
 were killed by the tests above and 25 lived. 24 of the 25 dropped a check that the code made (each refusal measured)
 and no test held: the closed shape of the signature (the children of `ds:Signature`, `SignedInfo`, a `Reference` and
 `KeyInfo`, an algorithm with parameters, the transforms, a SHA-1 digest), a certificate not yet valid, `NextUpdate` at
@@ -41,6 +41,19 @@ all 31 documents of 2026-11-20 have one), reported (`sequence_number`, `sequence
 minimum the caller gives (`min_sequence`, `min_sequences`) refuses an earlier list (`tl_sequence_rolled_back`): the
 review had found that an earlier list still within its `NextUpdate` verified like the current one, with nothing to
 tell them apart.
+A second review (2026-11-21, of 9874e32) closed how the number is read: a second `SchemeInformation`, a child element
+inside `TSLSequenceNumber`, a no-break space (or another Unicode space) around the digits and a number of 19 digits were
+accepted, and one of 4,301 digits was refused in the words of the Python interpreter, not as `tl_sequence_malformed`;
+now one `SchemeInformation`, one `TSLSequenceNumber` without child elements, 1 to 18 ASCII digits between XML white
+space. `load_qualified_status`: a location in `min_sequences` that named no list (a trailing space, another case) was
+ignored and its minimum applied to nothing, and a `sequences_out` that was not a dict was an `AttributeError` after
+every list had been fetched; both are a `ValueError` now, and the `sequences` of a cache are read back only when they
+are {location: integer >= 1}. The clauses of ETSI TS 119 612 V2.4.1 (2025-08) cited for the sequence number and for
+`NextUpdate` were 5.3.3 and 5.3.14; they are 5.3.2 and 5.3.15.
+The Go verifier answered `tip_unreadable: json: cannot unmarshal ...` to a tip whose `kind` was an integer, a boolean, an
+array or an object, where Python, JS and Java answer `tip_invalid: not a cryptovalid_tip/1 document` (exit 1 in the
+four); it answers as they do now. The reasons of a tip with a right `kind` and a member of a wrong type still differ
+between the four verifiers, and SPEC §22 rule 2 says so.
 Sentences corrected by the review: the README said that a token of another TSA under `--tsa-cert` is "not a failure"
 (since rule 7 the pack is not valid, exit 1); rule 2 listed the members of a tree head and of a HEAD without
 `sig_domain`; rule 4 gave the reasons of an admitted pack that is not valid without the case of rule 7; "a document

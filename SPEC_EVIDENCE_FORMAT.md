@@ -1998,10 +1998,11 @@ text of this specification allowed or a format change. The six decisions were ta
 written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one compares the canonicalization of rule
 6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 43 fail (44 where lxml is
 installed: that comparison fails there too) and the 10 named `*_control`, which hold what the rules do not change, pass. After the review of the branch (2026-11-21):
-`test_review_20261121.py`, 39 tests, the cases that mutants of the lines of rules 2, 3, 5 and 6 showed missing, two sentences of
+`test_review_20261121.py`, 42 tests, the cases that mutants of the lines of rules 2, 3, 5 and 6 showed missing, two sentences of
 this section, the empty pin of rule 4 and the sequence number of rule 6; 33 pass on 9b25d32 (the code already answered so,
-no test held it), six fail there (rule 6, `at` and the three tests of the sequence number; rule 4, an empty pin and a pin
-that is not a string).
+no test held it), nine fail there (rule 6, `at` and the five tests of the sequence number; rule 4, an empty pin and a pin
+that is not a string; rule 2, the tip of another kind in the Go verifier: without the Go toolchain that test passes there,
+34 and eight).
 
 1. **A trusted log key makes the tip required** (`verifier.verify_ledger(trusted_pubkey_hex=...)`, `verifier.py
    --trusted-pubkey`, the JS `verifyLedger({trustedPubkey})` and `cvverify.mjs --trusted-pubkey`, the Go
@@ -2021,7 +2022,13 @@ that is not a string).
      points (as `unknown_field` of §2.1). It is checked right after `kind` (a document whose `kind` is not
      `cryptovalid_tip/1` is still `not a cryptovalid_tip/1 document`) and before every other member: the Go verifier
      decoded a tip into a struct whose names match case-insensitively, so `"Kind": 1` there was `tip_unreadable` and in
-     Python an ignored member; both now name it.
+     Python an ignored member; both now name it. The same decoding made the Go verifier answer `tip_unreadable: json:
+     cannot unmarshal ...` to a `kind` that was an integer, a boolean, an array or an object; it reads `kind` first now
+     and answers `tip_invalid: not a cryptovalid_tip/1 document` as the other three. Only these two texts are the
+     same in the four. For a tip whose `kind` is right and another member is of a wrong type, missing or malformed,
+     and for a tip file that is not a JSON object, the four give one verdict and each its own words (measured on
+     2026-11-21: 72 such tips, the same exit code in the four for each, one text in the four for 3; 10 files that are
+     not an object, exit 1 in the four, one text for 1).
    - tree head (`<segment>.sth.json` of `cryptovalid_ingest`): `tree_size`, `root_sha256`, `signed`, `note`, `segment`,
      `sealed_utc`, `last_self_hash`, `prev_sth_sha256`, `signature`, `signer`, and `sig_domain` of rule 3
      (`cryptovalid_ingest.STH_MEMBERS`, eleven members: every member the writer has written since 2026-08-16; `signed`
@@ -2130,7 +2137,7 @@ that is not a string).
      -512; an identifier (`Id`, `ID`, `id`) on two elements refused; `KeyInfo` one `X509Data` with one
      `X509Certificate`, whose digest `xades:SigningCertificateV2/Cert/CertDigest` must match; the signing certificate
      valid now (`notBefore` to `notAfter`); a `NextUpdate/dateTime` of the list, when present, not passed (ETSI TS 119
-     612 5.3.14; an empty `NextUpdate`, a closed list, is read as before). Reasons: `xmldsig_missing`, `xmldsig_shape`,
+     612 5.3.15; an empty `NextUpdate`, a closed list, is read as before). Reasons: `xmldsig_missing`, `xmldsig_shape`,
      `xmldsig_algorithm`, `xmldsig_digest_mismatch`, `xmldsig_signing_certificate`, `xmldsig_untrusted_signer`,
      `xmldsig_certificate_not_valid`, `xmldsig_signature_invalid`, `xmldsig_malformed`, `tl_next_update_passed`. The instant the list is checked at (`at`,
      default now) is a timezone-aware datetime: another value is a `ValueError`.
@@ -2158,14 +2165,19 @@ that is not a string).
    LOTL); the publication defines no other source. After a pivot only the set it announces is accepted: the 15 days in
    which the Commission keeps the former certificates usable (the publication's section 2.2) are not used, so a LOTL
    that names the pivot and is still signed with a former certificate in those days is refused, never accepted wrongly.
-   **The sequence number** (`TSLSequenceNumber` of `SchemeInformation`, ETSI TS 119 612 5.3.3: an integer, 1 for the
-   first issue, incremented at each) is read since the review of 2026-11-21: exactly one, decimal digits, at least 1, or
-   the list is refused (`tl_sequence_malformed`; every one of the 31 documents of 2026-11-20 has one). It is reported
+   **The sequence number** (`TSLSequenceNumber` of `SchemeInformation`, ETSI TS 119 612 5.3.2: an integer, 1 for the
+   first issue, incremented at each) is read since the review of 2026-11-21, closed: the root has one
+   `SchemeInformation`, it holds exactly one `TSLSequenceNumber`, that element has no child element, and its text, XML
+   white space (space, tab, CR, LF) around it apart, is 1 to 18 ASCII digits (the limit XML Schema Part 2, 3.2.3, lets
+   a processor set and asks it to document; leading zeros count) with a value of at least 1; anything else refuses the
+   list (`tl_sequence_malformed`; every one of the 31 documents of 2026-11-20 has one, the largest 398). It is reported
    (`verify_list_signature(...)["sequence_number"]`; `load_qualified_status(sequences_out={})` fills {location: number}
-   for the LOTL and every list that verified, and the cache records them as `sequences`). A minimum given by the caller
+   for the LOTL and every list that verified, and the cache records them as `sequences`; a `sequences_out` that is not
+   a dict is a `ValueError` before anything is fetched). A minimum given by the caller
    (`verify_list_signature(min_sequence=n)`, `load_qualified_status(min_sequences={location: n})`, the LOTL under its
    location; with it the cache is not read) refuses an earlier list: `tl_sequence_rolled_back` (the LOTL: `ValueError`;
-   a national list: not covered, named in the log). Without a minimum no state is kept between two calls, so an earlier
+   a national list: not covered, named in the log). A location in `min_sequences` that is neither the LOTL's nor one
+   the verified LOTL points to is a `ValueError`: a minimum that would apply to no list is not ignored. Without a minimum no state is kept between two calls, so an earlier
    LOTL or national list, signed with a certificate that is still trusted and valid and not past its own `NextUpdate`,
    verifies like the current one: a verifier without memory cannot tell them apart, and a caller who keeps the numbers
    of one run and gives them back as minimums at the next makes it a failure.
