@@ -242,6 +242,13 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             self.assertEqual((cp.returncode, json.loads(cp.stdout)["verdict"]), (0, "PASS"), name)
 
 
+def _cap_memory():
+    """512 MiB of data for the writer: a writer that reads /dev/zero without end (the code before 2026-11-22) then dies
+    at once instead of growing to 5 GB until the system's OOM killer takes the whole session with it"""
+    import resource
+    resource.setrlimit(resource.RLIMIT_DATA, (512 << 20, 512 << 20))
+
+
 @unittest.skipUnless(hasattr(os, "mkfifo") and shutil.which("go"), "needs FIFOs and the Go toolchain")
 class TestTheGoWriterInputs(unittest.TestCase):
     """SPEC §5 step 0 (a) and (c), §22 rule 8: cvappend appends to a regular file only, and reads -tipkey as a regular
@@ -264,7 +271,7 @@ class TestTheGoWriterInputs(unittest.TestCase):
 
     def append(self, ledger, key=None):
         argv = [self.bin] + (["-tipkey", key] if key else []) + [ledger, "2026-11-22T00:00:00Z"]
-        cp = subprocess.run(argv, input='{"a":1}', capture_output=True, text=True, timeout=60)
+        cp = subprocess.run(argv, input='{"a":1}', capture_output=True, text=True, timeout=60, preexec_fn=_cap_memory)
         return cp.returncode, cp.stderr.strip()
 
     def test_the_ledger_is_a_regular_file(self):
