@@ -137,6 +137,20 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
         for name, (rc, verdict, _, _) in _all(self.bins, p).items():
             self.assertEqual((rc, verdict), (1, "FAIL"), name)
 
+    def test_every_character_below_0x80_in_a_string_is_verified_in_the_four(self):
+        """the canonical form of the JS verifier is one regex since 0.28.0: each control character, DEL (escaped as
+        \\u007f), the short escapes and characters past the BMP give the bytes verifier.py hashes"""
+        sys.path.insert(0, HERE)
+        import verifier
+        e = {"idx": 0, "ts": "2026-11-22T15:00:00Z", "data": "".join(map(chr, range(0x80))) + "\x80\xff\u2028\ufeff\U0001f600",
+             "prev_hash": "0" * 64}
+        e["self_hash"] = verifier.hash_with("sha256", verifier.canonical_payload(e))
+        p = self.path("ascii.jsonl")
+        for ensure_ascii in (True, False):
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(json.dumps(e, ensure_ascii=ensure_ascii) + "\n")
+            self.assertAll(_all(self.bins, p), (0, "PASS", None), "every character below 0x80")
+
     def test_a_fifo_with_no_writer_is_idle_after_10_s(self):
         fifo = self.path("idle.fifo")
         os.mkfifo(fifo)

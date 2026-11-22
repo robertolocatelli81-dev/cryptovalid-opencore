@@ -559,6 +559,13 @@ def input_too_complex(lines: int, tokens: int) -> Optional[str]:
     return None
 
 
+def ledger_too_complex(data: bytes) -> Optional[str]:
+    """input_too_complex of the bytes of a ledger: for the readers of a ledger beside verify_ledger (the signature layer,
+    the evidence pack), which until NEMESIS 22/11/2026 parsed every line of a ledger this rule refuses."""
+    return input_too_complex(data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0),
+                             sum(data.count(c) for c in (b"{", b"[", b",", b":")))
+
+
 _RECURSION_HEADROOM = 3 * MAX_JSON_DEPTH + 256  # frames the C decoder + object_pairs_hook may need per line
 
 
@@ -936,10 +943,12 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
                               encoding="utf-8", errors="surrogateescape", newline="\n") as f:
             n = tokens = 0
             raw_lines = []
-            for ln in f:   # SPEC §22 rule 9: the whole input is counted, at most MAX_INPUT_LINES kept
+            for ln in f:   # SPEC §22 rule 9: lines and tokens are counted before any line is parsed
                 n += 1
+                if n > MAX_INPUT_LINES:   # lines come first: the reason is known, the rest is not read (200 MiB of blank lines took 64 s)
+                    break
                 tokens += ln.count("{") + ln.count("[") + ln.count(",") + ln.count(":")
-                if n <= MAX_INPUT_LINES and ln.strip(" \t\r\n"):
+                if ln.strip(" \t\r\n"):
                     raw_lines.append(ln)
     except FileNotFoundError:
         return {

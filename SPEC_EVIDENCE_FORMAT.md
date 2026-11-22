@@ -2304,7 +2304,7 @@ maintainer, outside this repository.
    directory; `/dev/null`; a link to `/dev/zero`; a sparse file of 256 MiB + 1 byte; one of exactly 256 MiB; a file
    without permission; an absent file), the 12 the table names give its row in the four, the same text; the other three
    keep each verifier's answer, as above (256 MiB exactly is within the bound and fails at §5 step 1, in Go too
-   since 0.28.0). Held by `test_ledger_input_20261122.py` (14 tests), `verifiers/go/input_test.go` and
+   since 0.28.0). Held by `test_ledger_input_20261122.py` (16 tests), `verifiers/go/input_test.go` and
    `verifiers/js/test.mjs`.
    Not measured: macOS, where the Go runtime does not poll a FIFO (the Go verifier reads one there with a pause of 10 ms
    between tries, and a FIFO no writer has opened yet reads as empty, `empty_ledger`, where Linux waits for a writer),
@@ -2315,9 +2315,12 @@ maintainer, outside this repository.
 9. **What a ledger may hold is counted before it is parsed** (written on 2026-11-22, while rule 8 was measured; the
    same in `verifier.py`, JS, Go and Java). The bound of 256 MiB on the bytes did not bound memory: a file of 16 MiB
    holding 8 Mi lines `0` ended Python in `MemoryError` and Go in `fatal error: out of memory allocating heap arena metadata` under a data limit of
-   2 GB, and one line of 64 MiB holding `[{},{},...]` ended JS in `JavaScript heap out of memory` (exit 134) and Go
-   at a data limit of 3 GB, each without a receipt (measured on 2026-11-22 on a72d51d). Over the whole input, after the bytes of
-   rule 8 and before any line is parsed:
+   2 GB, and one line of 64 MiB holding `[{},{},...]` ended JS in `JavaScript heap out of memory` (exit 134), each without a
+   receipt, and took Go to 2783 MiB (a receipt under a data limit of 3 GB, `fatal error` under 2.5 GB; measured on
+   2026-11-22 on a72d51d). Over the whole input, after the bytes of
+   rule 8; the verdict is the one of a count made before any line is parsed (the Go verifier parses the lines within
+   the bounds while it counts and discards what it found; `verifier.py` stops reading at the first line past the line
+   bound):
 
    | the input holds | verdict, exit | reason |
    |---|---|---|
@@ -2330,16 +2333,30 @@ maintainer, outside this repository.
    of the JS verifier's `--conformance` (a vector not conformant). Why these two counts: every JSON value of a line
    but the first follows one of the four characters, so values are at most tokens plus lines, and each verifier's
    memory grows with values and with lines (the per-line reasons). Measured on 2026-11-22 at the bounds (2^20 lines of
-   `0`, of `{}`; 762 600 entry lines of 2^23 tokens; one line of 2^23 tokens as `{}`, `0`, `[]`, `""` elements and
+   `0`, of `{}`; 762 600 entry lines of 8 388 600 tokens; one line of 2^23 tokens as `{}`, `0`, `[]`, `""` elements and
    as 4 Mi keys of one object): read and parsed, FAIL with a receipt in the four, peak memory at most 1097 MiB in
    Python, 1359 MiB in JS, 1931 MiB in Go (the object of 4 Mi keys) and 1822 MiB in Java (its default heap; the
-   entry lines); one line or one token more, and 200 MiB of blank lines, FAIL with the reason in the four in at most
-   60 s (Python counts 209 715 200 blank lines in 60 s). Eight ledgers of real entries of this author hold 0.042 to
+   entry lines); one line or one token more, 200 MiB of blank lines and 256 MiB of lines `0`, FAIL with the reason in
+   the four in at most 8 s (`verifier.py` counted every line of the 200 MiB, 64 to 76 s, until the review of
+   2026-11-22; it stops at the first line past the bound, 0.5 s). Eight ledgers of real entries of this author hold 0.042 to
    0.112 tokens per byte, counted as this rule counts, and 299 to 14 512 bytes per line (measured on 2026-11-22): the
    token bound is reached between 72 and 192 MiB, the line bound only by lines shorter than 256 bytes on average; a
-   longer ledger is to be sealed in segments (§5). Held by `test_ledger_budget_20261122.py`
-   (7 tests; on a72d51d 5 fail and the 2 named `*_control` pass), `TestRule9TheBudgetOfALedger` in
-   `verifiers/go/input_test.go` and six checks in `verifiers/js/test.mjs`.
-   Not bounded by this rule: the other JSON readers of the Python package (documents of at most 64 MiB, §5 step 0)
+   longer ledger is to be sealed in segments (the ingest archive, §20 rules 8 to 11). Its writer (`Ingestor`) seals
+   the open segment before an entry would take it past 2^23 tokens (outside the lock of `append`, as its rotation by
+   entries, so a slow TSA anchor never holds the other appends), takes no `rotate_entries` above 2^20 and refuses
+   an entry of more than 2^23 tokens (`ValueError`): until the review of 2026-11-22 it sealed on the number of entries
+   alone, 100 000 by default, and 100 000 entries of 104 tokens each made a segment `verify_archive` refused (ok on
+   a72d51d). The readers of a ledger beside the verifier apply the same count to its bytes and parse no line of a
+   ledger over a bound: the signature layer (`signer.verify_file` and the MCP tool `verify_ledger`: the one failure
+   `{"idx": 0, "reason": "input_too_large"}`) and the evidence pack (`verify_pack`: the ledger is `hash_pass`,
+   `sig_pass` and `untruncated` false, `artifact_invalid` with the reason of the table). Until that review they parsed
+   every line: `evidence_pack.py verify` on a pack whose ledger was 128 MiB of 8 Mi lines `{"signature":1}` ended in
+   `MemoryError`, no receipt, under a data limit of 3 GB. Held by `test_ledger_budget_20261122.py`
+   (16 tests; of the 7 written with the rule, 5 fail on a72d51d and the 2 named `*_control` pass; of the 9 added on
+   review, 5 fail on 33678c9), `TestRule9TheBudgetOfALedger` in `verifiers/go/input_test.go` and twelve checks in
+   `verifiers/js/test.mjs`.
+   Not bounded by this rule: the readers that take a ledger one line at a time and keep nothing (`cryptovalid_tip.chain_tip`,
+   `evidence_pack._entries_and_head` when a pack is built, `cryptovalid_monitor`: a line of at most 256 MiB), the
+   other JSON readers of the Python package (documents of at most 64 MiB, §5 step 0)
    and the Rust and Swift verifiers (no toolchain on the bench; they read the ledger whole). By the measurement of the
    ledger path, one 64 MiB line of `{}` values reached 1631 MiB in Python (a receipt; not measured reader by reader).

@@ -31,6 +31,7 @@ type Verdict struct {
 	Signatures *SignatureCheck `json:"signatures,omitempty"`
 	Scope      string          `json:"scope"`
 	objects    []*Object       // the parsed entries, in order (nil where a line did not parse), for VerifySignatures
+	refused    bool            // SPEC §22 rule 9: the input holds too much; the reason is alone, nothing else is checked
 }
 
 // TipCheck is the outcome of comparing the snapshot with a signed chain tip (tip.go).
@@ -186,9 +187,9 @@ func VerifyLedger(r io.Reader) Verdict {
 		v.Failures = append(v.Failures, "read: "+err.Error())
 		hashOK = false
 	} else if lines > MaxInputLines {
-		return Verdict{Verdict: "FAIL", Failures: []string{fmt.Sprintf("input_too_large: more than %d lines", MaxInputLines)}, Scope: scope}
+		return Verdict{Verdict: "FAIL", Failures: []string{fmt.Sprintf("input_too_large: more than %d lines", MaxInputLines)}, Scope: scope, refused: true}
 	} else if tokens > MaxJSONTokens {
-		return Verdict{Verdict: "FAIL", Failures: []string{fmt.Sprintf("input_too_large: more than %d JSON tokens", MaxJSONTokens)}, Scope: scope}
+		return Verdict{Verdict: "FAIL", Failures: []string{fmt.Sprintf("input_too_large: more than %d JSON tokens", MaxJSONTokens)}, Scope: scope, refused: true}
 	}
 	v.Entries = i
 	v.LastSelfHash = prev
@@ -242,6 +243,9 @@ func VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64,
 	io.Copy(io.Discard, f)
 	if f.reason != nil {
 		return Verdict{Verdict: "FAIL", Failures: []string{f.reason.Error()}, Scope: scope}
+	}
+	if v.refused { // SPEC §22 rule 9: the reason alone, as the bytes of rule 8 (until NEMESIS 22/11/2026 the id, the tip and the keys asked for added theirs)
+		return v
 	}
 	// SPEC v0.9 §17 rule 1 (16/11/2026): the ledger identity is entry 0's self_hash, readable without a tip, so the expected
 	// identity is compared in every branch (until 0.25.0 only inside CheckTip: without a tip another ledger was PASS)

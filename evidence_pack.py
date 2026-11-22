@@ -694,6 +694,13 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
             ledgers_ok = False
             continue
         data = snap_of[_file_key(lm["file"])]   # the bytes read once (rule 7): every check below reads them, never the path again
+        too_much = verifier.ledger_too_complex(data)
+        if too_much:   # SPEC §22 rule 9: nothing of this ledger is parsed, by the chain or by the layers below (they took every line)
+            ledger_results.append({"file": lm["file"], "hash_pass": False, "sig_pass": False, "untruncated": False,
+                                   "pq_protected": False})
+            sealed.append(("contradicted", "artifact_invalid", f"ledger {lm['file']}: {too_much}"))
+            ledgers_ok = False
+            continue
         hp = verifier._verify_ledger_data(p, data).get("verdict") == "PASS"
         sealed.append(("verified", None) if hp else ("contradicted", "artifact_invalid", f"ledger {lm['file']}: hash chain"))
         sp = True

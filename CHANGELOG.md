@@ -27,7 +27,7 @@ positive control that took a leap second now taking 23:59:59).
 The bound of 256 MiB on the bytes did not bound memory. Measured on 2026-11-22 on a72d51d: a file of 16 MiB of 8 Mi
 lines `0` ended Python in `MemoryError` (exit 1, no receipt) and Go in `fatal error: out of memory allocating heap
 arena metadata` under a data limit of 2 GB; one line of 64 MiB of `[{},{},...]` ended JS in `JavaScript heap out of
-memory` (exit 134) and Go at a data limit of 3 GB. Now Python, JS, Go and Java count the whole input first: more than
+memory` (exit 134) and took Go to 2783 MiB (out of memory under a data limit of 2.5 GB). Now Python, JS, Go and Java count lines and tokens before a verdict: more than
 2^20 lines is FAIL `input_too_large: more than 1048576 lines`, else more than 2^23 of the characters `{ [ , :`
 (inside strings too) is FAIL `input_too_large: more than 8388608 JSON tokens`, the reason alone, exit 1; a tip of more
 than 2^23 tokens is row 2 of the table of rule 2 (`tip_unreadable: not a JSON text of the profile of SPEC §3`), as is
@@ -35,9 +35,20 @@ an `.expected.json` of the JS `--conformance`. The eleven forms measured at and 
 the four, peak memory at most 1097 MiB (Python), 1359 MiB (JS), 1931 MiB (Go) and 1822 MiB (Java). A ledger that
 verified before and holds more than 2^20 lines or 2^23 tokens is now FAIL: eight real ledgers of this author hold
 0.042 to 0.112 tokens per byte, so the token bound is reached between 72 and 192 MiB (seal longer ledgers in
-segments). `test_ledger_budget_20261122.py`, 7 tests (5 fail on a72d51d, the 2 `*_control` pass there);
-`TestRule9TheBudgetOfALedger` in `verifiers/go/input_test.go`; six checks in `verifiers/js/test.mjs`. Not bounded:
-the other JSON readers of the Python package (at most 64 MiB each) and the Rust and Swift verifiers.
+segments: the ingest writer now seals a segment before it would hold more than 2^23 tokens, outside the lock of
+`append` as its rotation by entries (a slow TSA anchor never holds the other appends), and refuses an `append` after
+`close()` (`ValueError`; it returned a reference to an entry never written); with its default of
+100 000 entries, entries of 104 tokens made a segment `verify_archive` refused). The same count is applied by the
+readers of a ledger beside the verifier, which parsed every line: `signer.verify_file`, the MCP `verify_ledger`
+(failure `{"idx": 0, "reason": "input_too_large"}`) and `verify_pack` (`evidence_pack.py verify` ended in
+`MemoryError`, no receipt, under a data limit of 3 GB on 128 MiB of 8 Mi lines). In Go the reason was not alone when
+the caller asked for a ledger id, a tip or a trusted key (`ledger_id_mismatch`, `tip_missing` after it): it is now.
+`verifier.py` stops at the first line past the line bound (200 MiB of blank lines took 64 to 76 s, now 0.5 s).
+`test_ledger_budget_20261122.py`, 16 tests (of the 7 written with the rule, 5 fail on a72d51d and the 2 `*_control`
+pass there; of the 9 added on review, 5 fail on 33678c9);
+`TestRule9TheBudgetOfALedger` in `verifiers/go/input_test.go`; twelve checks in `verifiers/js/test.mjs`. Not bounded:
+the readers that take a ledger one line at a time (`chain_tip`, the pack builder, the monitor), the other JSON readers
+of the Python package (at most 64 MiB each) and the Rust and Swift verifiers.
 
 ### A long line within the bound: the four verifiers agree (SPEC §22 rule 8)
 
@@ -50,7 +61,9 @@ the old function; a mutant that leaves 0x7f unescaped gives 22 159); Go reads a 
 one of 250 MiB PASS in the four (peak memory at 250 MiB: Python 1055 MiB, JS 2064 MiB, Go 1402 MiB, Java 1595 MiB),
 one byte changed FAIL in the four; a sparse file of 256 MiB exactly fails at §5 step 1 in the four (Go said `token
 too long`). `test_ledger_input_20261122.py`: `test_a_valid_line_of_65_mib_is_verified_in_the_four` (red on 287482e:
-JS out of memory), and `test_exactly_the_bound_is_within_it` gives the file to the four. `spec/CONFORMANCE.md` "Size"
+JS out of memory), and `test_exactly_the_bound_is_within_it` gives the file to the four;
+`test_every_character_below_0x80_in_a_string_is_verified_in_the_four` holds the escapes of the new `pyEscape` (no test
+or vector held DEL or `\b`: two mutants of it lived through every suite that runs the JS verifier). 16 tests in the file. `spec/CONFORMANCE.md` "Size"
 said the Go and JS verifiers bound no file: stale since rule 8, rewritten.
 
 ### Changed by the decisions of 2026-11-20 (SPEC §22, written before the code; verdicts change)

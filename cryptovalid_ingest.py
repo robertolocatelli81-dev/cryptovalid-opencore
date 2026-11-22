@@ -176,6 +176,10 @@ class Ingestor:
         FALLISCE verify_archive)."""
         if batch_size < 1 or rotate_entries < 1:
             raise ValueError("batch_size and rotate_entries must be >= 1")
+        import verifier
+        if rotate_entries > verifier.MAX_INPUT_LINES:   # SPEC §22 rule 9: a segment no verifier would read
+            raise ValueError(f"rotate_entries must be <= {verifier.MAX_INPUT_LINES} (SPEC §22 rule 9: a ledger holds no more lines)")
+        self._max_tokens, self._tokens = verifier.MAX_JSON_TOKENS, 0   # the tokens of the active segment, counted as rule 9 counts
         self._dir, self._prefix = directory, prefix
         self._batch, self._rotate, self._fsync = batch_size, rotate_entries, fsync
         self._backend = backend
@@ -252,6 +256,7 @@ class Ingestor:
                     raise ValueError(f"{path}: broken/tampered chain at idx {self._idx} — "
                                      "refusing to resume (run the verifier on it)")
                 good_end += len(line)
+                self._tokens += sum(line.count(c) for c in (b"{", b"[", b",", b":"))
                 if self._idx == 0:
                     self._first = e["self_hash"]
                 self._idx += 1
@@ -266,9 +271,35 @@ class Ingestor:
     def append(self, data: Dict) -> Dict:
         """Queue one event. Returns {segment, idx}. Durable only after flush()."""
         with self._lock:
-            e = {"idx": self._idx, "ts": _utc_now(), "data": data, "prev_hash": self._prev}
-            e["self_hash"] = hashlib.sha256(_canonical(e)).hexdigest()
-            self._buf.append(json.dumps(e, sort_keys=True, separators=(",", ":")))
+            def entry():
+                e = {"idx": self._idx, "ts": _utc_now(), "data": data, "prev_hash": self._prev}
+                e["self_hash"] = hashlib.sha256(_canonical(e)).hexdigest()
+                line = json.dumps(e, sort_keys=True, separators=(",", ":"))
+                return e, line, sum(line.count(c) for c in "{[,:")
+            def closed():   # after close() an entry would be queued and never written: refused (NEMESIS 22/11/2026)
+                if self._fh is None or self._fh.closed:
+                    raise ValueError("the Ingestor is closed: the entry was not appended")
+            closed()
+            e, line, tokens = entry()
+            # SPEC §22 rule 9: a segment is a ledger, and a verifier reads at most 2^23 tokens of one. Until NEMESIS
+            # 22/11/2026 the segment was sealed on its entries alone: 100 000 entries of 104 tokens each made a segment
+            # that verify_archive refused (input_too_large: more than 8388608 JSON tokens)
+            if tokens > self._max_tokens:
+                raise ValueError(f"the entry holds more than {self._max_tokens} JSON tokens (SPEC §22 rule 9): no "
+                                 "verifier would read its segment")
+            while self._idx and self._tokens + tokens > self._max_tokens:
+                # this entry opens the next segment; the seal (and its TSA anchor) runs OUTSIDE the lock, as the
+                # rotation below, and only if no other thread has rotated meanwhile
+                seq = self._seq
+                self._lock.release()
+                try:
+                    self.seal(only_seq=seq)
+                finally:
+                    self._lock.acquire()
+                closed()                         # close() may have run while the lock was free
+                e, line, tokens = entry()
+            self._tokens += tokens
+            self._buf.append(line)
             if self._idx == 0:
                 self._first = e["self_hash"]
             self._prev = e["self_hash"]
@@ -296,13 +327,14 @@ class Ingestor:
                     cryptovalid_tip.write_tip(path + ".tip.json", self._tip_key, self._idx, self._first, self._prev)
 
     # ── sealing ──────────────────────────────────────────────────────────────
-    def seal(self, min_entries: int = 1) -> Optional[Dict]:
+    def seal(self, min_entries: int = 1, only_seq: Optional[int] = None) -> Optional[Dict]:
         """Flush, write the STH sidecar (chained to the previous STH, signed if a
         backend is configured), and rotate to a fresh segment. No-op when the segment
-        has fewer than `min_entries` entries (default: no-op only when empty)."""
+        has fewer than `min_entries` entries (default: no-op only when empty), or when
+        `only_seq` is given and the active segment is no longer that one."""
         with self._lock:
             self.flush()
-            if self._idx < max(1, min_entries):
+            if self._idx < max(1, min_entries) or (only_seq is not None and self._seq != only_seq):
                 return None
             path = self._seg_path(self._seq)
             leaves = merkle.leaves_from_ledger(path)
@@ -321,6 +353,7 @@ class Ingestor:
             self._fh.close()
             self._seq += 1
             self._idx, self._prev, self._first = 0, GENESIS_PREV, GENESIS_PREV
+            self._tokens = 0
             self._fh = open(self._seg_path(self._seq), "ab")
             _fsync_dir(self._dir)
         # ancora TSA FUORI dal lock: una TSA lenta (fino a 30s) non deve mai
@@ -710,9 +743,9 @@ def verify_archive(directory: str, prefix: str = "ledger",
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import _Once, Parser, append_line, emit, receipt_cli, say, write_output
+    from verifier import MAX_INPUT_LINES, _Once, Parser, append_line, emit, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import _Once, Parser, append_line, emit, receipt_cli, say, write_output
+    from opencore.verifier import MAX_INPUT_LINES, _Once, Parser, append_line, emit, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -746,7 +779,7 @@ def main(argv=None) -> int:  # pragma: no cover - thin CLI
                            require_signature_domain=a.require_signature_domain)
         emit(json.dumps(r, indent=1)); return 0 if r["ok"] else 1
     ing = Ingestor(a.directory, prefix="bench", batch_size=a.batch,
-                   rotate_entries=a.n + 1)
+                   rotate_entries=min(a.n + 1, MAX_INPUT_LINES))
     t0 = time.perf_counter()
     for i in range(a.n):
         ing.append({"event": "bench", "i": i})

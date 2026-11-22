@@ -137,8 +137,11 @@ def t_verify_ledger(args: Dict) -> Dict:
     import signer
     try:
         try:
-            with evidence_pack._lines(data) as f:
-                lines = [signer._load_line(ln) for ln in f if ln.strip()]
+            if verifier.ledger_too_complex(data):   # SPEC §22 rule 9: one named failure, no line parsed
+                lines = [signer._Undecodable("input_too_large")]
+            else:
+                with evidence_pack._lines(data) as f:
+                    lines = [signer._load_line(ln) for ln in f if ln.strip()]
         except UnicodeDecodeError:
             lines = [signer._Undecodable("not_utf8")]
         sv = signer.verify_ledger_signatures(lines, pk)

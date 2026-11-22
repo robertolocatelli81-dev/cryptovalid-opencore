@@ -192,4 +192,13 @@ func TestRule9TheBudgetOfALedger(t *testing.T) {
 			t.Fatalf("%d bytes: want %q, got %v", len(c.in), c.want, v.Failures[:min(len(v.Failures), 2)])
 		}
 	}
+	// the reason is alone whatever the caller asks (until NEMESIS 22/11/2026 the id and the tip asked for added theirs)
+	p := filepath.Join(t.TempDir(), "l.jsonl")
+	if err := os.WriteFile(p, []byte(strings.Repeat("\n", MaxInputLines+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	v := VerifyLedgerFull(p, "", strings.Repeat("a", 64), "", strings.Repeat("a", 64), "", false, true, "2026-01-01T00:00:00Z", strings.Repeat("a", 64))
+	if v.Verdict != "FAIL" || len(v.Failures) != 1 || v.Failures[0] != lines {
+		t.Fatalf("with every option: %v", v.Failures)
+	}
 }

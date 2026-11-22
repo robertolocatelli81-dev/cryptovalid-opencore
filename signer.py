@@ -457,11 +457,16 @@ def _load_line(ln):
 def verify_file(path: str, pubkey_hex: Optional[str] = None, pq_pubkey_b64: Optional[str] = None,
                 require_pq: bool = False) -> Dict:
     try:   # SPEC §5 step 0: a regular file, opened once without blocking (a FIFO blocked here until 0.26.0)
-        from verifier import open_regular
+        from verifier import ledger_too_complex, read_regular
     except ImportError:   # python3 -m opencore.<module> from the parent directory
-        from opencore.verifier import open_regular
-    with os.fdopen(open_regular(path), encoding="utf-8") as f:
-        entries = [_load_line(ln) for ln in f if ln.strip()]
+        from opencore.verifier import ledger_too_complex, read_regular
+    data = read_regular(path)
+    if ledger_too_complex(data):   # SPEC §22 rule 9: one named failure, no line parsed (every line was, without a bound)
+        entries = [_Undecodable("input_too_large")]
+    else:
+        import io
+        with io.TextIOWrapper(io.BytesIO(data), encoding="utf-8") as f:
+            entries = [_load_line(ln) for ln in f if ln.strip()]
     return verify_ledger_signatures(entries, pubkey_hex, pq_pubkey_b64, require_pq=require_pq)
 
 

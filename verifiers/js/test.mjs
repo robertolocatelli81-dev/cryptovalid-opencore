@@ -430,6 +430,13 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
   ok("rule 9: lines before tokens", inputTooComplex(",\n".repeat(MAX_INPUT_LINES + 1)) === `input_too_large: more than ${MAX_INPUT_LINES} lines`);
   const v = verifyLedger("\n".repeat(MAX_INPUT_LINES + 1));
   ok("rule 9: verifyLedger gives the reason alone", v.verdict === "FAIL" && v.errors.length === 1 && v.errors[0].error.endsWith(" lines"), JSON.stringify(v.errors));
+  for (const c of "{[,:") ok(`rule 9: ${c} is a token`, inputTooComplex(c.repeat(MAX_JSON_TOKENS + 1)) !== null && inputTooComplex(c.repeat(MAX_JSON_TOKENS)) === null);
+  ok("rule 9: a CR ends no line", inputTooComplex("\r".repeat(MAX_INPUT_LINES + 1)) === null);
+  const d = mkdtempSync(join(tmpdir(), "cv-r9-"));
+  writeFileSync(join(d, "x.jsonl"), "{}\n");
+  writeFileSync(join(d, "x.expected.json"), JSON.stringify({ input: "x.jsonl", zz: ",".repeat(MAX_JSON_TOKENS) }));
+  const c9 = conformance(d);
+  ok("rule 9: an .expected.json of too many tokens is a vector not conformant", c9.conformant === false && c9.results[0].error === "unreadable: json_too_many_tokens", JSON.stringify(c9.results[0]).slice(0, 200));
 }
 
 console.log(`\ncvverify test: ${pass} passed, ${fail} failed`);
