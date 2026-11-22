@@ -18,8 +18,8 @@ revision that defines it, and none is silently substituted for another:
                          scopes and never normalises an untrusted wire object.
   external_action_ref    -04 §5.2 ("action-ref-v1-jcs-sha256"; -03 §4.2 up to 0.27.0): {action_type, agent_id, scope,
                          timestamp}, hashed as supplied, millisecond "Z" timestamp with a second from 00 through 59;
-                         never to be presented as an action_ref. Since 0.28.1 its input domain is, by default, the
-                         one argentum-core and the APS SDK enforce for this label (declared reading, see the function).
+                         never to be presented as an action_ref. Since 0.28.1 it hashes by default nothing that
+                         argentum-core or the APS SDK refuses for this label (declared reading, see the function).
   Scope values of action_ref_v2: -04 §5.1 refers them to §4.2 ("Scope grants use ASCII colon-separated segments") and
   forbids rejecting a scope "against a pattern this document does not state", while it still requires NFC, which an
   ASCII value always is. Read here (declared, 2026-11-22): no scope is refused for not being ASCII colon segments.
@@ -159,11 +159,12 @@ def action_ref_v2(obj: Dict[str, Any], payload: Any = None, empty_scope_permitte
 
 def external_action_ref(obj: Dict[str, Any], ascii_domain: bool = True) -> str:
     """"action-ref-v1-jcs-sha256" under -04 §5.2: hashed as supplied, no transformation.
-    ascii_domain (the default since 0.28.1) also refuses what the two implementations read on 2026-11-22 refuse before
-    hashing and -04 §5.2 does not state (argentum-core 217009a docs/spec/action-ref.md, Domain; agent-passport-system
-    638ac26 docs/specs/action-ref-v1.md, Input domain): a non-ASCII agent_id, action_type or scope, an empty scope, year
-    0000. The form exists for byte parity with records outside APS, and a digest neither of them reproduces correlates
-    with nothing; ascii_domain=False hashes what the -04 text alone admits (until 0.28.0 the only behaviour)."""
+    ascii_domain (the default since 0.28.1) also refuses what -04 §5.2 does not state and the implementations read on
+    2026-11-22 refuse before hashing: a non-ASCII agent_id, action_type or scope and an empty scope (argentum-core
+    217009a docs/spec/action-ref.md, Domain; agent-passport-system 638ac26 docs/specs/action-ref-v1.md, Input domain),
+    and year 0000 (argentum-core alone: the APS SDK hashes it and says so in that document). The form exists for byte
+    parity with records outside APS, and a digest one of them does not reproduce does not correlate with its records;
+    ascii_domain=False hashes what the -04 text alone admits (up to 0.28.0 the only behaviour)."""
     if not isinstance(obj, dict) or set(obj) != {"action_type", "agent_id", "scope", "timestamp"}:
         raise ApsError("-04 §5.2: exactly action_type, agent_id, scope, timestamp")
     for n in ("action_type", "agent_id", "scope", "timestamp"):

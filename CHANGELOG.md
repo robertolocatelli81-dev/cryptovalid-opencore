@@ -13,27 +13,45 @@ run by the same author, not by a third party.
 
 `cryptovalid_ingest.Ingestor` rotated on the number of entries (100 000 by default) and, since 0.28.0, on the tokens
 of SPEC v0.14 §22 rule 9, but it did not count bytes. Measured on 2026-11-22 on 0.27.0 and 0.28.0 (from PyPI), one core:
-70 000 entries of about 4 KiB (about 300 MB of lines) went into one segment, past the 268 435 456 bytes a verifier reads; `seal()`
-could not read it back (`InputTooLarge`), and every later `append` failed the same way, so the writer stopped. The
-writer now counts the bytes of the open segment, its line feeds included (a resumed writer counts the bytes already
-there), seals before an entry would take it past the bound, outside the lock as its other rotations, and refuses an
-entry longer than the bound alone (`ValueError`). The same 70 000 entries now make a segment of 268 431 350 bytes and a
-second one, and `verify_archive` is ok. `test_ledger_budget_20261122.py`: two tests more (a writer whose bound is lowered
-to 64 KiB, resumed; an entry over the bound refused), both red on 0.28.0.
+70 000 entries of about 4 KiB went into one segment of 300 289 112 bytes, past the 268 435 456 bytes a verifier reads;
+`seal()` could not read it back (`InputTooLarge`), so `close()` failed, the segment stayed unsealed and `verify_archive`
+refused it; from the entry that reaches `rotate_entries` on, every `append` raised the same error after writing its
+entry into that segment. The writer now counts the bytes of the open segment, its line feeds included (a resumed writer
+counts the bytes already in the file), seals before an entry would take it past the bound, outside the lock as its other
+rotations, and refuses an entry longer than the bound alone (`ValueError`). The same 70 000 entries now make a segment
+of 268 431 350 bytes and a second one, and `verify_archive` is ok. A segment already past the bound, left open by an
+earlier version, is not repaired: the writer resumes it and stops at the next seal with the same `InputTooLarge`.
+`test_ledger_budget_20261122.py`: five tests more (a writer whose bound is lowered to 64 KiB, resumed; an entry over
+the bound refused; the bound to the byte; a resumed segment with empty lines after its entries, and one of empty lines
+alone), each red on 0.28.0.
+
+### The segment writer refuses an entry a verifier would not read (SPEC §3)
+
+`Ingestor.append` wrote a float, NaN, an integer past 2^53, a lone surrogate or a nesting past 512, and `verify_archive`
+then refused the archive (`hash_chain_fail`; found in the review of 0.28.1, the same on 0.28.0). Each line is now read
+back as a verifier reads it before it is queued, and such an entry is a `ValueError`, nothing written. The price,
+measured on 2026-11-23 on one core with entries of about 1 KiB: 5 582 entries a second written, from 15 058 without the
+check. `test_ledger_budget_20261122.py`: one test more, red without the check.
 
 ### `external_action_ref` refuses by default what the other implementations refuse
 
 draft-pidlisnyi-aps-04 §5.2 says the external form ("action-ref-v1-jcs-sha256") "exists for cross-ecosystem byte
 parity" and that its field values are "hashed as supplied"; it states no rule on ASCII or on an empty `scope`. The two
-other implementations read on 2026-11-22 refuse, before hashing, a non-ASCII `agent_id`, `action_type` or `scope`, an
-empty `scope` and the year 0000: argentum-core at `217009a` (`docs/spec/action-ref.md`, Domain) and the APS SDK at
-`638ac26` (`docs/specs/action-ref-v1.md`, Input domain, which notes that §5.2 does not state the ASCII rule). Up to
-0.28.0 this module, written from the text alone, gave those values a digest neither of them reproduces, so a digest
-that correlates with nothing. `ascii_domain=True` is now the default and refuses them (`ApsError`, `ascii_domain: ...`);
-`ascii_domain=False` keeps the reading of the text alone. A declared reading, not a rule of the draft; every value
-inside that domain keeps its digest. On the action-ref fixtures of argentum-core at `217009a` the module now agrees with
-argentum on 15 of 15 run cases (11 of 15 before: the four out-of-domain vectors av-003, av-007, nfc-001 and nfc-002 were
-hashed). `test_aps.py`: `TestExternalAsciiDomain`.
+other implementations read on 2026-11-22 refuse, before hashing, a non-ASCII `agent_id`, `action_type` or `scope` and an
+empty `scope`: argentum-core at `217009a` (`docs/spec/action-ref.md`, Domain) and the APS SDK at `638ac26`
+(`docs/specs/action-ref-v1.md`, Input domain, which notes that §5.2 does not state the ASCII rule). argentum-core also
+refuses the year 0000, which the APS SDK hashes (the same document lists the difference). Up to 0.28.0 this module,
+written from the text alone, hashed all of these: a non-ASCII value or an empty `scope` got a digest neither of them
+reproduces, the year 0000 a digest argentum-core does not. `ascii_domain=True` is now the default and refuses them
+(`ApsError`, `ascii_domain: ...`); `ascii_domain=False` keeps the reading of the text alone. A declared reading, not a
+rule of the draft; every value inside that domain keeps its digest. Run on 2026-11-22: on the four action-ref fixture
+files of argentum-core at `217009a` the module now agrees with argentum on 22 of 22 v1 cases (18 of 22 before: the four
+out-of-domain vectors av-003, av-007, nfc-001 and nfc-002 were hashed); on the vectors of the APS SDK at `638ac26`
+(`conformance/action-ref-v1/vectors.json`) that give their preimage as an object, on 15 of 15 (11 of 15 before: av-003,
+av-007, rj-006 and rj-007 were hashed). Its two vectors with a key written twice give the preimage as JSON text and are
+not run: this function takes a parsed object. One difference between the two stays outside this change: the APS SDK
+hashes a second 60 at 23:59 on the last day of a month, which argentum-core and this module refuse (§5.2: "a second
+value from 00 through 59"). `test_aps.py`: `TestExternalAsciiDomain`.
 
 ## 0.28.0 (2026-11-22): verdicts change
 

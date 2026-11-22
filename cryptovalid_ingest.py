@@ -258,11 +258,11 @@ class Ingestor:
                                      "refusing to resume (run the verifier on it)")
                 good_end += len(line)
                 self._tokens += sum(line.count(c) for c in (b"{", b"[", b",", b":"))
-                self._bytes += len(line)
                 if self._idx == 0:
                     self._first = e["self_hash"]
                 self._idx += 1
                 self._prev = e["self_hash"]
+        self._bytes = good_end        # every byte kept, the empty lines too: the verifier's bound is on the file
         size = os.path.getsize(path)
         if size > good_end:
             self.recovered_bytes = size - good_end
@@ -277,6 +277,13 @@ class Ingestor:
                 e = {"idx": self._idx, "ts": _utc_now(), "data": data, "prev_hash": self._prev}
                 e["self_hash"] = hashlib.sha256(_canonical(e)).hexdigest()
                 line = json.dumps(e, sort_keys=True, separators=(",", ":"))
+                # the line is read back as verify_archive reads it (SPEC §3 profile: no float, NaN, integer past 2^53,
+                # lone surrogate). Until 0.28.1 such data was written, and the archive then failed verification
+                try:
+                    import verifier
+                    verifier._loads_strict(line)
+                except ValueError as err:
+                    raise ValueError(f"the entry is outside the profile a verifier reads (SPEC §3): {err}") from None
                 return e, line, sum(line.count(c) for c in "{[,:"), len(line.encode()) + 1   # + the LF
             def closed():   # after close() an entry would be queued and never written: refused (NEMESIS 22/11/2026)
                 if self._fh is None or self._fh.closed:
@@ -289,10 +296,10 @@ class Ingestor:
             if tokens > self._max_tokens:
                 raise ValueError(f"the entry holds more than {self._max_tokens} JSON tokens (SPEC §22 rule 9): no "
                                  "verifier would read its segment")
-            # SPEC §5 step 0: a segment is read up to MAX_INPUT_BYTES. Until 0.28.1 the bytes were not counted: 70 000
-            # entries of 4 KiB made a segment of 287 MB, seal() itself could not read it (InputTooLarge) and every later
-            # append failed the same way (measured 2026-11-22 on 0.27.0 and 0.28.0)
-            if size > self._max_bytes:
+            # SPEC §5 step 0: a segment is read up to MAX_INPUT_BYTES. Up to 0.28.0 the bytes were not counted: 70 000
+            # entries of 4 KiB made a segment of 300 MB, seal() itself could not read it (InputTooLarge), so close() failed
+            # and so did every append from the rotation on entries onwards (measured 2026-11-22 on 0.27.0 and 0.28.0)
+            if size > self._max_bytes - (0 if self._idx else self._bytes):   # with no entry yet: the empty lines a resume kept
                 raise ValueError(f"the entry is longer than {self._max_bytes} bytes (SPEC §5 step 0): no verifier "
                                  "would read its segment")
             while self._idx and (self._tokens + tokens > self._max_tokens or self._bytes + size > self._max_bytes):

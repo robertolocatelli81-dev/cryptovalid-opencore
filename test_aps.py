@@ -204,12 +204,13 @@ class TestTimestampCalendar(unittest.TestCase):
 
 
 class TestExternalAsciiDomain(unittest.TestCase):
-    """ascii_domain (the default since 0.28.1): the domain argentum-core and the APS SDK enforce for this label."""
+    """ascii_domain (the default since 0.28.1): nothing argentum-core or the APS SDK refuses for this label is hashed."""
     E = {"action_type": "t", "agent_id": "a", "scope": "s", "timestamp": "2026-05-24T10:30:00.000Z"}
 
     def test_refused_by_default_hashed_with_ascii_domain_false(self):
         for k, v in (("scope", ""), ("scope", "caf\u00e9"), ("agent_id", "caf\u00e9"), ("action_type", "\U0001F4C4"),
-                     ("timestamp", "0000-01-01T00:00:00.000Z")):
+                     ("scope", "\x80"), ("agent_id", "\x80"), ("action_type", "\x80"),   # the first code point outside ASCII
+                     ("timestamp", "0000-01-01T00:00:00.000Z"), ("timestamp", "0000-12-31T23:59:59.999Z")):
             with self.subTest(k=k, v=v):
                 o = {**self.E, k: v}
                 self.assertEqual(len(A.external_action_ref(o, ascii_domain=False)), 64)

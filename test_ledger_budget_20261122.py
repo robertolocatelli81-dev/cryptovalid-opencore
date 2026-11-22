@@ -421,7 +421,7 @@ class TestTheSegmentWriterKeepsToTheBudget(unittest.TestCase):
         self.assertTrue(r["ok"], r["failures"])
 
     def test_a_segment_is_sealed_before_it_holds_too_many_bytes(self):
-        """SPEC §5 step 0: a verifier reads a segment of at most MAX_INPUT_BYTES. Until 0.28.1 the writer did not count
+        """SPEC §5 step 0: a verifier reads a segment of at most MAX_INPUT_BYTES. Up to 0.28.0 the writer did not count
         bytes: 70 000 entries of 4 KiB made a segment seal() could not read, and every later append failed. The bound of
         this one writer is lowered so the test writes kilobytes; a resumed writer counts the bytes already there."""
         import cryptovalid_ingest as I
@@ -451,6 +451,92 @@ class TestTheSegmentWriterKeepsToTheBudget(unittest.TestCase):
         with self.assertRaises(ValueError):
             g.append({"s": "x" * 5000})
         self.assertEqual(g.append({"v": 1})["idx"], 0)   # the refused entry left the chain as it was
+        g.close()
+        self.assertTrue(I.verify_archive(self.tmp)["ok"])
+
+    def _writer(self, bound):
+        """A writer made while the verifier's bound is `bound`: the bound it keeps to is the verifier's, read when it is
+        made, not a number of its own."""
+        from unittest import mock
+        import cryptovalid_ingest as I
+        import verifier
+        with mock.patch.object(verifier, "MAX_INPUT_BYTES", bound):
+            return I.Ingestor(self.tmp, fsync=False)
+
+    def _sizes(self):
+        return [os.path.getsize(os.path.join(self.tmp, n)) for n in sorted(os.listdir(self.tmp)) if n.endswith(".jsonl")]
+
+    def test_the_bound_is_the_verifiers_and_it_is_exact(self):
+        """NEMESIS 23/11/2026: an entry as long as the bound is written and one byte more is refused; two entries that fill
+        a segment to the byte stay in it and the next one opens another; a seal starts the count again."""
+        import cryptovalid_ingest as I
+        g = I.Ingestor(self.tmp, fsync=False)
+        g.append({"s": ""})
+        g.close()                                # segment 0, sealed: the bytes of an entry with an empty string
+        own = self._sizes()[0]
+        g = self._writer(4096)
+        g.append({"s": "x" * (4096 - own)})      # segment 1: one entry of exactly 4096 bytes, its line feed included
+        with self.assertRaises(ValueError):
+            g.append({"s": "x" * (4096 - own + 1)})
+        g.append({"s": "x" * (2000 - own)})      # segment 1 is full: this one opens segment 2
+        g.append({"s": "x" * (2096 - own)})      # and this one fills it to the byte
+        g.append({"s": ""})                      # segment 3
+        g.close(seal=False)
+        self.assertEqual(self._sizes(), [own, 4096, 4096, own])
+        r = I.verify_archive(self.tmp)
+        self.assertTrue(r["ok"], r["failures"])
+
+    def test_a_resumed_writer_counts_every_byte_of_the_open_segment(self):
+        """NEMESIS 23/11/2026: the empty lines a resume keeps are bytes of the file too. At 80d1d5e they were not counted:
+        the next entry went into a segment longer than the bound, which seal() could not read."""
+        import cryptovalid_ingest as I
+        g = self._writer(4096)
+        g.append({"s": "x" * 2000})
+        g.close(seal=False)
+        first = self._sizes()[0]
+        own = first - 2000                       # the bytes of an entry besides its string
+        name = sorted(n for n in os.listdir(self.tmp) if n.endswith(".jsonl"))[0]
+        with open(os.path.join(self.tmp, name), "ab") as f:
+            f.write(b"\n" * 10)
+        g = self._writer(4096)
+        g.append({"s": "x" * (4096 - first - own - 5)})   # 5 bytes to spare without the 10 empty lines, 5 too many with them
+        g.close()
+        self.assertEqual(self._sizes()[0], first + 10)    # so it opened the next segment
+        self.assertTrue(all(z <= 4096 for z in self._sizes()), self._sizes())
+        r = I.verify_archive(self.tmp)
+        self.assertTrue(r["ok"], r["failures"])
+
+    def test_a_resumed_segment_of_empty_lines_alone_is_counted_too(self):
+        """NEMESIS 23/11/2026: with no entry there is nothing to seal, so an entry that does not fit after them is refused."""
+        import cryptovalid_ingest as I
+        g = I.Ingestor(self.tmp, fsync=False)
+        g.append({"s": ""})
+        g.close()
+        own = self._sizes()[0]
+        with open(os.path.join(self.tmp, sorted(n for n in os.listdir(self.tmp) if n.endswith(".jsonl"))[1]), "ab") as f:
+            f.write(b"\n" * 100)
+        g = self._writer(4096)
+        with self.assertRaises(ValueError):
+            g.append({"s": "x" * (4096 - own - 99)})
+        g.append({"s": "x" * (4096 - own - 100)})
+        g.close()
+        self.assertEqual(self._sizes()[:2], [own, 4096])
+        r = I.verify_archive(self.tmp)
+        self.assertTrue(r["ok"], r["failures"])
+
+    def test_an_entry_outside_the_profile_is_refused_before_it_is_written(self):
+        """Until 0.28.1 the writer wrote a float, NaN, an integer past 2^53, a lone surrogate or a nesting past 512, and
+        verify_archive then refused the archive (hash_chain_fail). The line is read back as a verifier reads it."""
+        import cryptovalid_ingest as I
+        g = I.Ingestor(self.tmp, fsync=False)
+        deep = 0
+        for _ in range(600):
+            deep = {"x": deep}
+        for bad in ({"f": 1.5}, {"n": float("nan")}, {"i": 2 ** 60}, {"s": "\ud800"}, deep):
+            with self.subTest(bad=str(bad)[:30]):
+                with self.assertRaises(ValueError):
+                    g.append(bad)
+        self.assertEqual(g.append({"ok": [1, "x", {"a": None}]})["idx"], 0)   # nothing of the refused ones was queued
         g.close()
         self.assertTrue(I.verify_archive(self.tmp)["ok"])
 
