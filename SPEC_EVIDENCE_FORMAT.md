@@ -1995,7 +1995,7 @@ same day, before any release; what that review measured is said in each. Tests: 
 
 The re-measurement of 2026-11-20 (§21) left six findings to a decision of the maintainer (rules 1-6; rule 7 applies
 the principle of rule 4 to the TSA pin, decided on 2026-11-21; rule 8 applies §5 step 0 to the other verifiers, after
-the review of 2026-11-22), each a behaviour the earlier
+the review of 2026-11-22; rule 9 bounds what a ledger holds, found while measuring rule 8), each a behaviour the earlier
 text of this specification allowed or a format change. The six decisions were taken the same day; each rule below was
 written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one compares the canonicalization of rule
 6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 43 fail (44 where lxml is
@@ -2311,3 +2311,35 @@ maintainer, outside this repository.
    and where Node and Java were not run; a Go verifier built for a platform that is not Unix opens a path the plain way,
    as rule 2 declares. The Rust and Swift verifiers read the ledger whole (`std::fs::read`, `FileHandle`): not changed,
    no toolchain on the bench that measured this rule.
+
+9. **What a ledger may hold is counted before it is parsed** (written on 2026-11-22, while rule 8 was measured; the
+   same in `verifier.py`, JS, Go and Java). The bound of 256 MiB on the bytes did not bound memory: a file of 16 MiB
+   holding 8 Mi lines `0` ended Python in `MemoryError` and Go in `fatal error: out of memory allocating heap arena metadata` under a data limit of
+   2 GB, and one line of 64 MiB holding `[{},{},...]` ended JS in `JavaScript heap out of memory` (exit 134) and Go
+   at a data limit of 3 GB, each without a receipt (measured on 2026-11-22 on a72d51d). Over the whole input, after the bytes of
+   rule 8 and before any line is parsed:
+
+   | the input holds | verdict, exit | reason |
+   |---|---|---|
+   | more than 2^20 lines (a line ends at LF or at the end of the input; blank lines count) | FAIL, 1 | `input_too_large: more than 1048576 lines` |
+   | else more than 2^23 tokens (the characters `{` `[` `,` `:` wherever they stand, inside strings too) | FAIL, 1 | `input_too_large: more than 8388608 JSON tokens` |
+
+   The reason is alone, where each verifier writes its reasons (Python `parse_errors`, JS `error`, Go and Java
+   `failures`); nothing of the ledger is verified. A tip (rule 2) of more than 2^23 tokens is row 2 of the table,
+   `tip_unreadable: not a JSON text of the profile of SPEC §3`, counted before it is parsed; so is an `.expected.json`
+   of the JS verifier's `--conformance` (a vector not conformant). Why these two counts: every JSON value of a line
+   but the first follows one of the four characters, so values are at most tokens plus lines, and each verifier's
+   memory grows with values and with lines (the per-line reasons). Measured on 2026-11-22 at the bounds (2^20 lines of
+   `0`, of `{}`; 762 600 entry lines of 2^23 tokens; one line of 2^23 tokens as `{}`, `0`, `[]`, `""` elements and
+   as 4 Mi keys of one object): read and parsed, FAIL with a receipt in the four, peak memory at most 1097 MiB in
+   Python, 1359 MiB in JS, 1931 MiB in Go (the object of 4 Mi keys) and 1822 MiB in Java (its default heap; the
+   entry lines); one line or one token more, and 200 MiB of blank lines, FAIL with the reason in the four in at most
+   60 s (Python counts 209 715 200 blank lines in 60 s). Eight ledgers of real entries of this author hold 0.042 to
+   0.112 tokens per byte, counted as this rule counts, and 299 to 14 512 bytes per line (measured on 2026-11-22): the
+   token bound is reached between 72 and 192 MiB, the line bound only by lines shorter than 256 bytes on average; a
+   longer ledger is to be sealed in segments (§5). Held by `test_ledger_budget_20261122.py`
+   (7 tests; on a72d51d 5 fail and the 2 named `*_control` pass), `TestRule9TheBudgetOfALedger` in
+   `verifiers/go/input_test.go` and six checks in `verifiers/js/test.mjs`.
+   Not bounded by this rule: the other JSON readers of the Python package (documents of at most 64 MiB, §5 step 0)
+   and the Rust and Swift verifiers (no toolchain on the bench; they read the ledger whole). By the measurement of the
+   ledger path, one 64 MiB line of `{}` values reached 1631 MiB in Python (a receipt; not measured reader by reader).

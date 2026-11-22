@@ -3,7 +3,7 @@
 // signature round-trip, AND cross-checks every vector against the REFERENCE Python
 // verifier (verifier.py at the repo root) as an independent oracle — so a bug that makes us
 // wrongly agree with ourselves is caught by disagreement with the reference.
-import { verifyLedger, conformance, jsonNestingDepth, hasLoneSurrogate, MAX_JSON_DEPTH, checkTip, tipPayload, parseInstant, readLedgerInput, LEDGER_TOO_LARGE, LEDGER_NOT_REGULAR } from "./cvverify.mjs";
+import { verifyLedger, conformance, jsonNestingDepth, hasLoneSurrogate, MAX_JSON_DEPTH, checkTip, tipPayload, parseInstant, readLedgerInput, LEDGER_TOO_LARGE, LEDGER_NOT_REGULAR, inputTooComplex, MAX_INPUT_LINES, MAX_JSON_TOKENS } from "./cvverify.mjs";
 import { readFileSync, writeFileSync, mkdtempSync, openSync, closeSync, existsSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign as edSign } from "node:crypto";
@@ -418,6 +418,18 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
   let dir = "no answer";
   readLedgerInput(HERE, (f) => { dir = f ? `${f.verdict} ${f.error}` : "read"; });
   ok("rule 8: a directory is not read", dir === `FAIL ${LEDGER_NOT_REGULAR}`, dir);
+}
+
+// SPEC §22 rule 9: lines first, then tokens ({ [ , : inside strings too), over the whole input, string or bytes
+{
+  const L = "0\n".repeat(MAX_INPUT_LINES), T = '"' + ",".repeat(MAX_JSON_TOKENS) + '"';
+  ok("rule 9: lines at the bound", inputTooComplex(L) === null);
+  ok("rule 9: one line more, no final LF", inputTooComplex(L + "0") === `input_too_large: more than ${MAX_INPUT_LINES} lines`);
+  ok("rule 9: tokens at the bound", inputTooComplex(Buffer.from(T)) === null);
+  ok("rule 9: one token more, in a string", inputTooComplex(Buffer.from(T + ",")) === `input_too_large: more than ${MAX_JSON_TOKENS} JSON tokens`);
+  ok("rule 9: lines before tokens", inputTooComplex(",\n".repeat(MAX_INPUT_LINES + 1)) === `input_too_large: more than ${MAX_INPUT_LINES} lines`);
+  const v = verifyLedger("\n".repeat(MAX_INPUT_LINES + 1));
+  ok("rule 9: verifyLedger gives the reason alone", v.verdict === "FAIL" && v.errors.length === 1 && v.errors[0].error.endsWith(" lines"), JSON.stringify(v.errors));
 }
 
 console.log(`\ncvverify test: ${pass} passed, ${fail} failed`);

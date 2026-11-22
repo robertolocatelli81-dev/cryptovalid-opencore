@@ -266,6 +266,23 @@ export function readTipFile(p) {
 export const LEDGER_MAX_BYTES = 256 * 1024 * 1024;   // verifier.py MAX_INPUT_BYTES
 export const FIFO_IDLE_SECONDS = 10;                  // verifier.py FIFO_IDLE_SECONDS
 export const LEDGER_TOO_LARGE = `input_too_large: file exceeds ${LEDGER_MAX_BYTES} bytes`;
+// SPEC §22 rule 9: what a ledger may hold, counted over the whole input before any line is parsed (verifier.py
+// MAX_INPUT_LINES, MAX_JSON_TOKENS): a line ends at LF or at the end of the input; a token is { [ , : wherever it stands
+export const MAX_INPUT_LINES = 1 << 20, MAX_JSON_TOKENS = 1 << 23;
+function countInput(t) {   // [lines, tokens] of a string or of bytes: the counted characters are ASCII
+  const str = typeof t === "string", at = (i) => (str ? t.charCodeAt(i) : t[i]);
+  let lines = 0, tokens = 0;
+  for (let i = 0; i < t.length; i++) { const c = at(i); if (c === 10) lines++; else if (c === 123 || c === 91 || c === 44 || c === 58) tokens++; }
+  if (t.length && at(t.length - 1) !== 10) lines++;
+  return [lines, tokens];
+}
+const countTokens = (t) => countInput(t)[1];
+export function inputTooComplex(t) {
+  const [lines, tokens] = countInput(t);
+  if (lines > MAX_INPUT_LINES) return `input_too_large: more than ${MAX_INPUT_LINES} lines`;
+  if (tokens > MAX_JSON_TOKENS) return `input_too_large: more than ${MAX_JSON_TOKENS} JSON tokens`;
+  return null;
+}
 export const LEDGER_NOT_REGULAR = "unreadable: not a regular file";
 export const LEDGER_FIFO_IDLE = `unreadable: FIFO idle for ${FIFO_IDLE_SECONDS} s`;
 export function readLedgerInput(p, done, idleMs = FIFO_IDLE_SECONDS * 1000, limit = LEDGER_MAX_BYTES) {
@@ -373,6 +390,9 @@ export function hasFloatLexeme(t) {
 
 export function verifyLedger(text, { algo = null, pubkey = null, tip = null, trustedPubkey = null, requireTip = false, tipNotBefore = null, expectLedgerId = null } = {}) {
   const entries = [], errors = [];
+  const tooMuch = inputTooComplex(text);
+  if (tooMuch) return { verdict: "FAIL", chain_integrity: false, algorithm: null, entries: 0, hash_failures_idx: [], link_failures_idx: [],
+    errors: [{ line: -1, error: tooMuch }], schema_failures: [], signatures: null, tip: null, verifier: "cvverify.mjs (independent, Node stdlib)" };
   text.split("\n").forEach((ln, i) => {
     if (!ln.replace(/[ \t\r]/g, "")) return;   // blank = ASCII space/tab/CR only (trim() took Unicode spaces) — r5
     let v;
@@ -471,7 +491,7 @@ export function conformance(dir) {
     // SPEC §22 rule 8: each file of the directory given is a regular file of at most TIP_MAX_BYTES, opened without
     // waiting (readTipFile); until 2026-11-22 a FIFO there waited without end. One that is not is a vector not conformant.
     let exp, raw;
-    try { exp = JSON.parse(readTipFile(join(dir, f)).toString("utf-8")); raw = readTipFile(join(dir, exp.input)).toString("utf-8"); }
+    try { const b = readTipFile(join(dir, f)); if (countTokens(b) > MAX_JSON_TOKENS) throw new Error("json_too_many_tokens"); exp = JSON.parse(b.toString("utf-8")); raw = readTipFile(join(dir, exp.input)).toString("utf-8"); }
     catch (e) { conformant = false; results.push({ vector: f, conform: false, error: "unreadable: " + (e.code || e.message) }); continue; }
     const got = verifyLedger(raw);
     const keys = ["verdict", "chain_integrity", "algorithm", "entries", "hash_failures_idx", "link_failures_idx"];
@@ -551,6 +571,8 @@ if (argv[0] === "--conformance") {
   if (expectLedgerId !== null && !/^[0-9a-f]{64}$/.test(expectLedgerId)) usage();   // SPEC v0.9 §17: can match no ledger
   readLedgerInput(argv[0], (fail, bytes) => {
     if (fail) { emitReceipt(fail, fail.verdict === "FAIL" ? 1 : 2); return; }
+    const tooMuch = inputTooComplex(bytes);   // before the text is decoded, as verifier.py counts before it parses
+    if (tooMuch) { emitReceipt({ verdict: "FAIL", error: tooMuch }, 1); return; }
     let text;
     try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }   // strict: one invalid byte is a broken ledger (FAIL), never U+FFFD; ignoreBOM: a leading BOM stays in the text and is refused like in the five others (it was stripped: PASS, NEMESIS 12/10/2026)
     catch (e) { emitReceipt({ verdict: "FAIL", error: "ledger is not valid UTF-8" }, 1); return; }
@@ -564,6 +586,7 @@ if (argv[0] === "--conformance") {
       try { bytesTip = readTipFile(tipPath); } catch (e) { tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_FILE }; }
       if (bytesTip !== null) {
         try {
+          if (countTokens(bytesTip) > MAX_JSON_TOKENS) throw new Error("json_too_many_tokens");   // SPEC §22 rule 9, before it is parsed
           const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytesTip);
           const d = jsonNestingDepth(raw); if (d > MAX_JSON_DEPTH) throw new Error("json_too_deep");
           if (hasLoneSurrogate(raw)) throw new Error("lone_surrogate");

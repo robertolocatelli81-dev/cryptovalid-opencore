@@ -422,6 +422,9 @@ func LoadTip(path string) (*Tip, error) {
 	// the tip is a SIGNED document: same strict acceptance profile as the entries (dup keys, floats, bounds,
 	// depth, surrogates) before the typed decode — one rule in Python, JS, Go and Java (r5); only JSON white space
 	// around it (bytes.TrimSpace also took a form feed, a vertical tab, U+0085 and U+00A0)
+	if countTokens(raw) > MaxJSONTokens { // SPEC §22 rule 9: counted before it is parsed
+		return nil, errors.New(TipUnreadableJSON)
+	}
 	doc, err := Parse(bytes.Trim(raw, " \t\r\n"))
 	if err != nil {
 		return nil, errors.New(TipUnreadableJSON)

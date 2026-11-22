@@ -353,12 +353,14 @@ def load_tip(path: str) -> Dict:
     """The tip is a SIGNED document: it is parsed with the same strict acceptance profile as the entries (no
     duplicate keys, no floats, bounded integers, depth/surrogate pre-scan) — one rule in Python, JS, Go and Java
     (council 16/09 r5: Java was strict, Python and Go were lax)."""
-    from verifier import _loads_strict, read_regular
+    from verifier import MAX_JSON_TOKENS, _loads_strict, read_regular
     # SPEC §22 rule 2, rows 1-3: one text for each in the four verifiers (a ValueError carrying it)
     try:   # SPEC §5 step 0: a regular file, opened once without blocking (a FIFO given as --tip blocked here until 0.26.0)
         raw = read_regular(path)
     except OSError:
         raise ValueError(TIP_UNREADABLE_FILE) from None
+    if sum(raw.count(c) for c in (b"{", b"[", b",", b":")) > MAX_JSON_TOKENS:   # SPEC §22 rule 9, before it is parsed
+        raise ValueError(TIP_UNREADABLE_JSON)
     try:
         doc = _loads_strict(raw.decode("utf-8").strip(" \t\r\n"))
     except (ValueError, RecursionError):   # UnicodeDecodeError is a ValueError

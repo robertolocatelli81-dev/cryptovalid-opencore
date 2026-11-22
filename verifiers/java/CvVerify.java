@@ -25,6 +25,8 @@ public class CvVerify {
     static final int MAX_DEPTH = 512;
     static final long SAFE_INT = (1L << 53) - 1;
     static final long MAX_INPUT_BYTES = 256L * 1024 * 1024;   // verifier.py MAX_INPUT_BYTES
+    static final long MAX_INPUT_LINES = 1L << 20, MAX_JSON_TOKENS = 1L << 23;   // SPEC §22 rule 9 (verifier.py MAX_INPUT_LINES, MAX_JSON_TOKENS)
+    static long countTokens(byte[] b) { long t = 0; for (byte c : b) if (c == '{' || c == '[' || c == ',' || c == ':') t++; return t; }
     static final String GENESIS = "0".repeat(64);
     static final String TIP_KIND = "cryptovalid_tip/1";
     static final Set<String> TIP_MEMBERS = Set.of("kind", "entries", "ledger_id", "tip_sha256", "ts", "log_pubkey_hex", "signature_hex", "signature_pq_hex", "log_pq_pubkey_b64");
@@ -390,9 +392,19 @@ public class CvVerify {
             // SPEC §22 rule 8: a regular file or a FIFO of at most MAX_INPUT_BYTES (fail-closed on size, like verifier.py, r5),
             // a FIFO idle FIFO_IDLE_SECONDS at most (it waited without end until 2026-11-22), a directory or a device not read
             ByteArrayOutputStream cur = new ByteArrayOutputStream();
+            long[] cnt = new long[3];   // SPEC §22 rule 9: LF, tokens, last byte (0 none, 1 LF, 2 other); past a bound only counted
             readInput(Path.of(ledgerPath), MAX_INPUT_BYTES, true, (b, n) -> {
-                for (int k = 0; k < n; k++) { if (b[k] == '\n') { lines.add(cur.toByteArray()); cur.reset(); } else cur.write(b[k]); }
+                for (int k = 0; k < n; k++) {
+                    byte c = b[k];
+                    if (c == '{' || c == '[' || c == ',' || c == ':') cnt[1]++;
+                    cnt[2] = c == '\n' ? 1 : 2;
+                    boolean keep = cnt[0] < MAX_INPUT_LINES && cnt[1] <= MAX_JSON_TOKENS;
+                    if (c == '\n') { cnt[0]++; if (keep) lines.add(cur.toByteArray()); cur.reset(); } else if (keep) cur.write(c);
+                }
             });
+            long nLines = cnt[0] + (cnt[2] == 2 ? 1 : 0);
+            if (nLines > MAX_INPUT_LINES) throw new InputRefused("input_too_large: more than " + MAX_INPUT_LINES + " lines");
+            if (cnt[1] > MAX_JSON_TOKENS) throw new InputRefused("input_too_large: more than " + MAX_JSON_TOKENS + " JSON tokens");
             if (cur.size() > 0) lines.add(cur.toByteArray());
         } catch (InputRefused e) { v.put("verdict", "FAIL"); v.put("failures", List.of(e.getMessage())); v.put("scope", SCOPE); return v;
         } catch (IOException | RuntimeException e) { v.put("verdict", "FAIL"); v.put("failures", List.of("open: " + e.getClass().getSimpleName())); v.put("scope", SCOPE); return v; }
@@ -622,7 +634,7 @@ public class CvVerify {
         try { rawTip = readTipFile(Path.of(path)); }   // row 1: a regular file of at most MAX_INPUT_BYTES, as Python's read_regular
         catch (Exception e) { tc.put("why", "tip_unreadable: the tip file cannot be read"); return tc; }
         Object parsed;
-        try { parsed = parse(rawTip); }
+        try { if (countTokens(rawTip) > MAX_JSON_TOKENS) throw new Bad("json_too_many_tokens"); parsed = parse(rawTip); }   // SPEC §22 rule 9
         catch (Bad | RuntimeException e) { tc.put("why", "tip_unreadable: not a JSON text of the profile of SPEC §3"); return tc; }
         if (!(parsed instanceof Obj)) { tc.put("why", "tip_unreadable: not a JSON object"); return tc; }
         Obj t = (Obj) parsed;

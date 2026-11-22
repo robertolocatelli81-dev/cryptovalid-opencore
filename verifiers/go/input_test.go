@@ -7,9 +7,11 @@ package cryptovalid
 import (
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -164,5 +166,30 @@ func TestTheLedgerIsCreatedPrivate(t *testing.T) {
 	st, err := f.Stat()
 	if err != nil || st.Mode().Perm() != 0o600 {
 		t.Fatalf("mode of a new ledger: %v %v", st.Mode().Perm(), err)
+	}
+}
+
+// SPEC §22 rule 9: lines first, then tokens ({ [ , : inside strings too), counted over the whole input; the reason alone
+func TestRule9TheBudgetOfALedger(t *testing.T) {
+	lines := fmt.Sprintf("input_too_large: more than %d lines", MaxInputLines)
+	tokens := fmt.Sprintf("input_too_large: more than %d JSON tokens", MaxJSONTokens)
+	T := `"` + strings.Repeat(",", MaxJSONTokens) + `"`
+	for _, c := range []struct {
+		in, want string
+	}{
+		{strings.Repeat("0\n", MaxInputLines), ""},
+		{strings.Repeat("0\n", MaxInputLines) + "0", lines},
+		{T + "\n", ""},
+		{T + ",\n", tokens},
+		{strings.Repeat(",\n", MaxInputLines+1), lines},
+	} {
+		v := VerifyLedger(strings.NewReader(c.in))
+		if v.Verdict != "FAIL" {
+			t.Fatalf("%d bytes: %s", len(c.in), v.Verdict)
+		}
+		budget := len(v.Failures) == 1 && (v.Failures[0] == lines || v.Failures[0] == tokens)
+		if (c.want == "" && budget) || (c.want != "" && (!budget || v.Failures[0] != c.want)) {
+			t.Fatalf("%d bytes: want %q, got %v", len(c.in), c.want, v.Failures[:min(len(v.Failures), 2)])
+		}
 	}
 }

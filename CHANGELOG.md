@@ -22,6 +22,23 @@ I-JSON admits, which these functions never see: they take parsed values, and the
 non-ASCII scope. `test_aps.py`: one test more, `test_v2_and_external_refuse_a_leap_second` (red on 0.27.0, with the
 positive control that took a leap second now taking 23:59:59).
 
+### What a ledger may hold, counted before it is parsed (SPEC §22 rule 9; verdicts change)
+
+The bound of 256 MiB on the bytes did not bound memory. Measured on 2026-11-22 on a72d51d: a file of 16 MiB of 8 Mi
+lines `0` ended Python in `MemoryError` (exit 1, no receipt) and Go in `fatal error: out of memory allocating heap
+arena metadata` under a data limit of 2 GB; one line of 64 MiB of `[{},{},...]` ended JS in `JavaScript heap out of
+memory` (exit 134) and Go at a data limit of 3 GB. Now Python, JS, Go and Java count the whole input first: more than
+2^20 lines is FAIL `input_too_large: more than 1048576 lines`, else more than 2^23 of the characters `{ [ , :`
+(inside strings too) is FAIL `input_too_large: more than 8388608 JSON tokens`, the reason alone, exit 1; a tip of more
+than 2^23 tokens is row 2 of the table of rule 2 (`tip_unreadable: not a JSON text of the profile of SPEC §3`), as is
+an `.expected.json` of the JS `--conformance`. The eleven forms measured at and past the bounds are FAIL with a receipt in
+the four, peak memory at most 1097 MiB (Python), 1359 MiB (JS), 1931 MiB (Go) and 1822 MiB (Java). A ledger that
+verified before and holds more than 2^20 lines or 2^23 tokens is now FAIL: eight real ledgers of this author hold
+0.042 to 0.112 tokens per byte, so the token bound is reached between 72 and 192 MiB (seal longer ledgers in
+segments). `test_ledger_budget_20261122.py`, 7 tests (5 fail on a72d51d, the 2 `*_control` pass there);
+`TestRule9TheBudgetOfALedger` in `verifiers/go/input_test.go`; six checks in `verifiers/js/test.mjs`. Not bounded:
+the other JSON readers of the Python package (at most 64 MiB each) and the Rust and Swift verifiers.
+
 ### A long line within the bound: the four verifiers agree (SPEC §22 rule 8)
 
 A ledger with one valid line of 65 MiB was PASS in Python and Java, ended without a receipt in JS (Node's `JavaScript

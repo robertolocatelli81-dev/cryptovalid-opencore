@@ -544,6 +544,21 @@ def _bounded_int(x):
 
 MAX_JSON_DEPTH = 512  # normative acceptance-profile bound (spec/CONFORMANCE.md, 2026-09-13)
 MAX_INPUT_BYTES = 256 * 1024 * 1024  # a ledger/pack larger than this is refused fail-closed (input_too_large)
+# SPEC §22 rule 9: what a ledger may hold, counted before any line is parsed (16 MiB of "0\n" lines took more than 2 GB)
+MAX_INPUT_LINES = 1 << 20
+MAX_JSON_TOKENS = 1 << 23   # the characters { [ , : wherever they stand
+
+
+def input_too_complex(lines: int, tokens: int) -> Optional[str]:
+    """SPEC §22 rule 9: the reason a ledger of `lines` lines (blank ones included) and `tokens` tokens holds too much,
+    else None; lines first."""
+    if lines > MAX_INPUT_LINES:
+        return f"input_too_large: more than {MAX_INPUT_LINES} lines"
+    if tokens > MAX_JSON_TOKENS:
+        return f"input_too_large: more than {MAX_JSON_TOKENS} JSON tokens"
+    return None
+
+
 _RECURSION_HEADROOM = 3 * MAX_JSON_DEPTH + 256  # frames the C decoder + object_pairs_hook may need per line
 
 
@@ -919,7 +934,13 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
         # the layers open() builds on a descriptor, or the bytes of the pipe: one wrapper, closed here with what it wraps
         with io.TextIOWrapper(io.BufferedReader(io.FileIO(fd)) if piped is None else io.BytesIO(piped),
                               encoding="utf-8", errors="surrogateescape", newline="\n") as f:
-            raw_lines = [ln for ln in f if ln.strip(" \t\r\n")]
+            n = tokens = 0
+            raw_lines = []
+            for ln in f:   # SPEC §22 rule 9: the whole input is counted, at most MAX_INPUT_LINES kept
+                n += 1
+                tokens += ln.count("{") + ln.count("[") + ln.count(",") + ln.count(":")
+                if n <= MAX_INPUT_LINES and ln.strip(" \t\r\n"):
+                    raw_lines.append(ln)
     except FileNotFoundError:
         return {
             "verdict": "FILE_NOT_FOUND",
@@ -930,6 +951,10 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
         return {"verdict": "FAIL", "path": path, "verified_utc": started, "entries_count": 0,
                 "parse_errors": [{"line": -1, "error": f"unreadable: {type(e).__name__}"}]}
 
+    too_much = input_too_complex(n, tokens)
+    if too_much:   # nothing parsed: the reason alone, as input_too_large of the bytes
+        return {"verdict": "FAIL", "path": path, "verified_utc": started, "entries_count": 0,
+                "parse_errors": [{"line": -1, "error": too_much}]}
     entries: List[Dict] = []
     for i, line in enumerate(raw_lines):
         try:

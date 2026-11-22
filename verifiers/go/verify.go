@@ -3,6 +3,7 @@ package cryptovalid
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,6 +56,17 @@ const scope = "single-snapshot check of the cryptovalid profile (SPEC_EVIDENCE_F
 // alone (NEMESIS R3, 22/11/2026).
 const MaxLineBytes = 64 << 20
 
+// SPEC §22 rule 9: what a ledger may hold, counted over the whole input before a line is parsed (verifier.py
+// MAX_INPUT_LINES, MAX_JSON_TOKENS): a line ends at LF or at the end of the input; a token is { [ , : wherever it stands.
+const (
+	MaxInputLines = 1 << 20
+	MaxJSONTokens = 1 << 23
+)
+
+func countTokens(b []byte) int {
+	return bytes.Count(b, []byte("{")) + bytes.Count(b, []byte("[")) + bytes.Count(b, []byte(",")) + bytes.Count(b, []byte(":"))
+}
+
 // EntryKeys is the CLOSED entry schema of SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the core fields plus the optional
 // fields of §2, exactly as verifier.py ENTRY_KEYS. A top-level key outside it is the named failure
 // `unknown_field:<keys>`, never a silent PASS (measured 2026-10-11 on this verifier: an entry written with an extra
@@ -93,9 +105,15 @@ func VerifyLedger(r io.Reader) Verdict {
 	hashOK, linkOK := true, true
 	prev := Genesis
 	line, i := 0, 0
+	lines, tokens := 0, 0
 	for sc.Scan() {
-		line++
 		raw := sc.Bytes()
+		lines++
+		tokens += countTokens(raw)
+		if lines > MaxInputLines || tokens > MaxJSONTokens {
+			continue // past a bound nothing more is parsed; the rest is only counted
+		}
+		line++
 		if isBlankLine(raw) { // only ASCII space/tab/CR count as blank (TrimSpace took Unicode spaces) — r5
 			continue
 		}
@@ -167,6 +185,10 @@ func VerifyLedger(r io.Reader) Verdict {
 	if err := sc.Err(); err != nil {
 		v.Failures = append(v.Failures, "read: "+err.Error())
 		hashOK = false
+	} else if lines > MaxInputLines {
+		return Verdict{Verdict: "FAIL", Failures: []string{fmt.Sprintf("input_too_large: more than %d lines", MaxInputLines)}, Scope: scope}
+	} else if tokens > MaxJSONTokens {
+		return Verdict{Verdict: "FAIL", Failures: []string{fmt.Sprintf("input_too_large: more than %d JSON tokens", MaxJSONTokens)}, Scope: scope}
 	}
 	v.Entries = i
 	v.LastSelfHash = prev

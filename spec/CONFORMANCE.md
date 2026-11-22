@@ -73,6 +73,9 @@ python3 conformance.py     # exit 0 = conformant
   65 MiB and one of 250 MiB measured PASS in the four on 2026-11-22). The Rust verifier reads the file whole
   (`std::fs::read`) with no bound, by code reading (no Rust toolchain on that bench): a valid ledger of 300 MiB is
   FAIL in the four and, by code reading, PASS in Rust (declared divergence, outside the acceptance profile).
+- **What a ledger holds** (SPEC §22 rule 9): Python, JS, Go and Java count the whole input before parsing it; more
+  than 2^20 lines is `input_too_large: more than 1048576 lines`, else more than 2^23 of the characters `{ [ , :`
+  (inside strings too) is `input_too_large: more than 8388608 JSON tokens`. Not in the Rust and Swift verifiers.
 
 ## Optional profiles
 
