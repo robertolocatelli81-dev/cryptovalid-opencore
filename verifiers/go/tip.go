@@ -45,7 +45,7 @@ type Tip struct {
 	Shape string `json:"-"`
 }
 
-// TipMembers is the closed member list of a tip (SPEC §22 rule 2, Unreleased; as cryptovalid_tip.TIP_MEMBERS): a member
+// TipMembers is the closed member list of a tip (SPEC v0.14 §22 rule 2; as cryptovalid_tip.TIP_MEMBERS): a member
 // outside it is tip_invalid naming it (until 0.27.0 ignored, PASS).
 var TipMembers = map[string]bool{"kind": true, "entries": true, "ledger_id": true, "tip_sha256": true, "ts": true,
 	"log_pubkey_hex": true, "signature_hex": true, "signature_pq_hex": true, "log_pq_pubkey_b64": true}

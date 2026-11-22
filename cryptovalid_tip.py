@@ -52,7 +52,7 @@ from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
 KIND = "cryptovalid_tip/1"
-# SPEC §22 rule 2 (Unreleased): the tip is a CLOSED object, these members and no other (the five signed ones, the key and
+# SPEC v0.14 §22 rule 2: the tip is a CLOSED object, these members and no other (the five signed ones, the key and
 # signature of the Ed25519 layer, the two of the post-quantum layer); a member outside the list is tip_invalid naming it
 TIP_MEMBERS = frozenset({"kind", "entries", "ledger_id", "tip_sha256", "ts", "log_pubkey_hex", "signature_hex",
                          "signature_pq_hex", "log_pq_pubkey_b64"})

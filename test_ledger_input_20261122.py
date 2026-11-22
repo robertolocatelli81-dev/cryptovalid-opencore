@@ -120,7 +120,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
         self.assertAll(_all(self.bins, SAMPLE), (0, "PASS", None), "the example ledger")
 
     def test_a_valid_line_of_65_mib_is_verified_in_the_four(self):
-        """NEMESIS R3 (22/11): until 0.28.0 JS ended in `JavaScript heap out of memory` (exit 134, no receipt) and Go
+        """NEMESIS R3 (22/11): before rule 8 JS ended in `JavaScript heap out of memory` (exit 134, no receipt) and Go
         was FAIL `token too long` on this ledger, which verifier.py and Java verify; one byte changed is FAIL in the four."""
         sys.path.insert(0, HERE)
         import verifier
@@ -224,7 +224,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
 
     def test_exactly_the_bound_is_within_it(self):
         """256 MiB exactly is read, as a file and through a FIFO, and fails at §5 step 1 (it holds no entry). The file is
-        given to the four: until 0.28.0 Go stopped at its line bound (`token too long`). The FIFO only to Java: its bound
+        given to the four: before rule 8 Go stopped at its line bound (`token too long`). The FIFO only to Java: its bound
         is reached with 256 MiB alone, where the Go and JS readers take the bound as an argument (input_test.go,
         test.mjs: 10 and 16 bytes) and verifier.py has its own tests."""
         at = self.path("at.jsonl")

@@ -201,7 +201,7 @@ export function hasLoneSurrogate(text) {
 // the chain's identity). With the tip and the TRUSTED log key,
 // tail truncation / suffix rewrite / an unsealed append become named failures (a bare chain cannot see them).
 export const TIP_KIND = "cryptovalid_tip/1";
-// SPEC §22 rule 2 (Unreleased): the tip is a CLOSED object (as cryptovalid_tip.TIP_MEMBERS); another member is tip_invalid naming it
+// SPEC v0.14 §22 rule 2: the tip is a CLOSED object (as cryptovalid_tip.TIP_MEMBERS); another member is tip_invalid naming it
 export const TIP_MEMBERS = new Set(["kind", "entries", "ledger_id", "tip_sha256", "ts", "log_pubkey_hex", "signature_hex", "signature_pq_hex", "log_pq_pubkey_b64"]);
 export function tipPayload(entries, ledgerId, tipSha256, ts) {
   return Buffer.from(`{"entries":${entries},"kind":"${TIP_KIND}","ledger_id":"${ledgerId}","tip_sha256":"${tipSha256}","ts":"${ts}"}`, "utf-8");
@@ -437,7 +437,7 @@ export function verifyLedger(text, { algo = null, pubkey = null, tip = null, tru
   }
   // SPEC v0.9 §17 rule 2: the oldest acceptable tip is a requirement on a tip, which it makes required
   if (tipNotBefore !== null && tipNotBefore !== undefined) requireTip = true;
-  // SPEC §22 rule 1 (Unreleased): the trusted log key makes the tip required too (until 0.27.0 without a tip: PASS)
+  // SPEC v0.14 §22 rule 1: the trusted log key makes the tip required too (until 0.27.0 without a tip: PASS)
   if (trustedPubkey) requireTip = true;
   // signed chain tip: `tip` is the parsed document (or null); the CLI loads <ledger>.tip.json when present
   let tipCheck = null;

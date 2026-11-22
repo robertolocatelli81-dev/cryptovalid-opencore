@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""SPEC §22 (Unreleased), after the review of the branch on 2026-11-21: the cases that mutants of the lines added by the
+"""SPEC v0.14 §22, after the review of the branch on 2026-11-21: the cases that mutants of the lines added by the
 rules showed missing in `test_decisions_20261120.py`, and the sentences of the specification the review re-measured.
 
 Rule 6 says the signature of a trusted list is read closed, "anything else refused with its reason": each refusal held

@@ -319,7 +319,7 @@ STATES_VOCABULARY = "cryptovalid-evidence-pack/states-1"   # 0.22.0 — SPEC §1
 # SPEC v0.8 §10: a receipt computed with pinned TSA certificates (`tsa_certs`): states-1 plus `verified` and `tsa_unresolved`
 # on time_anchor and the wider `token_invalid`. A receipt without a pin keeps states-1.
 STATES_VOCABULARY_PINNED_TSA = "cryptovalid-evidence-pack/states-2"
-# SPEC §22 rule 3 (Unreleased): format 1.2 has the members of 1.1; its manifest signature is over the domain-tagged message
+# SPEC v0.14 §22 rule 3: format 1.2 has the members of 1.1; its manifest signature is over the domain-tagged message
 # "cryptovalid-pack-manifest/2:" + manifest_digest_sha256, never a bare hash an entry signature could also be over.
 # build_pack writes 1.2; a pack of 1.1 (signature over the bare digest) verifies as before. 1.0 is refused (SPEC §10).
 PACK_FORMAT = "cryptovalid-evidence-pack/1.2"
@@ -749,7 +749,7 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
                 if pqe is not None:
                     producer.append(pqe)
         elif signer_pubkey_hex:
-            # SPEC §22 rule 4 (Unreleased): a pinned signer is a requirement on every ledger. Until 0.27.0 a ledger with no
+            # SPEC v0.14 §22 rule 4: a pinned signer is a requirement on every ledger. Until 0.27.0 a ledger with no
             # signature at all left sig_pass true and the pack valid under the pin, the state alone saying not_present
             sp, pq_reason = False, "unsigned_but_signer_pinned"
             producer.append(("not_evaluated", "not_present", f"ledger {lm['file']}: not signed, a signer is pinned"))
@@ -764,7 +764,7 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
     files_ok = all(file_ok.values()) if file_ok else False
     if len(producer) > 1 and producer[0][1] == "not_present" and not manifest_signer_hex:
         producer = producer[1:]   # an unsigned manifest next to signed ledgers: the subject is the ledgers' layers
-    # SPEC §22 rule 4 (Unreleased): a pinned manifest signer is a requirement. Until 0.27.0 a manifest not signed, or signed
+    # SPEC v0.14 §22 rule 4: a pinned manifest signer is a requirement. Until 0.27.0 a manifest not signed, or signed
     # by another key, left `valid` as it was under the pin (SPEC §10 "by design"); the pinned element must now be verified
     manifest_pin_holds = not manifest_signer_hex or man_elem[0] == "verified"
 
@@ -797,7 +797,7 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
                "rfc3161": rfc,
                "valid": bool(files_ok and manifest_ok and ledgers_ok and not signature_broken and anchor[0] != "contradicted"
                              and manifest_pin_holds
-                             # SPEC §22 rule 7 (Unreleased): pinned TSA certificates are a requirement, as the signer pins of
+                             # SPEC v0.14 §22 rule 7: pinned TSA certificates are a requirement, as the signer pins of
                              # rule 4: the token must be verified under them (until 0.27.0 a token of another TSA, no token, or
                              # a token openssl could not check left `valid` as it was, SPEC v0.8)
                              and (tsa_certs is None or anchor[0] == "verified")),

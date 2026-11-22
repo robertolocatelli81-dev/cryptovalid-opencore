@@ -18,7 +18,7 @@ QTST service whose ServiceHistoryInstance entries are out of order or share a St
 "indeterminate" (`qualification`), neither qualified nor not. Since v0.6 of the spec (2026-11-13) the certificate looked up is
 the one that verified the token's signature (SPEC §11 step 6), not any certificate the token carries.
 
-Since SPEC §22 rule 6 (Unreleased) a list counts only when its XAdES signature verifies: the LOTL under a certificate of the
+Since SPEC v0.14 §22 rule 6 a list counts only when its XAdES signature verifies: the LOTL under a certificate of the
 Official Journal publication in force (OJ_LOTL_SIGNERS_SHA256), each national list under a certificate of the LOTL's pointer
 to it, over https only (verify_list_signature: exclusive C14N written here on expat, the signature with `cryptography`).
 Protocol/XML parsing is stdlib (urllib, xml.etree with the ETSI namespace for the LOTL and every list, UTF-8 only, DTDs refused); the TSA cert is pulled from the CMS
@@ -60,7 +60,7 @@ HISTORY_NOT_ORDERED = "history_not_ordered"           # PRO-4.3.4-03A a)
 HISTORY_DUPLICATE_START = "history_duplicate_start"   # PRO-4.3.4-03A b)
 
 def _get(url, timeout=45):
-    # SPEC §22 rule 6 (Unreleased): https only. Until 0.27.0 http was allowed because one of the 31 national lists the EU
+    # SPEC v0.14 §22 rule 6: https only. Until 0.27.0 http was allowed because one of the 31 national lists the EU
     # LOTL points to is served over http only (tl.nbu.gov.sk, measured 15/11 and 20/11/2026); that list is now refused.
     with _net.open_url(url, timeout, _net.ALLOW_HTTPS) as r:
         return _net.read_body(r)   # SPEC v0.13 §21 rule 6: bounded
@@ -134,7 +134,7 @@ def _parse_tl(tl_xml: bytes):
         root.remove(s)   # SPEC §22 rule 6: the content read is what the enveloped signature covers, never its Objects
     return root
 
-# ── SPEC §22 rule 6 (Unreleased): the XAdES signature of the LOTL and of every trusted list ─────────────────────────────
+# ── SPEC v0.14 §22 rule 6: the XAdES signature of the LOTL and of every trusted list ─────────────────────────────
 # Until 0.27.0 a list was trusted for the channel it came over (a list and a LOTL without any ds:Signature made a token
 # qualified; one national list is served over http). Now a list counts only when its enveloped XAdES signature verifies:
 # the LOTL under a certificate of the Official Journal publication in force, each national list under a certificate the

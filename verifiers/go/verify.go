@@ -301,7 +301,7 @@ func VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64,
 		requireTip = true
 	}
 	if trustedPubkeyHex != "" {
-		// SPEC §22 rule 1 (Unreleased): the trusted log key is a requirement on a tip too (until 0.27.0 without a tip: PASS)
+		// SPEC v0.14 §22 rule 1: the trusted log key is a requirement on a tip too (until 0.27.0 without a tip: PASS)
 		requireTip = true
 	}
 	if trustedPQPubkeyB64 != "" {

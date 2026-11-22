@@ -248,7 +248,7 @@ What a PASS means, and what it does not:
 - **Time:** entry timestamps come from the writer's clock. An RFC 3161 token proves the data existed at the TSA's
   time; the evidence pack checks the token's status and its binding to the manifest, and the TSA's signature only
   against a TSA certificate you pin (`evidence_pack.py verify DIR --tsa-cert PEM`: `time_anchor: verified`; without a
-  pin `tsa_not_checked`; a token of another TSA is `tsa_unresolved` and, since SPEC §22 rule 7 (unreleased), the pack is
+  pin `tsa_not_checked`; a token of another TSA is `tsa_unresolved` and, since SPEC §22 rule 7 (0.28.0), the pack is
   not valid, exit 1, as a pack without a token under a pin: until 0.27.0 it was not a failure). Revocation of the TSA certificate
   is not checked. Between an event and its anchor, a root-level attacker on the writer can re-write and re-seal.
 - **Completeness:** an append-only log proves what it contains, never that everything that should have been recorded

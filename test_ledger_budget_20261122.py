@@ -3,7 +3,7 @@
 same in Python, JS, Go and Java: more than 2^20 lines (a line ends at LF or at the end of the input, blank ones count)
 is FAIL `input_too_large: more than 1048576 lines`; else more than 2^23 tokens (the characters { [ , : wherever they
 stand, inside strings too) is FAIL `input_too_large: more than 8388608 JSON tokens`; exit 1, nothing parsed. A tip of
-more than 2^23 tokens is row 2 of the table of rule 2. Until 0.28.0 a file of 16 MiB of "0" lines ended Python in
+more than 2^23 tokens is row 2 of the table of rule 2. Before rule 9 a file of 16 MiB of "0" lines ended Python in
 MemoryError and Go in "fatal error: out of memory allocating heap arena metadata" under a data limit of
 2 GB, and one line of 64 MiB of `{}` values
 ended JS in "JavaScript heap out of memory"; each without a receipt.
@@ -127,7 +127,7 @@ class TestTheBudgetOfALedgerInTheFourVerifiers(unittest.TestCase):
     @unittest.skipUnless(hasattr(os, "fork"), "needs a data limit (resource)")
     def test_256_mib_of_lines_under_a_data_limit_of_2_gb(self):
         """past the line bound nothing is kept or parsed: 128 Mi lines `0`, the bound of rule 8 exactly, are refused by
-        the four, verifier.py and Go under a data limit of 2 GB (Node and Java bound their own heap). Until 0.28.0
+        the four, verifier.py and Go under a data limit of 2 GB (Node and Java bound their own heap). Before rule 9
         16 MiB of such lines ended verifier.py in MemoryError and Go in `fatal error: out of memory`."""
         import resource
         p = os.path.join(self.tmp, "lines_256mib")

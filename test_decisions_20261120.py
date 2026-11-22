@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""SPEC §22 (Unreleased): the decisions taken on 2026-11-20 after the re-measurement of 0.27.0.
+"""SPEC v0.14 §22: the decisions taken on 2026-11-20 after the re-measurement of 0.27.0.
 
 Each class holds one rule of §22 and fails on the branch before it (9b81e9c, 0.27.0 + the rules of §21); the tests named
 `*_control` hold what the rule does not change and pass there too. Cross-language parts run the JS (node), Java (javac)

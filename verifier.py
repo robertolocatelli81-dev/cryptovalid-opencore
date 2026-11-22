@@ -1083,7 +1083,7 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
         # it was read only inside the tip check: without a tip, PASS)
         require_tip = True
     if trusted_pubkey_hex:
-        # SPEC §22 rule 1 (Unreleased): the trusted log key is a requirement on a tip, as the oldest tip and the trusted
+        # SPEC v0.14 §22 rule 1: the trusted log key is a requirement on a tip, as the oldest tip and the trusted
         # post-quantum key are (until 0.27.0 it was used only when a tip happened to be there: without one, PASS)
         require_tip = True
     if trusted_pq_pubkey_b64:

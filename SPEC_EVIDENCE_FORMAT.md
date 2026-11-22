@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.13 (2026-11-20; v0.12 2026-11-18, v0.11 2026-11-18, v0.10 2026-11-16, v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
+# CryptoValid Evidence Format — candidate standard v0.14 (2026-11-22; v0.13 2026-11-20, v0.12 2026-11-18, v0.11 2026-11-18, v0.10 2026-11-16, v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -398,6 +398,9 @@ bounded. Rule 7: the evidence pack checks the digest, the chain, the signatures,
 the same bytes. Rule 8: `signer.py sign` signs only lines within the entry schema whose `self_hash` it recomputes, and
 `signer.py verify` fails a line outside that schema. The ledger format (§2–§5),
 its hashes and its vectors do not change.
+v0.14 (2026-11-22, cryptovalid-opencore 0.28.0) adds §22, nine rules: six written for the decisions of 2026-11-20, rule 7
+on 2026-11-21, rules 8 and 9 on 2026-11-22. Not additive where a rule turns an accepted input into a refused one or
+changes a verdict; rule 3 changes what a tree head, a HEAD and a pack manifest are signed over.
 
 ## 7. Conformance (normative)
 
@@ -493,7 +496,7 @@ HASH_FAILURE, FORMAT_FAILURE) is `contradicted`, as a token over another digest 
 a token for which no chain to the pinned certificates is found
 (INDETERMINATE: NO_CERTIFICATE_CHAIN_FOUND, "no certificate chain has been found for the identified signing
 certificate") is `not_evaluated / tsa_unresolved`, as `key_unresolved` for the producer: a pin for another TSA does not
-make the pack false (until 0.27.0; replaced by §22 rule 7, Unreleased: the state stays `tsa_unresolved`, the pack is not
+make the pack false (until 0.27.0; replaced by §22 rule 7, v0.14: the state stays `tsa_unresolved`, the pack is not
 valid). The receipt's `rfc3161` object gains `tsa_check` = `{status, reason, detail, gen_time,
 signer_sha256, sha1_signature_legacy}` of §11 whenever §11 ran (`sha1_signature_legacy` since v0.10, §11 step 7); a receipt computed with a pin names `states_vocabulary:
 "cryptovalid-evidence-pack/states-2"` (states-1 with `verified` and `tsa_unresolved` reachable on `time_anchor` and the
@@ -508,7 +511,7 @@ admitted and has no `contradicted` subject; an admitted pack that is not valid a
 manifest signature, an Ed25519 layer, or a pinned post-quantum layer that cannot be checked here). The converse does not
 hold, by design: a manifest signed by a key other than `manifest_signer_hex` (library only; it pins the post-quantum keys the
 manifest records, as since 0.12.0) is `key_unresolved` and leaves `valid` as it was (until 0.27.0: since §22 rule 4,
-Unreleased, a pinned element that is not `verified` makes the pack not valid), and a post-quantum layer that nobody
+v0.14, a pinned element that is not `verified` makes the pack not valid), and a post-quantum layer that nobody
 pinned and that cannot be checked here is `backend_missing` with the pack valid. The post-quantum layer of a ledger is an
 element only when the manifest claims it (`pq_protected: true`), a key pins it, or the file carries it broken; otherwise
 it is reported in `ledgers[i].pq_protected` as before and is not part of what the pack asserts.
@@ -530,7 +533,7 @@ states the rule since v0.7): its answer for the same reply changes when a certif
 **What no state can say.** The RFC 3161 block and the manifest signature lie outside the manifest digest: a copy with the
 block removed has the states of a pack that never had one (`time_anchor: not_present`), and a copy with the manifest
 signature removed those of an unsigned pack. Only a pinned manifest signer or a hash of the whole folder tells them apart;
-since §22 rule 7 (Unreleased) pinned TSA certificates also make the copy without the block not valid (the states are the same).
+since §22 rule 7 (v0.14) pinned TSA certificates also make the copy without the block not valid (the states are the same).
 
 ## 11. RFC 3161 token check (NORMATIVE since v0.6, 2026-11-13)
 
@@ -1119,7 +1122,7 @@ of this section.
 Not changed by this section: a trusted log key (`--trusted-pubkey`) given without a tip file. It is the key a tip is
 checked with when there is one; the tip is required only with `--require-tip` (or rule 2, or a trusted post-quantum
 key), and without it the receipt's `tip` is `null` and its `scope` says the tail is not covered. Changed by §22 rule 1
-(Unreleased): the trusted log key makes the tip required too. The Rust and Swift
+(v0.14): the trusted log key makes the tip required too. The Rust and Swift
 verifiers have none of these options and refuse them as unknown flags, exit 2 (Rust measured on 2026-11-16; Swift by
 its code, `main.swift` takes only `--algo` and `--pubkey`).
 
@@ -1991,7 +1994,7 @@ same day, before any release; what that review measured is said in each. Tests: 
    `unknown_field:<keys>` at its index. A tag that separates the kinds of signed message is a change of format, not
    made here: it is §22 rule 3.
 
-## 22. Rules written for the decisions of 2026-11-20 (Unreleased)
+## 22. Rules written for the decisions of 2026-11-20 (NORMATIVE since v0.14)
 
 The re-measurement of 2026-11-20 (§21) left six findings to a decision of the maintainer (rules 1-6; rule 7 applies
 the principle of rule 4 to the TSA pin, decided on 2026-11-21; rule 8 applies §5 step 0 to the other verifiers, after
@@ -2270,7 +2273,7 @@ maintainer, outside this repository.
    `unreadable: FIFO idle for 10 s` instead of a wait. Java's tip reader (rule 2 row 1) reads through the same thread,
    so a tip path swapped for a FIFO is row 1 after 10 s. A line is read up to the bound in the four, so a ledger
    within the bound is judged on its entries, never on the length of a line: one valid line of 65 MiB and one of
-   250 MiB are PASS in the four, and the same line with one byte changed FAIL (measured on 2026-11-22). Until 0.28.0
+   250 MiB are PASS in the four, and the same line with one byte changed FAIL (measured on 2026-11-22). Before this rule
    the JS verifier ended on the line of 65 MiB without a receipt (Node's `JavaScript heap out of memory`, exit 134:
    its canonical form was built one character at a time) and the Go verifier was FAIL `read: bufio.Scanner: token too
    long` on any line longer than 64 MiB (`MaxLineBytes`, which now bounds only what the Go writer takes); the Go

@@ -71,14 +71,14 @@ from typing import Dict, List, Optional
 import cryptovalid_merkle as merkle
 
 GENESIS_PREV = "0" * 64
-# SPEC §22 rule 2 (Unreleased): a tree head (<segment>.sth.json) and the HEAD (<prefix>.head.json) are CLOSED objects, these
+# SPEC v0.14 §22 rule 2: a tree head (<segment>.sth.json) and the HEAD (<prefix>.head.json) are CLOSED objects, these
 # members and no other: every member this module has written since 2026-08-16 (`signed` since 2026-09-14). A member outside
 # the list is the failure sth_unknown_member:<keys> / head_unknown_member:<keys> (until 0.27.0 ignored: ok, no reason).
 STH_MEMBERS = frozenset({"tree_size", "root_sha256", "signed", "note", "segment", "sealed_utc", "last_self_hash",
                          "prev_sth_sha256", "signature", "signer", "sig_domain"})
 HEAD_MEMBERS = frozenset({"prefix", "segments_sealed", "last_segment", "last_sth_sha256", "updated_utc", "signature",
                           "signer", "sig_domain"})
-# SPEC §22 rule 3 (Unreleased): a tree head or a HEAD signed from now on carries `sig_domain`, inside the hashed body, and
+# SPEC v0.14 §22 rule 3: a tree head or a HEAD signed from now on carries `sig_domain`, inside the hashed body, and
 # its signature is over the UTF-8 bytes of "<sig_domain>:<hex of the SHA-256 of the canonical body>": never 64 hex
 # characters alone, the message of an entry signature (§2). Without `sig_domain` (written until 0.27.0) the signature is
 # over the bare hex, as before, and verify_archive names those documents in a warning; require_signature_domain refuses them.

@@ -173,7 +173,7 @@ class PackWithPinnedTsa(unittest.TestCase):
         self.assertEqual(r, EP.verify_pack(p, tsa_certs=None))
 
     def test_another_tsa_pinned_is_unresolved_and_the_pack_is_not_valid(self):
-        # SPEC §22 rule 7 (Unreleased): the TSA pin decides valid (until 0.27.0, SPEC v0.8: the pack stayed valid)
+        # SPEC v0.14 §22 rule 7: the TSA pin decides valid (until 0.27.0, SPEC v0.8: the pack stayed valid)
         r = EP.verify_pack(self.pack("other"), tsa_certs=[self.other.j("ca.crt")])
         self.assertEqual((self.ta(r), r["valid"]), (("not_evaluated", "tsa_unresolved"), False))
         self.assertEqual((r["rfc3161"]["tsa_check"]["status"], r["rfc3161"]["tsa_check"]["reason"]),

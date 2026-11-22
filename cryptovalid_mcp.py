@@ -115,7 +115,7 @@ _HEX_DIGITS = "0123456789abcdef"
 
 
 def t_verify_ledger(args: Dict) -> Dict:
-    """SPEC §22 rule 5 (Unreleased): with `expected_pubkey_hex` the Ed25519 signature of every entry is verified against
+    """SPEC v0.14 §22 rule 5: with `expected_pubkey_hex` the Ed25519 signature of every entry is verified against
     that key, on the same bytes the chain was checked on (one read), and `valid` says whether both hold; without it the
     chain is checked as before and `signatures.checked: false` says the signatures were not."""
     path = args["path"]
