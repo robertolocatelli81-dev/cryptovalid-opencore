@@ -7,7 +7,7 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
-## 0.28.0 (unreleased): verdicts change
+## 0.28.0 (2026-11-22): verdicts change
 
 ### APS action references: the revision in force, draft-pidlisnyi-aps-04 (2026-09-28)
 
