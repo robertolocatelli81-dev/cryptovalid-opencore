@@ -532,13 +532,47 @@ class TestTheSegmentWriterKeepsToTheBudget(unittest.TestCase):
         deep = 0
         for _ in range(600):
             deep = {"x": deep}
-        for bad in ({"f": 1.5}, {"n": float("nan")}, {"i": 2 ** 60}, {"s": "\ud800"}, deep):
+        def nested(n):
+            d = 0
+            for _ in range(n):
+                d = {"x": d}
+            return d
+        # NEMESIS 23/11/2026: the bounds to the unit (the line is one level deeper than its data), and data nested deeper
+        # than the JSON encoder goes (RecursionError on CPython 3.9 and 3.11 before) is the same ValueError
+        for bad in ({"f": 1.5}, {"n": float("nan")}, {"i": 2 ** 60}, {"i": 2 ** 53}, {"i": -2 ** 53}, {"s": "\ud800"}, deep,
+                    nested(512)):
             with self.subTest(bad=str(bad)[:30]):
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, "outside the profile a verifier reads"):
                     g.append(bad)
+        with self.assertRaisesRegex(ValueError, "outside the profile a verifier reads"):
+            g.append(nested(100000))
         self.assertEqual(g.append({"ok": [1, "x", {"a": None}]})["idx"], 0)   # nothing of the refused ones was queued
+        self.assertEqual(g.append({"i": [2 ** 53 - 1, -(2 ** 53 - 1)]})["idx"], 1)   # the last ones inside the profile
+        self.assertEqual(g.append(nested(511))["idx"], 2)                             # a line nested 512 levels
         g.close()
         self.assertTrue(I.verify_archive(self.tmp)["ok"])
+
+    def test_data_changed_while_the_segment_is_sealed_is_refused_and_nothing_is_left_half_done(self):
+        """NEMESIS 23/11/2026: the entry is built again after a seal outside the lock; the line that is queued is the one
+        that was read back, also when the caller's data changed meanwhile. The lock is free, nothing is queued."""
+        import cryptovalid_ingest as I
+        g = self._writer(4096)
+        g.append({"s": "x" * 3000})
+        data, seal = {"s": "y" * 3000}, g.seal
+        def seal_and_change(**kw):
+            data["f"] = 1.5
+            return seal(**kw)
+        g.seal = seal_and_change
+        with self.assertRaisesRegex(ValueError, "outside the profile a verifier reads"):
+            g.append(data)
+        self.assertTrue(g._lock.acquire(blocking=False))
+        g._lock.release()
+        self.assertEqual(g._buf, [])
+        self.assertEqual(g.append({"v": 1})["idx"], 0)   # the seal ran: the next entry opens the next segment
+        g.close()
+        r = I.verify_archive(self.tmp)
+        self.assertTrue(r["ok"], r["failures"])
+        self.assertEqual(r["segments_verified"], 2)
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,13 +25,17 @@ earlier version, is not repaired: the writer resumes it and stops at the next se
 the bound refused; the bound to the byte; a resumed segment with empty lines after its entries, and one of empty lines
 alone), each red on 0.28.0.
 
-### The segment writer refuses an entry a verifier would not read (SPEC §3)
+### The segment writer refuses an entry a verifier would not read (SPEC §3, CONFORMANCE.md acceptance profile)
 
-`Ingestor.append` wrote a float, NaN, an integer past 2^53, a lone surrogate or a nesting past 512, and `verify_archive`
-then refused the archive (`hash_chain_fail`; found in the review of 0.28.1, the same on 0.28.0). Each line is now read
-back as a verifier reads it before it is queued, and such an entry is a `ValueError`, nothing written. The price,
-measured on 2026-11-23 on one core with entries of about 1 KiB: 5 582 entries a second written, from 15 058 without the
-check. `test_ledger_budget_20261122.py`: one test more, red without the check.
+`Ingestor.append` wrote a float, NaN, an integer outside ±(2^53−1), a lone surrogate or a line nested past 512 levels
+(its data past 511), and `verify_archive` then refused the archive (`hash_chain_fail`; found in the review of 0.28.1, the
+same on 0.28.0). Each line is now read back as a verifier reads it before it is queued, and such an entry is a
+`ValueError`, nothing written; so is data nested deeper than the JSON encoder goes, which was never written (a
+`RecursionError` until now). Data that is not JSON (bytes, a set, keys that do not sort) is a `TypeError`, as before.
+The price, on one core with 200 000 lines of about 1.2 kB, a batch of 256 with fsync: 5 582 entries a second
+written (2026-11-23), 15 058 on 0.28.0, which has no check (2026-11-22); measured again on 2026-11-23, CPython 3.11:
+5 628 and 15 475. `test_ledger_budget_20261122.py`: two tests more (the bounds to the unit; data changed while a segment
+is sealed), red without the check.
 
 ### `external_action_ref` refuses by default what the other implementations refuse
 

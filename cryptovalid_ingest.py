@@ -275,15 +275,18 @@ class Ingestor:
         with self._lock:
             def entry():
                 e = {"idx": self._idx, "ts": _utc_now(), "data": data, "prev_hash": self._prev}
-                e["self_hash"] = hashlib.sha256(_canonical(e)).hexdigest()
-                line = json.dumps(e, sort_keys=True, separators=(",", ":"))
-                # the line is read back as verify_archive reads it (SPEC §3 profile: no float, NaN, integer past 2^53,
-                # lone surrogate). Until 0.28.1 such data was written, and the archive then failed verification
+                # the line is read back as verify_archive reads it (SPEC §3 and the acceptance profile of CONFORMANCE.md:
+                # no float, NaN, integer outside ±(2^53−1), lone surrogate, nesting past 512). Until 0.28.1 such data
+                # was written, and the archive then failed verification.
+                # RecursionError: data nested deeper than the JSON encoder goes (never written; one answer for every depth)
                 try:
+                    e["self_hash"] = hashlib.sha256(_canonical(e)).hexdigest()
+                    line = json.dumps(e, sort_keys=True, separators=(",", ":"))
                     import verifier
                     verifier._loads_strict(line)
-                except ValueError as err:
-                    raise ValueError(f"the entry is outside the profile a verifier reads (SPEC §3): {err}") from None
+                except (ValueError, RecursionError) as err:
+                    raise ValueError("the entry is outside the profile a verifier reads (SPEC §3 and the acceptance profile of "
+                                     f"CONFORMANCE.md): {err}") from None
                 return e, line, sum(line.count(c) for c in "{[,:"), len(line.encode()) + 1   # + the LF
             def closed():   # after close() an entry would be queued and never written: refused (NEMESIS 22/11/2026)
                 if self._fh is None or self._fh.closed:
