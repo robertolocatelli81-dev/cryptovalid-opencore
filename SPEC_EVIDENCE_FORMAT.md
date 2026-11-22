@@ -2258,26 +2258,31 @@ maintainer, outside this repository.
    | a FIFO (a named pipe, `<(cat ledger.jsonl)`), read to its end | as §5 steps 1-5 | |
    | a FIFO that gives more than 256 MiB | FAIL, 1 | `input_too_large: file exceeds 268435456 bytes` |
    | a FIFO that gives no byte and no end of file for 10 s (no writer) | FAIL, 1 | `unreadable: FIFO idle for 10 s` |
-   | anything else: a directory, a device (`/dev/null`, `/dev/zero`), a socket | FAIL, 1, no byte read | `unreadable: not a regular file` |
+   | anything else that opens: a directory, a device (`/dev/null`, `/dev/zero`) | FAIL, 1, no byte read | `unreadable: not a regular file` |
 
    Only the wait for a byte is bounded, not the whole read, as in §5 step 0. How: JS and Go open with `O_NONBLOCK` and
    judge the open descriptor (`fstat`); a FIFO is read through the event loop (JS) or the runtime poller (Go) with an
    idle timer. The JDK has no non-blocking open: the Java verifier reads the type from the attributes of the path
-   (`unix:mode`; where that view is absent, a path that is not a regular file is refused), then opens and reads it in
-   a second thread and stops waiting after 10 s without a byte, so a path swapped for a FIFO between the two ends in
+   (`unix:mode`; where that view is absent, a path that is not a regular file is refused), then opens and reads it in a
+   second thread and stops waiting after 10 s without a byte, so a path swapped for a FIFO between the two ends in
    `unreadable: FIFO idle for 10 s` instead of a wait. Java's tip reader (rule 2 row 1) reads through the same thread,
    so a tip path swapped for a FIFO is row 1 after 10 s. The Go verifier reads to the end, within the bound, what its
    line reader leaves after a line longer than 64 MiB (`MaxLineBytes`), so a FIFO of more than 256 MiB is
-   `input_too_large` there too; a line longer than 64 MiB within the bound stays its own failure, `read:
-   bufio.Scanner: token too long` (the other three parse it: not changed here). An absent file and a file the process
-   may not read keep each verifier's own answer (not changed here: Python `FILE_NOT_FOUND` exit 1 and `unreadable:
-   PermissionError`, JS `FILE_ERROR` exit 2, Go exit 2 for an absent file and `open: ...` for the other, Java `open:
-   NoSuchFileException` and `open: AccessDeniedException`).
+   `input_too_large` there too; a line longer than 64 MiB within the bound stays its own failure, `read: bufio.Scanner:
+   token too long` (not changed here; measured on 2026-11-22 with one line of 65 MiB: Python and Java parse it, and the
+   JS verifier ends without a receipt, Node's `JavaScript heap out of memory`, exit 134). An absent file and a file the
+   process may not read keep each verifier's own answer (not changed here: Python `FILE_NOT_FOUND` exit 1 and
+   `unreadable: PermissionError`, JS `FILE_ERROR` exit 2, Go exit 2 for an absent file and `open: ...` for the other,
+   Java `open: NoSuchFileException` and `open: AccessDeniedException`). So does a Unix socket, which the system does not
+   open as a file (`ENXIO`): Python `unreadable: OSError`, JS `FILE_ERROR` exit 2, Go `open: ... no such device or
+   address`, Java `unreadable: not a regular file` (measured on 2026-11-22; no byte read in the four).
    The Go writer (`cvappend`, `Append`, `AppendSigned`, `SignTip`) follows §5 step 0 (a) and (c): the ledger it appends
    to or signs is a regular file (else `<path>: unreadable: not a regular file`; a directory is the system's `is a
    directory` when it is opened to write), and the key file of `-tipkey` (`LoadTipKey`) is read as (c): a regular file
    or a FIFO of at most 1 MiB (`input_too_large: file exceeds 1048576 bytes`), with the same idle bound; a device or a
-   directory is `unreadable: not a regular file`.
+   directory is `unreadable: not a regular file`. The data `cvappend` reads from stdin becomes one line: at most 64 MiB
+   (`MaxLineBytes`), else `data: input_too_large: more than 67108864 bytes`, exit 2, nothing appended (stdin without
+   end, `< /dev/zero`, was read until no memory was left: Go's `fatal error: out of memory` under `ulimit -d 524288`).
    The JS verifier's `--conformance <dir>` reads each file of the directory as its tip reader does: one that is not a
    regular file of at most 256 MiB makes its vector not conformant, `unreadable: ...` (a FIFO there waited without end).
    Measured on 2026-11-22 on cfcd05c, each command killed after 40 s (`ledger_inputs.sh`, `cvappend_inputs.sh`, kept
@@ -2285,18 +2290,19 @@ maintainer, outside this repository.
    `unreadable: FIFO idle for 10 s` in Python after 10 s and did not return in JS, Go and Java; a FIFO whose writer held
    it 14 s without a byte was read as an empty ledger by the three after the 14 s; a FIFO of 256 MiB + 1 byte was read
    by JS (`json_decode`), by Go up to its line bound (`token too long`), and was `internal: OutOfMemoryError` in Java; a
-   link to `/dev/zero` did not return in JS (once ended by the system, exit 137) and Java, and was `token too long` in
-   Go; `/dev/null` was an empty ledger in the three; a directory was `FILE_ERROR` exit 2 in JS, `read: ... is a
-   directory` in Go and `open: IOException` in Java; a sparse file of 256 MiB + 1 byte was read by JS (`json_decode`)
-   and by Go up to its line bound (Java refused it already). `cvappend -tipkey` waited without end on a FIFO and read a
-   link to `/dev/zero` until the process was killed (exit 137 after 20 s); `cvappend` given a link to `/dev/zero` as the
-   ledger wrote the entry to it (exit 74, the `fsync` refused). Now, of the same 15 forms (a regular file; a FIFO with
-   no writer, a link to it, a writer at once, a writer 3 s late, a writer that holds it 14 s without a byte, 256 MiB + 1
-   byte through it; `<(cat ledger.jsonl)`; a directory; `/dev/null`; a link to `/dev/zero`; a sparse file of 256 MiB +
-   1 byte; one of exactly 256 MiB; a file without permission; an absent file), the 12 the table names give its row in
-   the four, the same text; the other three keep each verifier's answer, as above (256 MiB exactly is within the bound
-   and fails at §5 step 1; in Go as a line longer than 64 MiB). Held by `test_ledger_input_20261122.py` (13 tests),
-   `verifiers/go/input_test.go` and `verifiers/js/test.mjs`.
+   link to `/dev/zero` did not return in JS (once ended by the system, exit 137), was `internal: OutOfMemoryError` in
+   Java after 12 s (33 s with JDK 27) and `token too long` in Go; `/dev/null` was an empty ledger in the three; a
+   directory was `FILE_ERROR` exit 2 in JS, `read: ... is a directory` in Go and `open: IOException` in Java; a sparse
+   file of 256 MiB + 1 byte was read by JS (`json_decode`) and by Go up to its line bound (Java refused it already).
+   `cvappend -tipkey` waited without end on a FIFO and read a link to `/dev/zero` until the process was killed (exit 137
+   after 20 s); `cvappend` given a link to `/dev/zero` as the ledger wrote the entry to it (exit 74, the `fsync`
+   refused). Now, of the same 15 forms (a regular file; a FIFO with no writer, a link to it, a writer at once, a writer
+   3 s late, a writer that holds it 14 s without a byte, 256 MiB + 1 byte through it; `<(cat ledger.jsonl)`; a
+   directory; `/dev/null`; a link to `/dev/zero`; a sparse file of 256 MiB + 1 byte; one of exactly 256 MiB; a file
+   without permission; an absent file), the 12 the table names give its row in the four, the same text; the other three
+   keep each verifier's answer, as above (256 MiB exactly is within the bound and fails at §5 step 1; in Go as a line
+   longer than 64 MiB). Held by `test_ledger_input_20261122.py` (14 tests), `verifiers/go/input_test.go` and
+   `verifiers/js/test.mjs`.
    Not measured: macOS, where the Go runtime does not poll a FIFO (the Go verifier reads one there with a pause of 10 ms
    between tries, and a FIFO no writer has opened yet reads as empty, `empty_ledger`, where Linux waits for a writer),
    and where Node and Java were not run; a Go verifier built for a platform that is not Unix opens a path the plain way,

@@ -397,6 +397,24 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
     const t0 = Date.now(); const c = conformance(cdir);
     ok("rule 8: a FIFO among the vectors is not conformant, without a wait", c.conformant === false && c.results.length === 1 && /^unreadable: /.test(c.results[0].error) && Date.now() - t0 < 5000, JSON.stringify(c));
   }
+  // the same for a FIFO in the place of an *.expected.json (it was read the plain way: a wait without end)
+  const edir = mkdtempSync(join(tmpdir(), "cvconf-"));
+  if (spawnSync("mkfifo", [join(edir, "b.expected.json")]).status === 0) {
+    const t0 = Date.now(); const c = conformance(edir);
+    ok("rule 8: a FIFO as an expected.json is not conformant, without a wait", c.conformant === false && c.results.length === 1 && /^unreadable: /.test(c.results[0].error) && Date.now() - t0 < 5000, JSON.stringify(c));
+  }
+  // a FIFO of exactly the bound is read; one byte more is input_too_large (the reader has opened the FIFO, so the
+  // writer below does not wait; its bytes are read when the event loop runs)
+  const ff = join(edir, "l.fifo");
+  if (spawnSync("mkfifo", [ff]).status === 0) {
+    const viaFifo = (bytes, limit) => new Promise((res) => {
+      readLedgerInput(ff, (f, b) => res(f ? f.error : `read ${b.length}`), 10000, limit);
+      spawnSync("sh", ["-c", 'printf %s "$1" > "$0"', ff, "x".repeat(bytes)]);
+    });
+    const atF = await viaFifo(16, 16), pastF = await viaFifo(17, 16);
+    ok("rule 8: a FIFO of exactly the bound is read", atF === "read 16", atF);
+    ok("rule 8: a FIFO one byte past the bound is input_too_large", pastF === LEDGER_TOO_LARGE, pastF);
+  }
   let dir = "no answer";
   readLedgerInput(HERE, (f) => { dir = f ? `${f.verdict} ${f.error}` : "read"; });
   ok("rule 8: a directory is not read", dir === `FAIL ${LEDGER_NOT_REGULAR}`, dir);

@@ -4,7 +4,8 @@ path is opened once without waiting for a writer and judged on what was opened: 
 256 MiB is verified, a FIFO that gives no byte and no end of file for 10 s is `unreadable: FIFO idle for 10 s`, a
 directory or a device is `unreadable: not a regular file`, more than 256 MiB is `input_too_large: file exceeds
 268435456 bytes`; FAIL, exit 1, the same text in the four. Until then the three waited without end on a FIFO with no
-writer, JS and Java read a link to /dev/zero without end, and the three read /dev/null as an empty ledger. The Go writer
+writer, JS read a link to /dev/zero without end and Java until it had no memory left (`internal: OutOfMemoryError`),
+and the three read /dev/null as an empty ledger. The Go writer
 (cvappend) appends only to a regular file and reads its key file as §5 step 0 (c).
 
 Needs no `cryptography`: the ledger is the unsigned example. A verifier whose toolchain is absent is not run."""
@@ -188,6 +189,32 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             except OSError:   # BrokenPipeError: the reader stopped at the bound
                 pass
         self.assertAll(_all(self.bins, fifo, feed), (1, "FAIL", TOO_LARGE), "a FIFO of 257 MiB")
+
+    def test_exactly_the_bound_is_within_it_in_java(self):
+        """256 MiB exactly is read, as a file and through a FIFO, and fails at §5 step 1 (it holds no entry). Only the
+        Java verifier is run: its bound is reached with 256 MiB alone, where the Go and JS readers take the bound as an
+        argument (input_test.go, test.mjs: 10 and 16 bytes) and verifier.py has its own tests."""
+        if "java" not in self.bins:
+            self.skipTest("needs the Java toolchain")
+        at = self.path("at.jsonl")
+        with open(at, "wb") as f:   # sparse: no disk used
+            f.truncate(BOUND)
+        fifo = self.path("at.fifo")
+        os.mkfifo(fifo)
+
+        def feed(p):
+            try:
+                with open(p, "wb") as w:
+                    block = b"\0" * (1 << 20)
+                    for _ in range(256):
+                        w.write(block)
+            except OSError:
+                pass
+        java = {"java": self.bins["java"]}
+        for what, got in (("a file", _all(java, at)), ("a FIFO", _all(java, fifo, feed))):
+            rc, verdict, reason, _ = got["java"]
+            self.assertEqual((rc, verdict), (1, "FAIL"), what)
+            self.assertNotEqual(reason, TOO_LARGE, what)
 
     def test_a_fifo_whose_writer_comes_late_is_read_control(self):
         fifo = self.path("late.fifo")

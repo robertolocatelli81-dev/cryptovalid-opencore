@@ -12,7 +12,8 @@ import (
 // SPEC §22 rule 8 (§5 step 0 of the Python reference: verifier.open_ledger_input, read_input): the path is opened once
 // without waiting for a writer (oNonblock) and judged on what was opened. A regular file of at most the bound is read;
 // a FIFO (when the caller takes one) is read to its end, at most the bound, and a FIFO that gives no byte and no end of
-// file for fifoIdle is errFIFOIdle; anything else (a directory, a device, a socket) is errNotRegular, no byte read.
+// file for fifoIdle is errFIFOIdle; anything else that opens (a directory, a device) is errNotRegular, no byte read
+// (a Unix socket does not open: the system's ENXIO).
 
 const (
 	maxInputBytes   = 256 << 20 // verifier.py MAX_INPUT_BYTES

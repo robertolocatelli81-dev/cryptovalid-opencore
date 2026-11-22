@@ -90,6 +90,18 @@ func TestInputFIFO(t *testing.T) {
 	if b, err := readInput(fifo, 10); err != nil || string(b) != "abc" {
 		t.Fatalf("late writer: %q %v", b, err)
 	}
+	// a writer that comes after the open and leaves without a byte: the end at once, not an idle FIFO (the first read
+	// of nothing waits for the poller once, not at each read)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		if w, err := os.OpenFile(fifo, os.O_WRONLY, 0); err == nil {
+			w.Close()
+		}
+	}()
+	t0 := time.Now()
+	if b, err := readInput(fifo, 10); err != nil || len(b) != 0 || time.Since(t0) > 5*time.Second {
+		t.Fatalf("late writer that leaves without a byte: %q %v after %v", b, err, time.Since(t0))
+	}
 	// an empty buffer reads nothing and is not the end (io.Reader), whatever the FIFO holds
 	go func() {
 		time.Sleep(300 * time.Millisecond)
@@ -136,5 +148,21 @@ func TestInputFIFOIdle(t *testing.T) {
 	v := VerifyLedgerFull(fifo, "", "", "", "", "", false, false, "", "")
 	if v.Verdict != "FAIL" || len(v.Failures) != 1 || v.Failures[0] != "unreadable: FIFO idle for 10 s" {
 		t.Fatalf("VerifyLedgerFull on a FIFO with no writer: %+v", v)
+	}
+}
+
+// a ledger the writer creates is private to its owner whatever the umask (0600, as before rule 8 moved the open here)
+func TestTheLedgerIsCreatedPrivate(t *testing.T) {
+	old := syscall.Umask(0)
+	defer syscall.Umask(old)
+	p := filepath.Join(t.TempDir(), "new.jsonl")
+	f, err := openRegularLedger(p, os.O_RDWR|os.O_CREATE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("mode of a new ledger: %v %v", st.Mode().Perm(), err)
 	}
 }

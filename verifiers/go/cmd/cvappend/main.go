@@ -39,7 +39,13 @@ func main() {
 		}
 		ts = t
 	}
-	raw, _ := io.ReadAll(os.Stdin)
+	// the data becomes one line of the ledger: never read more than a line may hold (stdin without end, `< /dev/zero`,
+	// was read until no memory was left: the same class as the key file of SPEC §22 rule 8)
+	raw, _ := io.ReadAll(io.LimitReader(os.Stdin, cv.MaxLineBytes+1))
+	if int64(len(raw)) > cv.MaxLineBytes {
+		fmt.Fprintf(os.Stderr, "data: input_too_large: more than %d bytes\n", cv.MaxLineBytes)
+		os.Exit(2)
+	}
 	var data any
 	dec := json.NewDecoder(bytesReader(raw))
 	dec.UseNumber()

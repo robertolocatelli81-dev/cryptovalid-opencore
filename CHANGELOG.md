@@ -115,18 +115,21 @@ said the deepest of the lists of 2026-11-20 is 12 elements deep (17, of 31 docum
   the chain and the signatures are checked on one read of the file, and `valid` is true only when both hold. Without
   the key it answers as before and says `signatures: {"checked": false, ...}`.
 - **The JS, Go and Java verifiers read the ledger as `verifier.py` does** (§22 rule 8, after the third review): given a
-  FIFO with no writer as the ledger the three waited without end (Python: FAIL after 10 s); JS and Java read a link to
-  `/dev/zero` without end; the three read `/dev/null` as an empty ledger; JS read a file larger than 256 MiB and Go read
-  it up to its line bound. Now the path is opened once without waiting and the same text comes out of the four: a
-  directory or a device is `unreadable: not a regular file`, more than 256 MiB (a file or a FIFO) `input_too_large: file
-  exceeds 268435456 bytes`, a FIFO that gives nothing for 10 s `unreadable: FIFO idle for 10 s`, FAIL, exit 1 (JS: a
-  directory was `FILE_ERROR`, exit 2). A FIFO with a writer, `<(cat ledger.jsonl)` included, is read as before. The Go
-  writer (`cvappend`) appends only to a regular file (a link to `/dev/zero` was written to) and reads `-tipkey` as
-  `signer.py` reads a key, a regular file or a FIFO of at most 1 MiB, 10 s idle at most (a FIFO waited without end, a
-  link to `/dev/zero` was read until the process was killed). The JS verifier's `--conformance <dir>` reads each file
-  there as its tip reader does (a FIFO waited without end; now a vector not conformant). `test_ledger_input_20261122.py`
-  (13 tests: 7 fail on cfcd05c; the 4 named `*_control`, a FIFO whose writer leaves without a byte and a tip that is a
-  FIFO, row 1 of rule 2, pass on both), `verifiers/go/input_test.go` and `verifiers/js/test.mjs`.
+  FIFO with no writer as the ledger the three waited without end (Python: FAIL after 10 s); JS read a link to
+  `/dev/zero` without end and Java until `internal: OutOfMemoryError`; the three read `/dev/null` as an empty ledger; JS
+  read a file larger than 256 MiB and Go read it up to its line bound. Now the path is opened once without waiting and
+  the same text comes out of the four: a directory or a device is `unreadable: not a regular file`, more than 256 MiB (a
+  file or a FIFO) `input_too_large: file exceeds 268435456 bytes`, a FIFO that gives nothing for 10 s `unreadable: FIFO
+  idle for 10 s`, FAIL, exit 1 (JS: a directory was `FILE_ERROR`, exit 2). A FIFO with a writer, `<(cat ledger.jsonl)`
+  included, is read as before. The Go writer (`cvappend`) appends only to a regular file (a link to `/dev/zero` was
+  written to) and reads `-tipkey` as `signer.py` reads a key, a regular file or a FIFO of at most 1 MiB, 10 s idle at
+  most (a FIFO waited without end, a link to `/dev/zero` was read until the process was killed), and at most 64 MiB of
+  data from stdin (`data: input_too_large: more than 67108864 bytes`, exit 2: a line holds no more; stdin without end,
+  `< /dev/zero`, was read until no memory was left: Go's `fatal error: out of memory` under `ulimit -d 524288`). The JS
+  verifier's `--conformance <dir>` reads each file there as its tip reader does (a FIFO waited without end; now a vector
+  not conformant). `test_ledger_input_20261122.py` (14 tests: 7 fail on cfcd05c; the 4 named `*_control`, a FIFO whose
+  writer leaves without a byte, 256 MiB exactly in Java and a tip that is a FIFO, row 1 of rule 2, pass on both),
+  `verifiers/go/input_test.go` and `verifiers/js/test.mjs`.
 
 ### Fixed
 

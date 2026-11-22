@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -211,5 +212,44 @@ func TestTipTemporaryNextToARelativeLedger(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(d, "l.jsonl.tip.json")); err != nil {
 		t.Errorf("no tip next to the ledger: %v", err)
+	}
+}
+
+// The data on stdin is bounded (2026-11-22): `cvappend ledger < /dev/zero` was read until no memory was left (under
+// 512 MiB of data, Go's "fatal error: out of memory"). Now it stops one byte past MaxLineBytes, exit 2, and nothing is
+// appended. The stdin given here ends at 80 MiB, so the code before the bound reads it all (and answers `data: invalid
+// character ...`) instead of growing; what the writer took is counted.
+type zeros struct{ n, max int64 }
+
+func (z *zeros) Read(p []byte) (int, error) {
+	if z.n >= z.max {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > z.max-z.n {
+		p = p[:z.max-z.n]
+	}
+	clear(p)
+	z.n += int64(len(p))
+	return len(p), nil
+}
+
+func TestStdinPastALineIsRefused(t *testing.T) {
+	ledger := filepath.Join(t.TempDir(), "l.jsonl")
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "CVAPPEND_AS_CLI=1", "CVAPPEND_ARGS="+ledger+"\n2026-10-12T00:00:00Z")
+	stdin := &zeros{max: 80 << 20}
+	cmd.Stdin = stdin
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 2 || errb.String() != "data: input_too_large: more than 67108864 bytes\n" {
+		t.Fatalf("stdin past a line: %v, stderr %.200q", err, errb.String())
+	}
+	if stdin.n > 64<<20+1+1<<20 { // one byte past the bound, and what the pipe and the copy held when it stopped
+		t.Fatalf("%d bytes of stdin were taken", stdin.n)
+	}
+	if _, err := os.Stat(ledger); !os.IsNotExist(err) {
+		t.Fatalf("the ledger exists after a refusal: %v", err)
 	}
 }
