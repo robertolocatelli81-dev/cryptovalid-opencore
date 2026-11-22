@@ -135,7 +135,8 @@ said the deepest of the lists of 2026-11-20 is 12 elements deep (17, of 31 docum
 - **A tip, a tree head and a HEAD are closed objects** (§22 rule 2): a member outside the list of its document was
   ignored (PASS; `verify_archive` ok); it is now `tip_invalid: unknown_member:<keys>` (the same text in Python, JS, Go
   and Java), `sth_unknown_member:<keys>` or `head_unknown_member:<keys>`. Every member written since 2026-08-16 is in
-  the lists, so archives and tips written by earlier versions verify as before.
+  the lists, so archives and tips written by earlier versions verify as before. The Rust and Swift verifiers do not
+  apply the rule: the differential oracle declares the case `tip-pq-case` (Rust PASS, measured in CI on 2026-11-22).
 - **Tree heads, HEADs and pack manifests are signed over a domain-tagged message** (§22 rule 3, a format change). They
   were signed over a bare SHA-256 hex, the same kind of message as an entry signature. A tree head or HEAD signed now
   carries `sig_domain` (`cryptovalid-sth/2`, `cryptovalid-head/2`) and is signed over `<sig_domain>:<hex>`; packs are

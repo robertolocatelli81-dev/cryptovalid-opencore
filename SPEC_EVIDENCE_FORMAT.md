@@ -2024,7 +2024,9 @@ maintainer, outside this repository.
      and the two members of the post-quantum layer `signature_pq_hex`, `log_pq_pubkey_b64` (`cryptovalid_tip.TIP_MEMBERS`,
      JS `TIP_MEMBERS`, Go `TipMembers`, Java `TIP_MEMBERS`). The failure is `tip_invalid: unknown_member:<keys>`, the
      same text in Python, JS, Go and Java: the keys outside the list in code-point order, joined by `,`, cut to 120 code
-     points (as `unknown_field` of §2.1). It is checked right after `kind` (a document whose `kind` is not
+     points (as `unknown_field` of §2.1). The Rust and Swift verifiers do not apply this rule: a tip whose post-quantum
+     members are spelled `Signature_PQ_Hex` and `Log_PQ_Pubkey_B64` is PASS in Rust (measured in CI on 2026-11-22,
+     declared in `verifiers/differential_oracle.py` as `tip-pq-case`); Swift is not measured. It is checked right after `kind` (a document whose `kind` is not
      `cryptovalid_tip/1` is still `not a cryptovalid_tip/1 document`) and before every other member: the Go verifier
      decoded a tip into a struct whose names match case-insensitively, so `"Kind": 1` there was `tip_unreadable` and in
      Python an ignored member; both now name it. The same decoding made the Go verifier answer `tip_unreadable: json:

@@ -498,7 +498,12 @@ if TIP_CASE:
         for name in ("hybrid-tip-valid", "hybrid-tip-bad-pq", "hybrid-tip-pq-required-missing",
                      "tip-pq-int", "tip-pq-null", "tip-pq-empty", "tip-pq-short", "tip-pq-badkey", "tip-sig-upper", "tip-sig-space", "tip-pq-case",
                      "tip-dup-key", "tip-float-extra", "tip-logpk-int"):
-            CORPUS[name] = TIP_CASES[name][0].rstrip("\n")   # tip-pq-case: PASS everywhere, pq_protected False everywhere (must AGREE)
+            CORPUS[name] = TIP_CASES[name][0].rstrip("\n")
+        # tip-pq-case (the PQ members spelled Signature_PQ_Hex / Log_PQ_Pubkey_B64): PASS everywhere until 0.27.0; since
+        # SPEC §22 rule 2 a member outside the tip's list is tip_invalid on Python/JS/Go/Java, Rust does not check it
+        # (measured in CI on 2026-11-22: Rust PASS), Swift not measured
+        DECLARED_DIVERGENCE["tip-pq-case"] = ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "PASS", "swift": "PASS"},
+                                              "unknown member in a signed tip (SPEC §22 rule 2): tip_invalid on Python/JS/Go/Java, unchecked by Rust/Swift (declared)")
         for name in ("tip-pq-int", "tip-pq-null", "tip-pq-empty", "tip-pq-short", "tip-pq-badkey", "tip-sig-upper", "tip-sig-space",
                      "tip-dup-key", "tip-float-extra", "tip-logpk-int"):
             DECLARED_DIVERGENCE[name] = ({"python": "FAIL", "js": "FAIL", "go": "FAIL", "java": "FAIL", "rust": "PASS", "swift": "PASS"},
