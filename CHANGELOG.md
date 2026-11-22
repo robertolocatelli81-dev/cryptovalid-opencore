@@ -22,6 +22,20 @@ I-JSON admits, which these functions never see: they take parsed values, and the
 non-ASCII scope. `test_aps.py`: one test more, `test_v2_and_external_refuse_a_leap_second` (red on 0.27.0, with the
 positive control that took a leap second now taking 23:59:59).
 
+### A long line within the bound: the four verifiers agree (SPEC §22 rule 8)
+
+A ledger with one valid line of 65 MiB was PASS in Python and Java, ended without a receipt in JS (Node's `JavaScript
+heap out of memory`, exit 134, after 21 to 31 s: `pyEscape` built the canonical form one character at a time) and was
+FAIL `read: bufio.Scanner: token too long` in Go, whose line reader stopped at 64 MiB. JS now escapes in one regex
+pass (the same bytes as before: 0 differences on 200 000 random strings and on every BMP character, measured against
+the old function; a mutant that leaves 0x7f unescaped gives 22 159); Go reads a line up to the input bound, 256 MiB
+(`MaxLineBytes`, 64 MiB, bounds only what the Go writer takes). Measured on 2026-11-22: one valid line of 65 MiB and
+one of 250 MiB PASS in the four (peak memory at 250 MiB: Python 1055 MiB, JS 2064 MiB, Go 1402 MiB, Java 1595 MiB),
+one byte changed FAIL in the four; a sparse file of 256 MiB exactly fails at §5 step 1 in the four (Go said `token
+too long`). `test_ledger_input_20261122.py`: `test_a_valid_line_of_65_mib_is_verified_in_the_four` (red on 287482e:
+JS out of memory), and `test_exactly_the_bound_is_within_it` gives the file to the four. `spec/CONFORMANCE.md` "Size"
+said the Go and JS verifiers bound no file: stale since rule 8, rewritten.
+
 ### Changed by the decisions of 2026-11-20 (SPEC §22, written before the code; verdicts change)
 
 `test_decisions_20261120.py`, 54 tests (one compares the canonicalization with lxml and is skipped where lxml is absent):

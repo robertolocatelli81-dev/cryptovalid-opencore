@@ -2266,11 +2266,14 @@ maintainer, outside this repository.
    (`unix:mode`; where that view is absent, a path that is not a regular file is refused), then opens and reads it in a
    second thread and stops waiting after 10 s without a byte, so a path swapped for a FIFO between the two ends in
    `unreadable: FIFO idle for 10 s` instead of a wait. Java's tip reader (rule 2 row 1) reads through the same thread,
-   so a tip path swapped for a FIFO is row 1 after 10 s. The Go verifier reads to the end, within the bound, what its
-   line reader leaves after a line longer than 64 MiB (`MaxLineBytes`), so a FIFO of more than 256 MiB is
-   `input_too_large` there too; a line longer than 64 MiB within the bound stays its own failure, `read: bufio.Scanner:
-   token too long` (not changed here; measured on 2026-11-22 with one line of 65 MiB: Python and Java parse it, and the
-   JS verifier ends without a receipt, Node's `JavaScript heap out of memory`, exit 134). An absent file and a file the
+   so a tip path swapped for a FIFO is row 1 after 10 s. A line is read up to the bound in the four, so a ledger
+   within the bound is judged on its entries, never on the length of a line: one valid line of 65 MiB and one of
+   250 MiB are PASS in the four, and the same line with one byte changed FAIL (measured on 2026-11-22). Until 0.28.0
+   the JS verifier ended on the line of 65 MiB without a receipt (Node's `JavaScript heap out of memory`, exit 134:
+   its canonical form was built one character at a time) and the Go verifier was FAIL `read: bufio.Scanner: token too
+   long` on any line longer than 64 MiB (`MaxLineBytes`, which now bounds only what the Go writer takes); the Go
+   verifier reads to the end, within the bound, what its line reader leaves, so a FIFO of more than 256 MiB is
+   `input_too_large` there too. An absent file and a file the
    process may not read keep each verifier's own answer (not changed here: Python `FILE_NOT_FOUND` exit 1 and
    `unreadable: PermissionError`, JS `FILE_ERROR` exit 2, Go exit 2 for an absent file and `open: ...` for the other,
    Java `open: NoSuchFileException` and `open: AccessDeniedException`). So does a Unix socket, which the system does not
@@ -2300,8 +2303,8 @@ maintainer, outside this repository.
    3 s late, a writer that holds it 14 s without a byte, 256 MiB + 1 byte through it; `<(cat ledger.jsonl)`; a
    directory; `/dev/null`; a link to `/dev/zero`; a sparse file of 256 MiB + 1 byte; one of exactly 256 MiB; a file
    without permission; an absent file), the 12 the table names give its row in the four, the same text; the other three
-   keep each verifier's answer, as above (256 MiB exactly is within the bound and fails at §5 step 1; in Go as a line
-   longer than 64 MiB). Held by `test_ledger_input_20261122.py` (14 tests), `verifiers/go/input_test.go` and
+   keep each verifier's answer, as above (256 MiB exactly is within the bound and fails at §5 step 1, in Go too
+   since 0.28.0). Held by `test_ledger_input_20261122.py` (14 tests), `verifiers/go/input_test.go` and
    `verifiers/js/test.mjs`.
    Not measured: macOS, where the Go runtime does not poll a FIFO (the Go verifier reads one there with a pause of 10 ms
    between tries, and a FIFO no writer has opened yet reads as empty, `empty_ledger`, where Linux waits for a writer),

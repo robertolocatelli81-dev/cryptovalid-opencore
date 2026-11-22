@@ -68,9 +68,11 @@ python3 conformance.py     # exit 0 = conformant
 - **`\uXXXX` escapes**: exactly four ASCII hex digits (`0-9a-fA-F`); a sign or a non-ASCII digit is a decode error
   (Java's `Integer.parseInt` would have taken `\u+041`).
 - **`idx`**: a JSON integer; a boolean is not an index (Python's `True == 1` was measured and refused).
-- **Size**: the Python reference and the Java verifier refuse a file over 256 MiB (`input_too_large`) before
-  reading it; the Go, JS and Rust verifiers bound a single line (Go: 64 MiB) but not the file — a 300 MiB valid
-  ledger is FAIL in Python/Java and PASS elsewhere (declared divergence, outside the acceptance profile).
+- **Size**: the Python reference and the Java, JS and Go verifiers refuse a ledger over 256 MiB
+  (`input_too_large: file exceeds 268435456 bytes`, SPEC §22 rule 8) and read any line within it (one valid line of
+  65 MiB and one of 250 MiB measured PASS in the four on 2026-11-22). The Rust verifier reads the file whole
+  (`std::fs::read`) with no bound, by code reading (no Rust toolchain on that bench): a valid ledger of 300 MiB is
+  FAIL in the four and, by code reading, PASS in Rust (declared divergence, outside the acceptance profile).
 
 ## Optional profiles
 

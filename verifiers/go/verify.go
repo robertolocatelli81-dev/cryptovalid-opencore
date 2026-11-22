@@ -50,7 +50,9 @@ const scope = "single-snapshot check of the cryptovalid profile (SPEC_EVIDENCE_F
 	"signed chain tip is checked (tip.go / cvverify -tip): then only a holder of the log key can truncate " +
 	"and re-sign. Entry signatures are not verified here."
 
-// MaxLineBytes bounds one JSONL line (a longer line is a failure, not a crash, and never silently truncated).
+// MaxLineBytes bounds one line the Go WRITER takes (cvappend's stdin, the last line Append reads). The verifier reads
+// a line up to maxInputBytes, as verifier.py, JS and Java do: a valid line of 65 MiB was FAIL `token too long` here
+// alone (NEMESIS R3, 22/11/2026).
 const MaxLineBytes = 64 << 20
 
 // EntryKeys is the CLOSED entry schema of SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the core fields plus the optional
@@ -87,7 +89,7 @@ func truncRunes(s string, n int) string {
 func VerifyLedger(r io.Reader) Verdict {
 	v := Verdict{Failures: []string{}, Scope: scope}
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 1<<20), MaxLineBytes)
+	sc.Buffer(make([]byte, 1<<20), maxInputBytes+1) // +1: bufio refuses a token as long as its whole buffer
 	hashOK, linkOK := true, true
 	prev := Genesis
 	line, i := 0, 0
@@ -213,7 +215,7 @@ func VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64,
 	}
 	defer f.Close()
 	v := VerifyLedger(f)
-	// what the scanner left (it stops at a line longer than MaxLineBytes) is read to the end as verifier.py reads the
+	// what the scanner left (it stops at a line longer than maxInputBytes, from a reader without the bound) is read to the end as verifier.py reads the
 	// whole input before it parses: past the bound, or a FIFO idle, is the reason alone (nothing verified)
 	io.Copy(io.Discard, f)
 	if f.reason != nil {

@@ -119,6 +119,24 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
     def test_a_regular_file_is_verified_control(self):
         self.assertAll(_all(self.bins, SAMPLE), (0, "PASS", None), "the example ledger")
 
+    def test_a_valid_line_of_65_mib_is_verified_in_the_four(self):
+        """NEMESIS R3 (22/11): until 0.28.0 JS ended in `JavaScript heap out of memory` (exit 134, no receipt) and Go
+        was FAIL `token too long` on this ledger, which verifier.py and Java verify; one byte changed is FAIL in the four."""
+        sys.path.insert(0, HERE)
+        import verifier
+        e = {"idx": 0, "ts": "2026-11-22T15:00:00Z", "data": "x" * (65 << 20), "prev_hash": "0" * 64}
+        e["self_hash"] = verifier.hash_with("sha256", verifier.canonical_payload(e))
+        p = self.path("line65.jsonl")
+        with open(p, "w") as f:
+            f.write(json.dumps(e, separators=(",", ":")) + "\n")
+        del e
+        self.assertAll(_all(self.bins, p), (0, "PASS", None), "one valid line of 65 MiB")
+        with open(p, "r+b") as f:
+            f.seek(1 << 20)
+            f.write(b"y")
+        for name, (rc, verdict, _, _) in _all(self.bins, p).items():
+            self.assertEqual((rc, verdict), (1, "FAIL"), name)
+
     def test_a_fifo_with_no_writer_is_idle_after_10_s(self):
         fifo = self.path("idle.fifo")
         os.mkfifo(fifo)
@@ -190,15 +208,19 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
                 pass
         self.assertAll(_all(self.bins, fifo, feed), (1, "FAIL", TOO_LARGE), "a FIFO of 257 MiB")
 
-    def test_exactly_the_bound_is_within_it_in_java(self):
-        """256 MiB exactly is read, as a file and through a FIFO, and fails at §5 step 1 (it holds no entry). Only the
-        Java verifier is run: its bound is reached with 256 MiB alone, where the Go and JS readers take the bound as an
-        argument (input_test.go, test.mjs: 10 and 16 bytes) and verifier.py has its own tests."""
-        if "java" not in self.bins:
-            self.skipTest("needs the Java toolchain")
+    def test_exactly_the_bound_is_within_it(self):
+        """256 MiB exactly is read, as a file and through a FIFO, and fails at §5 step 1 (it holds no entry). The file is
+        given to the four: until 0.28.0 Go stopped at its line bound (`token too long`). The FIFO only to Java: its bound
+        is reached with 256 MiB alone, where the Go and JS readers take the bound as an argument (input_test.go,
+        test.mjs: 10 and 16 bytes) and verifier.py has its own tests."""
         at = self.path("at.jsonl")
         with open(at, "wb") as f:   # sparse: no disk used
             f.truncate(BOUND)
+        for name, (rc, verdict, reason, _) in _all(self.bins, at).items():
+            self.assertEqual((rc, verdict), (1, "FAIL"), name)
+            self.assertNotIn(reason, (TOO_LARGE, "read: bufio.Scanner: token too long"), name)
+        if "java" not in self.bins:
+            self.skipTest("the FIFO needs the Java toolchain")
         fifo = self.path("at.fifo")
         os.mkfifo(fifo)
 

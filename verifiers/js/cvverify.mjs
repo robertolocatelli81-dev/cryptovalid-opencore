@@ -29,21 +29,11 @@ const unknownReason = (u) => "unknown_field:" + [...u.join(",")].slice(0, 120).j
 
 // --- canonical JSON: identical to Python json.dumps(sort_keys=True,
 //     separators=(",",":"), ensure_ascii=True).
+// one regex pass, not `out += ch` per character: 65 M appends made a rope V8 could not hold (a line of 65 MiB ended in
+// "JavaScript heap out of memory", exit 134, no receipt; NEMESIS R3 22/11/2026)
+const PY_ESC = { '"': '\\"', "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t", "\b": "\\b", "\f": "\\f" };
 function pyEscape(s) {
-  let out = '"';
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i), ch = s[i];
-    if (ch === '"') out += '\\"';
-    else if (ch === "\\") out += "\\\\";
-    else if (ch === "\n") out += "\\n";
-    else if (ch === "\r") out += "\\r";
-    else if (ch === "\t") out += "\\t";
-    else if (ch === "\b") out += "\\b";
-    else if (ch === "\f") out += "\\f";
-    else if (c < 0x20 || c > 0x7e) out += "\\u" + c.toString(16).padStart(4, "0");
-    else out += ch;
-  }
-  return out + '"';
+  return '"' + s.replace(/["\\]|[^ -~]/g, (ch) => PY_ESC[ch] ?? "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0")) + '"';
 }
 const cmp = (a, b) => { const A = [...a], B = [...b]; for (let i = 0; i < Math.min(A.length, B.length); i++) { const d = A[i].codePointAt(0) - B[i].codePointAt(0); if (d) return d; } return A.length - B.length; };
 function canon(v) {
