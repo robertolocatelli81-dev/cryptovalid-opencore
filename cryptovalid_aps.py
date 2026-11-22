@@ -13,11 +13,15 @@ revision that defines it, and none is silently substituted for another:
                          the array sorted by code point; timestamp RFC 3339 UTC at second precision with "Z";
                          SHA-256(JCS). -01 states no duplicate rule: `reject_duplicate_scopes=True` applies the
                          rule the conformance suite takes from -03 (stated, never on by default).
-  action_ref_v2          -03 §4.1 ("aps-action-ref-v2"): the eight members, payload_ref and action_ref with their
+  action_ref_v2          -04 §5.1 ("aps-action-ref-v2"; -03 §4.1 up to 0.27.0, which took second 60): the eight members, payload_ref and action_ref with their
                          domain-separation prefixes; a verifier accepts only NFC, sorted (UTF-8 order), duplicate-free
                          scopes and never normalises an untrusted wire object.
-  external_action_ref    -03 §4.2 ("action-ref-v1-jcs-sha256"): {action_type, agent_id, scope, timestamp}, hashed as
-                         supplied, millisecond "Z" timestamp; never to be presented as an action_ref.
+  external_action_ref    -04 §5.2 ("action-ref-v1-jcs-sha256"; -03 §4.2 up to 0.27.0): {action_type, agent_id, scope,
+                         timestamp}, hashed as supplied, millisecond "Z" timestamp with a second from 00 through 59;
+                         never to be presented as an action_ref.
+  Scope values of action_ref_v2: -04 §5.1 refers them to §4.2 ("Scope grants use ASCII colon-separated segments") and
+  forbids rejecting a scope "against a pattern this document does not state", while it still requires NFC, which an
+  ASCII value always is. Read here (declared, 2026-11-22): no scope is refused for not being ASCII colon segments.
   verify_accountability_record
                          the Accountability Record v0.1 of the APS conformance corpus (its README and JSON schema):
                          the schema rules (closed object, required members, consts, enum, patterns, types), Ed25519
@@ -53,8 +57,10 @@ DAYS_IN_MONTH = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
 def _calendar_ok(y: str, mo: str, d: str, h: str, mi: str, s: str, leap_second: bool) -> bool:
     """RFC 3339 §5.6 date-time fields with a real calendar; second 60 only where a leap second can occur (23:59 on the
-    last day of a month) and only when the form admits it (-03 §4.1 issued_at and §4.2 timestamp do; the second-precision
-    native form and normalizeTimestamp refuse it, as the official implementation does)."""
+    last day of a month) and only when the form admits it. No form here admits it: -04 §5.1 (issued_at) and §5.2
+    (timestamp) state "a second value from 00 through 59" (-03 did not, and up to 0.27.0 they took 23:59:60 on the last
+    day of a month); the second-precision native form and normalizeTimestamp refuse it, as the official implementation
+    does."""
     y, mo, d, h, mi, s = (int(x) for x in (y, mo, d, h, mi, s))
     if not (1 <= mo <= 12 and h <= 23 and mi <= 59):
         return False
@@ -121,46 +127,46 @@ def payload_ref_v2(payload: Any) -> str:
 
 
 def action_ref_v2(obj: Dict[str, Any], payload: Any = None, empty_scope_permitted: bool = False) -> str:
-    """action_ref under -03 §4.1; with `payload`, payload_ref is recomputed and must match (the boundary's duty).
+    """action_ref under -04 §5.1; with `payload`, payload_ref is recomputed and must match (the boundary's duty).
     "All string fields MUST be non-empty except that a profile MAY permit an empty scope_required array": the permission
     is the profile's, so an empty array is refused unless the caller holding that profile passes empty_scope_permitted."""
     members = {"profile", "agent_id", "action_type", "target", "payload_ref", "scope_required", "issued_at", "nonce"}
     if not isinstance(obj, dict) or set(obj) != members:
-        raise ApsError("-03 §4.1: unknown or missing member")
+        raise ApsError("-04 §5.1: unknown or missing member")
     if obj["profile"] != "aps-action-ref-v2":
-        raise ApsError('-03 §4.1: profile MUST equal "aps-action-ref-v2"')
-    _strings(obj, ("agent_id", "action_type", "target", "payload_ref", "issued_at", "nonce"), "-03 §4.1")
+        raise ApsError('-04 §5.1: profile MUST equal "aps-action-ref-v2"')
+    _strings(obj, ("agent_id", "action_type", "target", "payload_ref", "issued_at", "nonce"), "-04 §5.1")
     if not HEX64.fullmatch(obj["payload_ref"]) or not HEX32.fullmatch(obj["nonce"]):
-        raise ApsError("-03 §4.1: invalid hexadecimal field")
+        raise ApsError("-04 §5.1: invalid hexadecimal field")
     m = TS_MILLIS.fullmatch(obj["issued_at"])
-    if not m or not _calendar_ok(*m.groups(), leap_second=True):
-        raise ApsError("-03 §4.1: issued_at must be RFC 3339 UTC with exactly three fractional digits and 'Z' on a real calendar date")
+    if not m or not _calendar_ok(*m.groups(), leap_second=False):
+        raise ApsError("-04 §5.1: issued_at must be RFC 3339 UTC with exactly three fractional digits and 'Z' on a real calendar date")
     sc = obj["scope_required"]
     if not isinstance(sc, list) or not all(isinstance(x, str) and x for x in sc):
-        raise ApsError("-03 §4.1: scope_required must be an array of non-empty strings")
+        raise ApsError("-04 §5.1: scope_required must be an array of non-empty strings")
     if not sc and not empty_scope_permitted:
-        raise ApsError("-03 §4.1: an empty scope_required is permitted only by an applicable profile")
+        raise ApsError("-04 §5.1: an empty scope_required is permitted only by an applicable profile")
     for x in sc:
-        _no_lone_surrogate(x, "-03 §4.1 scope")
+        _no_lone_surrogate(x, "-04 §5.1 scope")
     canon = sorted(set(unicodedata.normalize("NFC", x) for x in sc), key=lambda x: x.encode("utf-8"))
     if sc != canon:                      # the verifier does not normalise an untrusted wire object: it refuses it
-        raise ApsError("-03 §4.1: non-canonical scope array (NFC, UTF-8 order, duplicate-free)")
+        raise ApsError("-04 §5.1: non-canonical scope array (NFC, UTF-8 order, duplicate-free)")
     if payload is not None and payload_ref_v2(payload) != obj["payload_ref"]:
-        raise ApsError("-03 §4.1: payload_ref does not match the payload")
+        raise ApsError("-04 §5.1: payload_ref does not match the payload")
     return hashlib.sha256(b"APS-ACTION-REF-V2\x00" + jcs(obj)).hexdigest()
 
 
 def external_action_ref(obj: Dict[str, Any]) -> str:
-    """"action-ref-v1-jcs-sha256" under -03 §4.2: hashed as supplied, no transformation."""
+    """"action-ref-v1-jcs-sha256" under -04 §5.2: hashed as supplied, no transformation."""
     if not isinstance(obj, dict) or set(obj) != {"action_type", "agent_id", "scope", "timestamp"}:
-        raise ApsError("-03 §4.2: exactly action_type, agent_id, scope, timestamp")
+        raise ApsError("-04 §5.2: exactly action_type, agent_id, scope, timestamp")
     for n in ("action_type", "agent_id", "scope", "timestamp"):
         if not isinstance(obj[n], str):
-            raise ApsError(f"-03 §4.2: {n} must be a string")
-        _no_lone_surrogate(obj[n], f"-03 §4.2 {n}")
+            raise ApsError(f"-04 §5.2: {n} must be a string")
+        _no_lone_surrogate(obj[n], f"-04 §5.2 {n}")
     m = TS_MILLIS.fullmatch(obj["timestamp"])
-    if not m or not _calendar_ok(*m.groups(), leap_second=True):
-        raise ApsError("-03 §4.2: timestamp at exactly millisecond precision with 'Z' on a real calendar date (never coerced)")
+    if not m or not _calendar_ok(*m.groups(), leap_second=False):
+        raise ApsError("-04 §5.2: timestamp at exactly millisecond precision with 'Z' on a real calendar date (never coerced)")
     return hashlib.sha256(jcs(obj)).hexdigest()
 
 

@@ -171,8 +171,8 @@ class TestTimestampCalendar(unittest.TestCase):
 
     def test_positive_control(self):
         self.assertTrue(A.action_ref_native_01(dict(NATIVE, timestamp="2024-02-29T12:00:00Z"))[0])
-        self.assertTrue(A.action_ref_v2(v2(issued_at="2026-12-31T23:59:60.000Z")))       # leap second where it can occur
-        self.assertTrue(A.external_action_ref({"action_type": "t", "agent_id": "a", "scope": "s", "timestamp": "2026-06-30T23:59:60.000Z"}))
+        self.assertTrue(A.action_ref_v2(v2(issued_at="2026-12-31T23:59:59.999Z")))
+        self.assertTrue(A.external_action_ref({"action_type": "t", "agent_id": "a", "scope": "s", "timestamp": "2026-06-30T23:59:59.000Z"}))
         self.assertEqual(A.normalize_timestamp("2026-10-03T12:00:00.250+00:00"), "2026-10-03T12:00:00Z")
 
     def test_native_refuses_unicode_digits_and_impossible_dates(self):
@@ -182,11 +182,18 @@ class TestTimestampCalendar(unittest.TestCase):
             with self.assertRaises(A.ApsError, msg=ts):
                 A.normalize_timestamp(ts)
 
+    def test_v2_and_external_refuse_a_leap_second(self):
+        """-04 §5.1 and §5.2: "a second value from 00 through 59". Up to 0.27.0 (written from -03, which did not say so)
+        these two forms took 23:59:60 on the last day of a month, a real leap second such as 2016-12-31."""
+        for ms in ("2016-12-31T23:59:60.000Z", "2026-06-30T23:59:60.000Z", "2026-12-31T23:59:60.000Z"):
+            with self.assertRaises(A.ApsError, msg=ms):
+                A.action_ref_v2(v2(issued_at=ms))
+            with self.assertRaises(A.ApsError, msg=ms):
+                A.external_action_ref({"action_type": "t", "agent_id": "a", "scope": "s", "timestamp": ms})
+
     def test_v2_and_external_refuse_unicode_digits_and_impossible_dates(self):
         for ts in self.BAD:
             ms = ts.replace("Z", ".000Z")
-            if ms == "2026-12-31T23:59:60.000Z":
-                continue                                     # a leap second at 23:59 on the last day is admitted in these forms
             with self.assertRaises(A.ApsError, msg=ms):
                 A.action_ref_v2(v2(issued_at=ms))
             with self.assertRaises(A.ApsError, msg=ms):

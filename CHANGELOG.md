@@ -9,6 +9,19 @@ run by the same author, not by a third party.
 
 ## 0.28.0 (unreleased): verdicts change
 
+### APS action references: the revision in force, draft-pidlisnyi-aps-04 (2026-09-28)
+
+`cryptovalid_aps.action_ref_v2` and `external_action_ref` were written from -03 (§4.1, §4.2); -04 (§5.1, §5.2) adds "a
+second value from 00 through 59" to `issued_at` and `timestamp`. Up to 0.27.0 both took 23:59:60 on the last day of a month
+(`2016-12-31T23:59:60.000Z` gave an external reference); they now refuse it, and their messages name -04 §5.1 and §5.2.
+Compared on 2026-11-22, -03 §4.1–4.2 against -04 §5.1–5.2: the other additions already hold here (an empty
+`scope_required` only by the caller's profile context, `empty_scope_permitted`, False by default; any number spelling
+I-JSON admits, which these functions never see: they take parsed values, and the module reads no JSON text).
+-04 §5.1 refers a scope value to §4.2 ("Scope grants use ASCII colon-separated segments") and forbids rejecting a scope
+"against a pattern this document does not state", while it still requires NFC: read here (declared) as no refusal of a
+non-ASCII scope. `test_aps.py`: one test more, `test_v2_and_external_refuse_a_leap_second` (red on 0.27.0, with the
+positive control that took a leap second now taking 23:59:59).
+
 ### Changed by the decisions of 2026-11-20 (SPEC §22, written before the code; verdicts change)
 
 `test_decisions_20261120.py`, 54 tests (one compares the canonicalization with lxml and is skipped where lxml is absent):
