@@ -135,7 +135,7 @@ func parseInstant(s string) (time.Time, error) {
 
 // LoadTipKey reads the 32-byte Ed25519 seed (hex) used by signer.py / cryptovalid_tip.py.
 func LoadTipKey(keyfile string) (ed25519.PrivateKey, error) {
-	raw, err := os.ReadFile(keyfile)
+	raw, err := readInput(keyfile, keyMaxBytes) // SPEC §22 rule 8: a regular file or a FIFO of at most 1 MiB, never a wait without end
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func LoadTipKey(keyfile string) (ed25519.PrivateKey, error) {
 // SignTip signs the CURRENT tail of the ledger (entries = last idx + 1, tip = last self_hash) and writes the
 // sidecar atomically. Call it under the same lock as Append (AppendSigned does).
 func SignTip(ledger string, key ed25519.PrivateKey, ts time.Time) (*Tip, error) {
-	f, err := os.Open(ledger)
+	f, err := openRegularLedger(ledger, os.O_RDONLY)
 	if err != nil {
 		return nil, err
 	}

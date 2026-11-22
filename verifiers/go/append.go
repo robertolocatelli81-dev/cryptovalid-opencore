@@ -67,7 +67,7 @@ func appendLocked(path string, ts time.Time, data any, algo string, after func(f
 	if err != nil {
 		return "", fmt.Errorf("data not admissible: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	f, err := openRegularLedger(path, os.O_RDWR|os.O_CREATE)
 	if err != nil {
 		return "", err
 	}

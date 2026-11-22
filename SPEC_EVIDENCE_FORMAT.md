@@ -130,7 +130,8 @@ forces a boolean where reality had none.
    `MAX_INPUT_BYTES`, 256 MiB) is FAIL (`input_too_large`). Checking the path first and opening it after leaves a window
    where the path is replaced by a FIFO, and opening a FIFO for reading blocks until a writer comes: measured on
    2026-11-18 with 0.26.0, `verifier.py <a FIFO>` did not return (killed after 5 s, exit 124). The same rule holds for
-   every file §10 and §11 read from a path (below). The other implementations in `verifiers/` are not measured here.
+   every file §10 and §11 read from a path (below). The JS, Go and Java verifiers in `verifiers/` read the ledger by
+   the same rule since 2026-11-22 (§22 rule 8); the Rust and Swift verifiers are not measured here.
    **v0.12:** for the ledger itself a FIFO is read, not refused: `verifier.py <(cat ledger.jsonl)` gives the verdict of
    the same bytes in a file, as the five other verifiers do since 0.20.2 (the oracle case `input-fifo`; v0.11 had made
    it FAIL in `verifier.py` only, a disagreement with the other five that the differential oracle reported on
@@ -1993,7 +1994,8 @@ same day, before any release; what that review measured is said in each. Tests: 
 ## 22. Rules written for the decisions of 2026-11-20 (Unreleased)
 
 The re-measurement of 2026-11-20 (§21) left six findings to a decision of the maintainer (rules 1-6; rule 7 applies
-the principle of rule 4 to the TSA pin, decided on 2026-11-21), each a behaviour the earlier
+the principle of rule 4 to the TSA pin, decided on 2026-11-21; rule 8 applies §5 step 0 to the other verifiers, after
+the review of 2026-11-22), each a behaviour the earlier
 text of this specification allowed or a format change. The six decisions were taken the same day; each rule below was
 written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one compares the canonicalization of rule
 6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 43 fail (44 where lxml is
@@ -2060,8 +2062,9 @@ maintainer, outside this repository.
      (`TestTheReasonsOfATipAreTheSameInTheFourVerifiers`, an oracle written from this table). Row 1 in the JS, Go and
      Java verifiers since 2026-11-22 (third review): until then they waited without end on a FIFO given as the tip,
      and read a device (`/dev/null`) or a file larger than 256 MiB as bytes (row 2; Java: `internal: OutOfMemoryError`);
-     now each opens the path once (JS and Go without waiting for a writer; Java reads the attributes first, and a path
-     swapped for a FIFO between the two still waits: declared), and a FIFO, a device, a directory or more than 256 MiB
+     now each opens the path once (JS and Go without waiting for a writer; Java reads the attributes first, and since
+     rule 8 reads in a second thread that stops waiting after 10 s, so a path swapped for a FIFO between the two is row
+     1 too), and a FIFO, a device, a directory or more than 256 MiB
      (`verifier.py` `MAX_INPUT_BYTES`) is row 1, as in Python (`TestRowOneOfTheTableInTheFourVerifiers`). The Go
      verifier built for a platform that is not Unix has no non-blocking open (declared).
      After them, the comparisons with the file keep the texts of JS, Go and Java (`ledger_id_mismatch`,
@@ -2242,4 +2245,60 @@ maintainer, outside this repository.
    openssl): 33 combinations of token (the pinned TSA's, another TSA's, none, `anchored: false`, broken, over another
    digest; openssl absent at the check) x pin (none, TSA A, TSA B) x pack or archive; 12 change verdict, all from
    valid/ok to not, 21 do not; none becomes valid.
+8. **The JS, Go and Java verifiers read the ledger as §5 step 0 says** (written on 2026-11-22, after the third review of
+   the branch found that the tip reader of these three waited on a FIFO, rule 2 row 1, and named their ledger reader as
+   the same class, still open). The path given as the ledger is opened once without waiting for a writer and judged
+   on what was opened; each verifier writes the reason where it writes its other reasons (Python `parse_errors`, JS
+   `error`, Go and Java `failures`):
 
+   | the path | verdict, exit | reason |
+   |---|---|---|
+   | a regular file of at most 256 MiB (`verifier.py` `MAX_INPUT_BYTES`) | as §5 steps 1-5 | |
+   | a regular file larger than that | FAIL, 1 | `input_too_large: file exceeds 268435456 bytes` |
+   | a FIFO (a named pipe, `<(cat ledger.jsonl)`), read to its end | as §5 steps 1-5 | |
+   | a FIFO that gives more than 256 MiB | FAIL, 1 | `input_too_large: file exceeds 268435456 bytes` |
+   | a FIFO that gives no byte and no end of file for 10 s (no writer) | FAIL, 1 | `unreadable: FIFO idle for 10 s` |
+   | anything else: a directory, a device (`/dev/null`, `/dev/zero`), a socket | FAIL, 1, no byte read | `unreadable: not a regular file` |
+
+   Only the wait for a byte is bounded, not the whole read, as in §5 step 0. How: JS and Go open with `O_NONBLOCK` and
+   judge the open descriptor (`fstat`); a FIFO is read through the event loop (JS) or the runtime poller (Go) with an
+   idle timer. The JDK has no non-blocking open: the Java verifier reads the type from the attributes of the path
+   (`unix:mode`; where that view is absent, a path that is not a regular file is refused), then opens and reads it in
+   a second thread and stops waiting after 10 s without a byte, so a path swapped for a FIFO between the two ends in
+   `unreadable: FIFO idle for 10 s` instead of a wait. Java's tip reader (rule 2 row 1) reads through the same thread,
+   so a tip path swapped for a FIFO is row 1 after 10 s. The Go verifier reads to the end, within the bound, what its
+   line reader leaves after a line longer than 64 MiB (`MaxLineBytes`), so a FIFO of more than 256 MiB is
+   `input_too_large` there too; a line longer than 64 MiB within the bound stays its own failure, `read:
+   bufio.Scanner: token too long` (the other three parse it: not changed here). An absent file and a file the process
+   may not read keep each verifier's own answer (not changed here: Python `FILE_NOT_FOUND` exit 1 and `unreadable:
+   PermissionError`, JS `FILE_ERROR` exit 2, Go exit 2 for an absent file and `open: ...` for the other, Java `open:
+   NoSuchFileException` and `open: AccessDeniedException`).
+   The Go writer (`cvappend`, `Append`, `AppendSigned`, `SignTip`) follows §5 step 0 (a) and (c): the ledger it appends
+   to or signs is a regular file (else `<path>: unreadable: not a regular file`; a directory is the system's `is a
+   directory` when it is opened to write), and the key file of `-tipkey` (`LoadTipKey`) is read as (c): a regular file
+   or a FIFO of at most 1 MiB (`input_too_large: file exceeds 1048576 bytes`), with the same idle bound; a device or a
+   directory is `unreadable: not a regular file`.
+   The JS verifier's `--conformance <dir>` reads each file of the directory as its tip reader does: one that is not a
+   regular file of at most 256 MiB makes its vector not conformant, `unreadable: ...` (a FIFO there waited without end).
+   Measured on 2026-11-22 on cfcd05c, each command killed after 40 s (`ledger_inputs.sh`, `cvappend_inputs.sh`, kept
+   with the review notes of the maintainer): a FIFO with no writer given as the ledger, or a link to it, was FAIL
+   `unreadable: FIFO idle for 10 s` in Python after 10 s and did not return in JS, Go and Java; a FIFO whose writer held
+   it 14 s without a byte was read as an empty ledger by the three after the 14 s; a FIFO of 256 MiB + 1 byte was read
+   by JS (`json_decode`), by Go up to its line bound (`token too long`), and was `internal: OutOfMemoryError` in Java; a
+   link to `/dev/zero` did not return in JS (once ended by the system, exit 137) and Java, and was `token too long` in
+   Go; `/dev/null` was an empty ledger in the three; a directory was `FILE_ERROR` exit 2 in JS, `read: ... is a
+   directory` in Go and `open: IOException` in Java; a sparse file of 256 MiB + 1 byte was read by JS (`json_decode`)
+   and by Go up to its line bound (Java refused it already). `cvappend -tipkey` waited without end on a FIFO and read a
+   link to `/dev/zero` until the process was killed (exit 137 after 20 s); `cvappend` given a link to `/dev/zero` as the
+   ledger wrote the entry to it (exit 74, the `fsync` refused). Now, of the same 15 forms (a regular file; a FIFO with
+   no writer, a link to it, a writer at once, a writer 3 s late, a writer that holds it 14 s without a byte, 256 MiB + 1
+   byte through it; `<(cat ledger.jsonl)`; a directory; `/dev/null`; a link to `/dev/zero`; a sparse file of 256 MiB +
+   1 byte; one of exactly 256 MiB; a file without permission; an absent file), the 12 the table names give its row in
+   the four, the same text; the other three keep each verifier's answer, as above (256 MiB exactly is within the bound
+   and fails at §5 step 1; in Go as a line longer than 64 MiB). Held by `test_ledger_input_20261122.py` (13 tests),
+   `verifiers/go/input_test.go` and `verifiers/js/test.mjs`.
+   Not measured: macOS, where the Go runtime does not poll a FIFO (the Go verifier reads one there with a pause of 10 ms
+   between tries, and a FIFO no writer has opened yet reads as empty, `empty_ledger`, where Linux waits for a writer),
+   and where Node and Java were not run; a Go verifier built for a platform that is not Unix opens a path the plain way,
+   as rule 2 declares. The Rust and Swift verifiers read the ledger whole (`std::fs::read`, `FileHandle`): not changed,
+   no toolchain on the bench that measured this rule.

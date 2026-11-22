@@ -10,8 +10,9 @@
 // and — when present — Ed25519 signatures over self_hash. stdlib crypto only.
 // Honest scope: proves integrity/linkage/signature, NOT the truth of recorded facts.
 import { createHash, verify as edVerify, createPublicKey } from "node:crypto";
-import { readFileSync, readdirSync, existsSync, fstatSync, writeSync, openSync, closeSync, readSync, constants as fsc } from "node:fs";
+import { readdirSync, existsSync, fstatSync, writeSync, openSync, closeSync, readSync, constants as fsc } from "node:fs";
 import { join } from "node:path";
+import { Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 
 const GENESIS_PREV = "0".repeat(64);
@@ -266,6 +267,55 @@ export function readTipFile(p) {
     return Buffer.concat(parts, n);
   } finally { closeSync(fd); }
 }
+// SPEC §22 rule 8 (§5 step 0 of verifier.py: open_ledger_input): the ledger path is opened once without waiting for a
+// writer and judged on the open descriptor. A regular file of at most LEDGER_MAX_BYTES is read; a FIFO is read to its
+// end through the event loop (it waits for a writer there, never in a system call), at most LEDGER_MAX_BYTES, and one
+// that gives no byte and no end of file for FIFO_IDLE_SECONDS is a FAIL; anything else (a directory, a device) is not
+// read. done(failure, bytes): failure is null, { verdict: "FAIL", error } (exit 1), or { verdict: "FILE_ERROR", error }
+// (exit 2: absent, no permission, as before).
+export const LEDGER_MAX_BYTES = 256 * 1024 * 1024;   // verifier.py MAX_INPUT_BYTES
+export const FIFO_IDLE_SECONDS = 10;                  // verifier.py FIFO_IDLE_SECONDS
+export const LEDGER_TOO_LARGE = `input_too_large: file exceeds ${LEDGER_MAX_BYTES} bytes`;
+export const LEDGER_NOT_REGULAR = "unreadable: not a regular file";
+export const LEDGER_FIFO_IDLE = `unreadable: FIFO idle for ${FIFO_IDLE_SECONDS} s`;
+export function readLedgerInput(p, done, idleMs = FIFO_IDLE_SECONDS * 1000, limit = LEDGER_MAX_BYTES) {
+  let fd;
+  try { fd = openSync(p, fsc.O_RDONLY | (fsc.O_NONBLOCK ?? 0)); }
+  catch (e) { done({ verdict: "FILE_ERROR", error: e.code || e.message }, null); return; }
+  let st;
+  try { st = fstatSync(fd); } catch (e) { closeSync(fd); done({ verdict: "FILE_ERROR", error: e.code || e.message }, null); return; }
+  if (st.isFile()) {
+    let out = null, fail = null;
+    try {
+      if (st.size > limit) fail = { verdict: "FAIL", error: LEDGER_TOO_LARGE };
+      else {
+        const parts = []; let n = 0;
+        for (;;) {   // bounded: a file that grew past the bound after the fstat is refused too
+          const chunk = Buffer.alloc(1 << 16);
+          const r = readSync(fd, chunk, 0, chunk.length, null);
+          if (r === 0) break;
+          n += r; if (n > limit) { fail = { verdict: "FAIL", error: LEDGER_TOO_LARGE }; break; }
+          parts.push(r === chunk.length ? chunk : chunk.subarray(0, r));
+        }
+        if (!fail) out = Buffer.concat(parts, n);
+      }
+    } catch (e) { fail = { verdict: "FILE_ERROR", error: e.code || e.message }; }
+    finally { closeSync(fd); }
+    done(fail, out); return;
+  }
+  if (!st.isFIFO()) { closeSync(fd); done({ verdict: "FAIL", error: LEDGER_NOT_REGULAR }, null); return; }
+  // a FIFO: libuv reads it when the poller says it is readable (a byte, or the writer gone), so a FIFO no writer has
+  // opened yet is waited for, not read as empty (Linux reads it as its end), as verifier.py's select
+  let sock;
+  try { sock = new Socket({ fd, readable: true, writable: false }); }
+  catch (e) { try { closeSync(fd); } catch { /* closed */ } done({ verdict: "FILE_ERROR", error: e.code || e.message }, null); return; }
+  const parts = []; let n = 0, finished = false;
+  const finish = (fail, out) => { if (finished) return; finished = true; sock.destroy(); done(fail, out); };
+  sock.setTimeout(idleMs, () => finish({ verdict: "FAIL", error: LEDGER_FIFO_IDLE }, null));
+  sock.on("data", (b) => { n += b.length; if (n > limit) finish({ verdict: "FAIL", error: LEDGER_TOO_LARGE }, null); else parts.push(b); });
+  sock.on("end", () => finish(null, Buffer.concat(parts, n)));
+  sock.on("error", (e) => finish({ verdict: "FILE_ERROR", error: e.code || e.message }, null));
+}
 export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = null, notBefore = null, firstSelfHash = null, expectLedgerId = null) {
   if (tip && tip[TIP_UNREADABLE]) return { ok: false, pq_protected: false, error: tip[TIP_UNREADABLE] };
   if (!tip || typeof tip !== "object" || Array.isArray(tip) || !own(tip, "kind") || tip.kind !== TIP_KIND) return { ok: false, pq_protected: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
@@ -428,8 +478,12 @@ export function verifyLedger(text, { algo = null, pubkey = null, tip = null, tru
 export function conformance(dir) {
   let conformant = true; const results = [];
   for (const f of readdirSync(dir).filter((x) => x.endsWith(".expected.json")).sort()) {
-    const exp = JSON.parse(readFileSync(join(dir, f), "utf-8"));
-    const got = verifyLedger(readFileSync(join(dir, exp.input), "utf-8"));
+    // SPEC §22 rule 8: each file of the directory given is a regular file of at most TIP_MAX_BYTES, opened without
+    // waiting (readTipFile); until 2026-11-22 a FIFO there waited without end. One that is not is a vector not conformant.
+    let exp, raw;
+    try { exp = JSON.parse(readTipFile(join(dir, f)).toString("utf-8")); raw = readTipFile(join(dir, exp.input)).toString("utf-8"); }
+    catch (e) { conformant = false; results.push({ vector: f, conform: false, error: "unreadable: " + (e.code || e.message) }); continue; }
+    const got = verifyLedger(raw);
     const keys = ["verdict", "chain_integrity", "algorithm", "entries", "hash_failures_idx", "link_failures_idx"];
     const n = exp.normative;
     const ok = keys.every((k) => JSON.stringify(got[k]) === JSON.stringify(n[k]));
@@ -505,35 +559,35 @@ if (argv[0] === "--conformance") {
   const tipNotBefore = opts["--tip-not-before"] ?? null;
   const expectLedgerId = opts["--expect-ledger-id"] ?? null;
   if (expectLedgerId !== null && !/^[0-9a-f]{64}$/.test(expectLedgerId)) usage();   // SPEC v0.9 §17: can match no ledger
-  let text;
-  let bytes;
-  try { bytes = readFileSync(argv[0]); }
-  catch (e) { emitReceipt({ verdict: "FILE_ERROR", error: e.code || e.message }, 2); return; }
-  try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }   // strict: one invalid byte is a broken ledger (FAIL), never U+FFFD; ignoreBOM: a leading BOM stays in the text and is refused like in the five others (it was stripped: PASS, NEMESIS 12/10/2026)
-  catch (e) { emitReceipt({ verdict: "FAIL", error: "ledger is not valid UTF-8" }, 1); return; }
-  // tip: --tip <file>, else <ledger>.tip.json if present; an unreadable/malformed tip is a failure, never silence
-  let tip = null;
-  const tipPath = opts["--tip"] !== undefined ? opts["--tip"] : (existsSync(argv[0] + ".tip.json") ? argv[0] + ".tip.json" : null);
-  if (tipPath !== null) {
-    // the tip is a SIGNED document: the same strict profile as the entries (r5: Java was strict, JS lax); SPEC §22 rule 2,
-    // rows 1-3: one text for each way it cannot be read, the same in the four verifiers
-    let bytesTip = null;
-    try { bytesTip = readTipFile(tipPath); } catch (e) { tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_FILE }; }
-    if (bytesTip !== null) {
-      try {
-        const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytesTip);
-        const d = jsonNestingDepth(raw); if (d > MAX_JSON_DEPTH) throw new Error("json_too_deep");
-        if (hasLoneSurrogate(raw)) throw new Error("lone_surrogate");
-        if (hasDuplicateKeys(raw)) throw new Error("duplicate_key");
-        if (hasFloatLexeme(raw)) throw new Error("float_forbidden");
-        tip = JSON.parse(raw);
-        canon(tip);   // an integer beyond ±(2^53-1) is outside the profile, as in an entry
-        if (!tip || typeof tip !== "object" || Array.isArray(tip)) tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_OBJECT };
-      } catch (e) { tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_JSON }; }
+  readLedgerInput(argv[0], (fail, bytes) => {
+    if (fail) { emitReceipt(fail, fail.verdict === "FAIL" ? 1 : 2); return; }
+    let text;
+    try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }   // strict: one invalid byte is a broken ledger (FAIL), never U+FFFD; ignoreBOM: a leading BOM stays in the text and is refused like in the five others (it was stripped: PASS, NEMESIS 12/10/2026)
+    catch (e) { emitReceipt({ verdict: "FAIL", error: "ledger is not valid UTF-8" }, 1); return; }
+    // tip: --tip <file>, else <ledger>.tip.json if present; an unreadable/malformed tip is a failure, never silence
+    let tip = null;
+    const tipPath = opts["--tip"] !== undefined ? opts["--tip"] : (existsSync(argv[0] + ".tip.json") ? argv[0] + ".tip.json" : null);
+    if (tipPath !== null) {
+      // the tip is a SIGNED document: the same strict profile as the entries (r5: Java was strict, JS lax); SPEC §22 rule 2,
+      // rows 1-3: one text for each way it cannot be read, the same in the four verifiers
+      let bytesTip = null;
+      try { bytesTip = readTipFile(tipPath); } catch (e) { tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_FILE }; }
+      if (bytesTip !== null) {
+        try {
+          const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytesTip);
+          const d = jsonNestingDepth(raw); if (d > MAX_JSON_DEPTH) throw new Error("json_too_deep");
+          if (hasLoneSurrogate(raw)) throw new Error("lone_surrogate");
+          if (hasDuplicateKeys(raw)) throw new Error("duplicate_key");
+          if (hasFloatLexeme(raw)) throw new Error("float_forbidden");
+          tip = JSON.parse(raw);
+          canon(tip);   // an integer beyond ±(2^53-1) is outside the profile, as in an entry
+          if (!tip || typeof tip !== "object" || Array.isArray(tip)) tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_OBJECT };
+        } catch (e) { tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_JSON }; }
+      }
     }
-  }
-  const r = verifyLedger(text, { algo, pubkey, tip, trustedPubkey, requireTip, tipNotBefore, expectLedgerId });
-  emitReceipt(r, r.verdict === "PASS" ? 0 : 1);   // exit code after the write is drained (see emitReceipt)
+    const r = verifyLedger(text, { algo, pubkey, tip, trustedPubkey, requireTip, tipNotBefore, expectLedgerId });
+    emitReceipt(r, r.verdict === "PASS" ? 0 : 1);   // exit code after the write is drained (see emitReceipt)
+  });
 } else {
   console.error("usage: node cvverify.mjs <ledger.jsonl> [--algo A] [--pubkey hex] [--tip f] [--trusted-pubkey hex] [--require-tip] [--tip-not-before iso] [--expect-ledger-id hex] | --conformance <vectors_dir>");
   process.exit(2);

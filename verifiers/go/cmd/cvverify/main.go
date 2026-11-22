@@ -6,12 +6,12 @@
 package main
 
 import (
-	"strings"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	cv "github.com/robertolocatelli81-dev/cryptovalid-opencore/verifiers/go"

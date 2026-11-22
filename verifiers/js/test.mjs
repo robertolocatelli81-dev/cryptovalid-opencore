@@ -3,8 +3,8 @@
 // signature round-trip, AND cross-checks every vector against the REFERENCE Python
 // verifier (verifier.py at the repo root) as an independent oracle — so a bug that makes us
 // wrongly agree with ourselves is caught by disagreement with the reference.
-import { verifyLedger, conformance, jsonNestingDepth, hasLoneSurrogate, MAX_JSON_DEPTH, checkTip, tipPayload, parseInstant } from "./cvverify.mjs";
-import { readFileSync, writeFileSync, mkdtempSync, openSync, closeSync } from "node:fs";
+import { verifyLedger, conformance, jsonNestingDepth, hasLoneSurrogate, MAX_JSON_DEPTH, checkTip, tipPayload, parseInstant, readLedgerInput, LEDGER_TOO_LARGE, LEDGER_NOT_REGULAR } from "./cvverify.mjs";
+import { readFileSync, writeFileSync, mkdtempSync, openSync, closeSync, existsSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign as edSign } from "node:crypto";
 import { join, dirname } from "node:path";
@@ -361,6 +361,45 @@ for (const g of ["", "not json\n{}", "{}\n", "null\n", "[1,2]\n"]) {
   ok("§17 checkTip with an empty notBefore is bad_not_before", e1.ok === false && /^bad_not_before/.test(e1.error), JSON.stringify(e1));
   const e2 = checkTip(lines.length, last, tdoc, pkHex, null, first, "");
   ok("§17 checkTip with an empty expected id is not a pass", e2.ok === false, JSON.stringify(e2));
+}
+
+// SPEC §22 rule 8: the ledger reader (a regular file is read at once; the FIFO cases are in test_ledger_input_20261122.py)
+{
+  const proc = "/proc/self/status";   // a regular file whose fstat says 0 bytes: the read itself is bounded
+  if (existsSync(proc)) {
+    let got = "no answer";
+    readLedgerInput(proc, (f, b) => { got = f ? f.error : `read ${b.length} bytes`; }, 10000, 16);
+    ok("rule 8: a file read past the bound after its fstat is input_too_large", got === LEDGER_TOO_LARGE, got);
+    let whole = "no answer";
+    readLedgerInput(proc, (f, b) => { whole = f ? f.error : "read"; });
+    ok("rule 8 control: the same file within the bound is read", whole === "read", whole);
+  }
+  // at the bound exactly: read; one byte more: input_too_large (the fstat check, then the bounded read)
+  const at = join(mkdtempSync(join(tmpdir(), "cvbound-")), "l.jsonl");
+  writeFileSync(at, "x".repeat(16));
+  let atBound = "no answer", past = "no answer";
+  readLedgerInput(at, (f, b) => { atBound = f ? f.error : `read ${b.length}`; }, 10000, 16);
+  readLedgerInput(at, (f, b) => { past = f ? f.error : `read ${b.length}`; }, 10000, 15);
+  ok("rule 8: a file of exactly the bound is read", atBound === "read 16", atBound);
+  ok("rule 8: a file one byte past the bound is input_too_large", past === LEDGER_TOO_LARGE, past);
+  // judged on the fstat before a byte is read: a sysfs file says 4096 bytes and holds a few (Python's open_regular)
+  const sys = "/sys/kernel/uevent_seqnum";
+  if (existsSync(sys)) {
+    let small = "no answer";
+    readLedgerInput(sys, (f, b) => { small = f ? f.error : `read ${b.length}`; }, 10000, 100);
+    ok("rule 8: a file whose fstat is past the bound is refused before it is read", small === LEDGER_TOO_LARGE, small);
+  }
+  // --conformance <dir>: a FIFO in the directory given is a vector not conformant, at once (it waited without end)
+  const cdir = mkdtempSync(join(tmpdir(), "cvconf-"));
+  writeFileSync(join(cdir, "a.expected.json"), JSON.stringify({ input: "a.jsonl", normative: {} }));
+  const mk = spawnSync("mkfifo", [join(cdir, "a.jsonl")]);
+  if (mk.status === 0) {
+    const t0 = Date.now(); const c = conformance(cdir);
+    ok("rule 8: a FIFO among the vectors is not conformant, without a wait", c.conformant === false && c.results.length === 1 && /^unreadable: /.test(c.results[0].error) && Date.now() - t0 < 5000, JSON.stringify(c));
+  }
+  let dir = "no answer";
+  readLedgerInput(HERE, (f) => { dir = f ? `${f.verdict} ${f.error}` : "read"; });
+  ok("rule 8: a directory is not read", dir === `FAIL ${LEDGER_NOT_REGULAR}`, dir);
 }
 
 console.log(`\ncvverify test: ${pass} passed, ${fail} failed`);

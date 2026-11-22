@@ -387,14 +387,14 @@ public class CvVerify {
         boolean hashOK = true, linkOK = true; String algo = ""; String prev = GENESIS, first = ""; int i = 0, line = 0;
         List<byte[]> lines = new ArrayList<>();
         try {
-            if (Files.size(Path.of(ledgerPath)) > MAX_INPUT_BYTES) {   // fail-closed on size, like verifier.py (r5)
-                v.put("verdict", "FAIL"); v.put("failures", List.of("input_too_large: file exceeds " + MAX_INPUT_BYTES + " bytes")); v.put("scope", SCOPE); return v;
-            }
-            try (InputStream in = new BufferedInputStream(Files.newInputStream(Path.of(ledgerPath)), 1 << 16)) {
-                ByteArrayOutputStream cur = new ByteArrayOutputStream(); int c;
-                while ((c = in.read()) >= 0) { if (c == '\n') { lines.add(cur.toByteArray()); cur.reset(); } else cur.write(c); }
-                if (cur.size() > 0) lines.add(cur.toByteArray());
-            }
+            // SPEC §22 rule 8: a regular file or a FIFO of at most MAX_INPUT_BYTES (fail-closed on size, like verifier.py, r5),
+            // a FIFO idle FIFO_IDLE_SECONDS at most (it waited without end until 2026-11-22), a directory or a device not read
+            ByteArrayOutputStream cur = new ByteArrayOutputStream();
+            readInput(Path.of(ledgerPath), MAX_INPUT_BYTES, true, (b, n) -> {
+                for (int k = 0; k < n; k++) { if (b[k] == '\n') { lines.add(cur.toByteArray()); cur.reset(); } else cur.write(b[k]); }
+            });
+            if (cur.size() > 0) lines.add(cur.toByteArray());
+        } catch (InputRefused e) { v.put("verdict", "FAIL"); v.put("failures", List.of(e.getMessage())); v.put("scope", SCOPE); return v;
         } catch (IOException | RuntimeException e) { v.put("verdict", "FAIL"); v.put("failures", List.of("open: " + e.getClass().getSimpleName())); v.put("scope", SCOPE); return v; }
         for (byte[] raw : lines) {
             line++;
@@ -546,17 +546,73 @@ public class CvVerify {
         return null;
     }
 
-    // SPEC §22 rule 2, row 1: a FIFO, a device, a directory or a file larger than MAX_INPUT_BYTES is "cannot be read"; the
-    // attributes are read before the open (the JDK has no non-blocking open: a path swapped for a FIFO between the two
-    // waits for a writer, declared), and the read is bounded whatever the file has become
+    // SPEC §22 rule 2, row 1: a FIFO, a device, a directory or a file larger than MAX_INPUT_BYTES is "cannot be read";
+    // read by readInput (rule 8): a path swapped for a FIFO after its attributes were read is row 1 after
+    // FIFO_IDLE_SECONDS, not a wait for a writer, and the read is bounded whatever the file has become
     static byte[] readTipFile(Path p) throws IOException {
-        java.nio.file.attribute.BasicFileAttributes a = Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class);
-        if (!a.isRegularFile() || a.size() > MAX_INPUT_BYTES) throw new IOException("not a regular file of at most MAX_INPUT_BYTES");
-        try (InputStream in = Files.newInputStream(p)) {
-            byte[] b = in.readNBytes((int) MAX_INPUT_BYTES + 1);
-            if (b.length > MAX_INPUT_BYTES) throw new IOException("not a regular file of at most MAX_INPUT_BYTES");
-            return b;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        readInput(p, MAX_INPUT_BYTES, false, (b, n) -> out.write(b, 0, n));
+        return out.toByteArray();
+    }
+
+    // SPEC §22 rule 8 (§5 step 0 of verifier.py: open_ledger_input). The JDK has no non-blocking open: the type is read
+    // from the attributes of the path (unix:mode; where that view is absent only a regular file passes), then the path
+    // is opened and read in a second thread, and this one stops waiting after FIFO_IDLE_SECONDS without a byte and
+    // without the end (a FIFO with no writer, or a path swapped for a FIFO after its attributes were read). At most
+    // `limit` bytes; each chunk goes to `sink` in the reading thread, before the caller sees the outcome.
+    static final int FIFO_IDLE_SECONDS = 10;   // verifier.py FIFO_IDLE_SECONDS
+    static final String INPUT_NOT_REGULAR = "unreadable: not a regular file";
+    static final String INPUT_TOO_LARGE = "input_too_large: file exceeds " + MAX_INPUT_BYTES + " bytes";
+    static final String INPUT_FIFO_IDLE = "unreadable: FIFO idle for " + FIFO_IDLE_SECONDS + " s";
+    static final class InputRefused extends IOException { InputRefused(String why) { super(why); } }
+    interface Sink { void write(byte[] b, int n) throws IOException; }
+
+    /** 0 a regular file, 1 a FIFO, 2 anything else (a directory, a device, a socket) */
+    static int inputKind(Path p) throws IOException {
+        Object mode;
+        try { mode = Files.getAttribute(p, "unix:mode"); }
+        catch (UnsupportedOperationException | IllegalArgumentException e) {
+            return Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class).isRegularFile() ? 0 : 2;
         }
+        int fmt = ((Integer) mode) & 0170000;
+        return fmt == 0100000 ? 0 : fmt == 0010000 ? 1 : 2;
+    }
+
+    static void readInput(Path p, long limit, boolean fifoOK, Sink sink) throws IOException {
+        int kind = inputKind(p);
+        if (kind == 2 || (kind == 1 && !fifoOK)) throw new InputRefused(INPUT_NOT_REGULAR);
+        if (kind == 0 && Files.size(p) > limit) throw new InputRefused(INPUT_TOO_LARGE);
+        final long[] last = { System.nanoTime() };   // the last byte (or the start), under `done`
+        final Object[] done = new Object[1];         // null while reading; then Boolean.TRUE or the Throwable
+        Thread t = new Thread(() -> {
+            Object outcome = Boolean.TRUE;
+            try (InputStream in = Files.newInputStream(p)) {
+                byte[] b = new byte[1 << 16]; long n = 0; int r;
+                while ((r = in.read(b)) >= 0) {
+                    synchronized (done) { last[0] = System.nanoTime(); }
+                    n += r;
+                    if (n > limit) throw new InputRefused(INPUT_TOO_LARGE);
+                    sink.write(b, r);
+                }
+            } catch (Throwable e) { outcome = e; }
+            synchronized (done) { done[0] = outcome; done.notifyAll(); }
+        }, "cvverify-input");
+        t.setDaemon(true);   // a reader still waiting does not keep the process alive
+        t.start();
+        final long idle = java.util.concurrent.TimeUnit.SECONDS.toNanos(FIFO_IDLE_SECONDS);
+        Object outcome;
+        synchronized (done) {
+            while (done[0] == null) {
+                long left = idle - (System.nanoTime() - last[0]);
+                if (left <= 0) throw new InputRefused(INPUT_FIFO_IDLE);
+                try { done.wait(Math.max(1, left / 1_000_000)); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new InterruptedIOException(); }
+            }
+            outcome = done[0];
+        }
+        if (outcome instanceof IOException) throw (IOException) outcome;
+        if (outcome instanceof RuntimeException) throw (RuntimeException) outcome;
+        if (outcome instanceof Error) throw (Error) outcome;
     }
 
     static Map<String, Object> checkTip(String path, int entries, String first, String last, String tpk, String tpq, String nb, String lid) {

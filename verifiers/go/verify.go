@@ -4,6 +4,7 @@ package cryptovalid
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -200,12 +201,24 @@ func VerifyLedgerWithTipPQ(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubke
 // Signatures are verified whenever the ledger carries them or a key was given; with a caller-given key a
 // failing layer is a FAIL (signatures_failed), never a silent PASS.
 func VerifyLedgerFull(ledgerPath, tipPath, trustedPubkeyHex, trustedPQPubkeyB64, pubkeyHex, pqPubkeyB64 string, requirePQ, requireTip bool, tipNotBefore, expectLedgerID string) Verdict {
-	f, err := os.Open(ledgerPath)
+	// SPEC §22 rule 8: opened once without waiting (a FIFO with no writer waited without end until 2026-11-22), a
+	// regular file or a FIFO of at most 256 MiB, idle 10 s at most; a directory or a device is not read
+	f, err := openInput(ledgerPath, maxInputBytes, true)
 	if err != nil {
+		var tl *inputTooLarge
+		if errors.Is(err, errNotRegular) || errors.As(err, &tl) {
+			return Verdict{Verdict: "FAIL", Failures: []string{err.Error()}, Scope: scope}
+		}
 		return Verdict{Verdict: "FAIL", Failures: []string{"open: " + err.Error()}, Scope: scope}
 	}
 	defer f.Close()
 	v := VerifyLedger(f)
+	// what the scanner left (it stops at a line longer than MaxLineBytes) is read to the end as verifier.py reads the
+	// whole input before it parses: past the bound, or a FIFO idle, is the reason alone (nothing verified)
+	io.Copy(io.Discard, f)
+	if f.reason != nil {
+		return Verdict{Verdict: "FAIL", Failures: []string{f.reason.Error()}, Scope: scope}
+	}
 	// SPEC v0.9 §17 rule 1 (16/11/2026): the ledger identity is entry 0's self_hash, readable without a tip, so the expected
 	// identity is compared in every branch (until 0.25.0 only inside CheckTip: without a tip another ledger was PASS)
 	if expectLedgerID != "" && (v.Entries == 0 || v.FirstSelfHash != expectLedgerID) {
