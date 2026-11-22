@@ -420,5 +420,39 @@ class TestTheSegmentWriterKeepsToTheBudget(unittest.TestCase):
         r = I.verify_archive(self.tmp)
         self.assertTrue(r["ok"], r["failures"])
 
+    def test_a_segment_is_sealed_before_it_holds_too_many_bytes(self):
+        """SPEC §5 step 0: a verifier reads a segment of at most MAX_INPUT_BYTES. Until 0.28.1 the writer did not count
+        bytes: 70 000 entries of 4 KiB made a segment seal() could not read, and every later append failed. The bound of
+        this one writer is lowered so the test writes kilobytes; a resumed writer counts the bytes already there."""
+        import cryptovalid_ingest as I
+        g = I.Ingestor(self.tmp, fsync=False)
+        g._max_bytes = 64 * 1024
+        for i in range(40):                      # 40 entries of about 4 KiB: about 160 KiB, three segments or more
+            g.append({"i": i, "s": "x" * 4000})
+        g.close(seal=False)
+        g = I.Ingestor(self.tmp, fsync=False)    # resumed: the bytes of the open segment are counted again
+        g._max_bytes = 64 * 1024
+        for i in range(10):
+            g.append({"i": i, "s": "x" * 4000})
+        g.close()
+        sizes = [os.path.getsize(os.path.join(self.tmp, n)) for n in sorted(os.listdir(self.tmp)) if n.endswith(".jsonl")]
+        if sizes and sizes[-1] == 0:             # close() sealed the last segment and opened the next one, still empty
+            sizes = sizes[:-1]
+        self.assertGreaterEqual(len(sizes), 3, sizes)
+        self.assertTrue(all(0 < z <= 64 * 1024 for z in sizes), sizes)
+        r = I.verify_archive(self.tmp)
+        self.assertTrue(r["ok"], r["failures"])
+        self.assertEqual(len(sizes), r["segments_verified"])
+
+    def test_an_entry_longer_than_the_bound_is_refused(self):
+        import cryptovalid_ingest as I
+        g = I.Ingestor(self.tmp, fsync=False)
+        g._max_bytes = 4096
+        with self.assertRaises(ValueError):
+            g.append({"s": "x" * 5000})
+        self.assertEqual(g.append({"v": 1})["idx"], 0)   # the refused entry left the chain as it was
+        g.close()
+        self.assertTrue(I.verify_archive(self.tmp)["ok"])
+
 if __name__ == "__main__":
     unittest.main()

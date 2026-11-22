@@ -180,6 +180,7 @@ class Ingestor:
         if rotate_entries > verifier.MAX_INPUT_LINES:   # SPEC §22 rule 9: a segment no verifier would read
             raise ValueError(f"rotate_entries must be <= {verifier.MAX_INPUT_LINES} (SPEC §22 rule 9: a ledger holds no more lines)")
         self._max_tokens, self._tokens = verifier.MAX_JSON_TOKENS, 0   # the tokens of the active segment, counted as rule 9 counts
+        self._max_bytes, self._bytes = verifier.MAX_INPUT_BYTES, 0     # and its bytes: a verifier reads at most this many (§5 step 0)
         self._dir, self._prefix = directory, prefix
         self._batch, self._rotate, self._fsync = batch_size, rotate_entries, fsync
         self._backend = backend
@@ -257,6 +258,7 @@ class Ingestor:
                                      "refusing to resume (run the verifier on it)")
                 good_end += len(line)
                 self._tokens += sum(line.count(c) for c in (b"{", b"[", b",", b":"))
+                self._bytes += len(line)
                 if self._idx == 0:
                     self._first = e["self_hash"]
                 self._idx += 1
@@ -275,19 +277,25 @@ class Ingestor:
                 e = {"idx": self._idx, "ts": _utc_now(), "data": data, "prev_hash": self._prev}
                 e["self_hash"] = hashlib.sha256(_canonical(e)).hexdigest()
                 line = json.dumps(e, sort_keys=True, separators=(",", ":"))
-                return e, line, sum(line.count(c) for c in "{[,:")
+                return e, line, sum(line.count(c) for c in "{[,:"), len(line.encode()) + 1   # + the LF
             def closed():   # after close() an entry would be queued and never written: refused (NEMESIS 22/11/2026)
                 if self._fh is None or self._fh.closed:
                     raise ValueError("the Ingestor is closed: the entry was not appended")
             closed()
-            e, line, tokens = entry()
+            e, line, tokens, size = entry()
             # SPEC §22 rule 9: a segment is a ledger, and a verifier reads at most 2^23 tokens of one. Until NEMESIS
             # 22/11/2026 the segment was sealed on its entries alone: 100 000 entries of 104 tokens each made a segment
             # that verify_archive refused (input_too_large: more than 8388608 JSON tokens)
             if tokens > self._max_tokens:
                 raise ValueError(f"the entry holds more than {self._max_tokens} JSON tokens (SPEC §22 rule 9): no "
                                  "verifier would read its segment")
-            while self._idx and self._tokens + tokens > self._max_tokens:
+            # SPEC §5 step 0: a segment is read up to MAX_INPUT_BYTES. Until 0.28.1 the bytes were not counted: 70 000
+            # entries of 4 KiB made a segment of 287 MB, seal() itself could not read it (InputTooLarge) and every later
+            # append failed the same way (measured 2026-11-22 on 0.27.0 and 0.28.0)
+            if size > self._max_bytes:
+                raise ValueError(f"the entry is longer than {self._max_bytes} bytes (SPEC §5 step 0): no verifier "
+                                 "would read its segment")
+            while self._idx and (self._tokens + tokens > self._max_tokens or self._bytes + size > self._max_bytes):
                 # this entry opens the next segment; the seal (and its TSA anchor) runs OUTSIDE the lock, as the
                 # rotation below, and only if no other thread has rotated meanwhile
                 seq = self._seq
@@ -297,8 +305,9 @@ class Ingestor:
                 finally:
                     self._lock.acquire()
                 closed()                         # close() may have run while the lock was free
-                e, line, tokens = entry()
+                e, line, tokens, size = entry()
             self._tokens += tokens
+            self._bytes += size
             self._buf.append(line)
             if self._idx == 0:
                 self._first = e["self_hash"]
@@ -353,7 +362,7 @@ class Ingestor:
             self._fh.close()
             self._seq += 1
             self._idx, self._prev, self._first = 0, GENESIS_PREV, GENESIS_PREV
-            self._tokens = 0
+            self._tokens = self._bytes = 0
             self._fh = open(self._seg_path(self._seq), "ab")
             _fsync_dir(self._dir)
         # ancora TSA FUORI dal lock: una TSA lenta (fino a 30s) non deve mai

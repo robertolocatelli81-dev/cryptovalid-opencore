@@ -84,7 +84,8 @@ class TestActionRefs(unittest.TestCase):
         e = {"action_type": "a", "agent_id": "did:x", "scope": "s", "timestamp": "2026-04-08T12:00:00.000Z"}
         self.assertEqual(A.external_action_ref(e), hashlib.sha256(jcs(e)).hexdigest())
         nfd = {**e, "scope": unicodedata.normalize("NFD", "café")}
-        self.assertNotEqual(A.external_action_ref(nfd), A.external_action_ref({**e, "scope": "café"}))   # hashed as supplied
+        self.assertNotEqual(A.external_action_ref(nfd, ascii_domain=False),
+                            A.external_action_ref({**e, "scope": "café"}, ascii_domain=False))   # the -04 text: hashed as supplied
         for b in ({**e, "timestamp": "2026-04-08T12:00:00Z"}, {**e, "scope": ["s"]}, {**e, "x": 1}, {**e, "scope": "\ud800"}):
             with self.subTest(b=str(b)[:50]):
                 with self.assertRaises(A.ApsError):
@@ -200,6 +201,27 @@ class TestTimestampCalendar(unittest.TestCase):
                 A.external_action_ref({"action_type": "t", "agent_id": "a", "scope": "s", "timestamp": ms})
         with self.assertRaises(A.ApsError):                  # second 60 away from 23:59 / the last day
             A.action_ref_v2(v2(issued_at="2026-10-03T12:00:60.000Z"))
+
+
+class TestExternalAsciiDomain(unittest.TestCase):
+    """ascii_domain (the default since 0.28.1): the domain argentum-core and the APS SDK enforce for this label."""
+    E = {"action_type": "t", "agent_id": "a", "scope": "s", "timestamp": "2026-05-24T10:30:00.000Z"}
+
+    def test_refused_by_default_hashed_with_ascii_domain_false(self):
+        for k, v in (("scope", ""), ("scope", "caf\u00e9"), ("agent_id", "caf\u00e9"), ("action_type", "\U0001F4C4"),
+                     ("timestamp", "0000-01-01T00:00:00.000Z")):
+            with self.subTest(k=k, v=v):
+                o = {**self.E, k: v}
+                self.assertEqual(len(A.external_action_ref(o, ascii_domain=False)), 64)
+                with self.assertRaises(A.ApsError):
+                    A.external_action_ref(o)
+
+    def test_last_valid_values_keep_their_digest(self):
+        for k, v in (("scope", " "), ("scope", "\x7f"), ("agent_id", "\x7f"), ("action_type", "\x7f"), ("agent_id", ""),
+                     ("action_type", ""), ("timestamp", "0001-01-01T00:00:00.000Z")):
+            with self.subTest(k=k, v=v):
+                o = {**self.E, k: v}
+                self.assertEqual(A.external_action_ref(o), A.external_action_ref(o, ascii_domain=False))
 
 
 if __name__ == "__main__":

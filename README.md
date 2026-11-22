@@ -19,7 +19,7 @@ public time-stamping services, see [NOTICE](NOTICE)), offline once installed and
 `openssl`:
 
 ```bash
-pip install 'cryptovalid-opencore[sign]==0.28.0'
+pip install 'cryptovalid-opencore[sign]==0.28.1'
 git clone --depth 1 https://github.com/robertolocatelli81-dev/cryptovalid-opencore && cd cryptovalid-opencore/spec/vectors/beacon/nist
 cryptovalid-verify beacon ../payment_ledger.jsonl --entry 1 --pulse pulse_2030303.json --previous pulse_2030302.json --certificate certificate_5b6386e6ac8a993b.pem | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['status'], r['bounds']['not_before'], r['entry']['payment'])"
 cryptovalid-verify beacon ../payment_ledger.jsonl --entry 1 --pulse pulse_2030302.json --previous pulse_2030301.json --certificate certificate_5b6386e6ac8a993b.pem | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['status'], r['reason'])"
