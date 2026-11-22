@@ -1998,11 +1998,14 @@ text of this specification allowed or a format change. The six decisions were ta
 written here before the code. Tests: `test_decisions_20261120.py`, 54 tests (one compares the canonicalization of rule
 6 with lxml and is skipped where lxml is absent): on the branch before these rules (9b81e9c) 43 fail (44 where lxml is
 installed: that comparison fails there too) and the 10 named `*_control`, which hold what the rules do not change, pass. After the review of the branch (2026-11-21):
-`test_review_20261121.py`, 43 tests, the cases that mutants of the lines of rules 2, 3, 5 and 6 showed missing, two sentences of
-this section, the empty pin of rule 4, the sequence number of rule 6 and the table of the reasons of a tip of rule 2; 33
-pass on 9b25d32 (the code already answered so, no test held it), ten fail there (rule 6, `at` and the five tests of the
+`test_review_20261121.py`, 46 tests, the cases that mutants of the lines of rules 2, 3, 5 and 6 showed missing, two sentences of
+this section, the empty pin of rule 4, the sequence number of rule 6 and the table of the reasons of a tip of rule 2; 34
+pass on 9b25d32 (the code already answered so, no test held it), twelve fail there (rule 6, `at` and the five tests of the
 sequence number; rule 4, an empty pin and a pin that is not a string; rule 2, the tip of another kind in the Go verifier,
-and the table: without the Go toolchain the first of these two passes there, 34 and nine).
+the table, its row 1, and the words of `bad_not_before` after it: without the Go toolchain the first of these four passes
+there, 35 and eleven). The paths
+`prove_decisioni_D_20261120/cryptovalid/*.py` cited below name measurement scripts kept with the review notes of the
+maintainer, outside this repository.
 
 1. **A trusted log key makes the tip required** (`verifier.verify_ledger(trusted_pubkey_hex=...)`, `verifier.py
    --trusted-pubkey`, the JS `verifyLedger({trustedPubkey})` and `cvverify.mjs --trusted-pubkey`, the Go
@@ -2054,7 +2057,13 @@ and the table: without the Go toolchain the first of these two passes there, 34 
      text in the four for 40 before this table, for all 245 that fail after (the other 6 pass in the four); one exit
      code changed, the JS verifier's for a `log_pubkey_hex` of `false` or `0`, read as absent (exit 0) where the other
      three refused it (now row 8, exit 1). Held by `test_review_20261121.py`
-     (`TestTheReasonsOfATipAreTheSameInTheFourVerifiers`, an oracle written from this table).
+     (`TestTheReasonsOfATipAreTheSameInTheFourVerifiers`, an oracle written from this table). Row 1 in the JS, Go and
+     Java verifiers since 2026-11-22 (third review): until then they waited without end on a FIFO given as the tip,
+     and read a device (`/dev/null`) or a file larger than 256 MiB as bytes (row 2; Java: `internal: OutOfMemoryError`);
+     now each opens the path once (JS and Go without waiting for a writer; Java reads the attributes first, and a path
+     swapped for a FIFO between the two still waits: declared), and a FIFO, a device, a directory or more than 256 MiB
+     (`verifier.py` `MAX_INPUT_BYTES`) is row 1, as in Python (`TestRowOneOfTheTableInTheFourVerifiers`). The Go
+     verifier built for a platform that is not Unix has no non-blocking open (declared).
      After them, the comparisons with the file keep the texts of JS, Go and Java (`ledger_id_mismatch`,
      `tip_of_another_ledger`, `tip_rolled_back`, `tail_truncated`, `unsealed_tail`, `tail_rewritten`,
      `bad_not_before`); in the Python reference `tip_rolled_back`, `unsealed_tail` and `bad_not_before` carried a longer

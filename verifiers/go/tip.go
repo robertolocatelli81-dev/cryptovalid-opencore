@@ -389,11 +389,33 @@ func tipShape(o *Object) string {
 	return ""
 }
 
+// MaxTipBytes: a tip file larger than this is row 1 of the table of SPEC §22 rule 2 (verifier.py MAX_INPUT_BYTES).
+const MaxTipBytes = 256 << 20
+
+// readTipFile: the bytes of a regular file of at most MaxTipBytes, opened once without waiting (a FIFO, a device, a
+// directory or a larger file is an error: row 1 of the table of SPEC §22 rule 2, as Python's read_regular).
+func readTipFile(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|oNonblock, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() || st.Size() > MaxTipBytes {
+		return nil, errors.New("not a regular file of at most MaxTipBytes")
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, MaxTipBytes+1))
+	if err != nil || len(raw) > MaxTipBytes {
+		return nil, errors.New("not a regular file of at most MaxTipBytes")
+	}
+	return raw, nil
+}
+
 // LoadTip reads a sidecar; any malformation is an error (never a silent "no tip"). SPEC §22 rule 2: a file that cannot
 // be read, is not a JSON text of the profile, or is not an object is an error carrying one of the three texts above; a
 // tip that fails a row 4-13 of the table is returned with Shape set, and CheckTip names it.
 func LoadTip(path string) (*Tip, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readTipFile(path)
 	if err != nil {
 		return nil, errors.New(TipUnreadableFile)
 	}

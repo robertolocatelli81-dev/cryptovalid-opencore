@@ -546,11 +546,24 @@ public class CvVerify {
         return null;
     }
 
+    // SPEC §22 rule 2, row 1: a FIFO, a device, a directory or a file larger than MAX_INPUT_BYTES is "cannot be read"; the
+    // attributes are read before the open (the JDK has no non-blocking open: a path swapped for a FIFO between the two
+    // waits for a writer, declared), and the read is bounded whatever the file has become
+    static byte[] readTipFile(Path p) throws IOException {
+        java.nio.file.attribute.BasicFileAttributes a = Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class);
+        if (!a.isRegularFile() || a.size() > MAX_INPUT_BYTES) throw new IOException("not a regular file of at most MAX_INPUT_BYTES");
+        try (InputStream in = Files.newInputStream(p)) {
+            byte[] b = in.readNBytes((int) MAX_INPUT_BYTES + 1);
+            if (b.length > MAX_INPUT_BYTES) throw new IOException("not a regular file of at most MAX_INPUT_BYTES");
+            return b;
+        }
+    }
+
     static Map<String, Object> checkTip(String path, int entries, String first, String last, String tpk, String tpq, String nb, String lid) {
         Map<String, Object> tc = new LinkedHashMap<>(); tc.put("ok", false); tc.put("checked", true); tc.put("trusted", false); tc.put("tip_path", path); tc.put("pq_protected", false);
-        // SPEC §22 rule 2: the table of the reasons of a tip, rows 1-14 in order, the same words as Python, JS and Go
+        // SPEC §22 rule 2: the table of the reasons of a tip, rows 1-15 in order, the same words as Python, JS and Go
         byte[] rawTip;
-        try { rawTip = Files.readAllBytes(Path.of(path)); }
+        try { rawTip = readTipFile(Path.of(path)); }   // row 1: a regular file of at most MAX_INPUT_BYTES, as Python's read_regular
         catch (Exception e) { tc.put("why", "tip_unreadable: the tip file cannot be read"); return tc; }
         Object parsed;
         try { parsed = parse(rawTip); }

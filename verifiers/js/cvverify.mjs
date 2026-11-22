@@ -10,7 +10,7 @@
 // and — when present — Ed25519 signatures over self_hash. stdlib crypto only.
 // Honest scope: proves integrity/linkage/signature, NOT the truth of recorded facts.
 import { createHash, verify as edVerify, createPublicKey } from "node:crypto";
-import { readFileSync, readdirSync, existsSync, fstatSync, writeSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, fstatSync, writeSync, openSync, closeSync, readSync, constants as fsc } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -247,6 +247,25 @@ export const TIP_UNREADABLE_FILE = "tip_unreadable: the tip file cannot be read"
 export const TIP_UNREADABLE_JSON = "tip_unreadable: not a JSON text of the profile of SPEC §3";
 export const TIP_UNREADABLE_OBJECT = "tip_unreadable: not a JSON object";
 const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+// SPEC §22 rule 2, row 1: a regular file of at most TIP_MAX_BYTES (verifier.py MAX_INPUT_BYTES), opened once without
+// waiting for a writer (a FIFO, a device, a directory or a larger file is "cannot be read", as Python's read_regular)
+export const TIP_MAX_BYTES = 256 * 1024 * 1024;
+export function readTipFile(p) {
+  const fd = openSync(p, fsc.O_RDONLY | (fsc.O_NONBLOCK ?? 0));
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > TIP_MAX_BYTES) throw new Error("not a regular file of at most TIP_MAX_BYTES");
+    const parts = []; let n = 0;
+    for (;;) {   // bounded read: a file that grew past the bound after the fstat is refused too
+      const chunk = Buffer.alloc(1 << 16);
+      const r = readSync(fd, chunk, 0, chunk.length, null);
+      if (r === 0) break;
+      n += r; if (n > TIP_MAX_BYTES) throw new Error("not a regular file of at most TIP_MAX_BYTES");
+      parts.push(r === chunk.length ? chunk : chunk.subarray(0, r));
+    }
+    return Buffer.concat(parts, n);
+  } finally { closeSync(fd); }
+}
 export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = null, notBefore = null, firstSelfHash = null, expectLedgerId = null) {
   if (tip && tip[TIP_UNREADABLE]) return { ok: false, pq_protected: false, error: tip[TIP_UNREADABLE] };
   if (!tip || typeof tip !== "object" || Array.isArray(tip) || !own(tip, "kind") || tip.kind !== TIP_KIND) return { ok: false, pq_protected: false, error: "tip_invalid: not a cryptovalid_tip/1 document" };
@@ -499,7 +518,7 @@ if (argv[0] === "--conformance") {
     // the tip is a SIGNED document: the same strict profile as the entries (r5: Java was strict, JS lax); SPEC §22 rule 2,
     // rows 1-3: one text for each way it cannot be read, the same in the four verifiers
     let bytesTip = null;
-    try { bytesTip = readFileSync(tipPath); } catch (e) { tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_FILE }; }
+    try { bytesTip = readTipFile(tipPath); } catch (e) { tip = { [TIP_UNREADABLE]: TIP_UNREADABLE_FILE }; }
     if (bytesTip !== null) {
       try {
         const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytesTip);

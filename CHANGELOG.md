@@ -15,10 +15,10 @@ run by the same author, not by a third party.
 on the branch before these rules (9b81e9c) 43 fail (44 where lxml is installed) and the 10 named `*_control` pass. 62 mutants
 of the changed lines (Python, JS, Go, Java): all killed.
 
-After the review of the branch (2026-11-21), `test_review_20261121.py`, 43 tests: 33 pass on 9b25d32 (they hold what the
-code already did and no test held), ten fail there (the instant without a time zone, two of the empty pin, five of the
-sequence number, the tip of another kind in the Go verifier, and the table of the reasons of a tip: without the Go
-toolchain the tip of another kind passes there, 34 and nine). 58 further mutants of the lines of rule 6 (`cryptovalid_lotl.py`): 33
+After the review of the branch (2026-11-21), `test_review_20261121.py`, 46 tests: 34 pass on 9b25d32 (they hold what the
+code already did and no test held), twelve fail there (the instant without a time zone, two of the empty pin, five of the
+sequence number, the tip of another kind in the Go verifier, the table of the reasons of a tip, its row 1, and the words
+of `bad_not_before`: without the Go toolchain the tip of another kind passes there, 35 and eleven). 58 further mutants of the lines of rule 6 (`cryptovalid_lotl.py`): 33
 were killed by the tests above and 25 lived. 24 of the 25 dropped a check that the code made (each refusal measured)
 and no test held: the closed shape of the signature (the children of `ds:Signature`, `SignedInfo`, a `Reference` and
 `KeyInfo`, an algorithm with parameters, the transforms, a SHA-1 digest), a certificate not yet valid, `NextUpdate` at
@@ -62,7 +62,11 @@ reference takes the shorter words of the other three for `tip signature invalid`
 and `bad_not_before`. Measured on 251 generated tip files (`d4b_testi_tip.py`): one text in the four for 40 before, for
 all 245 that fail after (the other 6 pass in the four). One verdict changes: the JS verifier read a `log_pubkey_hex` of
 `false` or `0` as absent and passed the tip (exit 0) where the other three refused it; now exit 1, `tip fields must be
-strings`, as they do.
+strings`, as they do. Row 1 of the table (a FIFO, a device, a directory, more than 256 MiB: `the tip file cannot be
+read`) held only in Python: the JS, Go and Java verifiers waited without end on a FIFO given as the tip and read a device
+or a larger file as bytes (row 2; Java `internal: OutOfMemoryError`); a third review (2026-11-22) found it, and the three
+now open the path once and check it as Python does (Java reads the attributes before the open: a path swapped for a FIFO
+between the two still waits, declared).
 Sentences corrected by the review: the README said that a token of another TSA under `--tsa-cert` is "not a failure"
 (since rule 7 the pack is not valid, exit 1); rule 2 listed the members of a tree head and of a HEAD without
 `sig_domain`; rule 4 gave the reasons of an admitted pack that is not valid without the case of rule 7; "a document

@@ -299,7 +299,9 @@ class TestSignatureShapeIsClosed(unittest.TestCase):
         with self.assertRaises(ValueError) as c:
             L.verify_list_signature(self.good, {self.fp}, at=datetime(2026, 11, 21))
         self.assertIn("timezone-aware", str(c.exception))
-        self.assertEqual(self._why(self.good, at=datetime(2026, 11, 21, tzinfo=timezone.utc)), "ok")
+        # control at an instant inside the validity of the fixture certificate (made at setUp, a day before now): a fixed
+        # date here turned red on 2026-11-22T00:00Z, once the certificate began after it (NEMESIS 2026-11-22)
+        self.assertEqual(self._why(self.good, at=datetime.now(timezone.utc)), "ok")
 
 
 @unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
@@ -862,6 +864,146 @@ class TestTheReasonsOfATipAreTheSameInTheFourVerifiers(unittest.TestCase):
                 rc, out, rawout = _run(bins, name, led, [d + "trusted-pubkey", pk, d + "tip-not-before", "2099-01-01T00:00:00Z"])
                 self.assertEqual((rc, _reason(name, out)), (1, f"tip_rolled_back: the tip is dated {tip['ts']}, before the "
                                                               "required 2099-01-01T00:00:00Z"), name)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+class TestRowOneOfTheTableInTheFourVerifiers(unittest.TestCase):
+    """SPEC §22 rule 2, row 1: a tip path that is a FIFO, a device or a directory, or a file larger than 256 MiB, is
+    `tip_unreadable: the tip file cannot be read` in the four verifiers. NEMESIS 2026-11-22: until then the JS, Go and
+    Java verifiers waited without end on a FIFO, and read a device or a larger file (row 2; Java: internal OutOfMemoryError)."""
+
+    def test_a_path_that_is_not_a_regular_file_of_at_most_the_bound(self):
+        import json
+        import signer
+        import subprocess
+        import cryptovalid_tip as T
+        from test_decisions_20261120 import _binaries, _ledger
+        tmp = tempfile.mkdtemp()
+        try:
+            led = os.path.join(tmp, "l.jsonl")
+            _ledger(led, 3)
+            key = os.path.join(tmp, "log.key")
+            pk = signer.keygen(key)["public_key_hex"]
+            T.sign_tip(led, key, tip_path=os.path.join(tmp, "good.json"))
+            bins = _binaries(tmp)
+            tipf = led + ".tip.json"
+
+            def run(name, extra=()):
+                argv, first, d = bins[name]
+                flags = [d + "trusted-pubkey", pk] + [d + x if i % 2 == 0 else x for i, x in enumerate(extra)]
+                cp = subprocess.run(argv + (flags + [led] if first else [led] + flags), capture_output=True, text=True,
+                                    timeout=60, stdin=subprocess.DEVNULL)
+                tip = (json.loads(cp.stdout).get("tip") or {}) if cp.stdout.strip().startswith("{") else {}
+                return cp.returncode, tip.get("error") if name in ("python", "js") else tip.get("why")
+            want = (1, "tip_unreadable: the tip file cannot be read")
+            os.mkfifo(tipf)
+            for name in bins:
+                self.assertEqual(run(name), want, ("fifo", name))
+            os.remove(tipf)
+            for name in bins:
+                self.assertEqual(run(name, ("tip", "/dev/null")), want, ("/dev/null", name))
+            with open(tipf, "wb") as f:   # sparse: no disk used
+                f.truncate(256 * 1024 * 1024 + 1)
+            for name in bins:
+                self.assertEqual(run(name), want, ("larger than 256 MiB", name))
+            os.remove(tipf)
+            os.symlink(os.path.join(tmp, "good.json"), tipf)   # control: a link to the signed tip is read through
+            for name in bins:
+                self.assertEqual(run(name)[0], 0, ("link to the signed tip", name))
+            # the other Python entry point, cryptovalid_tip.py check: rows 1-3 with the same texts
+            os.remove(tipf)
+            for body, row in ((None, "tip_unreadable: the tip file cannot be read"), (b"{", "tip_unreadable: not a JSON text of "
+                              "the profile of SPEC \u00a73"), (b"[]", "tip_unreadable: not a JSON object")):
+                if body is None:
+                    os.mkdir(tipf)
+                else:
+                    with open(tipf, "wb") as f:
+                        f.write(body)
+                cp = subprocess.run([sys.executable, os.path.join(HERE, "cryptovalid_tip.py"), "check", led, "--trusted-pubkey", pk],
+                                    capture_output=True, text=True, timeout=60)
+                self.assertEqual((cp.returncode, json.loads(cp.stdout).get("error")), (1, row), "cryptovalid_tip.py check")
+                os.rmdir(tipf) if body is None else os.remove(tipf)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+class TestTheUnknownMembersOfATipAreSortedAndCutInCodePoints(unittest.TestCase):
+    """SPEC §22 rule 2: `unknown_member:<keys>`, the keys in code-point order, cut to 120 code points, the same text in
+    the four. NEMESIS 2026-11-22: a cut in UTF-8 bytes in the Go verifier lived with the tests until then; keys outside
+    the Basic Multilingual Plane tell the units apart."""
+
+    def test_keys_beyond_the_basic_plane(self):
+        import json
+        import signer
+        import subprocess
+        import cryptovalid_tip as T
+        from test_decisions_20261120 import _binaries, _ledger
+        tmp = tempfile.mkdtemp()
+        try:
+            led = os.path.join(tmp, "l.jsonl")
+            _ledger(led, 3)
+            key = os.path.join(tmp, "log.key")
+            pk = signer.keygen(key)["public_key_hex"]
+            tip = T.sign_tip(led, key)
+            bins = _binaries(tmp)
+            cases = [["x" * 119 + "\U0001F600\U0001F600"], ["\U0001F600" * 130], ["\uffff", "\U0001F600"],
+                     ["\ue000", "\U00010000", "a"]]
+            for keys in cases:
+                with open(led + ".tip.json", "w", encoding="utf-8") as f:
+                    json.dump(dict(tip, **{k: 1 for k in keys}), f, ensure_ascii=False)
+                want = "tip_invalid: unknown_member:" + ",".join(sorted(keys))[:120]   # str: code points
+                for name in bins:
+                    argv, first, d = bins[name]
+                    flags = [d + "trusted-pubkey", pk]
+                    cp = subprocess.run(argv + (flags + [led] if first else [led] + flags), capture_output=True, text=True,
+                                        timeout=60)
+                    t = json.loads(cp.stdout).get("tip") or {}
+                    self.assertEqual((cp.returncode, t.get("error") if name in ("python", "js") else t.get("why")), (1, want),
+                                     (name, [k[:3] for k in keys]))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+@unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
+class TestTheTextsAfterTheTableInTheFourVerifiers(unittest.TestCase):
+    """SPEC §22 rule 2, after the table: `bad_not_before` and `tail_truncated` with the same words in the four (an option
+    spelled as each verifier spells it). NEMESIS 2026-11-22: the longer tail of `bad_not_before` in Python, put back, lived
+    with the tests until then."""
+
+    def test_bad_not_before_and_tail_truncated(self):
+        import json
+        import signer
+        import subprocess
+        import cryptovalid_tip as T
+        from test_decisions_20261120 import _binaries, _ledger
+        tmp = tempfile.mkdtemp()
+        try:
+            led = os.path.join(tmp, "l.jsonl")
+            _ledger(led, 3)
+            longer = os.path.join(tmp, "m.jsonl")
+            _ledger(longer, 4)
+            key = os.path.join(tmp, "log.key")
+            pk = signer.keygen(key)["public_key_hex"]
+            bins = _binaries(tmp)
+
+            def run(name, extra):
+                argv, first, d = bins[name]
+                flags = [d + "trusted-pubkey", pk] + [d + x if i % 2 == 0 else x for i, x in enumerate(extra)]
+                cp = subprocess.run(argv + (flags + [led] if first else [led] + flags), capture_output=True, text=True, timeout=60)
+                t = json.loads(cp.stdout).get("tip") or {}
+                return cp.returncode, t.get("error") if name in ("python", "js") else t.get("why")
+            T.sign_tip(led, key)
+            for bad in ("2026-13-01T00:00:00Z", "2026-11-01"):
+                for name in bins:
+                    opt = "-tip-not-before" if name == "java" else "--tip-not-before"
+                    self.assertEqual(run(name, ("tip-not-before", bad)),
+                                     (1, f"bad_not_before: {opt} must be YYYY-MM-DDThh:mm:ss[.f](Z|\u00b1hh:mm)"), (name, bad))
+            T.sign_tip(longer, key, tip_path=led + ".tip.json")
+            for name in bins:
+                self.assertEqual(run(name, ()), (1, "tail_truncated: file has 3 entries, the signed tip commits to 4"), name)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
