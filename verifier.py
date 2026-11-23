@@ -753,27 +753,35 @@ def input_too_large(path: str) -> bool:
         return False
 
 
+_DEPTH_OUT = re.compile(r'["\[\]{}]')
+_DEPTH_IN = re.compile(r'["\\]')
+
+
 def json_nesting_depth(text: str) -> int:
     """Maximum bracket nesting of a JSON text, by a LINEAR scan (no recursion, no parsing):
     brackets inside strings are ignored, escapes honoured. Used to refuse pathological nesting
     deterministically BEFORE the recursive stdlib decoder can hit the interpreter's stack."""
     depth = max_depth = 0
-    in_str = esc = False
-    for ch in text:
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-        elif ch == '"':
-            in_str = True
+    i = 0
+    while True:                                  # jumps to the next character that matters (same result as a char loop)
+        m = _DEPTH_OUT.search(text, i)
+        if m is None:
+            break
+        ch, i = m.group(), m.end()
+        if ch == '"':
+            while True:
+                m = _DEPTH_IN.search(text, i)
+                if m is None:
+                    return max_depth             # unterminated string: nothing after it counts
+                i = m.end()
+                if m.group() == '"':
+                    break
+                i += 1                           # a backslash escapes the next character, whatever it is
         elif ch in "[{":
             depth += 1
             if depth > max_depth:
                 max_depth = depth
-        elif ch in "]}":
+        else:
             depth -= 1
     return max_depth
 
@@ -797,9 +805,9 @@ def has_lone_surrogate(text: str) -> bool:
     (council 14/09/2026, spec/CONFORMANCE.md)."""
     i, n = 0, len(text)
     while i < n:
-        if text[i] != "\\":
-            i += 1
-            continue
+        i = text.find("\\", i)                  # only escapes matter: jump to the next backslash
+        if i < 0:
+            break
         if i + 1 < n and text[i + 1] == "u" and i + 5 < n:
             try:
                 cp = int(text[i + 2:i + 6], 16)
