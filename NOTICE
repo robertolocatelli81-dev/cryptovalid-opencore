@@ -32,7 +32,10 @@ spec/vectors/forestrie-mmr/LICENSE). spec/vectors/aac-cll-mmr/ holds
 vectors/cll-material/cases.json of action-state-group/agent-action-capsule
 (commit f812c44, BSD-3-Clause, Copyright (c) 2026 Action State Group, Inc.; full
 text in spec/vectors/aac-cll-mmr/LICENSE, the project's notice in
-spec/vectors/aac-cll-mmr/NOTICE).
+spec/vectors/aac-cll-mmr/NOTICE). spec/vectors/rfc10073/rfc10073.txt is RFC 10073 (Copyright (c)
+2026 IETF Trust and the persons identified as the document authors), the text
+of rfc-editor.org kept in full and without modification, as the IETF Trust
+Legal Provisions 5.0 §3.c.i allow; it is not under the AGPL.
 
 spec/vectors/beacon/nist/ holds pulses and the certificate of the NIST
 Randomness Beacon 2.0, the bytes beacon.nist.gov served on 2026-11-16. NIST is

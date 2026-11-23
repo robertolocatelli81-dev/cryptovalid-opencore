@@ -10,8 +10,8 @@ difference is measured in both directions. Proposed by Athena's review of 15/11/
 test_hybrid_is_not_composite_20261115.py), rewritten here.
 
 The composite below is a test helper written from RFC 10073 §2.1, §2.2, §3.2, §3.3, §4.1 and §4.3, not a product
-function. With CV_RFC10073_TXT=<path to https://www.rfc-editor.org/rfc/rfc10073.txt> the helper is also checked against
-the two signatures of the RFC's Appendix E for id-MLDSA65-Ed25519-SHA512 (not shipped: the vector stays in the RFC).
+function. It is also checked against the two signatures of the RFC's Appendix E for id-MLDSA65-Ed25519-SHA512, read
+from spec/vectors/rfc10073/rfc10073.txt (since 2026-11-23; CV_RFC10073_TXT=<path> reads another copy).
 Positive control in the file: a "composite" that signs the message itself with the empty context, i.e. the hybrid's
 bytes, makes the crossing check report failures."""
 import base64
@@ -164,9 +164,9 @@ class HybridIsNotComposite(unittest.TestCase):
         with self.assertRaises(InvalidSignature):
             pk.verify(sig, m_prime(self.h.msg))                 # the empty context: the hybrid's profile
 
-    @unittest.skipUnless(os.environ.get("CV_RFC10073_TXT"), "the RFC 10073 text is not given (CV_RFC10073_TXT)")
     def test_helper_against_rfc_10073_appendix_e(self):
-        m, ctx, tc = _appendix_e(os.environ["CV_RFC10073_TXT"], "id-MLDSA65-Ed25519-SHA512")
+        path = os.environ.get("CV_RFC10073_TXT") or os.path.join(ROOT, "spec", "vectors", "rfc10073", "rfc10073.txt")
+        m, ctx, tc = _appendix_e(path, "id-MLDSA65-Ed25519-SHA512")
         pk, s, sc = (base64.b64decode(tc[k]) for k in ("pk", "s", "sWithContext"))
         self.assertTrue(Composite.verify(pk, m, s))
         self.assertTrue(Composite.verify(pk, m, sc, ctx))

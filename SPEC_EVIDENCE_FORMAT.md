@@ -1023,9 +1023,8 @@ Rules of this format (NORMATIVE since v0.8):
 Since v0.15 (§29) `cryptovalid_composite.py` verifies composite signatures of RFC 10073 for three ML-DSA-65
 algorithms; it signs nothing, and the hybrid of this section stays what it is. Until v0.15: nothing in this repository
 implemented RFC 10073. The test builds composite signatures with a helper
-of its own; with the RFC's text given (`CV_RFC10073_TXT=<path to rfc10073.txt>`) it also checks that helper against the
-two signatures of Appendix E for `id-MLDSA65-Ed25519-SHA512` (they verified on 2026-11-15); the vector is not shipped
-here.
+of its own and checks that helper against the two signatures of Appendix E for `id-MLDSA65-Ed25519-SHA512` (they
+verified on 2026-11-15), read since v0.15 from the RFC's text in `spec/vectors/rfc10073/` (§29 rule 5).
 
 **Quantum-vulnerable signatures, a limit stated (v0.10).** NIST IR 8547, *Transition to Post-Quantum Cryptography
 Standards*, final, October 2026 (CSRC document history: draft 11/12/24, final 10/27/26; https://doi.org/10.6028/NIST.IR.8547;
@@ -2708,8 +2707,10 @@ was written before the code.
    composite public key as one value and never reads the `signer` / `signer_pq` fields of a ledger entry, and the
    ledger verifier never reads a composite key. A relying party that holds a hybrid pair of this format has no
    composite key: it MUST NOT concatenate them into one.
-5. **Vectors.** The test vectors of RFC 10073 Appendix E (the copy of lamps-wg/draft-composite-sigs, `src/testvectors.json`,
-   commit b9e2674) are IETF contributions under BCP 78, not shipped here (as in §15); the test reads them from a
-   path given in `CV_COMPOSITE_VECTORS` or `CV_RFC10073_TXT`. Measured on 2026-11-23 with both: the signatures `s`
+5. **Vectors.** `spec/vectors/rfc10073/rfc10073.txt` is the RFC's text from rfc-editor.org, kept in full and without
+   modification as the IETF Trust Legal Provisions 5.0 §3.c.i allow (read on 2026-11-23), pinned by SHA-256. The test
+   extracts the vectors of Appendix E from it at run time and fails, never skips, when the file is missing or its hash
+   differs; with `CV_COMPOSITE_VECTORS` it also compares the copy of lamps-wg/draft-composite-sigs
+   (`src/testvectors.json`, commit b9e2674): identical for the three algorithms. Measured on 2026-11-23: the signatures `s`
    (empty ctx) and `sWithContext` of the three algorithms verify, and are refused with one bit changed, with the
    other ctx, under another of the three algorithms and with the ECDSA signature re-encoded in non-minimal BER.

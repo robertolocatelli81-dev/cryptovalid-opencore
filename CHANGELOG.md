@@ -75,9 +75,11 @@ already requires for the `[sign]` extra (no new dependency). The hybrid of this 
 
 - Vectors, measured on 2026-11-23: RFC 10073 Appendix E as printed in rfc10073.txt and as in lamps-wg/draft-composite-sigs
   `src/testvectors.json` (commit b9e2674): for the three algorithms, `s` and `sWithContext` verify, and are refused
-  with one bit changed, with the other ctx and under the other two algorithms; the two copies are identical. Both are
-  IETF contributions under BCP 78 and are not shipped: the test reads them from `CV_RFC10073_TXT` /
-  `CV_COMPOSITE_VECTORS` and is skipped, saying so, without them. The two M' of Appendix D are checked in the test.
+  with one bit changed, with the other ctx and under the other two algorithms; the two copies are identical. The RFC's
+  text is shipped in full and unmodified in `spec/vectors/rfc10073/` (IETF Trust Legal Provisions 5.0 §3.c.i), pinned
+  by SHA-256: the test extracts Appendix E from it at run time and fails when the file is missing or altered; the
+  lamps-wg copy is compared when `CV_COMPOSITE_VECTORS` names it. The two M' of Appendix D are checked in the test;
+  `test_hybrid_is_not_composite_20261115.py` now reads the same file instead of skipping.
 - Mindburn-Labs/helm-ai-kernel (ba872ee) calls its Ed25519 + ML-DSA-65 envelope "composite": it is two independent
   signatures over the same preimage, ML-DSA with an empty context (`hybrid_verifier.go`, `mldsa_verifier.go`), the
   construction of SPEC §15; its vector pair, presented as an RFC 10073 signature, is refused (measured on two messages;

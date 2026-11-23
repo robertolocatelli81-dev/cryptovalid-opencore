@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """cryptovalid_composite: verification of composite ML-DSA signatures of RFC 10073 (SPEC §29).
 
-Vectors: RFC 10073 Appendix E, read from CV_RFC10073_TXT=<rfc10073.txt> and/or CV_COMPOSITE_VECTORS=<testvectors.json of
-lamps-wg/draft-composite-sigs> (IETF contributions under BCP 78: not shipped here, as in SPEC §15). Without either the
-vector test is skipped and says so. The other tests sign with a helper of this file written from §3.2 (not a product
-function) and attack every input: lengths, curves, point and DER encodings, labels, ctx, the hybrid's own bytes.
+Vectors: RFC 10073 Appendix E, extracted at run time from spec/vectors/rfc10073/rfc10073.txt (the RFC's text kept in
+full, IETF TLP 5.0 §3.c.i), whose SHA-256 is checked first: a missing file or another hash is a FAILURE, not a skip.
+With CV_COMPOSITE_VECTORS=<testvectors.json of lamps-wg/draft-composite-sigs> the two copies are also compared. The
+other tests sign with a helper of this file written from §3.2 (not a product function) and attack every input:
+lengths, curves, point and DER encodings, labels, ctx, the hybrid's own bytes.
 
 Positive control, measured: on a156b15 (no cryptovalid_composite) every test here errors at the import."""
 import base64
@@ -31,16 +32,31 @@ NEEDS = unittest.skipUnless(HAVE, "needs `cryptography` with ML-DSA (the `sign` 
 MSG = b"The quick brown fox jumps over the lazy dog."
 
 
+RFC_DIR = os.path.join(ROOT, "spec", "vectors", "rfc10073")
+
+
+def rfc_text():
+    """the bytes of rfc10073.txt, after the pin of SHA256SUMS (AssertionError when missing or different)"""
+    with open(os.path.join(RFC_DIR, "SHA256SUMS"), encoding="ascii") as f:
+        want, name = f.read().split()
+    assert name == "./rfc10073.txt", name
+    with open(os.path.join(RFC_DIR, "rfc10073.txt"), "rb") as f:
+        data = f.read()
+    got = hashlib.sha256(data).hexdigest()
+    assert got == want, f"rfc10073.txt has SHA-256 {got}, the pin is {want}"
+    return data
+
+
+def appendix_e(data: bytes):
+    """the JSON of Appendix E, its wrapped lines joined"""
+    t = data.decode("utf-8-sig")
+    t = t[t.index("Appendix E.  Test Vectors", t.index("Appendix E.  Test Vectors") + 30):]
+    t = t[t.index("\n   {") + 1:]
+    return json.JSONDecoder().raw_decode(re.sub(r"\n\s*", "", t).strip())[0]
+
+
 def rfc_vectors():
-    """the Appendix E JSON of the RFC text (lines unwrapped) and the lamps-wg file, each when its path is given"""
-    out = {}
-    txt = os.environ.get("CV_RFC10073_TXT")
-    if txt:
-        with open(txt, encoding="utf-8-sig") as f:
-            t = f.read()
-        t = t[t.index("Appendix E.  Test Vectors", t.index("Appendix E.  Test Vectors") + 30):]
-        t = t[t.index("\n   {") + 1:]
-        out["rfc10073.txt"] = json.JSONDecoder().raw_decode(re.sub(r"\n\s*", "", t).strip())[0]
+    out = {"rfc10073.txt": appendix_e(rfc_text())}
     js = os.environ.get("CV_COMPOSITE_VECTORS")
     if js:
         with open(js, encoding="utf-8") as f:
@@ -72,12 +88,52 @@ class Signer:
         return ml + self.t.sign(mp, ec.ECDSA(hashes.SHA256() if self.trad == "p256" else hashes.SHA384()))
 
 
+class Pin(unittest.TestCase):
+    """runs without `cryptography` too: the RFC's text and its vectors must be here"""
+    def test_the_vectors_are_extracted(self):
+        names = {t["tcId"] for t in appendix_e(rfc_text())["tests"]}
+        self.assertLessEqual(set(CC.ALGORITHMS), names)
+
+    def test_the_pin_fails_closed(self):
+        """control: a byte changed in the text, or the file absent, makes rfc_text() fail"""
+        global RFC_DIR
+        import shutil
+        import tempfile
+        saved = RFC_DIR
+        with tempfile.TemporaryDirectory() as td:
+            shutil.copy(os.path.join(saved, "SHA256SUMS"), td)
+            try:
+                RFC_DIR = td
+                self.assertRaises(OSError, rfc_text)
+                with open(os.path.join(saved, "rfc10073.txt"), "rb") as f:
+                    data = bytearray(f.read())
+                data[len(data) // 2] ^= 1
+                with open(os.path.join(td, "rfc10073.txt"), "wb") as f:
+                    f.write(data)
+                self.assertRaises(AssertionError, rfc_text)
+            finally:
+                RFC_DIR = saved
+        self.assertEqual(len(rfc_text()), os.path.getsize(os.path.join(RFC_DIR, "rfc10073.txt")))
+
+
 @NEEDS
 class Vectors(unittest.TestCase):
+    def test_an_altered_vector_is_refused(self):
+        d = appendix_e(rfc_text())
+        m = base64.b64decode(d["m"])
+        for t in d["tests"]:
+            if t["tcId"] in CC.ALGORITHMS:
+                pk, s = base64.b64decode(t["pk"]), bytearray(base64.b64decode(t["s"]))
+                for k in (0, CC.MLDSA65_SIG - 1, CC.MLDSA65_SIG + 5, len(s) - 1):
+                    b = bytearray(s)
+                    b[k] ^= 0x01
+                    self.assertFalse(CC.verify(t["tcId"], pk, m, bytes(b))["ok"], (t["tcId"], k))
+                pk2 = bytearray(pk)
+                pk2[7] ^= 0x01
+                self.assertFalse(CC.verify(t["tcId"], bytes(pk2), m, bytes(s))["ok"])
+
     def test_appendix_e(self):
         sets = rfc_vectors()
-        if not sets:
-            self.skipTest("RFC 10073 vectors not given (CV_RFC10073_TXT / CV_COMPOSITE_VECTORS)")
         for src, d in sets.items():
             m, ctx = base64.b64decode(d["m"]), base64.b64decode(d["ctx"])
             self.assertEqual(m, MSG)
