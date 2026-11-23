@@ -127,7 +127,7 @@ def solana_status(pack_dir: str, manifest: Dict, check: bool = False) -> Dict:
     if not os.path.exists(path):
         return {"present": False, "checked": False, "verified": None}
     try:   # SPEC §5 step 0: opened once without blocking
-        a = json.loads(read_text_regular(path))
+        a = json.loads(read_text_regular(path), object_pairs_hook=_reject_dup)   # a key twice is a refusal
     except (OSError, ValueError, RecursionError) as e:
         return {"present": True, "checked": False, "verified": False,
                 "note": f"SOLANA_ANCHOR.json unreadable: {type(e).__name__}"}
@@ -412,7 +412,7 @@ def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = 
     """Verify the pack independently, render HTML (always), then PDF if WeasyPrint
     is importable and not html_only. Returns paths + the UNMODIFIED verdict."""
     try:   # SPEC §5 step 0: opened once without blocking (a FIFO here waited, 18/11/2026)
-        manifest = json.loads(read_text_regular(os.path.join(pack_dir, "MANIFEST.json")))
+        manifest = json.loads(read_text_regular(os.path.join(pack_dir, "MANIFEST.json")), object_pairs_hook=_reject_dup)
         if not isinstance(manifest, dict):
             raise ValueError("not a JSON object")
     except (OSError, ValueError, RecursionError) as e:
@@ -446,9 +446,9 @@ def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = 
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, read_text_regular, receipt_cli, say, write_output
+    from verifier import Parser, _reject_dup, emit, read_text_regular, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, read_text_regular, receipt_cli, say, write_output
+    from opencore.verifier import Parser, _reject_dup, emit, read_text_regular, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -471,7 +471,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if a.solana_digest:
         # a digest is printed only for a readable manifest that carries its own digest: never a memo for "" or a traceback
         try:
-            man = json.loads(read_text_regular(os.path.join(a.pack_dir, "MANIFEST.json")))
+            man = json.loads(read_text_regular(os.path.join(a.pack_dir, "MANIFEST.json")),
+                             object_pairs_hook=_reject_dup)   # a key twice is a refusal, as in verify_pack
         except (OSError, ValueError, RecursionError) as e:
             p.error(f"--solana-digest: MANIFEST.json cannot be read ({type(e).__name__})")
         md = man.get("manifest_digest_sha256") if isinstance(man, dict) else None

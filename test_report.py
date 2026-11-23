@@ -322,6 +322,31 @@ class TestSolanaAnchor(_Base):
                 self.assertIn("MANIFEST.json unreadable", r.get("error", ""))
 
 
+@NEEDS_CRYPTO
+class TestDuplicateKeys(_Base):
+    """a key twice in MANIFEST.json or SOLANA_ANCHOR.json is a refusal here as in verify_pack: the last value is not
+    read (2026-11-23)."""
+
+    def test_anchor_with_a_key_twice_is_a_failed_anchor(self):
+        man = json.load(open(os.path.join(self.pack, "MANIFEST.json")))
+        good = report.solana_anchor_digest(man)
+        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w") as f:
+            f.write('{"tx_signature": "s", "digest_sha3_hex": "00", "digest_sha3_hex": "%s"}' % good)
+        s = report.solana_status(self.pack, man)
+        self.assertIs(s["verified"], False)
+        self.assertIn("unreadable", s["note"])
+
+    def test_manifest_with_a_key_twice_is_unreadable(self):
+        p = os.path.join(self.pack, "MANIFEST.json")
+        raw = open(p).read().rstrip()
+        self.assertTrue(raw.endswith("}"))
+        with open(p, "w") as f:
+            f.write(raw[:-1] + ', "manifest_digest_sha256": "' + "a" * 64 + '"}')
+        r = report.generate_report(self.pack, html_only=True)
+        self.assertFalse(r["valid"])
+        self.assertIn("MANIFEST.json unreadable", r.get("error", ""))
+
+
 class SolanaDigestCli(unittest.TestCase):
     """--solana-digest prints a memo only for a readable MANIFEST.json that carries a 64-hex manifest_digest_sha256;
     anything else is a usage error with the reason (exit 2), never a traceback and never the digest of "" (2026-11-23)."""
@@ -336,12 +361,32 @@ class SolanaDigestCli(unittest.TestCase):
                                   capture_output=True, text=True, timeout=60)
 
     def test_bad_manifests_are_usage_errors(self):
-        for m in (b"[]", b"null", b"{}", b'{"manifest_digest_sha256": "ab"}', b'{"manifest_digest_sha256": 1}',
-                  b'{"manifest_digest_sha256": "' + b"A" * 64 + b'"}', b"[[[[", b"\xff\xfe", b"[" * 100000, None):
+        def digest(v):
+            return json.dumps({"manifest_digest_sha256": v}).encode()
+        h = "a" * 64
+        unread, nodig = "cannot be read", "has no manifest_digest_sha256"
+        for m, why in ((b"[]", nodig), (b"null", nodig), (b"{}", nodig), (digest("ab"), nodig), (digest(1), nodig),
+                       (digest("A" * 64), nodig), (digest(h + "a"), nodig), (digest(h + "\n"), nodig),
+                       (digest("g" * 64), nodig), (digest("\u0661" * 64), nodig),   # 65, a final newline, not hex
+                       (b"[[[[", unread), (b"\xff\xfe", unread), (b"[" * 100000, unread), (None, unread),
+                       # a key twice is a refusal as in verify_pack, whichever value comes last
+                       (b'{"manifest_digest_sha256": "ab", "manifest_digest_sha256": "' + h.encode() + b'"}', unread),
+                       (b'{"x": 1, "x": 2, "manifest_digest_sha256": "' + h.encode() + b'"}', unread)):
             r = self.run_cli(m)
             self.assertEqual(r.returncode, 2, (m[:20] if m else m, r.stderr[-200:]))
             self.assertNotIn("Traceback", r.stderr)
+            self.assertIn(why, r.stderr, m[:20] if m else m)
             self.assertEqual(r.stdout, "")
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "needs a FIFO")
+    def test_a_fifo_is_refused_without_waiting(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            os.mkfifo(os.path.join(d, "MANIFEST.json"))
+            r = subprocess.run([sys.executable, report.__file__, d, "--solana-digest"],
+                               capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 2, r.stderr[-200:])
+        self.assertIn("InputNotRegular", r.stderr)
 
     def test_a_good_manifest_prints_its_digest(self):
         md = "a" * 64
@@ -352,6 +397,7 @@ class SolanaDigestCli(unittest.TestCase):
         self.assertEqual(out["solana_memo"], "sha3:" + out["digest_sha3_hex"])
 
 
+@NEEDS_CRYPTO
 class ManifestMembersOfAnotherType(_Base):
     """caccia1 2026-11-23: a manifest whose signer_pubkeys is not a list stopped render_html (TypeError), and one whose
     manifest_digest_sha256 is not a string stopped solana_status when a SOLANA_ANCHOR.json is present (AttributeError):

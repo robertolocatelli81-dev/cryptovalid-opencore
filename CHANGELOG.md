@@ -242,10 +242,12 @@ bounds did not change.
 A `SOLANA_ANCHOR.json` or `MANIFEST.json` that is not a JSON object, an anchor whose `tx_signature` or
 `digest_sha3_hex` is not a string (or a `tx_signature` that is not ASCII), or nesting past what the parser reads, made
 `generate_report` stop with a traceback; it is now a failed anchor or an unreadable manifest in the report.
-`--solana-digest` prints a memo only for a readable `MANIFEST.json` with a 64-hex `manifest_digest_sha256`; anything
-else is a usage error with the reason (exit 2), where before it printed a traceback or the digest of an empty string.
-`TestSolanaAnchor`, which stood after the `__main__` block of `test_report.py` since 2026-08-22, now runs (with
-`cryptography`, like the other classes of that file). Also in 0.28.1 (earlier releases not measured): a `signer_pubkeys` that is not a
+`--solana-digest` prints a memo only for a readable `MANIFEST.json` whose `manifest_digest_sha256` is 64 lowercase hex
+characters; anything else is a usage error with the reason (exit 2), where before it printed a traceback or the digest
+of an empty string. A key twice in either file is a refusal in the report and in `--solana-digest`, as it already was
+in `verify_pack`; before, the last value was read. `TestSolanaAnchor`, which stood after the `__main__` block of
+`test_report.py` since 2026-08-22, now runs (with `cryptography`, like the other classes of that file that build a
+pack). Also in 0.28.1 (earlier releases not measured): a `signer_pubkeys` that is not a
 list stopped `render_html` with a TypeError (now shown as one line), and an anchor next to a manifest whose
 `manifest_digest_sha256` is not a string stopped `solana_status` with an AttributeError (now `verified: false` with the
 reason).
