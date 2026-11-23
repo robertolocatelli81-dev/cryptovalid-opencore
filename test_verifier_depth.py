@@ -50,6 +50,10 @@ class DeepNesting(unittest.TestCase):
     def test_normative_bound_is_a_property_of_the_verifier(self):
         # linear pre-scan: MAX_JSON_DEPTH is refused deterministically, independent of the host stack
         self.assertEqual(V.json_nesting_depth('{"a":[[{"b":"]]}"}]]}'), 4)   # brackets in strings ignored
+        self.assertEqual(V.json_nesting_depth('[][]'), 1)                     # a closing ] lowers the depth
+        self.assertEqual(V.json_nesting_depth('{}{}'), 1)                     # and so does a closing }
+        self.assertEqual(V.json_nesting_depth('{"a":"[[['), 1)                # an unterminated string: nothing after it counts
+        self.assertEqual(V.json_nesting_depth('"\\'), 0)                      # nor after a backslash that ends the text
         ok = V.verify_ledger(self._valid_chained(V.MAX_JSON_DEPTH))          # exactly at the bound: accepted
         self.assertEqual(ok["verdict"], "PASS")
         bad = V.verify_ledger(self._valid_chained(V.MAX_JSON_DEPTH + 1))     # one past the bound: refused

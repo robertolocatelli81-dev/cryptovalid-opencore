@@ -571,8 +571,9 @@ def _key_bytes(value: Any) -> Optional[bytes]:
     if _HEX_ANYCASE.match(value):
         return bytes.fromhex(value)
     if _B64_ANY.match(value):
+        v = value.rstrip("=").replace("-", "+").replace("_", "/")    # the padding is re-made: CPython 3.9 tolerates one "=" too many, 3.11 and 3.13 refuse it
         try:
-            return base64.b64decode(value.replace("-", "+").replace("_", "/") + "=" * (-len(value.rstrip("=")) % 4), validate=True)
+            return base64.b64decode(v + "=" * (-len(v) % 4), validate=True)
         except (binascii.Error, ValueError):
             return None
     return None
@@ -704,7 +705,8 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any], *, keys_are_complete: boo
         whole = jcs(receipt)                          # the entire receipt must canonicalize: it is the §5.7 pre-image
         msg = jcs(body)
     except (ValueError, TypeError) as ex:
-        add("signing_input", "undecidable", "not_canonicalizable", f"the signing input cannot be canonicalized (RFC 8785): {ex}")
+        if "signing_input" not in out["checks"]:         # a check that failed stays failed in `checks` (§5.4)
+            add("signing_input", "undecidable", "not_canonicalizable", f"the signing input cannot be canonicalized (RFC 8785): {ex}")
     else:
         if "signing_input" not in out["checks"]:
             add("signing_input", "pass")

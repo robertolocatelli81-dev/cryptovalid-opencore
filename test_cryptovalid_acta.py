@@ -1149,6 +1149,39 @@ class Draft04_20261123(unittest.TestCase):
             self.assertEqual((rc, out["outcome"]), (1, "invalid"), name)
             rc, out, _ = self._cli(path, "--key", f"{kid}={carried}")
             self.assertEqual((rc, out["outcome"], out["checks"].get("carried_key")), (0, "valid", "pass"), name)
+        # every documented form of the same key is that key, on every Python (padded base64 was key_mismatch on 3.11/3.13)
+        import base64
+        sk, pk = self._keyed()
+        base = {"type": "x:y", "issued_at": "2026-03-01T00:00:00Z", "issuer_id": "k04"}
+        b64, b64u = base64.b64encode(pk).decode(), base64.urlsafe_b64encode(pk).decode()
+        self.assertTrue(b64.endswith("="))
+        jwk = {"kty": "OKP", "crv": "Ed25519", "x": b64u.rstrip("=")}
+        for same in (pk.hex(), pk.hex().upper(), b64, b64u, b64.rstrip("="), b64u.rstrip("="), b64 + "=", jwk, dict(jwk, x=b64u)):
+            v = A.verify_receipt(self._env(sk, dict(base, public_key=same)), {"k04": pk})
+            self.assertEqual((v["outcome"], v["checks"]["carried_key"]), ("valid", "pass"), same)
+        other = hashlib.sha256(b"other").digest()
+        for not_it in (other.hex(), base64.b64encode(other).decode(), None, "zz", [pk.hex()], pk.hex() + "00", b64[:-2],
+                       dict(jwk, kty="EC"), dict(jwk, crv="X25519"), dict(jwk, x=None)):
+            v = A.verify_receipt(self._env(sk, dict(base, public_key=not_it)), {"k04": pk})
+            self.assertEqual((v["outcome"], v["code"]), ("invalid", "key_mismatch"), not_it)
+        # each carried member is compared: one that is the key does not hide one that is not, in either order
+        for first, second in ((pk.hex(), other.hex()), (other.hex(), pk.hex())):
+            v = A.verify_receipt(self._env(sk, dict(base, public_key=first, verification_jwk=second)), {"k04": pk})
+            self.assertEqual((v["outcome"], v["code"]), ("invalid", "key_mismatch"))
+        # a relying-party key held as PEM (ES256) is not compared: undecidable, never a mismatch and never valid
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+        ek = ec.generate_private_key(ec.SECP256R1())
+        pem = ek.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        pay = dict(base, issuer_id="es", public_key=pk.hex())
+        while True:
+            rr, ss = decode_dss_signature(ek.sign(A.jcs(pay), ec.ECDSA(hashes.SHA256())))
+            if ss <= A.P256_ORDER // 2:
+                break
+        es = {"payload": pay, "signature": {"alg": "ES256", "kid": "es", "sig": (rr.to_bytes(32, "big") + ss.to_bytes(32, "big")).hex()}}
+        v = A.verify_receipt(es, {"es": pem})
+        self.assertEqual((v["outcome"], v["code"], v["checks"]["signature"]), ("undecidable", "carried_key_not_comparable", "pass"))
 
     def test_link_form_against_an_independent_reading_of_5_7(self):
         import random
@@ -1301,6 +1334,14 @@ class Draft04_20261123(unittest.TestCase):
             with open(os.path.join(tmp, "f.json"), "w", encoding="utf-8") as fh:
                 json.dump(forged, fh)
             self.assertEqual(self._cli(bad, os.path.join(tmp, "f.json"), "--key", f"k04={pk.hex()}", "--sequence")[0], 1)
+        # an input whose shape is not read, between two receipts: in a sequence it stands where a chain begins and its
+        # link is not judged; in a chain, whether it follows the one before could not be checked — never valid either way
+        for hole in (A.Unparsed("not JSON"), [], {"x": 1}):
+            v = A.verify_chain([a, hole, a], keys, sequence=True)
+            self.assertEqual((v["outcome"], v["chains"], [p["code"] for p in v["problems"]]),
+                             ("undecidable", [0, 1, 2], ["input_not_json" if isinstance(hole, A.Unparsed) else "unrecognized_shape"]))
+            v = A.verify_chain([a, hole], keys)
+            self.assertEqual((v["outcome"], v["chains"], v["problems"][-1]["code"]), ("undecidable", [0], "chain_link_undecidable"))
 
     def test_a_window_that_cannot_be_applied_is_undecidable(self):
         sk, pk = self._keyed()
@@ -1326,6 +1367,12 @@ class Draft04_20261123(unittest.TestCase):
             self.assertEqual((v["outcome"], v["code"]), ("undecidable", "unsupported_algorithm"), alg)
             v = A.verify_receipt(r, {"k04": {"key": pk, "valid_until": "2026-02-01T00:00:00Z"}})
             self.assertEqual((v["outcome"], v["code"]), ("invalid", "key_outside_validity_window"), alg)
+        # a check that failed is reported as failed even when the same receipt cannot be canonicalized
+        p = {"type": "x:y", "issued_at": "2026-03-01T00:00:00Z", "issuer_id": "k04", "signature": None}
+        r = self._env(sk, p)
+        r["payload"]["x"] = "\ud800"
+        v = A.verify_receipt(r, {"k04": pk})
+        self.assertEqual((v["outcome"], v["code"], v["checks"]["signing_input"]), ("invalid", "signature_in_signing_input", "fail"))
 
 
 if __name__ == "__main__":

@@ -13,12 +13,16 @@ run by the same author, not by a third party.
 
 The -04 of the draft was posted on 2026-11-22 (datatracker, checked on 2026-11-23: revision 04, no -05; individual
 draft, not adopted by a working group). The module was written against -03. Measured on 2026-11-23 on b784901, before
-this change, against every published vector set for the draft that runs offline: 106 of 115 cases agreed —
+this change, against three published vector sets for the draft, offline: 106 of 115 cases agreed —
 ScopeBlind/agent-governance-testvectors at 5c749de (chain-link 21/27, key-window 6/6, signing-input 4/4, revocation 2/2,
 timeliness 3/3, negative/embedded-key 3/4), probityai/agent-evidence-vectors `vectors-receipt-signature` at 127cf14
 (graded against -03, both key-set passes, 56/58) and the TRACE Acta fixtures of agentrust-io/trace-spec at 6f04de6 (the
 signature, signing-input, key-window and chain columns, 11/11). After it: 115/115; with one hex digit of each
-signature flipped, 115/115 refused. Each change below follows the text of -04:
+signature flipped, 115/115 refused. Two more sets, run the same day and not in those counts: the FINOS MI-24 decision
+records of agent-governance-testvectors at 5c749de (`verifier-vectors/finos-mi24-decision-record`, the receipt-level
+`verify` outcome of its 31 v1.1.0 and 50 v1.2.0 cases: 81/81 before and after, the number of chains and of broken links of
+the four sequence cases reported only after) and giskard09/argentum-core `farley-receipt-signature` at 541ce84 (4/4
+before and after). Each change below follows the text of -04:
 
 - **Three outcomes (§5.4).** `verify_receipt` and `verify_chain` return `outcome` (valid | invalid | undecidable), the
   code that decided and `checks` (each check's result); every check runs and the outcome is invalid if one that ran
@@ -46,7 +50,8 @@ signature flipped, 115/115 refused. Each change below follows the text of -04:
 - **Carried keys (§8.5).** A `public_key`, `verification_key` or `verification_jwk` member of the signed bytes is never
   used: with no key from the relying party the outcome is undecidable `embedded_key_rejected` (was `key_not_supplied`,
   and invalid for a flat receipt without `issuer_id`); with one, a carried key that is not that key is invalid
-  `key_mismatch`. Keys are compared as the reference verifier documents it (@veritasacta/verify 0.11.1, ERRORS.md).
+  `key_mismatch`. Keys are compared as the reference verifier documents it (@veritasacta/verify 0.11.1, ERRORS.md):
+  hex in either case, base64 or base64url with or without padding, or an OKP Ed25519 JWK.
 - Codes on every refusal of the chain: `malformed_chain_link`, `chain_break`, `policy_digest_*`; the draft's section
   numbers of -04 in every message (-03 §6.6, §6.7, §6.8, §6.9, §9.2, §9.5, §9.7 are -04 §5.2, §5.7, §5.8, §5.9, §5.6,
   §8.5, §8.7).
@@ -58,6 +63,19 @@ combinations of ten defects against the outcome §5.4 predicts and §5.7 link fo
 5 026 values; eight are red on b784901 (the ninth checks the vendored bytes). Twelve mutants of the new lines: eleven
 caught, one equivalent (the bare-link comparison after the exact one). Eleven existing tests changed with the rules above (one renamed).
 Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those of the suite above).
+
+### The depth and surrogate scans of `verifier.py` jump to the characters that matter
+
+`json_nesting_depth` and `has_lone_surrogate`, run on every line the verifier and the writer read, walked each character
+in Python; they now jump with `re.search` / `str.find` to the next quote, bracket or backslash. Same results: measured
+on 2026-11-23 against the character-by-character versions of 0.28.1 under Python 3.9, 3.11 and 3.13, on 1 237 882 texts
+each (every text of up to six characters over nine symbols, random texts of up to 300 symbols, JSON documents whole, cut
+and with one symbol added, eleven texts of up to 2 MiB): 0 differences in either function and in what `_loads_strict`
+returns or raises; eleven mutants of the new lines are each caught by a shorter run of it. Speed (minimum of seven runs): `_loads_strict`
+on a 4 KiB audit event is 5 to 7 times faster. It is slower where the characters that matter are dense: on 1 MiB of
+`[]`, of `""` or of escapes inside a string, `json_nesting_depth` takes 5 to 7 times longer than before (about 0.16 to
+0.35 s per MiB under Python 3.11) and `has_lone_surrogate` about twice on escapes; both stay linear in the input, whose
+bounds did not change.
 
 ## 0.28.1 (2026-11-23): verdicts change
 
