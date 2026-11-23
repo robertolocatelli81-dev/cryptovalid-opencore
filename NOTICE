@@ -25,7 +25,14 @@ full text in testdata/interop/LICENSE.torchwood). testdata/interop/README.md
 lists each file, its source commit and its license. spec/vectors/scitt-cose/
 holds the test vectors of action-state-group/scitt-cose (Copyright 2026 Action
 State Group, Inc., Apache License 2.0; full text in spec/vectors/scitt-cose/LICENSE,
-the project's notice in spec/vectors/scitt-cose/NOTICE).
+the project's notice in spec/vectors/scitt-cose/NOTICE). spec/vectors/forestrie-mmr/
+holds checkpoint-receipt-kat39.json of forestrie/protocol (commit e5eb191, MIT
+License, Copyright (c) 2026 Robin Bryce; full text in
+spec/vectors/forestrie-mmr/LICENSE). spec/vectors/aac-cll-mmr/ holds
+vectors/cll-material/cases.json of action-state-group/agent-action-capsule
+(commit f812c44, BSD-3-Clause, Copyright (c) 2026 Action State Group, Inc.; full
+text in spec/vectors/aac-cll-mmr/LICENSE, the project's notice in
+spec/vectors/aac-cll-mmr/NOTICE).
 
 spec/vectors/beacon/nist/ holds pulses and the certificate of the NIST
 Randomness Beacon 2.0, the bytes beacon.nist.gov served on 2026-11-16. NIST is

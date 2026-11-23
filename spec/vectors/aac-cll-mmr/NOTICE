@@ -1,0 +1,12 @@
+agent-action-capsule
+Copyright 2026 Action State Group, Inc.
+
+This repository contains an open specification (an IETF Internet-Draft) and a
+reference implementation, developed by Action State Group, Inc.
+(https://actionstate.ai) and published as an open standard intended for
+contribution to an appropriate standards body as the ecosystem matures.
+
+The specification text is an IETF contribution governed by BCP 78 and BCP 79.
+Code and reference-implementation material are licensed under the Revised BSD
+License (see LICENSE), except the paths LICENSING.md section 3 lists, which are
+licensed under the Apache License, Version 2.0 (see LICENSE-APACHE-2.0).

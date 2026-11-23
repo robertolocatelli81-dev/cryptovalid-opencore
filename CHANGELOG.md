@@ -37,6 +37,32 @@ run by the same author, not by a third party.
   sigstore-python, RFC 9943 §7.1; unlike cosign `verify` (`--insecure-ignore-tlog`, `--insecure-ignore-sct`),
   policy-controller `mode: warn` and sigstore-python `UnsafeNoOp`, nothing here turns a check off. Details in SPEC §23.
 
+### COSE Receipts of an MMR, vds 3 (SPEC v0.15 §28)
+
+`cryptovalid_cose_receipts` (experimental) verifies the receipts of draft-ietf-scitt-receipts-mmr-profile-00 (SCITT
+working group document, posted 2026-11-21; the current revision on datatracker on 2026-11-23). Until now a receipt with
+vds 3 was `UNSUPPORTED_VDS`.
+
+- `verify_receipt` reads a receipt of inclusion (`vdp` exactly `{-1: [+ bstr]}`, each proof `[uint index, [* 32-byte
+  hash]]`, payload detached, every proof giving the same peak); the `entry` is the 32-byte node value. The result
+  reports `node_height`, `index_bound` (false when a path is empty, draft §11.1) and `ignored_labels`.
+- `verify_mmr_consistency(receipt, log_key, trusted_size, trusted_accumulator)` reads a receipt of consistency (draft
+  §7.1): the signed `tree-size-2` (label -65933) equal to the last proof's, the proofs contiguous from the trusted size,
+  each folded by `consistent_roots` with every "-> ERROR" of the draft a refusal naming its class, and the signature
+  over the accumulator; it returns the new state.
+- The protected header must be Core Deterministic CBOR (RFC 8949 §4.2.1, draft §7); a label not read is ignored
+  whatever its value and reported, one in `crit` is refused.
+- vds 3 is not an IANA value: the draft writes `TBD_1`; 3 is the value draft-bryce-cose-receipts-mmr-profile-04
+  requested and the one Forestrie writes. It changes here when IANA assigns one.
+- External vectors, measured on 2026-11-23: forestrie/protocol KAT-39 (`spec/vectors/forestrie-mmr/`, MIT): 231/231
+  pairs and 8/8 negatives of the fold, 3/3 receipt chains, ES256 receipts and negatives as expected except
+  `reject/es256-high-s` (accepted: RFC 9053 has no low-s rule); the bare `bstr` form of its older receipts is refused
+  (draft -00 has an array); KS256 is `UNSUPPORTED_ALG`; 45 of 52 protected-header rows agree, 7 follow the draft's
+  text (bytewise key order; unread labels ignored whatever their value). agent-action-capsule CLL material
+  (`spec/vectors/aac-cll-mmr/`, BSD-3-Clause, unsigned proofs written from draft-bryce -02): 92/92 inclusion and 79/79
+  consistency proofs, its 13 same-size cases refused as draft -00 §7.1.1 writes. No public receipt of inclusion in the
+  draft -00 form was found: the inclusion tests use receipts signed here (`test_mmr_receipts_20261123.py`).
+
 ### `cryptovalid_acta` follows draft-farley-acta-signed-receipts-04
 
 The -04 of the draft was posted on 2026-11-22 (datatracker, checked on 2026-11-23: revision 04, no -05; individual

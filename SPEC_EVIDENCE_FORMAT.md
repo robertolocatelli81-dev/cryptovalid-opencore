@@ -409,6 +409,8 @@ v0.15 also adds §24, the SLH-DSA archival anchor `omega-slhdsa-anchor-v2` (FIPS
 `cryptovalid_slhdsa.py`, §25, DSSE envelopes carrying in-toto Statements, verified by `cryptovalid_dsse.py`, §26,
 the properties a weekly fuzz run holds three readers to, and §27, the GitHub Action. Additive: no existing input
 changes verdict.
+v0.15 also adds §28, the COSE Receipts of an MMR (vds 3, draft-ietf-scitt-receipts-mmr-profile-00) in the experimental
+`cryptovalid_cose_receipts.py`: additive, a receipt with vds 3 was `UNSUPPORTED_VDS` before.
 
 ## 7. Conformance (normative)
 
@@ -2602,3 +2604,73 @@ Written before `action.yml`. `uses: robertolocatelli81-dev/cryptovalid-opencore@
    wheel that was verified.
 Inputs reach the scripts only through environment variables. Not done by the action: pinning the PyPI dependency by
 hash, and any check of the evidence beyond what `cryptovalid-verify` does with the given arguments.
+## 28. COSE Receipts of an MMR, vds 3 (NORMATIVE since v0.15, 2026-11-23)
+
+`cryptovalid_cose_receipts.py` (experimental module) verifies the COSE Receipts of RFC 9942 for vds 1 (RFC9162_SHA256)
+and vds 2 (CCF, draft-ietf-scitt-receipts-ccf-profile-06). This section adds the verifiable data structure of
+draft-ietf-scitt-receipts-mmr-profile-00, "COSE Receipts for MMRs" (R. Bryce, J. Geater; SCITT working group document,
+posted 2026-11-21; datatracker read on 2026-11-23: revision 00 current, it replaces draft-bryce-cose-receipts-mmr-profile
+whose last revision is -05). It was written before the code. The draft is a working document: a later revision may
+change what this section follows, and the section will be revised against it.
+
+1. **The value of vds.** The draft registers `MMR_SHA256` as `TBD_1` and does not request a value; IANA's "COSE
+   Verifiable Data Structure Algorithms" registry holds only 1 (read on 2026-11-23). This verifier reads **3**:
+   draft-bryce-cose-receipts-mmr-profile-04 §12 wrote "TBD_1 (requested assignment 3)", and the implementation of the
+   draft's author (forestrie/protocol, `spec/label-registry.md`) writes 3 and says it is not registered. 2 is the value
+   requested by the CCF profile. The label `tree-size-2` is `-65933`, the private-use value the draft names until
+   `TBD_2` is assigned (§12.1.3). Both change here when IANA assigns them.
+2. **The protected header** of an MMR receipt is read under the draft's §7, for inclusion and consistency alike (§5
+   refers to it): Core Deterministic Encoding of RFC 8949 §4.2.1 (definite lengths, arguments and floating-point values
+   in shortest form, map keys in strictly increasing bytewise order of their encodings, so no duplicate), one map
+   filling the whole byte string. Anything else is `PROTECTED_HEADER_ENCODING`. Labels are COSE labels (RFC 9052 §1.4:
+   int or text). A label the verifier does not read is ignored whatever its value (draft §7: "MUST ignore protected
+   header labels it does not recognise, whatever the type of their values"), and reported in `ignored_labels`; a label
+   listed in `crit` that is not 1 or 395 (and -65933 for consistency, 15 under profile `rfc9943`) is refused, as RFC
+   9052 §3.1 asks. The unprotected header is not signed and no rule asks it to be deterministic: it is read as
+   well-formed CBOR, and only `vdp` (396) is read from it.
+3. **A receipt of inclusion** (draft §4, §5, §5.1, §5.2): `vdp` is exactly `{-1: [+ bstr]}`; each bstr is the CBOR
+   `[uint index, [* bstr .size 32]]` with an index below 2^64 - 1 and at most 64 hashes (§2: a tree is at most 63
+   high); the payload MUST be detached; the caller's `entry` is the **node value** (32 bytes), which the caller computes
+   under the log's leaf commitment scheme (the draft leaves it to the application, §11.2); `included_root` gives the
+   peak, and the log signature is checked over it. Every proof must be well formed and give the same peak, since one
+   payload is signed (`PROOFS_DISAGREE`; the draft speaks of one proof). The result reports `node_height` (whether the
+   node is a leaf is read from its height, §11.2) and `index_bound`: false when a path is empty, since then the index
+   is not bound (§11.1). A `vdp` holding only `-2` is a receipt of consistency (`OTHER_RECEIPT_KIND`).
+4. **A receipt of consistency** (draft §6, §7, §7.1, §7.1.1) is verified by `verify_mmr_consistency(receipt, log_key,
+   trusted_size, trusted_accumulator)`: `vdp` is exactly `{-2: [+ bstr]}`; `tree-size-2` present (else
+   `SIGNED_SIZE_MISSING`) and an unsigned integer; equal to the last proof's (`SIGNED_SIZE_MISMATCH`); each proof's
+   `tree-size-1` equal to the state reached so far, starting from the trusted size (`CHAIN_NOT_CONTIGUOUS`); every
+   proof folded by `consistent_roots` with each of its "-> ERROR" a refusal naming the class; the right-peaks of the
+   count it returns; the log signature over the final accumulator, peaks concatenated highest first. The trusted
+   state must be a complete MMR size (0 is the empty tree) with one 32-byte value per peak (`TRUSTED_STATE_INVALID`).
+   The trusted vds is MMR_SHA256, the only one supported, so step 2 of §7.1 is `vds == 3`. The result is the new
+   state; the caller keeps it (the draft: trusted state advances only forwards).
+5. **Signature algorithms** are those of vds 1 and 2: EdDSA with Ed25519, ES256 with P-256, ES384 with P-384.
+6. **Vectors.** `spec/vectors/forestrie-mmr/` holds the KAT-39 file of forestrie/protocol (MIT; generated by the
+   reference implementation of the draft's author): receipts of consistency and the fold. No public vector of a
+   receipt of inclusion in the form of draft -00 was found on 2026-11-23: Forestrie's inclusion receipts carry the
+   proof as a `{1, 2}` map, not a bstr, and no vds (its `spec/checkpoints-and-receipts.md` §4.2 lists these
+   departures); this verifier refuses them. The inclusion tests sign their own receipts over a tree built with the
+   draft's `add_leaf_hash`, and check `included_root` against the 21 accumulators of the KAT-39 tree: vectors of this
+   repository, no external confirmation of an inclusion receipt. `spec/vectors/aac-cll-mmr/` holds 184 unsigned
+   proofs of action-state-group/agent-action-capsule (BSD-3-Clause, written from draft-bryce -02): 92/92 inclusion
+   proofs reach a peak and 79/79 consistency proofs give the new peaks; its 13 cases from a size to the same size are
+   refused, since draft -00 §7.1.1 writes "if sizeto <= sizefrom -> ERROR". They confirm the two algorithms, not a
+   signed receipt.
+
+Where Forestrie's rules (its ADR-0066, D9) and this verifier answer differently, measured on 2026-11-23 on the KAT-39
+file, this verifier follows the draft's text:
+
+- **Bare proof.** Forestrie's older receipts carry one `bstr` under `vdp` -2; draft -00 §7 has `consistency-proofs = [
+  + consistency-proof ]`. Refused here (`MALFORMED_PROOF`); the ten `receipts` and five `receipt_negatives` rows are
+  in that form, and their ES256 rows verify, or are refused for the reason the file expects, once that unprotected
+  value is put in an array.
+- **Low s.** Forestrie refuses an ES256 signature with a high `s`; RFC 9053 §2.1 has no such rule and the draft adds
+  none. `reject/es256-high-s` is accepted here.
+- **KS256** (secp256k1 with Keccak-256, the five KS256 rows) is not a COSE algorithm this verifier implements:
+  `UNSUPPORTED_ALG`.
+- **Seven of the 52 protected-header rows.** Forestrie sorts map keys shorter encoding first, then bytewise (the order of
+  RFC 8949 §4.2.3); the draft and RFC 8949 §4.2.1 sort bytewise, so the row `skip/two-unread-labels-length-first-order`
+  (`-1` before `24`) is refused here. Forestrie refuses an array, a map, a tag, `undefined`, simple value 40 and a
+  negative label beyond 64 bits under a label it does not read; the draft ignores such a label "whatever the type of
+  its values": the six rows are accepted here. The other 45 rows agree.

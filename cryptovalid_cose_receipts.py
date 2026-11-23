@@ -27,6 +27,12 @@ preparation, 2026-10-03):
                      map). Consistency proofs (-2, Figure 9) are not evaluated here: a receipt that carries them is
                      `CONSISTENCY_NOT_EVALUATED` (§5: "A Verifier MUST reject a receipt in which any proof present in
                      the vdp map recomputes a different root"; refusing them all never accepts one that does).
+                     Also vds 3 = MMR_SHA256 (draft-ietf-scitt-receipts-mmr-profile-00, 2026-11-21, the WG document
+                     current on datatracker on 2026-11-23; SPEC §28): receipts of inclusion through verify_receipt, the
+                     caller's `entry` being the 32-byte NODE VALUE (the leaf commitment is the application's, §11.2);
+                     receipts of consistency through verify_mmr_consistency, from a trusted size and accumulator. The
+                     protected header must be Core Deterministic CBOR (§7); labels not read are ignored and reported
+                     (`ignored_labels`). vds 3 and tree-size-2 -65933 are not IANA values (SPEC §28 rule 1).
   profile "rfc9943"  the same, plus the header MUSTs of RFC 9943 §6 on BOTH the Signed Statement and the Receipt:
                      CWT Claims (15) with iss (1) and sub (2), iss of 1..8192 characters, kid (4) when neither x5t (34)
                      nor x5chain (33) is in the protected header.
@@ -80,6 +86,8 @@ from cryptovalid_scitt import (L_ALG, L_CWT, L_KID, L_VDP, L_VDS, CWT_ISS, CWT_S
 
 ALG_EDDSA, ALG_ES256, ALG_ES384 = -8, -7, -35
 VDS_CCF_LEDGER_SHA256 = 2        # draft-ietf-scitt-receipts-ccf-profile-06 §5: TBD_1, "Requested assignment" 2 (not yet IANA)
+VDS_MMR_SHA256 = 3               # draft-ietf-scitt-receipts-mmr-profile-00 §3: TBD_1; 3 as requested by draft-bryce-...-04 (not IANA)
+L_TREE_SIZE_2 = -65933           # draft-ietf-scitt-receipts-mmr-profile-00 §12.1.3: TBD_2, "private use until assigned"
 L_X5CHAIN, L_X5T = 33, 34
 PROFILES = ("rfc9942", "rfc9943")
 BACKEND_MISSING_WHY = "cryptography is not installed here (pip install 'cryptovalid-opencore[sign]'): the signature was not evaluated"
@@ -194,11 +202,14 @@ def verify_receipt(receipt: bytes, entry: bytes, log_key, profile: str = "rfc994
     """An RFC 9942 COSE Receipt with VDS RFC9162_SHA256 for the leaf entry `entry` (the caller's bytes)."""
     if profile not in PROFILES:
         raise ValueError(f"profile must be one of {PROFILES}")
+    if _mmr_vds(receipt) is not None:              # vds 3: the protected header is read under the MMR profile's rules
+        return _verify_mmr_inclusion(receipt, entry, log_key, profile)
     try:
         rp, ph, uh, rpl, sig = parse_cose_sign1(receipt, _CRIT_RECEIPT[profile])
         vds = ph.get(L_VDS)                              # protected header only: an unprotected vds is never read
         if type(vds) is not int or vds not in (VDS_RFC9162_SHA256, VDS_CCF_LEDGER_SHA256):   # CBOR true is not the uint 1
-            return _refuse("UNSUPPORTED_VDS", f"protected vds {vds!r} is neither 1 (RFC9162_SHA256) nor 2 (CCF_LEDGER_SHA256)")
+            return _refuse("UNSUPPORTED_VDS", f"protected vds {vds!r} is not 1 (RFC9162_SHA256), 2 (CCF_LEDGER_SHA256) "
+                           "or 3 (MMR_SHA256)")
         alg = ph.get(L_ALG)
         if alg not in (ALG_EDDSA, ALG_ES256, ALG_ES384):
             return _refuse("UNSUPPORTED_ALG", f"receipt alg {alg!r} not supported")
@@ -361,3 +372,374 @@ def verify_statement_with_receipt(statement: bytes, receipt: bytes, issuer_key, 
     result = "VALID" if st["ok"] and rc["ok"] else "INVALID" if refused else "NOT_EVALUATED"
     return {"ok": st["ok"] and rc["ok"], "result": result,
             "stage": first["stage"], "statement": st, "receipt": rc, "profile": profile}
+
+
+# ── vds 3 = MMR_SHA256, draft-ietf-scitt-receipts-mmr-profile-00 (2026-11-21) ────────────────────────────────────────
+_U64 = 1 << 64
+_MMR_MAX_PATH = 64                   # §2: a tree is at most 63 high, so no path is longer
+
+
+class _Tag(tuple):
+    """a CBOR tag (number, content) read inside an unread header value"""
+
+
+class _Simple(int):
+    """a CBOR simple value other than false, true and null"""
+
+
+def _cbor_read(b: bytes, i: int, det: bool, depth: int = 0):
+    """→ (value, end): one well-formed CBOR item (RFC 8949 §3; definite lengths only). With `det` also the Core
+    Deterministic Encoding of §4.2.1: arguments and floats in shortest form, map keys in strictly increasing bytewise
+    order of their encodings (no duplicates). Map keys are COSE labels, int or text (RFC 9052 §1.4). ValueError else."""
+    if depth > 64 or i >= len(b):
+        raise ValueError("CBOR item cut short or nested too deep")
+    major, info = b[i] >> 5, b[i] & 0x1F
+    i += 1
+    if info >= 28:
+        raise ValueError("indefinite length" if info == 31 else f"reserved additional information {info}")
+    if major == 7 and info in (25, 26, 27):           # floats: half, single, double
+        import struct
+        k = {25: 2, 26: 4, 27: 8}[info]
+        if i + k > len(b):
+            raise ValueError("float cut short")
+        raw = b[i:i + k]
+        v = struct.unpack({2: ">e", 4: ">f", 8: ">d"}[k], raw)[0]
+        if det and k > 2:
+            for fmt in ((">e", ">f") if k == 8 else (">e",)):
+                try:
+                    if v != v:      # NaN: shorter when the payload bits a narrower float drops are zero
+                        bits = int.from_bytes(raw, "big")
+                        drop = {(8, ">f"): 29, (8, ">e"): 42, (4, ">e"): 13}[(k, fmt)]
+                        if bits & ((1 << drop) - 1) == 0:
+                            raise ValueError("float not in shortest form")
+                    elif struct.unpack(fmt, struct.pack(fmt, v))[0] == v:
+                        raise ValueError("float not in shortest form")
+                except (OverflowError, struct.error):
+                    pass
+        return v, i + k
+    if info < 24:
+        n = info
+    else:
+        k = 1 << (info - 24)
+        if i + k > len(b):
+            raise ValueError("CBOR head cut short")
+        n, i = int.from_bytes(b[i:i + k], "big"), i + k
+        if det and n < (24 if k == 1 else 1 << (4 * k)):
+            raise ValueError("argument not in shortest form")
+    if major == 0:
+        return n, i
+    if major == 1:
+        return -1 - n, i
+    if major in (2, 3):
+        if i + n > len(b):
+            raise ValueError("string cut short")
+        return (b[i:i + n] if major == 2 else b[i:i + n].decode("utf-8")), i + n    # invalid UTF-8: ValueError
+    if major == 4:
+        out = []
+        for _ in range(n):
+            v, i = _cbor_read(b, i, det, depth + 1)
+            out.append(v)
+        return out, i
+    if major == 5:
+        out, last = {}, None
+        for _ in range(n):
+            k0 = i
+            key, i = _cbor_read(b, i, det, depth + 1)
+            if type(key) not in (int, str):
+                raise ValueError("map key is not a COSE label (int or text)")
+            if key in out:
+                raise ValueError("duplicate map key")
+            if det and last is not None and b[k0:i] <= last:
+                raise ValueError("map keys not in bytewise order")
+            last = b[k0:i]
+            out[key], i = _cbor_read(b, i, det, depth + 1)
+        return out, i
+    if major == 6:
+        v, i = _cbor_read(b, i, det, depth + 1)
+        return _Tag((n, v)), i
+    if info == 24 and n < 32:                         # major 7: two-byte simple values below 32 are not well-formed
+        raise ValueError("simple value below 32 in two bytes")
+    return {20: False, 21: True, 22: None}.get(n, _Simple(n)), i
+
+
+def _mmr_parse(cose: bytes, understood: frozenset):
+    """→ (protected bytes, protected map, unprotected map, payload | None, signature) of a tagged COSE_Sign1 whose
+    protected header is deterministically encoded as -00 §7 requires (the whole bstr one map); `crit` as RFC 9052 §3.1."""
+    v, end = _cbor_read(bytes(cose), 0, False)
+    if end != len(cose):
+        raise ValueError("bytes after the COSE_Sign1")
+    if not (isinstance(v, _Tag) and v[0] == 18 and isinstance(v[1], list) and len(v[1]) == 4):
+        raise ValueError("not a tagged COSE_Sign1 (tag 18, array of 4)")
+    pb, uh, pl, sig = v[1]
+    if not (isinstance(pb, bytes) and isinstance(uh, dict) and (pl is None or isinstance(pl, bytes))
+            and isinstance(sig, bytes)):
+        raise ValueError("COSE_Sign1 must be [bstr protected, map unprotected, bstr / nil payload, bstr signature]")
+    try:
+        ph, pend = _cbor_read(pb, 0, True)
+        if not isinstance(ph, dict) or pend != len(pb):
+            raise ValueError("not one map filling the byte string")
+    except ValueError as e:
+        raise ScittError(f"protected header not deterministically encoded (-00 §7, RFC 8949 §4.2.1): {e}") from None
+    crit = R.cose_crit_problem(ph, uh, understood)
+    if crit:
+        raise ValueError(crit)
+    return pb, ph, uh, pl, sig
+
+
+def _mmr_vds(cose) -> Optional[int]:
+    """3 when the protected header reads vds 3 (routing only: everything is checked again by the verifier)"""
+    try:
+        pb = _cbor_read(bytes(cose), 0, False)[0][1][0]
+        ph = _cbor_read(pb, 0, False)[0]
+        return VDS_MMR_SHA256 if ph.get(L_VDS) == VDS_MMR_SHA256 else None      # 3.0 routes too, and is refused there
+    except Exception:  # noqa: BLE001 — not an MMR receipt; the other paths refuse it with their own stage
+        return None
+
+
+def _mmr_height(i: int) -> int:
+    """index_height, -00 §9.1"""
+    pos = i + 1
+    while pos & (pos + 1):                            # not all ones
+        pos = pos - (1 << (pos.bit_length() - 1)) + 1
+    return pos.bit_length() - 1
+
+
+def _mmr_pospair(pos: int, a: bytes, b: bytes) -> bytes:
+    """hash_pospair64, -00 §8.2.1 (pos < 2^64)"""
+    if not 0 < pos < _U64:
+        raise ValueError(f"position {pos} outside 64 bits")
+    return hashlib.sha256(pos.to_bytes(8, "big") + a + b).digest()
+
+
+def mmr_included_root(i: int, nodehash: bytes, proof: List[bytes]) -> bytes:
+    """included_root, -00 §5.2: the peak the path implies for the node value `nodehash` at index `i`."""
+    root, g = nodehash, _mmr_height(i)
+    for sibling in proof:
+        if _mmr_height(i + 1) > g:
+            i += 1
+            root = _mmr_pospair(i + 1, sibling, root)
+        else:
+            i += 2 << g
+            root = _mmr_pospair(i + 1, root, sibling)
+        g += 1
+    return root
+
+
+def _leaf_count(i: int) -> int:
+    """leaf_count, -00 §9.3: the leaves of MMR(i+1), whose set bits are the heights of the peaks"""
+    s = i + 1
+    peaksize, peakmap = (1 << s.bit_length()) - 1, 0
+    while peaksize > 0:
+        peakmap <<= 1
+        if s >= peaksize:
+            s -= peaksize
+            peakmap |= 1
+        peaksize >>= 1
+    return peakmap
+
+
+def _complete(size: int) -> bool:
+    """mmr_size_for_leaf_count(leaf_count(size - 1)) == size, -00 §9.4 (0, the empty tree, is complete)"""
+    lc = _leaf_count(size - 1) if size else 0
+    return 2 * lc - bin(lc).count("1") == size
+
+
+class MmrShapeError(ValueError):
+    """a consistency proof that is not of the shape its two sizes imply; `cls` names the class"""
+    def __init__(self, cls: str, why: str):
+        super().__init__(f"{cls}: {why}")
+        self.cls = cls
+
+
+def mmr_consistent_roots(sizefrom: int, sizeto: int, accumulatorfrom: List[bytes], proofs: List[List[bytes]]):
+    """consistent_roots, -00 §7.1.1, with each "-> ERROR" of the draft an MmrShapeError. → (roots, nright)."""
+    if sizeto <= sizefrom:
+        raise MmrShapeError("size_must_increase", f"tree-size-2 {sizeto} is not above tree-size-1 {sizefrom}")
+    if not 0 < sizeto < _U64 or not _complete(sizeto):
+        raise MmrShapeError("incomplete_tree_size", f"tree-size-2 {sizeto} is not a complete MMR size")
+    leavesto = _leaf_count(sizeto - 1)
+    leavesfrom = _leaf_count(sizefrom - 1) if sizefrom > 0 else 0
+    n = bin(leavesfrom).count("1")
+    if len(accumulatorfrom) != n or len(proofs) != n:
+        raise MmrShapeError("peak_count_mismatch", f"{n} peaks at size {sizefrom}, {len(accumulatorfrom)} "
+                                                   f"accumulator values and {len(proofs)} paths")
+    nto = bin(leavesto).count("1")
+    if n == 0:
+        return [], nto
+    split = (leavesfrom ^ leavesto).bit_length() - 1
+    roots: List[bytes] = []
+    offset = i = 0
+    for h in range(leavesfrom.bit_length() - 1, split, -1):
+        if not (leavesfrom >> h) & 1:
+            continue
+        if len(proofs[i]) != 0:
+            raise MmrShapeError("path_length_mismatch", f"path {i}: the peak is also a peak of tree-size-2, its path must be empty")
+        roots.append(accumulatorfrom[i])
+        offset += (1 << (h + 1)) - 1
+        i += 1
+    above, root = len(roots), None
+    for h in range(split - 1, -1, -1):
+        if not (leavesfrom >> h) & 1:
+            continue
+        if len(proofs[i]) != split - h:
+            raise MmrShapeError("path_length_mismatch", f"path {i}: {len(proofs[i])} hashes, {split - h} expected")
+        subtree = (1 << (h + 1)) - 1
+        proven = mmr_included_root(offset + subtree - 1, accumulatorfrom[i], proofs[i])
+        if i == above:
+            root = proven
+        elif proven != root:
+            raise MmrShapeError("root_mismatch", f"path {i} produces another value than path {above}")
+        offset += subtree
+        i += 1
+    if n > above:
+        roots.append(root)
+    return roots, nto - len(roots)
+
+
+_CRIT_MMR_INCLUSION = {"rfc9942": frozenset({1, 395}), "rfc9943": frozenset({1, 15, 395})}
+_CRIT_MMR_CONSISTENCY = {p: c | {L_TREE_SIZE_2} for p, c in _CRIT_MMR_INCLUSION.items()}
+_MMR_READ = frozenset({1, 2, 15, 395, L_TREE_SIZE_2})   # protected labels the MMR paths read (4, 33, 34: seen as present)
+
+
+def _mmr_common(receipt: bytes, log_key, profile: str, understood: Dict, vdp_key: int):
+    """the checks inclusion and consistency share; → (refusal, None) or (None, (rp, ph, sig, alg, pub, proofs))"""
+    if profile not in PROFILES:
+        raise ValueError(f"profile must be one of {PROFILES}")
+    try:
+        rp, ph, uh, rpl, sig = _mmr_parse(receipt, understood[profile])
+    except ScittError as e:
+        return _refuse("PROTECTED_HEADER_ENCODING", str(e)[:200]), None
+    vds = ph.get(L_VDS)
+    if type(vds) is not int or vds != VDS_MMR_SHA256:
+        return _refuse("UNSUPPORTED_VDS", f"protected vds {vds!r} is not 3 (MMR_SHA256)"), None
+    alg = ph.get(L_ALG)
+    if type(alg) is not int or alg not in (ALG_EDDSA, ALG_ES256, ALG_ES384):
+        return _refuse("UNSUPPORTED_ALG", f"receipt alg {alg!r} not supported"), None
+    if profile == "rfc9943":
+        why = _header_musts(ph, "receipt")
+        if why:
+            return _refuse("HEADER_MUST", why), None
+    vdp = uh.get(L_VDP)
+    if not isinstance(vdp, dict) or set(vdp) != {vdp_key}:
+        keys = sorted(vdp, key=repr) if isinstance(vdp, dict) else vdp
+        other = -1 if vdp_key == -2 else -2
+        if isinstance(vdp, dict) and set(vdp) == {other}:
+            fn = "an inclusion receipt: verify_receipt" if other == -1 else "a consistency receipt: verify_mmr_consistency"
+            return _refuse("OTHER_RECEIPT_KIND", f"vdp holds {other} only, {fn}"), None
+        return _refuse("MALFORMED_PROOF", f"vdp {keys!r}: an MMR receipt's vdp map is exactly {{{vdp_key}: [+ bstr]}}"), None
+    proofs = vdp[vdp_key]
+    if not isinstance(proofs, list) or not proofs or not all(isinstance(p, bytes) for p in proofs):
+        return _refuse("MALFORMED_PROOF", f"vdp {vdp_key} is not [+ bstr .cbor proof]"), None
+    if rpl is not None:
+        return _refuse("PAYLOAD_NOT_DETACHED", "an MMR receipt's payload MUST be detached (-00 §5, §7)"), None
+    pub = load_public_key(log_key)
+    why = _curve_problem(alg, pub)
+    if why:
+        return _refuse("KEY_CURVE_MISMATCH", f"receipt: {why}"), None
+    return None, (rp, ph, sig, alg, pub, proofs)
+
+
+def _hashes(x, what: str) -> List[bytes]:
+    if not (isinstance(x, list) and len(x) <= _MMR_MAX_PATH and all(isinstance(h, bytes) and len(h) == 32 for h in x)):
+        raise ValueError(f"{what} must be [* bstr .size 32] (node values of MMR_SHA256, -00 §4), at most {_MMR_MAX_PATH}")
+    return x
+
+
+def _verify_mmr_inclusion(receipt: bytes, entry: bytes, log_key, profile: str) -> Dict:
+    """-00 §5.1. `entry` is the NODE VALUE (32 bytes), computed by the caller under the log's leaf commitment scheme
+    (§11.2: the profile leaves it to the application)."""
+    try:
+        bad, got = _mmr_common(receipt, log_key, profile, _CRIT_MMR_INCLUSION, -1)
+        if bad:
+            return bad
+        rp, ph, sig, alg, pub, proofs = got
+        node = bytes(entry)
+        if len(node) != 32:
+            return _refuse("ENTRY_NOT_A_NODE_VALUE", f"an MMR_SHA256 entry is a 32-byte node value, not {len(node)} bytes")
+        peaks, walked = set(), []
+        for k, pb in enumerate(proofs):
+            try:
+                dec = R.cbor_decode(pb)
+                if not (isinstance(dec, list) and len(dec) == 2 and type(dec[0]) is int and 0 <= dec[0] < _U64 - 1):
+                    raise ValueError("not [uint index, [* hash]] with an index below 2^64 - 1")
+                path = _hashes(dec[1], "inclusion-path")
+                peaks.add(mmr_included_root(dec[0], node, path))
+            except ValueError as e:
+                return _refuse("MALFORMED_PROOF", f"proof {k}: {e}"[:200])
+            walked.append((dec[0], len(path)))
+        if len(peaks) != 1:     # one detached payload is signed: a proof for another peak is unverified material
+            return _refuse("PROOFS_DISAGREE", "the inclusion proofs do not produce the same peak")
+        peak = peaks.pop()
+        if not _verify_sig(alg, pub, _sig1(rp, peak), sig):
+            return _refuse("INCLUSION_ROOT_SIGNATURE_INVALID", "the log signature does not verify over the peak "
+                                                               "included_root produces (-00 §5.1 step 3)")
+        index, plen = walked[0]
+        return {"ok": True, "stage": None, "why": "MMR: log signature valid over the peak rebuilt from the node value and the path",
+                "alg": alg, "vds": VDS_MMR_SHA256, "root": peak.hex(), "leaf_index": index, "node_height": _mmr_height(index),
+                "index_bound": all(p > 0 for _, p in walked),   # -00 §11.1: an empty path does not bind the index
+                "payload_attached": False, "ignored_labels": sorted((k for k in ph if k not in _MMR_READ), key=repr)}
+    except ImportError as e:
+        return _refuse("BACKEND_MISSING", BACKEND_MISSING_WHY + f" ({e})"[:120])
+    except Exception as e:  # noqa: BLE001
+        return _refuse("MALFORMED_RECEIPT", f"{type(e).__name__}: {e}"[:200])
+
+
+def verify_mmr_consistency(receipt: bytes, log_key, trusted_size: int, trusted_accumulator: List[bytes],
+                           profile: str = "rfc9942") -> Dict:
+    """A COSE Receipt of consistency of draft-ietf-scitt-receipts-mmr-profile-00 §7.1, from the trusted state
+    (`trusted_size`, `trusted_accumulator`: the peaks, highest first; size 0 and [] is the empty tree). The trusted vds
+    is MMR_SHA256, the one this verifier supports, so step 2 is `vds == 3`. On success `tree_size_2` and `accumulator`
+    are the new trusted state (§7.1: it advances only forwards; a caller that holds a later state passes that one)."""
+    try:
+        if not (type(trusted_size) is int and 0 <= trusted_size < _U64 and _complete(trusted_size)
+                and isinstance(trusted_accumulator, list)
+                and all(isinstance(h, bytes) and len(h) == 32 for h in trusted_accumulator)
+                and len(trusted_accumulator) == bin(_leaf_count(trusted_size - 1) if trusted_size else 0).count("1")):
+            return _refuse("TRUSTED_STATE_INVALID", "the trusted state is not a complete MMR size with one 32-byte "
+                                                    "value per peak")
+        bad, got = _mmr_common(receipt, log_key, profile, _CRIT_MMR_CONSISTENCY, -2)
+        if bad:
+            return bad
+        rp, ph, sig, alg, pub, proofs = got
+        if L_TREE_SIZE_2 not in ph:
+            return _refuse("SIGNED_SIZE_MISSING", "the protected header has no tree-size-2 (-65933): MUST be rejected (-00 §7)")
+        signed = ph[L_TREE_SIZE_2]
+        if type(signed) is not int or signed < 0:
+            return _refuse("SIGNED_SIZE_NOT_UINT", f"tree-size-2 {signed!r} is not an unsigned integer (-00 §7.1 step 1)")
+        steps = []
+        for k, pb in enumerate(proofs):
+            try:
+                dec = R.cbor_decode(pb)
+                if not (isinstance(dec, list) and len(dec) == 4 and type(dec[0]) is int and type(dec[1]) is int
+                        and dec[0] >= 0 and dec[1] >= 0 and isinstance(dec[2], list) and len(dec[2]) <= _MMR_MAX_PATH):
+                    raise ValueError("not [uint tree-size-1, uint tree-size-2, [* consistency-path], [* hash]]")
+                steps.append((dec[0], dec[1], [_hashes(p, "consistency-path") for p in dec[2]],
+                              _hashes(dec[3], "right-peaks")))
+            except ValueError as e:
+                return _refuse("MALFORMED_PROOF", f"proof {k}: {e}"[:200])
+        if signed != steps[-1][1]:
+            return _refuse("SIGNED_SIZE_MISMATCH", f"protected tree-size-2 {signed} is not the last proof's "
+                                                   f"{steps[-1][1]} (-00 §7.1 step 3)")
+        size, acc = trusted_size, list(trusted_accumulator)
+        for k, (s1, s2, paths, right) in enumerate(steps):
+            if s1 != size:
+                return _refuse("CHAIN_NOT_CONTIGUOUS", f"proof {k}: tree-size-1 {s1}, the state is at {size} "
+                                                       "(-00 §7.1 steps 4, 6.1)")
+            try:
+                roots, nright = mmr_consistent_roots(size, s2, acc, paths)
+            except MmrShapeError as e:
+                return _refuse("MALFORMED_PROOF", f"proof {k}: {e}"[:200], shape=e.cls)
+            if len(right) != nright:
+                return _refuse("MALFORMED_PROOF", f"proof {k}: {len(right)} right-peaks, {nright} expected",
+                               shape="right_peak_count_mismatch")
+            size, acc = s2, roots + right
+        if not _verify_sig(alg, pub, _sig1(rp, b"".join(acc)), sig):
+            return _refuse("CONSISTENCY_SIGNATURE_INVALID", "the log signature does not verify over the accumulator "
+                                                            f"of tree size {size} (-00 §7.1 step 7)")
+        return {"ok": True, "stage": None, "why": "MMR: log signature valid over the accumulator the proofs produce",
+                "alg": alg, "vds": VDS_MMR_SHA256, "tree_size_2": size, "accumulator": [h.hex() for h in acc],
+                "payload_attached": False, "ignored_labels": sorted((k for k in ph if k not in _MMR_READ), key=repr)}
+    except ImportError as e:
+        return _refuse("BACKEND_MISSING", BACKEND_MISSING_WHY + f" ({e})"[:120])
+    except Exception as e:  # noqa: BLE001
+        return _refuse("MALFORMED_RECEIPT", f"{type(e).__name__}: {e}"[:200])
