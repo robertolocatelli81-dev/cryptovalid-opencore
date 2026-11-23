@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.14 (2026-11-22; v0.13 2026-11-20, v0.12 2026-11-18, v0.11 2026-11-18, v0.10 2026-11-16, v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
+# CryptoValid Evidence Format — candidate standard v0.15 (2026-11-23; v0.14 2026-11-22, v0.13 2026-11-20, v0.12 2026-11-18, v0.11 2026-11-18, v0.10 2026-11-16, v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -401,6 +401,10 @@ its hashes and its vectors do not change.
 v0.14 (2026-11-22, cryptovalid-opencore 0.28.0) adds §22, nine rules: six written for the decisions of 2026-11-20, rule 7
 on 2026-11-21, rules 8 and 9 on 2026-11-22. Not additive where a rule turns an accepted input into a refused one or
 changes a verdict; rule 3 changes what a tree head, a HEAD and a pack manifest are signed over.
+v0.15 (2026-11-23) adds §23: the list of the checks of `cryptovalid-verify`, printed from the tables the code that runs
+them reads (`--list-checks`), and the verification profile (`--profile`), a closed JSON document by which the relying
+party adds requirements and cannot remove a check. Additive: without `--profile` the verdict and the exit status are
+those of v0.14; the receipt gains the member `profile` (`"default"`) and each layer the member `id`.
 
 ## 7. Conformance (normative)
 
@@ -2365,3 +2369,77 @@ maintainer, outside this repository.
    other JSON readers of the Python package (documents of at most 64 MiB, §5 step 0)
    and the Rust and Swift verifiers (no toolchain on the bench; they read the ledger whole). By the measurement of the
    ledger path, one 64 MiB line of `{}` values reached 1631 MiB in Python (a receipt; not measured reader by reader).
+
+## 23. What `cryptovalid-verify` checks, and what a verification profile adds (NORMATIVE since v0.15, 2026-11-23)
+
+A relying party must be able to see what a verifier checks before it trusts a verdict, and to ask for more than the
+default without being able to ask for less. This section was written before the code. Direction followed (sources read
+on 2026-11-23): in-toto 1.0 §5.2 runs every step of the final-product verification in order, with no step the verifier
+may skip; Sigstore's policy-controller combines the matching ClusterImagePolicies with AND, and an image that matches no
+policy is refused by default; sigstore-python takes a verification policy for every verification, on top of the
+signature, inclusion and certificate checks; RFC 9943 (SCITT architecture, June 2026) §7.1 lets a relying party apply
+its own validation policy after the receipt is verified. Differences, declared: cosign `verify` has options that turn
+checks off (`--insecure-ignore-tlog`, `--insecure-ignore-sct`, `--check-claims=false`), policy-controller has
+`mode: warn` and a `static` authority that passes without any signature, sigstore-python has `UnsafeNoOp` ("This policy
+is fundamentally insecure"); this format has none of these, by rule 3. A profile here is a closed JSON document, not a
+policy language (CUE, Rego): it names pins the verifiers of this repository already take.
+
+1. **The list of checks.** `cryptovalid-verify --list-checks [COMMAND] [--format text|json]` prints, for each check
+   of the commands `auto`, `pack`, `archive`, `ledger`, `ap2` and `cldma`: a stable `id`, the commands that run it,
+   whether it always runs (`required: "always"`) or is added by a profile (`required: "profile"`, with the profile
+   member that adds it in `enabled_by`), when it can be SKIP, and the norm that asks for it. The list is the table the
+   code reads to write each layer of a receipt (`verify_evidence.CHECKS`) and the table the profile reader accepts
+   (`verify_evidence.REQUIREMENTS`): a layer whose id is not in the table cannot be written, and an entry of the table
+   that no code writes is a test failure (`test_checks_profile_20261123.py`). Each layer of a receipt carries its `id`.
+   The JSON form is `{"list_format": "cryptovalid-verify-checks/1", "checks": [...]}`. The commands `checkpoint`,
+   `tiles`, `vkey-rfc6962` and `beacon` are run by their own modules (§13, §14, §19): `--list-checks` names them with
+   `checks: []` and the section that defines them; their checks are not in this list.
+2. **The profile document** (`--profile FILE`) is read under §5 step 0 (a regular file, opened once without
+   blocking), at most 1 MiB, UTF-8 without a byte order mark, one JSON object. It is refused (rule 4) when a key is
+   written twice in any object, when it holds `NaN` or `Infinity`, or when any member is outside these lists:
+   - top level, all three required: `profile_format`, the string `"cryptovalid-verify-profile/1"`; `name`, a string
+     of 1 to 200 characters without control characters; `require`, an object with at least one of `ledger`, `pack`,
+     `archive`, each a non-empty object.
+   - `require.ledger` (`verifier.verify_ledger`): `log_key` (`trusted_pubkey_hex`: a signed tip verified with this
+     key is required, §22 rule 1), `log_pq_key` (`trusted_pq_pubkey_b64`, needs `log_key`, §17), `tip_not_before`
+     (needs `log_key`, §17 rule 2, the instant profile of `cryptovalid_tip.parse_instant`), `ledger_id`
+     (`expect_ledger_id`, §17 rule 1). There is no member for `require_tip`: a tip is checked only with a trusted log
+     key (§17), so alone it can only fail, and `log_key` already requires the tip.
+   - `require.pack` (`evidence_pack.verify_pack`): `manifest_signer` (`manifest_signer_hex`, §10), `ledger_signer`
+     (`signer_pubkey_hex`, §5 step 5), `ledger_pq_key` (`pq_pubkey_b64`, needs `ledger_signer`, §10, §15),
+     `tsa_certs` (§10, §11, §22 rule 7: the RFC 3161 token is required and `time_anchor` must be `verified`),
+     `tsa_crls` (§11 step 8, needs `tsa_certs`), `signature_domain` (`true`: `require_signature_domain`, §22 rule 3).
+   - `require.archive` (`cryptovalid_ingest.verify_archive`): `head_key` (`expected_pubkey_hex`, §17 rule 4, §20
+     rule 8), `tsa_certs` (§22 rule 7), `signature_domain` (`true`, §22 rule 3).
+   A key is 64 lowercase hexadecimal characters (an Ed25519 public key; `ledger_id`, a `self_hash` of §3); a
+   post-quantum key is strict base64 of 1952 bytes (ML-DSA-65); `tsa_certs` and `tsa_crls` are non-empty arrays of
+   distinct strings, each the path of a file of certificates (§11) or of one CRL, relative paths read from the
+   directory of the profile file; the files are read and parsed when the profile is read.
+3. **A profile only adds.** No member and no command-line option turns a check of rule 1 off; the only boolean value a
+   profile takes is `true`, and `false` is refused with the reason. The verification of a profiled run is, in order:
+   (a) the verification without a profile, unchanged; (b) for each requirement, the same verification with the pins
+   of that requirement and of the requirements it needs; (c) when there is more than one requirement, the same
+   verification with all of them. Each requirement is `met` when its run (b) is valid, `not_met` when it is not,
+   `not_evaluated` when a check of that run could not run here (`CheckNotRun`); `valid` is true only when (a) is valid,
+   every requirement is `met` and (c), when run, is valid. So a profile cannot turn a verdict of (a) from not valid to
+   valid, and a requirement that cannot be evaluated here leaves the result not valid.
+4. **Refusals.** A profile that is not readable, not valid JSON, not closed as in rule 2, of a wrong type, with a
+   value `false`, with a requirement missing what it needs, or with a file it names unreadable or not a certificate /
+   CRL, is a usage error: exit 2, the reason on stderr, nothing on stdout, nothing verified. `--profile` given with
+   `ap2` or `cldma` (no requirement is defined for them) or given twice is exit 2. The commands of rule 1's last
+   sentence take their own options: `checkpoint`, `vkey-rfc6962` and `beacon` refuse `--profile` as an unknown
+   option, exit 2; `tiles` has its own `--profile`, the name of a C2SP log profile (§14: `static-ct-api` or
+   `tlog-tiles`), unrelated to this section.
+5. **The receipt names the profile.** Without `--profile` the receipt has `"profile": "default"`. With it,
+   `profile` is an object: `profile_format`, `name`, `sha256` (of the bytes of the file as read), `applies_to` (the
+   kind verified, the one `auto` chose), `requirements` (each `{"id", "state", "detail"}` in the order of the
+   table), `together` (the state of run (c), or `null` when there was one requirement), and `outcome`: `met`,
+   `not_met`, `not_evaluated`, or `not_applicable` when the profile has no section for the kind verified (`auto` routed
+   the path to another kind; then `valid` is false). When the verification without a profile could not run a check
+   (exit 74, §10), the receipt carries the profile with `outcome: "not_evaluated"` and no requirement run.
+6. **Without `--profile` nothing changes** but the two added members (`profile`, and `id` in each layer): the layers,
+   their order, their names and statuses, `valid` and the exit status are those of v0.14.
+
+Not in this section: requirements for the experimental `ap2` and `cldma` commands (ap2-evidence-pack has its own
+pins), for the modules without a `cryptovalid-verify` command (`cryptovalid_acta.py`, `cryptovalid_aps.py`), and the
+`lotl_check` of the archive verifier (it reads the EU trusted lists from the network).

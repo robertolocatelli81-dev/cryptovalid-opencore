@@ -217,6 +217,27 @@ claimed RFC 3161 token is not refuted; with `--sign-key` the manifest is authent
 a truncated ledger fails. The receipt states per subject what was checked and how it came out (`admission`,
 `states`: SPEC §10), so a refused manifest is told apart from tampering.
 
+## Choosing what is checked
+
+```bash
+cryptovalid-verify --list-checks pack                  # every check of a command: id, norm, always or added by a profile
+cryptovalid-verify --list-checks --format json
+cryptovalid-verify pack pack_dir/ --profile bank.json  # add requirements: a pinned signer, a verified RFC 3161 token
+```
+
+```json
+{"profile_format": "cryptovalid-verify-profile/1", "name": "bank audit 2026",
+ "require": {"pack": {"manifest_signer": "<64 hex>", "tsa_certs": ["tsa-root.pem"]},
+             "ledger": {"log_key": "<64 hex>", "ledger_id": "<64 hex>"}}}
+```
+
+The list is printed from the tables the code reads when it writes each layer of a receipt, so it cannot drift from what
+runs. A profile can only add requirements: the checks of each command (chain, hashes, signatures, closed forms, as
+`--list-checks` shows them) always run, and no member or option turns them off. An unknown member, a wrong type, `false`, a key written twice or a malformed file is
+refused with the reason, exit 2. The receipt names the profile (`name` and the SHA-256 of its bytes, or `"default"`)
+and the state of each requirement; a requirement that cannot be checked here leaves the result not valid. Members,
+rules and the norm behind each one: SPEC §23.
+
 ## Checkpoints and tiles of transparency logs
 
 ```bash

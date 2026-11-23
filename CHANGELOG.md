@@ -9,6 +9,28 @@ run by the same author, not by a third party.
 
 ## Unreleased: verdicts change
 
+### `cryptovalid-verify --list-checks` and `--profile` (SPEC v0.15 §23)
+
+- `--list-checks [COMMAND] [--format text|json]` prints every check of `auto`, `pack`, `archive`, `ledger`, `ap2` and
+  `cldma`: a stable id, the commands that run it, whether it always runs or is added by a profile, when it can be SKIP,
+  and the norm that asks for it. It is printed from `verify_evidence.CHECKS` and `REQUIREMENTS`, the tables the code
+  reads to write each layer and to read a profile (a layer id outside the table is a KeyError; an entry no code writes
+  fails `test_checks_profile_20261123.py`).
+- `--profile FILE` (with `auto`, `pack`, `ledger`, `archive`): a closed JSON document by which the relying party adds
+  requirements, mapped to pins the reference verifiers already take (ledger: `log_key`, `log_pq_key`,
+  `tip_not_before`, `ledger_id`; pack: `manifest_signer`, `ledger_signer`, `ledger_pq_key`, `tsa_certs`, `tsa_crls`,
+  `signature_domain`; archive: `head_key`, `tsa_certs`, `signature_domain`). It cannot remove a check: the result is
+  valid only when the verification without the profile is valid and every requirement holds alone and together. A
+  requirement that could not run here is `not_evaluated` and the result is not valid; a profile with no section for
+  the kind `auto` chose is `not_applicable`, not valid. Refused with exit 2 and the reason: unknown members at any
+  level, wrong types, `false`, keys written twice, `NaN`, a byte order mark, more than 1 MiB, a missing dependency
+  (`tip_not_before` without `log_key`), certificate or CRL files that do not parse, `--profile` with `ap2` or `cldma`.
+- The receipt gains `profile` (`"default"`, or the profile's name, SHA-256 of its bytes, requirements and outcome) and
+  each layer an `id`. Without `--profile`, the layers, `valid` and the exit status do not change.
+- Direction followed and differences (sources read on 2026-11-23): in-toto 1.0 §5.2, Sigstore policy-controller,
+  sigstore-python, RFC 9943 §7.1; unlike cosign `verify` (`--insecure-ignore-tlog`, `--insecure-ignore-sct`),
+  policy-controller `mode: warn` and sigstore-python `UnsafeNoOp`, nothing here turns a check off. Details in SPEC §23.
+
 ### `cryptovalid_acta` follows draft-farley-acta-signed-receipts-04
 
 The -04 of the draft was posted on 2026-11-22 (datatracker, checked on 2026-11-23: revision 04, no -05; individual
