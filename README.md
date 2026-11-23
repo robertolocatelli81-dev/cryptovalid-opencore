@@ -19,14 +19,14 @@ public time-stamping services, see [NOTICE](NOTICE)), offline once installed and
 `openssl`:
 
 ```bash
-pip install 'cryptovalid-opencore[sign]==0.28.1'
+pip install 'cryptovalid-opencore[sign]==0.29.0'
 git clone --depth 1 https://github.com/robertolocatelli81-dev/cryptovalid-opencore && cd cryptovalid-opencore/spec/vectors/beacon/nist
 cryptovalid-verify beacon ../payment_ledger.jsonl --entry 1 --pulse pulse_2030303.json --previous pulse_2030302.json --certificate certificate_5b6386e6ac8a993b.pem | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['status'], r['bounds']['not_before'], r['entry']['payment'])"
 cryptovalid-verify beacon ../payment_ledger.jsonl --entry 1 --pulse pulse_2030302.json --previous pulse_2030301.json --certificate certificate_5b6386e6ac8a993b.pem | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['status'], r['reason'])"
 cd ../../rfc3161 && python3 -c "import cryptovalid_tsa as T; d=bytes.fromhex('17d8b17f0f81486e20a5643d8c64e7491bd438b3c563d1fa8bd8d90560d5b2fd'); [print(f, T.verify_token(open(f+'.tsr','rb').read(), d, 'sha256', [f+'.signer.pem'])['status']) for f in ('freetsa','digicert','bosa_qualified')]"
 ```
 
-Output (measured on 2026-11-22, Python 3.13, network off):
+Output (measured on 2026-11-23, Python 3.13, network off):
 
 ```
 verified 2026-11-16T13:04:00.000Z {'payment_id': '7d1e9a40-2b6c-4f8e-a3d2-5c6b7a8e9f01', 'amount': '99.95', 'currency': 'EUR'}

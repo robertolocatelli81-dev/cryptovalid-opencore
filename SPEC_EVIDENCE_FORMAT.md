@@ -401,7 +401,7 @@ its hashes and its vectors do not change.
 v0.14 (2026-11-22, cryptovalid-opencore 0.28.0) adds §22, nine rules: six written for the decisions of 2026-11-20, rule 7
 on 2026-11-21, rules 8 and 9 on 2026-11-22. Not additive where a rule turns an accepted input into a refused one or
 changes a verdict; rule 3 changes what a tree head, a HEAD and a pack manifest are signed over.
-v0.15 (2026-11-23) adds §23: the list of the checks of `cryptovalid-verify`, printed from the tables the code that runs
+v0.15 (2026-11-23, cryptovalid-opencore 0.29.0) adds §23: the list of the checks of `cryptovalid-verify`, printed from the tables the code that runs
 them reads (`--list-checks`), and the verification profile (`--profile`), a closed JSON document by which the relying
 party adds requirements and cannot remove a check. Additive: without `--profile` the verdict and the exit status are
 those of v0.14; the receipt gains the member `profile` (`"default"`) and each layer the member `id`.
