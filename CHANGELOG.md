@@ -250,13 +250,20 @@ in `verify_pack`; before, the last value was read. `TestSolanaAnchor`, which sto
 pack). Also in 0.28.1 (earlier releases not measured): a `signer_pubkeys` that is not a
 list stopped `render_html` with a TypeError (now shown as one line), and an anchor next to a manifest whose
 `manifest_digest_sha256` is not a string stopped `solana_status` with an AttributeError (now `verified: false` with the
-reason).
+reason). An anchor is now bound only to a `manifest_digest_sha256` of 64 lowercase hex characters, the rule of
+`--solana-digest`: with `""` the anchor was recorded as bound to the SHA3-256 of no bytes, and with a lone surrogate
+(`"\ud800"` in JSON) `solana_status` stopped with a UnicodeEncodeError. A lone surrogate in a string the report shows
+is written escaped (it stopped the writing of the HTML). One in a file name of the manifest is `manifest_bad_ledgers`
+or `manifest_bad_file_digests` from `evidence_pack.verify_pack`, which raised UnicodeEncodeError, in 0.28.1 too
+(`cryptovalid-verify pack` already answered FAIL; `evidence_pack.py verify` and `cryptovalid-report` printed a
+traceback).
 
 ### `cryptovalid-verify pack`: a manifest nested too deep is refused, not a traceback
 
-In 0.28.1 (earlier releases not measured), a `MANIFEST.json` nested about 100 000 levels made `cryptovalid-verify pack` (and `auto`, and
-the runs of a profile) end with a `RecursionError` traceback from `_pack_layers`; it is now the refusal of the
-manifest, like any other unreadable manifest.
+In 0.28.1 (earlier releases not measured), a `MANIFEST.json` nested deeper than the Python parser reads made
+`cryptovalid-verify pack` and `auto` end with a `RecursionError` traceback from `_pack_layers` (measured on 2026-11-23:
+at 1 100 levels under Python 3.9 and 3.11, at 20 000 under 3.13; not at 900); the runs of a profile, new in this
+release, did the same until this change. It is now the refusal of the manifest, like any other unreadable manifest.
 
 ## 0.28.1 (2026-11-23): verdicts change
 

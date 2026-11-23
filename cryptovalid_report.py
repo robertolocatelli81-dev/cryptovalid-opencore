@@ -138,9 +138,11 @@ def solana_status(pack_dir: str, manifest: Dict, check: bool = False) -> Dict:
                 "note": "SOLANA_ANCHOR.json is not an object with an ASCII string tx_signature and a string "
                         "digest_sha3_hex"}
     declared = declared.strip().lower()
-    if not isinstance(manifest.get("manifest_digest_sha256"), str):   # nothing to bind to: a failure, never a traceback
+    md = manifest.get("manifest_digest_sha256")   # the rule of --solana-digest: nothing else is a digest to bind to
+    if not (isinstance(md, str) and re.fullmatch(r"[0-9a-f]{64}", md)):   # a failure, never a traceback (a number, "", a lone surrogate)
         return {"present": True, "checked": False, "verified": False,
-                "note": "MANIFEST.json has no string manifest_digest_sha256: the anchor cannot be bound to it"}
+                "note": "MANIFEST.json has no manifest_digest_sha256 of 64 lowercase hex characters: the anchor cannot "
+                        "be bound to it"}
     expected = solana_anchor_digest(manifest)
     if not sig or declared != expected:
         return {"present": True, "checked": False, "verified": False,
@@ -426,6 +428,8 @@ def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = 
 
     doc = render_html(manifest, verification, lres, title=title,
                       pack_dir=os.path.abspath(pack_dir), solana=sres)
+    # a lone surrogate (JSON "\ud800" in the manifest, an argument that is not UTF-8) has no UTF-8 bytes: shown escaped
+    doc = doc.encode("utf-8", "backslashreplace").decode("utf-8")
     base = out or os.path.join(pack_dir, "report.pdf")
     html_path = os.path.splitext(base)[0] + ".html"
     write_output(html_path, doc)   # 0.20.3: whole (temporary + rename), or exit 74

@@ -517,6 +517,9 @@ class CritLabelsAreLabels(unittest.TestCase):
         self.assertEqual(R.cose_crit_problem({1: -8, 2: [Sub(1)]}, {}, frozenset({1})), "crit_malformed")
         self.assertEqual(R.cose_crit_problem({1: -8, 2: [True]}, {}, frozenset({1})), "crit_malformed")
         self.assertIsNone(R.cose_crit_problem({1: -8, 2: [1]}, {}, frozenset({1})))
+        self.assertIsNone(R.cose_crit_problem({1: -8, 2: [1, "x"], "x": 0}, {}, frozenset({1, "x"})))   # a text label
+        for mixed in ([1, True], [True, 1], [1, Sub(1)], [1, 1.0], [1, b"x"], [1, None]):               # every element
+            self.assertEqual(R.cose_crit_problem({1: -8, 2: mixed}, {}, frozenset({1})), "crit_malformed", mixed)
 
 if __name__ == "__main__":
     unittest.main()

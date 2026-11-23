@@ -429,5 +429,50 @@ class ManifestMembersOfAnotherType(_Base):
                 self.assertIs(r["valid"], False)
                 self.assertEqual((r["solana"]["present"], r["solana"]["verified"]), (True, False))
 
+    def test_signer_pubkeys_that_is_one_value_is_shown_as_one_row(self):
+        self._manifest(signer_pubkeys="one-value-7f3<")
+        with open(report.generate_report(self.pack, html_only=True)["html"], encoding="utf-8") as f:
+            doc = f.read()
+        self.assertIn("<td class='mono'>one-value-7f3&lt;</td>", doc)
+        self.assertNotIn("none — unsigned ledgers", doc)
+
+    def test_an_anchor_binds_to_a_digest_of_64_hex_only(self):
+        """review of b26f203: the string "" bound the anchor to sha3_256(b"") (recorded, not failed), and a lone surrogate
+        (written \\ud800 in JSON) stopped solana_anchor_digest with a UnicodeEncodeError."""
+        import hashlib
+        for v in ("", "\ud800", "AB" * 32, "ab" * 31, "ab" * 33, "ab" * 32 + "\n"):
+            with self.subTest(v=v):
+                self._manifest(manifest_digest_sha256=v)
+                with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+                    json.dump({"tx_signature": "s", "digest_sha3_hex": hashlib.sha3_256(
+                        v.encode("utf-8", "surrogatepass")).hexdigest()}, f)
+                r = report.generate_report(self.pack, html_only=True)
+                self.assertEqual((r["valid"], r["solana"]["present"], r["solana"]["verified"]), (False, True, False))
+        self._manifest(manifest_digest_sha256="ab" * 32)                                  # control: 64 hex binds
+        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+            json.dump({"tx_signature": "s", "digest_sha3_hex": hashlib.sha3_256(("ab" * 32).encode()).hexdigest()}, f)
+        self.assertIsNone(report.generate_report(self.pack, html_only=True)["solana"]["verified"])
+
+    def test_a_lone_surrogate_in_the_manifest_is_not_a_traceback(self):
+        """review of b26f203: a string with no UTF-8 bytes shown in the report stopped write_output; one as a file name
+        stopped evidence_pack.verify_pack itself (os.path.realpath), in 0.28.1 too."""
+        with open(os.path.join(self.pack, "MANIFEST.json"), encoding="utf-8") as f:
+            base = json.load(f)
+        self._manifest(subject="s\ud800")
+        r = report.generate_report(self.pack, html_only=True)
+        self.assertIs(r["valid"], evidence_pack.verify_pack(self.pack)["valid"])
+        with open(r["html"], encoding="utf-8") as f:
+            self.assertIn("s\\ud800", f.read())
+        led = dict(base["ledgers"][0], file="\ud800")
+        name = base["ledgers"][0]["file"]
+        digs = {(k + "\udfff" if k == name else k): v for k, v in base["file_digests_sha256"].items()}
+        for kw, code in (({"ledgers": [led]}, "manifest_bad_ledgers"), ({"file_digests_sha256": digs}, "manifest_bad_file_digests")):
+            with self.subTest(code=code):
+                self._manifest(**dict(base, **kw))
+                v = evidence_pack.verify_pack(self.pack)
+                self.assertEqual((v["valid"], v["refusal_class"]), (False, "malformed"))
+                self.assertTrue(v["error"].startswith(code), v["error"])
+                self.assertIs(report.generate_report(self.pack, html_only=True)["valid"], False)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

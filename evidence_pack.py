@@ -591,6 +591,10 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
         # separators of THIS platform only (on POSIX "\\" is an ordinary character, not a separator: NEMESIS P2, 01/10/2026)
         if not (isinstance(name, str) and name != "" and not os.path.isabs(name) and "\0" not in name):
             return False
+        try:
+            os.fsencode(name)   # a lone surrogate (JSON "\ud800") names no file here: a refusal, never a traceback
+        except UnicodeEncodeError:
+            return False
         parts = name
         for sep in {os.sep, os.altsep or os.sep, "/"}:
             parts = parts.replace(sep, "/")
