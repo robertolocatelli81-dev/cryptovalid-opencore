@@ -103,7 +103,7 @@ signature flipped, 115/115 refused. Two more sets, run the same day and not in t
 records of agent-governance-testvectors at 5c749de (`verifier-vectors/finos-mi24-decision-record`, the receipt-level
 `verify` outcome of its 31 v1.1.0 and 50 v1.2.0 cases: 81/81 before and after, the number of chains and of broken links of
 the four sequence cases reported only after) and giskard09/argentum-core `farley-receipt-signature` at 541ce84 (4/4
-before and after). Each change below follows the text of -04:
+before and after; its four vector files and `jwks.json` are byte-identical at 217009a, the head on 2026-11-23). Each change below follows the text of -04:
 
 - **Three outcomes (§5.4).** `verify_receipt` and `verify_chain` return `outcome` (valid | invalid | undecidable), the
   code that decided and `checks` (each check's result); every check runs and the outcome is invalid if one that ran
