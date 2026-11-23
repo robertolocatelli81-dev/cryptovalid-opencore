@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""cryptovalid_acta — draft-farley-acta-signed-receipts-03: KATs from the primary sources, the reference implementation's
+"""cryptovalid_acta — draft-farley-acta-signed-receipts-04 (-03 before 2026-11-23): KATs from the primary sources, the reference implementation's
 receipts as positive control (every positive has its tampered twin), chain/§6.7/§6.8 rules, hostile inputs, the Cedar
 driver when cedarpy is present. CV_REQUIRE_CRYPTO=1 makes a missing `cryptography` a failure (CI)."""
 import base64, hashlib, json, os, subprocess, sys, tempfile, unittest
@@ -92,7 +92,7 @@ class TestReferenceReceipts(unittest.TestCase):
             m = json.loads(json.dumps(refs)); mut(m)
             self.assertFalse(A.verify_chain(m, {"conformance": PUB_HEX, "other": PUB_HEX})["ok"])
         wrong_policy = dict(_policy_files()); wrong_policy["autoresearch-safe.cedar"] += b"\n// changed"
-        self.assertTrue(any("6.8" in p["why"] for p in A.verify_chain(refs, {"conformance": PUB_HEX}, wrong_policy)["problems"]))
+        self.assertTrue(any("5.8" in p["why"] for p in A.verify_chain(refs, {"conformance": PUB_HEX}, wrong_policy)["problems"]))   # -03 §6.8 = -04 §5.8
         # a bare-hex link (earlier revisions) is accepted on read with a warning, never emitted
         bare = json.loads(json.dumps(refs)); bare[1]["payload"]["previousReceiptHash"] = A.receipt_hash(refs[0]).split(":")[1]
         bare[1] = A.sign_receipt({k: v for k, v in bare[1]["payload"].items()}, SEED, "conformance")
@@ -120,8 +120,10 @@ class TestSignVerify(unittest.TestCase):
         alias = A.sign_receipt(dict(p1, issuer_id="conformance"), SEED, "conformance")
         alias["signature"]["kid"] = KID
         v = A.verify_receipt(alias, {KID: PUB_HEX, "conformance": PUB_HEX}); self.assertFalse(v["ok"]); self.assertIn("2.2", v["why"])
-        # §6.6: an envelope carries exactly payload and signature
-        v = A.verify_receipt(dict(r1, public_key=PUB_HEX), {KID: PUB_HEX}); self.assertFalse(v["ok"]); self.assertIn("6.6", v["why"])
+        # -04 §5.2: an envelope carries exactly payload and signature; anything else is a shape not recognized, which
+        # -04 §5.4 makes undecidable (under -03 this module answered invalid)
+        v = A.verify_receipt(dict(r1, public_key=PUB_HEX), {KID: PUB_HEX}); self.assertFalse(v["ok"]); self.assertIn("5.2", v["why"])
+        self.assertEqual((v["outcome"], v["code"]), ("undecidable", "unrecognized_shape"))
         # never signs: issuer_id != kid, a signature member inside the payload, bad decision, bad policy digest, bad time
         with self.assertRaises(ValueError):
             A.sign_receipt(dict(p1, issuer_id="sb:issuer:other"), SEED)
@@ -180,7 +182,7 @@ class TestSignVerify(unittest.TestCase):
         self.assertFalse(A.verify_chain([], {KID: PUB_HEX})["ok"]); self.assertFalse(A.verify_chain("x", {})["ok"])
         # round 1: a valid signature with hostile members OUTSIDE the signed bytes is a verdict, never an exception
         nan_sig = json.loads(json.dumps(r2)); nan_sig["signature"]["junk"] = float("nan")
-        v = A.verify_receipt(nan_sig, {KID: PUB_HEX}); self.assertFalse(v["ok"]); self.assertIn("6.6", v["why"])
+        v = A.verify_receipt(nan_sig, {KID: PUB_HEX}); self.assertFalse(v["ok"]); self.assertIn("5.2", v["why"])
         deep = json.loads(json.dumps(r2)); deep["payload"]["deep"] = json.loads("[" * 600 + "]" * 600)
         self.assertFalse(A.verify_receipt(deep, {KID: PUB_HEX})["ok"])
         bad0 = {"payload": dict(p1, x=float("nan")), "signature": {"alg": "EdDSA", "kid": KID, "sig": "00" * 64}}
@@ -209,7 +211,7 @@ class TestSignVerify(unittest.TestCase):
                   "payload": {"previousReceiptHash": A.receipt_hash(flat_g), "policy_digest": POLICY_DIGEST}}                 # decoy members
         flat_h["signature"] = sk.sign(A.jcs(flat_h)).hex()
         v = A.verify_chain([flat_g, flat_h], {"conformance": PUB_HEX}, _policy_files()); self.assertFalse(v["ok"])
-        self.assertTrue(any("6.7" in p["why"] for p in v["problems"]) and any("6.8" in p["why"] for p in v["problems"]), v["problems"])
+        self.assertTrue(any("5.7" in p["why"] for p in v["problems"]) and any("5.8" in p["why"] for p in v["problems"]), v["problems"])
         flat_ok = {k: v for k, v in flat_h.items() if k not in ("signature", "payload")}; flat_ok["previousReceiptHash"] = A.receipt_hash(flat_g); flat_ok["policy_digest"] = POLICY_DIGEST
         flat_ok["signature"] = sk.sign(A.jcs(flat_ok)).hex()
         self.assertTrue(A.verify_chain([flat_g, flat_ok], {"conformance": PUB_HEX}, _policy_files())["ok"])
@@ -218,15 +220,18 @@ class TestSignVerify(unittest.TestCase):
         self.assertTrue(A.verify_receipt(es, {"es": pem})["ok"]); v = A.verify_receipt(hi, {"es": pem}); self.assertFalse(v["ok"]); self.assertIn("low-S", v["why"])
         # instants, not just shapes; previous must be signed; issued_at_base UTC; Cedar literal safety
         for bad_ts in ("2026-99-99T99:99:99Z", "2026-02-30T00:00:00Z", "2026-09-20T09:00:00+25:00"):
-            v = A.verify_receipt(A.sign_receipt(dict(p1, issued_at=bad_ts), SEED), {KID: PUB_HEX})      # correctly signed, not an instant
-            self.assertFalse(v["ok"]); self.assertIn("instant", v["why"])
+            # correctly signed, not an instant: -04 §5.4 reports it apart (outcome unchanged); with a window, §5.6 undecidable
+            v = A.verify_receipt(A.sign_receipt(dict(p1, issued_at=bad_ts), SEED), {KID: PUB_HEX})
+            self.assertEqual(v["outcome"], "valid"); self.assertTrue(any("instant" in p for p in v["payload_problems"]))
+            v = A.verify_receipt(A.sign_receipt(dict(p1, issued_at=bad_ts), SEED), {KID: {"key": PUB_HEX, "valid_from": "2026-01-01T00:00:00Z"}})
+            self.assertEqual(v["outcome"], "undecidable"); self.assertIn("instant", v["why"])
             with self.assertRaises(ValueError):
                 A.decision_payload("Read", "allow", KID, bad_ts)
         with self.assertRaises(ValueError):
             A.decision_payload("Read", "allow", KID, previous=p1)
         pay_s = dict(p1, signature="x")
         ps = {"payload": pay_s, "signature": {"alg": "EdDSA", "kid": KID, "sig": sk.sign(A.jcs(pay_s)).hex()}}   # signed as-is by a sloppy signer
-        v = A.verify_receipt(ps, {KID: PUB_HEX}); self.assertFalse(v["ok"]); self.assertIn("6.6", v["why"])
+        v = A.verify_receipt(ps, {KID: PUB_HEX}); self.assertFalse(v["ok"]); self.assertIn("5.2", v["why"])
 
 
 class TestDriverAndCLI(unittest.TestCase):
@@ -248,10 +253,12 @@ class TestDriverAndCLI(unittest.TestCase):
             r = run("verify", os.path.join(tmp, "nope.json")); self.assertEqual(r.returncode, 2); self.assertIn('"ok": false', r.stdout)
             with open(os.path.join(tmp, "deep.json"), "w") as f:
                 f.write("[" * 100000)
-            r = run("verify", os.path.join(tmp, "deep.json")); self.assertEqual(r.returncode, 2); self.assertNotIn("Traceback", r.stderr)
+            # -04 §5.4: input that is not JSON this verifier reads is undecidable (exit 77), its cause named
+            r = run("verify", os.path.join(tmp, "deep.json")); self.assertEqual(r.returncode, 77); self.assertNotIn("Traceback", r.stderr)
+            self.assertEqual(json.loads(r.stdout)["code"], "input_not_json")
             with open(os.path.join(tmp, "dup.json"), "w") as f:
                 f.write('{"payload": {"a": 1, "a": 2}, "signature": {"alg": "EdDSA", "kid": "k", "sig": "00"}}')
-            r = run("verify", os.path.join(tmp, "dup.json")); self.assertEqual(r.returncode, 2); self.assertIn("duplicate", r.stdout)
+            r = run("verify", os.path.join(tmp, "dup.json")); self.assertEqual(r.returncode, 77); self.assertIn("duplicate", r.stdout)
             os.makedirs(os.path.join(tmp, "nopolicy"))
             r = run("verify", os.path.join(tmp, "r1.json"), "--key", f"{KID}={PUB_HEX}", "--policy-dir", os.path.join(tmp, "nopolicy")); self.assertEqual(r.returncode, 2)
             r = run("verify", os.path.join(tmp, "r1.json"), "--key", f"{KID}={os.path.join(tmp, 'seed')}")            # a hex keyfile: not a public key → refused
@@ -322,7 +329,7 @@ class KeyValidityWindow(unittest.TestCase):
         keys = {kid: {"key": pk, "valid_from": "2026-01-01T00:00:00Z", "valid_until": "2026-06-01T00:00:00Z"}}
         out = A.verify_receipt(r, keys)
         self.assertFalse(out["ok"])
-        self.assertIn("§9.2", out["why"])
+        self.assertIn("§5.6", out["why"])   # -03 §9.2 = -04 §5.6
 
     @NEEDS_CRYPTO
     def test_before_the_window_is_refused(self):
@@ -358,7 +365,7 @@ class KeyValidityWindow(unittest.TestCase):
         keys = {kid: {"key": pk, "valid_until": "2026-01-01T00:00:00Z"}}
         out = A.verify_receipt(r, keys)
         self.assertFalse(out["ok"])
-        self.assertIn("§9.2", out["why"])
+        self.assertIn("§5.6", out["why"])   # -03 §9.2 = -04 §5.6
         # A leap second maps to :59.999999 of the same minute: ordered after :59 and before the next minute,
         # without asserting that a 61st second exists in the calendar Python models.
         self.assertLess(A._instant("2026-06-30T23:59:59Z"), A._instant("2026-06-30T23:59:60Z"))
@@ -391,7 +398,7 @@ class KeyValidityWindow(unittest.TestCase):
         keys = {kid: {"key": pk, "valid_until": "not-an-instant"}}
         out = A.verify_receipt(r, keys)
         self.assertFalse(out["ok"])
-        self.assertIn("§9.2", out["why"])
+        self.assertIn("§5.6", out["why"])   # -03 §9.2 = -04 §5.6
 
 
 # SHA-256 of the vendored key-window vectors, as merged into ScopeBlind/agent-governance-testvectors main at
@@ -550,7 +557,8 @@ class AbsenceSideOfTheVerdict(unittest.TestCase):
         self.assertEqual(v["verdict"], "not_assessed")
         self.assertIn("NOT checked", v["why"])
         v2 = A.verify_receipt(good, {}, keys_are_complete=True)
-        self.assertEqual(v2["verdict"], "fail", "a complete trust list makes an unknown issuer a refusal")
+        # -04 §5.4: no key from a trust anchor = undecidable, complete list or not; the declaration changes the code only
+        self.assertEqual((v2["verdict"], v2["code"]), ("not_assessed", "issuer_not_trusted"))
         self.assertEqual(A.verify_receipt(forged, keys)["verdict"], "fail")   # a checked signature still judges
         self.assertEqual(A.verify_receipt(good, keys)["verdict"], "pass")
 
@@ -587,15 +595,17 @@ class AbsenceSideOfTheVerdict(unittest.TestCase):
             self.assertEqual(out["key_status"], case["key_status"], label)
 
     def test_key_status_never_asserts_what_was_not_measured(self):
-        """The cases the public bench does NOT exercise. A receipt refused before the key set is consulted must not
-        claim anything about the key: it reports `not_reached`, not `unknown_key`."""
+        """The cases the public bench does NOT exercise. Under -04 §5.4 every check runs, so `key_status` reports the
+        window check that ran; a receipt whose shape is not recognized never reaches the key set: `not_reached`."""
         good, _forged, keys = self._pair()
         kid = next(iter(keys))
         windowed = {kid: {"key": keys[kid], "valid_from": "2026-01-01T00:00:00Z", "valid_until": "2026-06-01T00:00:00Z"}}
         early = json.loads(json.dumps(good))
-        early["signature"]["alg"] = "RS256"                       # refused at §6.9, long before the key set
-        self.assertEqual(A.verify_receipt(early, windowed)["key_status"], "not_reached")
-        del early["payload"]["tool_name"]
+        early["signature"]["alg"] = "RS256"                       # §5.9: undecidable, the window still measured
+        v = A.verify_receipt(early, windowed)
+        self.assertEqual((v["outcome"], v["code"], v["key_status"]), ("undecidable", "unsupported_algorithm", "inside"))
+        self.assertNotIn("signature", v["checks"])                # never reported as checked
+        early["extra"] = 1                                         # not an envelope any more (§5.2)
         self.assertEqual(A.verify_receipt(early, windowed)["key_status"], "not_reached")
 
         self.assertEqual(A.verify_receipt(good, {})["key_status"], "unknown_key")
@@ -744,10 +754,14 @@ class MalformedInputsFound20260925(unittest.TestCase):
             self.assertIsNone(A._instant(t), t)
             self.assertFalse(A._valid_instant(t), t)
             self.assertIsNone(A._RFC3339.match(t), t)
-            for keys in ({self.kid: self.pk}, window):
-                v = A.verify_receipt(self._receipt(t), keys)
-                self.assertEqual(v["verdict"], "fail", t)
-                self.assertIn("RFC 3339", v["why"], t)
+            # -04 §5.4: a payload member that does not conform is reported apart and does not change the outcome;
+            # -04 §5.6: with a window, an issued_at that is not an instant leaves it unapplied: undecidable
+            v = A.verify_receipt(self._receipt(t), {self.kid: self.pk})
+            self.assertEqual(v["outcome"], "valid", t)
+            self.assertTrue(any("RFC 3339" in p for p in v["payload_problems"]), t)
+            v = A.verify_receipt(self._receipt(t), window)
+            self.assertEqual((v["outcome"], v["code"]), ("undecidable", "key_window_undecidable"), t)
+            self.assertIn("RFC 3339", v["why"], t)
             with self.assertRaises(ValueError):
                 A.decision_payload("t", "allow", self.kid, t)
         # the audit, as a guard: every compiled pattern of the module is ASCII-only
@@ -816,8 +830,9 @@ class MalformedInputsFound20260925(unittest.TestCase):
             deep = self._write("deep.json", "[" * 200000 + "]" * 200000)
             args = (deep,) if flag == "receipt" else (rp, "--jwks", deep)
             code, out, err = self._cli(*args)
-            self.assertEqual(code, 2, out[:300])
-            msg = json.loads(out)["error"]
+            # a receipt that is not JSON this verifier reads is undecidable (-04 §5.4, exit 77); a key set is a usage error
+            self.assertEqual(code, 77 if flag == "receipt" else 2, out[:300])
+            msg = json.loads(out)["why" if flag == "receipt" else "error"]
             self.assertIn("nesting deeper than 512", msg, flag)
             self.assertNotIn("Recursion", msg, flag)
             self.assertNotIn("Traceback", err, flag)
@@ -1002,11 +1017,315 @@ class ReviewFindings20260926(unittest.TestCase):
         self.assertEqual(A._instant_exact("2026-09-20T09:00:00.000Z"), A._instant_exact("2026-09-20T09:00:00Z"))
         self.assertIsNone(A._outside_window(t, {"valid_from": "2026-01-01T00:00:00Z"}))
 
-    def test_a_readable_bound_that_excludes_the_receipt_wins_over_a_malformed_one(self):
+    def test_a_malformed_bound_leaves_the_window_unapplied(self):
+        # Under -03 a readable bound that excluded the receipt decided (review of 26/09). -04 §5.6: "If the window
+        # cannot be applied, because a bound is not a valid timestamp ... the outcome is undecidable".
         w = A._outside_window("2026-01-01T00:00:00Z", {"valid_from": "2026-06-01T00:00:00Z", "valid_until": "garbage"})
-        self.assertEqual(w[0], "outside")
+        self.assertEqual(w[0], "bound")
         w = A._outside_window("2026-07-01T00:00:00Z", {"valid_from": "2026-06-01T00:00:00Z", "valid_until": "garbage"})
         self.assertEqual(w[0], "bound")                       # inside the readable bound: the unreadable one decides nothing
+
+
+# SHA-256 of the vendored chain-link and embedded-key vectors (ScopeBlind/agent-governance-testvectors at 5c749de,
+# fetched 2026-11-23; examples/acta/chain-link/SOURCE.md has the source and the re-fetch recipe).
+CL_SHA256 = {
+    "chain-link/bare-hex-link.json": "2ad6bea058a1a847e0b8f99bb8e6274c31decfb554a59f20740a65cec0abdaba",
+    "chain-link/base64url-link.json": "fcf8eb0711dd3a24007212775af0febe7a2ce90b261fc4943e0b0a8362852ce0",
+    "chain-link/empty-link.json": "a72d8be59b76a18b3a35fd952c6201e552255e181b2781bdb432379b2c6b06d7",
+    "chain-link/genesis.json": "90613a05be1864856f141114e748e51d6bd1bca75083086a098f0d491405cc17",
+    "chain-link/index.json": "b92533bc792e1e8de608e3b5855c22b12752685e41d9c18b55eb47e3e4ec1616",
+    "chain-link/jwks.json": "5de65661ae63403fc6db476c7d21f603bd6084bc30135dac6cd23a4840f4a947",
+    "chain-link/jwks-window-ended.json": "5e6d9f41c3b6a4b4196efc993c8d939503cbd4b0a5081318a76eb206ed34e749",
+    "chain-link/linked.json": "1625248b8808cd59f47a0111481ed6e2de049af7bd0d6aaa9456015c115a137f",
+    "chain-link/malformed-digest.json": "e50911404d120601ece20b5401572a9626d3a979b0ee903bc73123b3105b0031",
+    "chain-link/no-link.json": "1d48d567e3604b906233eb509be51f0b1c7fc3e930c2847ebca8b56962bad452",
+    "chain-link/non-string-link.json": "4e8237536b9a3bbaa4ccfdd035821a388a29c3f50417e789b9033af8fa4eb071",
+    "chain-link/null-link.json": "f7a53aa50119572a18be90f723f3b5550b2d6df5e756124432bd0020139cfa76",
+    "chain-link/payload-only-link.json": "26625f8254aa7c19f817c15432a2d1da21f3b579a8f67b89b14a31d805664ae7",
+    "chain-link/sequence-first-linked.jsonl": "7b83c5882ef4d199d2542cd3e0857eff90feae5512a40bdc6ac5fd8f84d1cbbb",
+    "chain-link/sequence-linked.jsonl": "1af763974c9147b17bc030ac16b078a5ffce1366f00e65e6452eec8fd34b0fea",
+    "chain-link/sequence-new-chain.jsonl": "94f14d6db83bc88d9bd13346f7e0dfb813c908cf873a660266eb2538b3f62786",
+    "chain-link/sequence-null-link.jsonl": "5f58a4d1d23010ce008c33fd3352fb38183f212e6c2b890b36c5d3c4afc8b2cd",
+    "chain-link/sequence-payload-only.jsonl": "f4dbb63d271e82913b665a60d166113ad8ffb981cb0088450d93e6c90992ffb3",
+    "chain-link/sha3-256-link.json": "3233f39aa5ba30f8e5dcfcd1532047074fe9e30bb285cf7ed330e09dc0fcd2b9",
+    "chain-link/sha512-link.json": "26867357901907160a2bfaed03a644fb1a243bce81e1e5e3770f55f76dc74f55",
+    "chain-link/short-digest.json": "538d8e07ca4029f1ffb84dfd07e9a7495ad7ffe6feee1d235f8c644e4d144367",
+    "chain-link/uppercase-hex.json": "30dd91d8f72dfe1a47ed65b4dd8a1d8292f98853ac0d8261430f1f8124f41edb",
+    "embedded-key/acta-envelope.json": "54281d5aa54b80d66d9ffe48f8dcd3c7935f763e724c3aaa6071500278d1ac2c",
+    "embedded-key/decision-receipt.json": "ecc93bdcbaa4dce42d6ea70b84b7e58ce07850dd7d9b8b168447fc7d3a421455",
+}
+EXIT_OF = {"valid": 0, "invalid": 1, "undecidable": 77}
+
+
+def _link_form_oracle(v):
+    """-04 §5.7 read independently of `link_form`: character by character, no regular expression."""
+    if v is None:
+        return "null"
+    if not isinstance(v, str):
+        return "malformed"
+    lower_hex = set("0123456789abcdef")
+    body = v[7:] if v.startswith("sha256:") else v
+    if len(body) == 64 and all(c in lower_hex for c in body):
+        return "link"
+    if ":" in v:
+        name = v.split(":", 1)[0]
+        ascii_alnum = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+        if name and name[0] in ascii_alnum and all(c in ascii_alnum or c in "._+-" for c in name) \
+                and name.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")) != "sha256":
+            return "other_algorithm"
+    return "malformed"
+
+
+@NEEDS_CRYPTO
+class Draft04_20261123(unittest.TestCase):
+    """draft-farley-acta-signed-receipts-04 (datatracker, 2026-11-22). Every test here fails on the -03 code (commit
+    b784901): measured on 2026-11-23 by running this class against that module."""
+
+    VEC = os.path.join(HERE, "examples", "acta")
+
+    def _cli(self, *args):
+        r = subprocess.run([sys.executable, A.__file__, "verify", *args], capture_output=True, text=True)
+        try:
+            return r.returncode, json.loads(r.stdout), r.stderr
+        except ValueError:
+            return r.returncode, {}, r.stdout + r.stderr
+
+    def test_vendored_vectors_are_the_published_bytes(self):
+        on_disk = sorted(f"{d}/{f}" for d in ("chain-link", "embedded-key") for f in os.listdir(os.path.join(self.VEC, d))
+                         if f.endswith((".json", ".jsonl")))
+        self.assertEqual(on_disk, sorted(CL_SHA256))
+        for name, want in CL_SHA256.items():
+            with open(os.path.join(self.VEC, name), "rb") as fh:
+                self.assertEqual(hashlib.sha256(fh.read()).hexdigest(), want, name)
+
+    def test_the_chain_link_suite_through_the_command(self):
+        """All 27 cases of verifier-vectors/chain-link: outcome as exit status, the code that decided, and for a
+        sequence the number of chains and the warning on a null link."""
+        d = os.path.join(self.VEC, "chain-link")
+        with open(os.path.join(d, "index.json"), encoding="utf-8") as fh:
+            idx = json.load(fh)
+        self.assertEqual(len(idx["cases"]), 27)
+        with tempfile.TemporaryDirectory() as tmp:
+            for n, c in enumerate(idx["cases"]):
+                args = []
+                if c["check"] == "sequence":
+                    with open(os.path.join(d, c["file"]), encoding="utf-8") as fh:
+                        for i, line in enumerate(row for row in fh if row.strip()):
+                            p = os.path.join(tmp, f"{n}-{i}.json")
+                            with open(p, "w", encoding="utf-8") as out:
+                                out.write(line)
+                            args.append(p)
+                    args.append("--sequence")
+                else:
+                    args = ([os.path.join(d, c["previous"])] if c.get("previous") else []) + [os.path.join(d, c["file"])]
+                if c.get("jwks"):
+                    args += ["--jwks", os.path.join(d, c["jwks"])]
+                rc, out, err = self._cli(*args)
+                label = f"{c['file']} / {c['check']} / {c.get('previous')} / {c.get('jwks')}"
+                self.assertEqual(rc, EXIT_OF[c["outcome"]], f"{label}: {out or err}")
+                self.assertEqual(out["outcome"], c["outcome"], label)
+                self.assertEqual(out["code"], c["code"], label)
+                if c["check"] == "sequence":
+                    self.assertEqual(len(out["chains"]), c["chains"], label)
+                    self.assertEqual(len(out["chain_breaks"]), c["chain_breaks"], label)
+                if c.get("warn"):
+                    notes = out.get("notes", []) + [w["why"] for w in out.get("warnings", [])]
+                    self.assertTrue(any("null" in w and "MUST NOT" in w for w in notes), label)
+
+    def test_a_carried_key_is_never_trusted(self):
+        """negative/embedded-key: no key from outside -> undecidable `embedded_key_rejected`; a valid key that did not
+        sign -> invalid; and the positive control the suite's script asks for: under the key it carries the receipt
+        verifies, so the refusal above is the rule of §8.5 and not a receipt that cannot verify at all."""
+        bystander = "7422b9887598068e32c4448a949adb290d0f4e35b9e01b0ee5f1a1e600fe2674"
+        for name in ("acta-envelope.json", "decision-receipt.json"):
+            path = os.path.join(self.VEC, "embedded-key", name)
+            with open(path, encoding="utf-8") as fh:
+                r = json.load(fh)
+            kid = r["signature"]["kid"] if isinstance(r["signature"], dict) else r["kid"]
+            carried = (r["payload"] if isinstance(r["signature"], dict) else r)["public_key"]
+            rc, out, _ = self._cli(path)
+            self.assertEqual((rc, out["outcome"], out["code"]), (77, "undecidable", "embedded_key_rejected"), name)
+            rc, out, _ = self._cli(path, "--key", f"{kid}={bystander}")
+            self.assertEqual((rc, out["outcome"]), (1, "invalid"), name)
+            rc, out, _ = self._cli(path, "--key", f"{kid}={carried}")
+            self.assertEqual((rc, out["outcome"], out["checks"].get("carried_key")), (0, "valid", "pass"), name)
+
+    def test_link_form_against_an_independent_reading_of_5_7(self):
+        import random
+        rnd = random.Random(20261123)
+        alphabet = "0123456789abcdefABCDEF:sha256SHA3-512._+-/= é٠\n"
+        samples = [None, 0, 1.5, True, [], {}, "", ":", "sha256:", "SHA256:" + "a" * 64, "sha256:" + "A" * 64,
+                   "sha256:" + "a" * 63, "sha256:" + "a" * 65, "a" * 64, "A" * 64, "sha3-256:" + "a" * 64, "sha3-256:",
+                   "-x:" + "a" * 64, ".x:1", "x y:1", "é:1", "sha256 :" + "a" * 64, "Sha256:x", "s:", "1:2", "sha256:" + "a" * 64 + "\n"]
+        for _ in range(5000):
+            n = rnd.choice((0, 1, 5, 9, 64, 71, 72, 80))
+            s = "".join(rnd.choice(alphabet) for _ in range(n))
+            if rnd.random() < 0.3:
+                s = rnd.choice(("sha256:", "sha512:", "SHA256:", "x:", "")) + "".join(rnd.choice("0123456789abcdef") for _ in range(64))
+            samples.append(s)
+        for s in samples:
+            self.assertEqual(A.link_form(s)[0], _link_form_oracle(s), repr(s))
+
+    def _keyed(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        sk = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(b"test-only/acta-04").digest())
+        return sk, sk.public_key().public_bytes_raw()
+
+    def _env(self, sk, payload, alg="EdDSA", kid="k04"):
+        return {"payload": payload, "signature": {"alg": alg, "kid": kid, "sig": sk.sign(A.jcs(payload)).hex()}}
+
+    def test_every_combination_of_defects_gets_the_outcome_of_5_4(self):
+        """Exhaustive over 10 independent defects (1024 receipts): the outcome predicted from the text of §5.4/§5.6/
+        §5.7/§8.5 — invalid if a check that ran failed, undecidable if none failed and one could not run — never
+        from the code under test."""
+        import itertools
+        sk, pk = self._keyed()
+        other = hashlib.sha256(b"other").digest()
+        names = ("sig_tampered", "link_malformed", "link_other_alg", "carried_other", "carried_same", "window_outside",
+                 "window_null_bound", "no_key", "alg_unknown", "issuer_mismatch")
+        payload_noise = 0
+        for bits in itertools.product((0, 1), repeat=len(names)):
+            d = dict(zip(names, bits))
+            p = {"type": "protectmcp:decision", "tool_name": "t", "decision": "allow", "issued_at": "2026-03-01T00:00:00Z",
+                 "issuer_id": "other-issuer" if d["issuer_mismatch"] else "k04"}
+            if sum(bits) % 3 == 0:                      # a payload problem rides along: it must change nothing (§5.4)
+                p["decision"] = "maybe"; payload_noise += 1
+            if d["link_malformed"]:
+                p["previousReceiptHash"] = "sha256:" + "A" * 64
+            elif d["link_other_alg"]:
+                p["previousReceiptHash"] = "sha3-256:" + "a" * 64
+            if d["carried_other"]:
+                p["public_key"] = other.hex()
+            elif d["carried_same"]:
+                p["verification_jwk"] = {"kty": "OKP", "crv": "Ed25519", "x": base64.urlsafe_b64encode(pk).rstrip(b"=").decode()}
+            r = self._env(sk, p, alg="RS256" if d["alg_unknown"] else "EdDSA")
+            if d["sig_tampered"]:
+                s = r["signature"]["sig"]; r["signature"]["sig"] = ("0" if s[0] != "0" else "1") + s[1:]
+            entry = {"key": pk}
+            if d["window_outside"]:
+                entry["valid_until"] = "2026-02-01T00:00:00Z"
+            if d["window_null_bound"]:
+                entry["valid_from"] = None
+            keys = {} if d["no_key"] else {"k04": entry}
+            fails, cannot = set(), set()
+            if d["link_malformed"]:
+                fails.add("link")
+            elif d["link_other_alg"]:
+                cannot.add("link")
+            if d["issuer_mismatch"]:
+                fails.add("issuer")
+            if d["alg_unknown"]:
+                cannot.add("alg")
+            if d["no_key"]:
+                cannot.add("key")
+            else:
+                if d["sig_tampered"] and not d["alg_unknown"]:
+                    fails.add("sig")
+                if d["carried_other"]:
+                    fails.add("carried")
+                if d["window_null_bound"]:
+                    cannot.add("window")            # a window that cannot be applied, whatever the other bound says
+                elif d["window_outside"]:
+                    fails.add("window")
+            want = "invalid" if fails else ("undecidable" if cannot else "valid")
+            v = A.verify_receipt(r, keys)
+            self.assertEqual(v["outcome"], want, d)
+            self.assertEqual((v["ok"], v["assessed"]), (want == "valid", want != "undecidable"), d)
+            self.assertEqual(v["code"] is None, want == "valid", d)
+        self.assertGreater(payload_noise, 300)
+
+    def test_unknown_members_around_the_signature_are_never_valid(self):
+        """Closed by construction where the draft closes it (§5.2: exactly payload and signature; exactly alg, kid,
+        sig): any other member makes the shape unrecognized — undecidable, its cause named. Members inside the payload
+        are the issuer's signed content (§2.2, §3) and stay valid."""
+        import random
+        rnd = random.Random(4)
+        sk, pk = self._keyed()
+        base = self._env(sk, {"type": "x:y", "issued_at": "2026-03-01T00:00:00Z", "issuer_id": "k04"})
+        values = (None, 0, "", "x", [], {}, True, 1e300, {"kid": "k04"})
+        for _ in range(300):
+            name = "".join(rnd.choice("abcdefghijklmnopqrstuvwxyz_$é0") for _ in range(rnd.randint(1, 8)))
+            where = rnd.choice(("envelope", "signature", "payload"))
+            r = json.loads(json.dumps(base))
+            target = r if where == "envelope" else r["signature"] if where == "signature" else r["payload"]
+            if name in target:
+                continue
+            target[name] = rnd.choice(values)
+            if where == "payload":
+                if name in ("signature", "previousReceiptHash", "issuer_id") or name in A.CARRIED_KEY_MEMBERS:
+                    continue
+                r = self._env(sk, r["payload"])
+            v = A.verify_receipt(r, {"k04": pk})
+            if where == "payload":
+                self.assertEqual(v["outcome"], "valid", (where, name))
+            else:
+                self.assertEqual((v["outcome"], v["code"]), ("undecidable", "unrecognized_shape"), (where, name))
+
+    def test_a_sequence_holds_chains_and_a_chain_asserts_each_link(self):
+        sk, pk = self._keyed()
+
+        def mk(t, **kw):
+            return self._env(sk, dict({"type": "x:y", "issued_at": t, "issuer_id": "k04"}, **kw))
+        a = mk("2026-03-01T00:00:00Z")
+        b = mk("2026-03-01T00:00:01Z", previousReceiptHash=A.receipt_hash(a))
+        c = mk("2026-03-01T00:00:02Z")
+        d = mk("2026-03-01T00:00:03Z", previousReceiptHash=None)
+        e = mk("2026-03-01T00:00:04Z", previousReceiptHash=A.receipt_hash(d).split(":")[1])
+        keys = {"k04": pk}
+        v = A.verify_chain([a, b, c, d, e], keys, sequence=True)
+        self.assertEqual((v["outcome"], v["chains"], v["chain_breaks"]), ("valid", [0, 2, 3], []))
+        self.assertTrue(any(w["i"] == 3 and "null" in w["why"] for w in v["warnings"]))
+        v = A.verify_chain([a, b, c, d, e], keys)
+        self.assertEqual((v["outcome"], v["chain_breaks"]), ("invalid", [2, 3]))
+        self.assertEqual({p["code"] for p in v["problems"]}, {"chain_break"})
+        v = A.verify_chain([b], keys, sequence=True)            # first receipt's link: reported, not failed
+        self.assertEqual(v["outcome"], "valid"); self.assertTrue(any("not checked" in w["why"] for w in v["warnings"]))
+        payload_only = mk("2026-03-01T00:00:05Z", previousReceiptHash="sha256:" + hashlib.sha256(A.jcs(a["payload"])).hexdigest())
+        for seq in (False, True):
+            self.assertEqual(A.verify_chain([a, payload_only], keys, sequence=seq)["chain_breaks"], [1])
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for i, r in enumerate((a, b, c, d, e)):
+                paths.append(os.path.join(tmp, f"{i}.json"))
+                with open(paths[-1], "w", encoding="utf-8") as fh:
+                    json.dump(r, fh)
+            self.assertEqual(self._cli(*paths, "--key", f"k04={pk.hex()}", "--sequence")[0], 0)
+            self.assertEqual(self._cli(*paths, "--key", f"k04={pk.hex()}")[0], 1)
+            # §5.4 over a run: an input that is not JSON is undecidable, but a receipt that ran and failed wins
+            bad = os.path.join(tmp, "bad.json")
+            with open(bad, "w", encoding="utf-8") as fh:
+                fh.write("{not json")
+            rc, out, _ = self._cli(bad, "--key", f"k04={pk.hex()}")
+            self.assertEqual((rc, out["code"]), (77, "input_not_json"))
+            forged = json.loads(json.dumps(c)); forged["payload"]["tool_name"] = "x"
+            with open(os.path.join(tmp, "f.json"), "w", encoding="utf-8") as fh:
+                json.dump(forged, fh)
+            self.assertEqual(self._cli(bad, os.path.join(tmp, "f.json"), "--key", f"k04={pk.hex()}", "--sequence")[0], 1)
+
+    def test_a_window_that_cannot_be_applied_is_undecidable(self):
+        sk, pk = self._keyed()
+        r = self._env(sk, {"type": "x:y", "issued_at": "2026-03-01T00:00:00Z", "issuer_id": "k04"})
+        for entry in ({"valid_from": None}, {"valid_until": None}, {"valid_from": "2026-06-01T00:00:00Z", "valid_until": "2026-01-01T00:00:00Z"},
+                      {"valid_from": "2026-01-01T00:00:00Z", "valid_until": "2026-01-01T00:00:00Z"},
+                      {"valid_from": "2026-06-01T00:00:00Z", "valid_until": "garbage"}):
+            v = A.verify_receipt(r, {"k04": dict(entry, key=pk)})
+            self.assertEqual((v["outcome"], v["code"], v["key_status"]), ("undecidable", "key_window_undecidable", "undecidable"), entry)
+        nots = A.verify_receipt(self._env(sk, {"type": "x:y", "issuer_id": "k04"}), {"k04": {"key": pk, "valid_from": "2026-01-01T00:00:00Z"}})
+        self.assertEqual(nots["outcome"], "undecidable")                     # no signed issued_at to apply the window to
+        none = A.verify_receipt(r, {"k04": pk})
+        self.assertEqual((none["outcome"], none["key_status"], none["checks"]["key_window"]), ("valid", "no_window", "not_established"))
+        jwk = {"kty": "OKP", "crv": "Ed25519", "kid": "k04", "x": base64.urlsafe_b64encode(pk).rstrip(b"=").decode(), "valid_until": None}
+        with self.assertRaises(ValueError):                                  # §5.6: null is not a timestamp, not "absent"
+            A.keys_from_jwks({"keys": [jwk]})
+
+    def test_an_unsupported_algorithm_is_undecidable_but_a_failed_check_still_wins(self):
+        sk, pk = self._keyed()
+        for alg in ("RS256", "ML-KEM-768", "", None, 7, "eddsa"):
+            r = self._env(sk, {"type": "x:y", "issued_at": "2026-03-01T00:00:00Z", "issuer_id": "k04"}, alg=alg)
+            v = A.verify_receipt(r, {"k04": pk})
+            self.assertEqual((v["outcome"], v["code"]), ("undecidable", "unsupported_algorithm"), alg)
+            v = A.verify_receipt(r, {"k04": {"key": pk, "valid_until": "2026-02-01T00:00:00Z"}})
+            self.assertEqual((v["outcome"], v["code"]), ("invalid", "key_outside_validity_window"), alg)
 
 
 if __name__ == "__main__":

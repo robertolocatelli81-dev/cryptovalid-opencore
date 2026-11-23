@@ -2,7 +2,7 @@
 # cryptovalid-opencore driver for ScopeBlind/agent-governance-testvectors.
 # Reads fixtures from ../../fixtures/, evaluates each input against fixtures/policy/*.cedar with the OFFICIAL Cedar
 # bindings (cedarpy, the cedar-policy Rust crate — never the fixtures' expected_decision), and writes one Acta 2.1
-# envelope receipt per input to ../../receipts/cryptovalid-opencore/, chained per draft-farley-acta-signed-receipts-03 §6.7,
+# envelope receipt per input to ../../receipts/cryptovalid-opencore/, chained per draft-farley-acta-signed-receipts-04 §5.7 (§6.7 of -03),
 # policy_digest per §6.8, signed with the fixture seed (fixtures/keys/README.md). Exit 77 = cannot run here.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

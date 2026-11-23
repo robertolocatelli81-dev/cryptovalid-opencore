@@ -291,8 +291,8 @@ Other people's work this repository uses, each under its own licence:
   `spec/vectors/beacon/nist/` (with the statement NIST asks for, `NIST-STATEMENT.txt`); tokens of public time-stamping
   services in `spec/vectors/rfc3161/`; RFC 3161 tokens committed in thebristolsound/birdbrain (MIT), esig/dss of the
   European Commission (LGPL-2.1) and dfandrich/fileviewinfo (MIT), licence text beside them, in
-  `spec/vectors/rfc3161/third_party/`; the Cedar policy and key-window vectors of ScopeBlind/agent-governance-testvectors
-  (Apache-2.0, licence text beside them) and receipts made with protect-mcp 0.29.0 (MIT) in `examples/acta/`. See
+  `spec/vectors/rfc3161/third_party/`; the Cedar policy and the key-window, chain-link and embedded-key vectors of
+  ScopeBlind/agent-governance-testvectors (Apache-2.0, licence text beside them) and receipts made with protect-mcp 0.29.0 (MIT) in `examples/acta/`. See
   [NOTICE](NOTICE).
 - **Data not shipped**: no ISO 4217 table; `tools/iso4217_table.py` builds the one you pin (`--currency-table`) from your
   own download of list one (SPEC §18 "Currencies").

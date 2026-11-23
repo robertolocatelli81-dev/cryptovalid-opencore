@@ -36,9 +36,11 @@ NIST asks distributions of its data to include is in
 spec/vectors/beacon/nist/NIST-STATEMENT.txt (read on nist.gov/open/license on
 2026-11-17).
 
-examples/acta/autoresearch-safe.cedar and examples/acta/key-window/* are copied
-verbatim from ScopeBlind/agent-governance-testvectors (commits 49ad7c1 and
-1e24b5687): Copyright (c) ScopeBlind Contributors and agent-governance-testvectors
+examples/acta/autoresearch-safe.cedar, examples/acta/key-window/*,
+examples/acta/chain-link/*.json(l) and examples/acta/embedded-key/* are copied
+verbatim from ScopeBlind/agent-governance-testvectors (commits 49ad7c1,
+1e24b5687 and, for chain-link and embedded-key, 5c749de, fetched 2026-11-23):
+Copyright (c) ScopeBlind Contributors and agent-governance-testvectors
 contributors, Apache License 2.0, full text in
 examples/acta/LICENSE.agent-governance-testvectors (that repository has no
 NOTICE file). examples/acta/reference_protect-mcp/ holds receipts produced on

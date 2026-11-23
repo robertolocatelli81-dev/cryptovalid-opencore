@@ -7,6 +7,58 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
+## Unreleased: verdicts change
+
+### `cryptovalid_acta` follows draft-farley-acta-signed-receipts-04
+
+The -04 of the draft was posted on 2026-11-22 (datatracker, checked on 2026-11-23: revision 04, no -05; individual
+draft, not adopted by a working group). The module was written against -03. Measured on 2026-11-23 on b784901, before
+this change, against every published vector set for the draft that runs offline: 106 of 115 cases agreed —
+ScopeBlind/agent-governance-testvectors at 5c749de (chain-link 21/27, key-window 6/6, signing-input 4/4, revocation 2/2,
+timeliness 3/3, negative/embedded-key 3/4), probityai/agent-evidence-vectors `vectors-receipt-signature` at 127cf14
+(graded against -03, both key-set passes, 56/58) and the TRACE Acta fixtures of agentrust-io/trace-spec at 6f04de6 (the
+signature, signing-input, key-window and chain columns, 11/11). After it: 115/115; with one hex digit of each
+signature flipped, 115/115 refused. Each change below follows the text of -04:
+
+- **Three outcomes (§5.4).** `verify_receipt` and `verify_chain` return `outcome` (valid | invalid | undecidable), the
+  code that decided and `checks` (each check's result); every check runs and the outcome is invalid if one that ran
+  failed, undecidable if none failed and one could not run, valid only if all ran and passed. Until now the first
+  refusal returned, so a receipt whose link names SHA3-256 and whose key window had ended was refused for the link
+  instead of the window. `verdict` and `assessed` stay, with the same values; the exit status stays 0 / 1 / 77.
+- **Now undecidable, was invalid:** a link whose prefix names another hash algorithm (§5.7,
+  `unsupported_chain_hash_algorithm`); an `alg` this verifier does not implement (§5.9, `unsupported_algorithm`); a
+  receipt shape not recognized, an envelope with a member beside payload and signature or a signature object with
+  one beside alg, kid and sig included (§5.2/§5.4, `unrecognized_shape`); a receipt file that is not JSON this verifier
+  reads, which ended the command with exit 2 (`input_not_json`, exit 77; the other files are still judged); a
+  receipt that cannot be canonicalized (`not_canonicalizable`); an unknown kid with `--keys-are-complete`
+  (`issuer_not_trusted`: no key from a trust anchor is available, §5.4); a key window that cannot be applied because
+  the signed `issued_at` is absent or not an instant (§5.6); a key window with one bound malformed and the other
+  excluding the receipt, or with `valid_until` not after `valid_from`. A null bound ("A bound present
+  as null is not a valid timestamp", §5.6) was read as absent: now undecidable in the library, and `--jwks` refuses it
+  (exit 2) as it already refused a malformed one.
+- **Now valid, was invalid:** a null `previousReceiptHash` on a receipt checked alone, read as omitted with a warning
+  (§5.7.1); a payload that lacks a member §2.2 requires or does not conform to its type (`decision`, `tool_name`,
+  `issued_at` without a key window): listed in `payload_problems`, the outcome unchanged (§5.4).
+- **Sequences (§5.7.1).** `verify --sequence` (`verify_chain(..., sequence=True)`) reads a log that holds one chain
+  after another: a receipt without a link, or with null, begins a new chain (`chains` lists where each begins) instead
+  of breaking the one before. Without the flag each file is asserted to follow the one before, as until now, and an
+  absent or null link there is `chain_break`.
+- **Carried keys (§8.5).** A `public_key`, `verification_key` or `verification_jwk` member of the signed bytes is never
+  used: with no key from the relying party the outcome is undecidable `embedded_key_rejected` (was `key_not_supplied`,
+  and invalid for a flat receipt without `issuer_id`); with one, a carried key that is not that key is invalid
+  `key_mismatch`. Keys are compared as the reference verifier documents it (@veritasacta/verify 0.11.1, ERRORS.md).
+- Codes on every refusal of the chain: `malformed_chain_link`, `chain_break`, `policy_digest_*`; the draft's section
+  numbers of -04 in every message (-03 §6.6, §6.7, §6.8, §6.9, §9.2, §9.5, §9.7 are -04 §5.2, §5.7, §5.8, §5.9, §5.6,
+  §8.5, §8.7).
+
+`examples/acta/chain-link/` and `examples/acta/embedded-key/`: the chain-link suite (27 cases) and the two
+embedded-key receipts of agent-governance-testvectors at 5c749de (Apache-2.0), pinned by SHA-256 and run through the
+command by `test_cryptovalid_acta.py`. Nine tests more (`Draft04_20261123`), among them an exhaustive one over 1 024
+combinations of ten defects against the outcome §5.4 predicts and §5.7 link forms against an independent reading on
+5 026 values; eight are red on b784901 (the ninth checks the vendored bytes). Twelve mutants of the new lines: eleven
+caught, one equivalent (the bare-link comparison after the exact one). Eleven existing tests changed with the rules above (one renamed).
+Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those of the suite above).
+
 ## 0.28.1 (2026-11-23): verdicts change
 
 ### The segment writer seals before a segment is longer than a verifier reads (SPEC §5 step 0)

@@ -1,48 +1,64 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""cryptovalid-opencore — Signed Decision Receipts, draft-farley-acta-signed-receipts-03 (0.16.0, 2026-09-24).
+"""cryptovalid-opencore — Signed Decision Receipts, draft-farley-acta-signed-receipts-04 (since Unreleased; -03 from 0.16.0).
 
 Status: EXPERIMENTAL. Outside the maintained core of cryptovalid-opencore (README, "Core and experimental
 modules"): kept, installed and tested, no new scope is added here.
 
-draft-farley-acta-signed-receipts-03 (T. Farley, ScopeBlind / Veritas Acta, 29 August 2026, expires 2 March 2027;
-individual Internet-Draft, Informational — copy downloaded 2026-09-20): a portable, signed receipt of a machine-to-machine
-access-control decision (an AI agent calling a tool). What this module implements, transcribed from the draft:
+draft-farley-acta-signed-receipts-04 (T. Farley, ScopeBlind / Veritas Acta, posted 2026-11-22, expires 2027-05-26;
+individual Internet-Draft, Informational — the current revision on the IETF datatracker when checked on 2026-11-23): a
+portable, signed receipt of a machine-to-machine access-control decision (an AI agent calling a tool). What this module
+implements, transcribed from the draft:
 
   §2.1   envelope shape {payload, signature{alg, kid, sig}}; the flat shape (payload fields at the top level, signature a hex
-         string) is READ, never emitted (§6.6: new implementations SHOULD emit the envelope).
+         string) is READ, never emitted (§5.2: new implementations SHOULD emit the envelope).
   §2.2   payload members: type, issued_at (RFC 3339 with zone), issuer_id (MUST equal signature.kid), previousReceiptHash
          (inside the payload, omitted — not null — on a genesis), payload_digest, action_ref, ...
   §3.1   protectmcp:decision: tool_name, decision ∈ {allow, deny, rate_limit, require_approval}, reason, policy_digest, session_id.
-  §5/§6.6 signing input = JCS(payload) (RFC 8785, ES6 numbers), PureEdDSA over the canonical bytes — no pre-hash; sig hex.
-  §6.7   previousReceiptHash = "sha256:" + hex(SHA-256(JCS(receipt))) over the ENTIRE signed receipt including the signature
-         member; a bare hex digest MAY be accepted on read, is never emitted; an unknown prefix is refused.
-  §6.8   policy_digest = "sha256:" + hex(SHA-256(JCS({construction: "acta-policy-digest-v1", engine, files: [{name, sha256}]
+  §5.1/§5.2 signing input = JCS(payload) (RFC 8785, ES6 numbers), PureEdDSA over the canonical bytes — no pre-hash; sig hex.
+  §5.4   three outcomes, `outcome` = valid | invalid | undecidable, also as the exit status (0 | 1 | 77): invalid if any check
+         ran and failed, undecidable (with its cause in `code` and `why`) if none failed and one could not run, valid only
+         if every check ran and passed. A payload that lacks a member §2.2 requires or does not conform to its type is
+         listed in `payload_problems` and does not change the outcome (§5.4).
+  §5.6   key validity window [valid_from, valid_until) applied to the signed issued_at whenever the key source gives one:
+         outside = invalid; a window that cannot be applied (a bound that is not an instant, null included; valid_until
+         not after valid_from; issued_at absent or not an instant) = undecidable; no window = `key_status` "no_window".
+  §5.7   previousReceiptHash = "sha256:" + hex(SHA-256(JCS(receipt))) over the ENTIRE signed receipt including the signature
+         member; the bare 64 hex of earlier revisions is recognized on read, never emitted. A value whose prefix names
+         another hash algorithm is undecidable; any other value (uppercase hex, wrong length, base64url, "", a non-string)
+         is malformed and the receipt invalid.
+  §5.7.1 three readings: one receipt alone (a null link is read as omitted, with a warning); a chain, where each receipt is
+         asserted to follow the one before (absent, null or another link = invalid `chain_break`); and a sequence
+         (`--sequence`), where a receipt without a link, or with null, begins a new chain (`chains` lists where each
+         begins) and a link on the first receipt is reported, not checked. A link over the predecessor's payload alone
+         never matches.
+  §5.8   policy_digest = "sha256:" + hex(SHA-256(JCS({construction: "acta-policy-digest-v1", engine, files: [{name, sha256}]
          sorted by name}))) — every file hashed over its exact bytes; recomputed by the verifier from the policy bytes.
-  §6.9   alg agility: "EdDSA" (MTI), "ML-DSA-65" (FIPS 204) and "ES256" are read against the declared alg; only EdDSA is emitted.
-  §2.1.1 kid RECOMMENDED "sb:issuer:" + first 12 characters of the Base58 (Bitcoin alphabet) encoding of the Ed25519 key.
+  §5.9   alg agility: "EdDSA" (MTI), "ML-DSA-65" (FIPS 204) and "ES256" are read against the declared alg; any other alg, or
+         ML-DSA-65 on a host without it, is undecidable (`unsupported_algorithm`). Only EdDSA is emitted.
+  §8.5   a carried key (a public_key, verification_key or verification_jwk member of the signed bytes) is never used: with
+         no key from the relying party the outcome is undecidable (`embedded_key_rejected`); with one, a carried key that
+         is not that key makes the receipt invalid (`key_mismatch`).
+  §2.1.1 kid RECOMMENDED form "sb:issuer:" + first 12 characters of the Base58 (Bitcoin alphabet) encoding of the Ed25519 key.
 
 Measured on 2026-09-20 against ScopeBlind/agent-governance-testvectors v0.3 (commit 49ad7c1): the fixture policy digest
 (sha256:81ba074a…) is reproduced from the .cedar bytes; the decisions come from the official Cedar bindings (cedarpy 4.12,
 the cedar-policy Rust crate), never from the fixtures' expected_decision; the receipts pass the repository's three checks
 (JSON schema, @veritasacta/verify 0.10.18 signatures, chain/outcomes) — see `run-vectors`. Declared (the draft does not say):
-ES256 is read as IEEE P1363 r||s, 64 bytes, hex, low-S only (the (r, n−s) twin would verify and change the §6.7 hash);
+ES256 is read as IEEE P1363 r||s, 64 bytes, hex, low-S only (the (r, n−s) twin would verify and change the §5.7 hash);
 ML-DSA-65 is read as pure ML-DSA with the EMPTY context over the same canonical bytes (raw 3309-byte signature, hex,
 verified through `cryptography` ≥ 48 — not measured against another implementation: the public vectors are Ed25519 only);
 a flat receipt without `alg` is read as EdDSA (the MTI) and one without `kid` takes its `issuer_id` as the kid (an envelope re-emitted
-flat, or the reverse, verifies with a different §6.7 hash — inherent to the draft's two shapes, caught by the chain link);
+flat, or the reverse, verifies with a different §5.7 hash — inherent to the draft's two shapes, caught by the chain link);
+issuer_id against kid is checked in the flat shape too (§2.2 "MUST match"; §5.4 names only the envelope);
 an earlier-revision `policy_digest` (16 hex, no prefix) is an opaque label the signature check tolerates and the policy
-binding refuses (§6.8 compatibility note); a receipt signed under an algorithm this host cannot verify is a
-problem, never a pass; the chain check does not know whether a receipt without previousReceiptHash is a genesis or
-unchained (§2.2 says the format does not distinguish).
-
-Ambiguity of -03, stated (2026-11-17): §2.2 says the first receipt of a chain "MUST omit the member entirely rather than
-carrying null" — a rule for the issuer; -03 says nothing to a verifier about null, but a member that is present "MUST
-be computed as specified in Section 6.7" (§2.2) and §6.7 says it "MUST be the string \"sha256:\" followed by" the hex
-digest, which null is not. This module refuses it (a member present must be "sha256:<64 lowercase hex>"); a public vector set expects it read as
-absent, citing a revision -04 that is not on the IETF datatracker (checked on 2026-11-17: the current revision is -03,
-of 2026-09-04). Unchanged until a revision of the draft decides it.
+binding refuses (§5.8 compatibility note); a carried key is compared as the reference verifier does (32 or 1952 bytes in
+hex of either case, base64 or base64url, or an OKP Ed25519 JWK; a value in none of these forms is not the key), and against
+a relying-party key held only as PEM (ES256) the comparison cannot run: undecidable; a JSON input that does not parse is
+undecidable (`input_not_json`), a file that cannot be read is a usage error (exit 2); the chain check does not know whether
+a receipt without previousReceiptHash is a genesis or unchained (§2.2 says the format does not distinguish).
+Not implemented: commitment mode (§6), the evidence predicate (§4), a configurable "require a window" (§5.6 MAY).
 """
 from __future__ import annotations
 import sys as _sys_0203
@@ -69,7 +85,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-DRAFT = "draft-farley-acta-signed-receipts-03 (2026-08-29, expires 2027-03-02; individual Internet-Draft)"
+DRAFT = "draft-farley-acta-signed-receipts-04 (2026-11-22, expires 2027-05-26; individual Internet-Draft)"
 DECISIONS = ("allow", "deny", "rate_limit", "require_approval")
 ALGS = ("EdDSA", "ML-DSA-65", "ES256")
 # Every pattern here is ASCII-only, by construction ([0-9], never \d) AND by flag (re.ASCII): in Python `\d` matches any
@@ -243,47 +259,42 @@ def _valid_instant(t: str) -> bool:
     return _instant(t) is not None
 
 
-def _outside_window(issued_at: str, entry: Any) -> Optional[Tuple[str, str]]:
-    """§9.2: 'Verifiers SHOULD check key validity windows when available.' Returns a reason when the receipt's
-    issued_at falls outside the window declared for its key, or None when it does not — including when no window
-    is declared, which is the common case and is not an error.
+def _outside_window(issued_at: Any, entry: Any) -> Optional[Tuple[str, str]]:
+    """-04 §5.6: when the key source gives the key a window, it MUST be applied to the signed issued_at. Returns None
+    when no window is given or the receipt falls inside it, else (kind, reason):
 
-    The draft states the SHOULD and nothing about the boundaries, so the choice is ours and is declared here:
-    the window is [valid_from, valid_until), start inclusive and end exclusive. The reason is the JOSE convention
-    the draft sits in — RFC 7519 §4.1.5 says `nbf` is met when the time is "after or equal to" it, and §4.1.4 that
-    `exp` is the time "on or after which" a token MUST NOT be accepted. X.509 (RFC 5280 §4.1.2.5) includes both
-    ends instead, which is equally defensible; the two readings differ by exactly one instant, and the exclusive
-    end is the more conservative of the two on expiry. (An earlier note here claimed this was the only reading
-    that keeps consecutive keys disjoint — that was wrong: (from, until] does too.)
+      "outside"  issued_at is before valid_from, or at or after valid_until: the receipt is invalid (§5.4). The window
+                 is [valid_from, valid_until): -04 §5.6 fixes it ("from valid_from, included, to valid_until, excluded",
+                 as RFC 7519 treats exp) — what this module had chosen under -03 §9.2, where it was ours to choose.
+      "bound"    the window cannot be applied because of the key source: a bound that is not an RFC 3339 instant —
+                 null included ("A bound present as null is not a valid timestamp") — or valid_until not after
+                 valid_from. Undecidable (§5.6), never a finding about the receipt.
+      "instant"  the window cannot be applied because the signed issued_at is absent or not an instant: undecidable.
+
+    A bound is present when its member is (null counts as present); an absent bound leaves that side open. Under -03
+    a readable bound that excluded the receipt decided even when the other bound was unreadable (review of 26/09/2026);
+    -04 §5.6 says a window with a bound that is not a timestamp "cannot be applied", so that case is undecidable now.
 
     What this does NOT do: it compares an instant the SIGNER asserts against a window the relying party holds.
     It catches a key used after an honest rotation; it cannot catch a compromised key whose receipts are
-    backdated inside the window. §9.2 is a SHOULD and this check is only as good as the window's source.
-    """
-    # Returns None, or (kind, reason) with kind "outside" (the receipt falls outside a window that could be read),
-    # "bound" (the RELYING PARTY's bound is not an instant: a configuration defect, never a finding about the receipt)
-    # or "instant" (the receipt's issued_at cannot be compared). The kind used to be inferred from the reason's wording.
-    if not isinstance(entry, dict):
+    backdated inside the window (§5.6, §8.2)."""
+    if not isinstance(entry, dict) or ("valid_from" not in entry and "valid_until" not in entry):
         return None
-    vf, vu = entry.get("valid_from"), entry.get("valid_until")
-    if vf is None and vu is None:
-        return None
-    a = _instant_exact(vf) if vf is not None else None
-    b = _instant_exact(vu) if vu is not None else None
+    a = _instant_exact(entry["valid_from"]) if "valid_from" in entry else None
+    b = _instant_exact(entry["valid_until"]) if "valid_until" in entry else None
+    if "valid_from" in entry and a is None:
+        return "bound", f"the key's valid_from {entry['valid_from']!r} is not an RFC 3339 instant: the window cannot be applied (§5.6)"
+    if "valid_until" in entry and b is None:
+        return "bound", f"the key's valid_until {entry['valid_until']!r} is not an RFC 3339 instant: the window cannot be applied (§5.6)"
+    if a is not None and b is not None and not b > a:
+        return "bound", "the key's valid_until is not after its valid_from: the window cannot be applied (§5.6)"
     t = _instant_exact(issued_at)
     if t is None:
-        # A window was declared and the instant cannot be compared against it: refuse rather than skip.
-        return "instant", "issued_at cannot be compared with the key validity window (§9.2)"
-    # A bound that CAN be read and excludes the receipt decides, even if the other bound is unreadable: an unreadable
-    # bound must not turn a definite "outside" into "not assessed" (independent review 26/09/2026).
+        return "instant", "the signed issued_at is absent or not an RFC 3339 instant: the key's window cannot be applied (§5.6)"
     if a is not None and t < a:
-        return "outside", "issued_at precedes the key validity window (§9.2)"
+        return "outside", "issued_at precedes the key validity window (§5.6)"
     if b is not None and t >= b:
-        return "outside", "issued_at is at or after the key validity window ends (§9.2)"
-    if vf is not None and a is None:
-        return "bound", "the relying party's key valid_from is not an RFC 3339 instant (§9.2)"
-    if vu is not None and b is None:
-        return "bound", "the relying party's key valid_until is not an RFC 3339 instant (§9.2)"
+        return "outside", "issued_at is at or after the key validity window ends (§5.6)"
     return None
 
 
@@ -305,7 +316,7 @@ def issuer_kid(pub: bytes) -> str:
 
 
 def policy_digest(files: Dict[str, bytes], engine: str = "cedar") -> str:
-    """§6.8 acta-policy-digest-v1 over the exact bytes of every policy file, sorted by name (code point order)."""
+    """§5.8 acta-policy-digest-v1 over the exact bytes of every policy file, sorted by name (code point order)."""
     if not files:
         raise ValueError("a policy digest needs at least one file")
     m = {"construction": "acta-policy-digest-v1", "engine": engine,
@@ -345,7 +356,7 @@ def policy_digest_from_dir(path: str, engine: str = "cedar", ext: str = ".cedar"
 
 
 def receipt_hash(receipt: Dict[str, Any]) -> str:
-    """§6.7: "sha256:" + hex(SHA-256(JCS(entire signed receipt)))."""
+    """§5.7: "sha256:" + hex(SHA-256(JCS(entire signed receipt)))."""
     return "sha256:" + hashlib.sha256(jcs(receipt)).hexdigest()
 
 
@@ -376,7 +387,7 @@ def pubkey_from_seed(seed_hex: str) -> bytes:
 def decision_payload(tool_name: str, decision: str, issuer_id: str, issued_at: Optional[str] = None,
                      policy_digest_value: Optional[str] = None, session_id: Optional[str] = None, reason: Optional[str] = None,
                      previous: Optional[Dict[str, Any]] = None, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """§3.1 protectmcp:decision payload. `previous` = the preceding SIGNED receipt (its §6.7 hash becomes
+    """§3.1 protectmcp:decision payload. `previous` = the preceding SIGNED receipt (its §5.7 hash becomes
     previousReceiptHash); a genesis omits the member. `extra` members (e.g. sequence, tool_input digest) are added as given."""
     if decision not in DECISIONS:
         raise ValueError(f"decision must be one of {DECISIONS}")
@@ -393,15 +404,15 @@ def decision_payload(tool_name: str, decision: str, issuer_id: str, issued_at: O
                          "issued_at": ts, "issuer_id": issuer_id}
     if policy_digest_value is not None:
         if not _SHA256_PREFIXED.match(policy_digest_value):
-            raise ValueError("policy_digest must be sha256:<64 lowercase hex> (§6.8)")
+            raise ValueError("policy_digest must be sha256:<64 lowercase hex> (§5.8)")
         p["policy_digest"] = policy_digest_value
     if session_id is not None:
         p["session_id"] = session_id
     if reason is not None:
         p["reason"] = reason
     if previous is not None:
-        if _shape(previous)[0] == "invalid":
-            raise ValueError("previous must be a SIGNED receipt (the §6.7 pre-image includes its signature)")
+        if _shape(previous)[0] == "unrecognized":
+            raise ValueError("previous must be a SIGNED receipt (the §5.7 pre-image includes its signature)")
         p["previousReceiptHash"] = receipt_hash(previous)
     for k, v in (extra or {}).items():
         if k in p:
@@ -420,7 +431,7 @@ def sign_receipt(payload: Dict[str, Any], seed_hex: str, kid: Optional[str] = No
     if payload.get("issuer_id") != kid:
         raise ValueError("payload.issuer_id MUST equal signature.kid (§2.2)")
     if "signature" in payload:
-        raise ValueError("the signing input never contains a signature member (§6.6)")
+        raise ValueError("the signing input never contains a signature member (§5.2)")
     sig = sk.sign(jcs(payload))
     return {"payload": payload, "signature": {"alg": "EdDSA", "kid": kid, "sig": sig.hex()}}
 
@@ -510,165 +521,113 @@ def _key_material_problem(key: Any) -> Optional[str]:
     return f"key material is {len(b)} bytes: neither 32 (Ed25519), 1952 (ML-DSA-65) nor a PEM public key"
 
 
-# The §6.6 refusal for a signing input that carries a signature member (null and "" included). A constant, so that
-# verify_receipt attaches its code by identity with THIS return, never by searching the free text.
-SIGNATURE_IN_SIGNING_INPUT_WHY = "payload contains a signature member (§6.6 MUST NOT)"
+# The §5.2 refusal for a signing input that carries a signature member (null and "" included).
+SIGNATURE_IN_SIGNING_INPUT_WHY = "payload contains a signature member (§5.2 MUST NOT)"
+# -04 §8.5: "A carried key is the value of a public_key, verification_key or verification_jwk member of the signed bytes".
+CARRIED_KEY_MEMBERS = ("public_key", "verification_key", "verification_jwk")
+_ALG_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*\Z", re.ASCII)
+_HEX_ANYCASE = re.compile(r"^(?:[0-9a-fA-F]{2})+\Z", re.ASCII)
+_B64_ANY = re.compile(r"^[A-Za-z0-9+/_-]+={0,2}\Z", re.ASCII)
+_VERDICT = {"valid": "pass", "invalid": "fail", "undecidable": "not_assessed"}
+
+
+class Unparsed:
+    """A receipt input that is not well-formed JSON (or not JSON this module reads: duplicate member names, NaN, nesting
+    deeper than 512). -04 §5.4 lists "the input was not well-formed JSON" among the causes of an undecidable outcome,
+    so the CLI hands this to the verifier instead of stopping, and the other receipts of a run are still judged."""
+
+    def __init__(self, why: str):
+        self.why = why
+
+
+def link_form(value: Any) -> Tuple[str, str]:
+    """-04 §5.7, what a previousReceiptHash value is: ("link", 64 hex) for "sha256:" + 64 lowercase hex or the bare 64
+    lowercase hex of earlier revisions; ("null", "") for null (§5.7.1); ("other_algorithm", name) for a value that begins
+    with a name and a colon, where the name starts with an ASCII letter or digit, holds only ASCII letters, digits, ".",
+    "_", "+", "-", and is not "sha256" compared without regard to case; ("malformed", why) for anything else."""
+    if value is None:
+        return "null", ""
+    if isinstance(value, str):
+        if _PREV_HASH.match(value):
+            return "link", value[-64:]
+        name, colon, _rest = value.partition(":")
+        if colon and _ALG_NAME.match(name) and name.lower() != "sha256":
+            return "other_algorithm", name
+        return "malformed", "previousReceiptHash is not \"sha256:\" + 64 lowercase hex, nor the bare 64 hex of earlier revisions (§5.7)"
+    return "malformed", f"previousReceiptHash is a JSON {type(value).__name__}, not a string (§5.7)"
+
+
+def _key_bytes(value: Any) -> Optional[bytes]:
+    """Key material as raw bytes, the way @veritasacta/verify 0.11.1 compares a carried key (ERRORS.md, key_mismatch):
+    hex in either case, base64 or base64url (padding optional), or an OKP Ed25519 JWK's x; None for anything else."""
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    if isinstance(value, dict):
+        if value.get("kty") != "OKP" or value.get("crv") != "Ed25519" or not isinstance(value.get("x"), str):
+            return None
+        value = value["x"]
+    if not isinstance(value, str):
+        return None
+    if _HEX_ANYCASE.match(value):
+        return bytes.fromhex(value)
+    if _B64_ANY.match(value):
+        try:
+            return base64.b64decode(value.replace("-", "+").replace("_", "/") + "=" * (-len(value.rstrip("=")) % 4), validate=True)
+        except (binascii.Error, ValueError):
+            return None
+    return None
 
 
 def _shape(receipt: Any) -> Tuple[str, Optional[Dict[str, Any]], Optional[Dict[str, Any]], str]:
-    """(shape, signing-input object, signature object {alg, kid, sig}, why). §6.6: envelope = exactly {payload, signature{}}."""
+    """(shape, signing-input object, signature {alg, kid, sig}, why). -04 §5.2: the envelope carries EXACTLY payload and a
+    signature object with alg, kid and sig; the flat shape carries a signature member that is a string. Anything else is
+    "unrecognized" — undecidable under §5.4, never valid."""
+    if isinstance(receipt, Unparsed):
+        return "unrecognized", None, None, receipt.why
     if not isinstance(receipt, dict):
-        return "invalid", None, None, "receipt is not a JSON object"
+        return "unrecognized", None, None, f"the receipt is a JSON {type(receipt).__name__}, not an object (§2)"
     if isinstance(receipt.get("signature"), dict) and isinstance(receipt.get("payload"), dict):
         if set(receipt) != {"payload", "signature"}:
-            return "invalid", None, None, "envelope receipt must carry exactly payload and signature (§6.6)"
+            extra = sorted(set(receipt) - {"payload", "signature"})
+            return "unrecognized", None, None, f"an envelope carries exactly payload and signature (§5.2); this one also carries {extra}"
         s = receipt["signature"]
         if set(s) != {"alg", "kid", "sig"}:
-            return "invalid", None, None, "signature object must carry exactly alg, kid and sig (§2.1.1/§6.6)"
-        if "signature" in receipt["payload"]:
-            return "invalid", None, None, SIGNATURE_IN_SIGNING_INPUT_WHY
-        return "envelope", receipt["payload"], {"alg": s.get("alg"), "kid": s.get("kid"), "sig": s.get("sig")}, ""
+            return "unrecognized", None, None, f"the signature object carries exactly alg, kid and sig (§2.1.1, §5.2); this one carries {sorted(s)}"
+        return "envelope", receipt["payload"], {"alg": s["alg"], "kid": s["kid"], "sig": s["sig"]}, ""
     if isinstance(receipt.get("signature"), str):
         body = {k: v for k, v in receipt.items() if k != "signature"}
         return "flat", body, {"alg": receipt.get("alg", "EdDSA"), "kid": receipt.get("kid", receipt.get("issuer_id")),
                               "sig": receipt["signature"]}, ""
-    return "invalid", None, None, "no signature member in either shape (§6.6)"
+    if "payload" not in receipt and isinstance(receipt.get("signature"), dict):
+        return "unrecognized", None, None, "the payload member is absent (§5.4)"
+    return "unrecognized", None, None, "no signature member in either shape (§5.2, §5.4)"
 
 
-def verify_receipt(receipt: Any, keys: Dict[str, Any], *, keys_are_complete: bool = False) -> Dict[str, Any]:
-    """`keys` = {kid: public key} — 32 raw Ed25519 bytes or 64-hex str for EdDSA, 1952 raw bytes or a base64 str for ML-DSA-65,
-    P-256 SubjectPublicKeyInfo PEM bytes for ES256. Keys come from the relying party, never from the receipt (§9.5).
-
-    A value may also be `{"key": <material>, "valid_from": <RFC 3339>, "valid_until": <RFC 3339>}`; when a window is
-    present the receipt's `issued_at` must fall in `[valid_from, valid_until)` (§9.2, a SHOULD that applies only when
-    the window is available — see `_outside_window` for why the end is exclusive and what the check cannot catch).
-
-    Key material that cannot be a key in any form read here (a float, an empty string, "!!!!", 5 bytes, a PEM that does
-    not load) is the relying party's configuration defect, not the receipt's: the verdict is `not_assessed` with code
-    `key_material_invalid`, never `fail` (see `_key_material_problem` for why it looks at the material only).
-
-    Returns {ok, verdict, assessed, key_status, code, shape, alg, kid, why, hash, notes}. `keys` must be a mapping:
-    anything else is a programming error and raises TypeError."""
-    if not isinstance(keys, dict):
-        raise TypeError(f"keys must be a dict {{kid: key}}, not {type(keys).__name__}")
-    shape, body, sig, why = _shape(receipt)
-    # `assessed` separates the absence side INSIDE the verdict: False = this host could not judge the receipt at all
-    # (a missing library, an algorithm this build cannot verify, key material of the relying party that is not a key in
-    # any form read here). ok=False then means "not assessed", not "invalid":
-    # reporting our own missing input as a finding about the artifact is the defect this field exists to prevent.
-    # `key_status` is stated in EVERY outcome (§5.5 of -04): "a verifier that does not check windows cannot be
-    # mistaken for one whose check passed". Values: not_reached (the receipt was refused before the key set was even
-    # consulted — the default, because saying anything else would assert what we did not measure), unknown_key,
-    # no_window, inside, outside, undecidable. `code` is the machine-readable reason, null when there is none; the codes
-    # emitted are issuer_not_trusted, key_not_supplied, key_outside_validity_window, key_window_undecidable and
-    # key_material_invalid, and — since 26/09/2026, because agent-evidence-vectors requires a code on every refusal —
-    # signature_invalid (the signature does not verify under the key) and signature_in_signing_input (§6.6). Every
-    # other refusal still carries its reason in `why` and code null.
-    out: Dict[str, Any] = {"ok": False, "verdict": "fail", "assessed": True, "key_status": "not_reached",
-                           "code": None, "shape": shape, "alg": None, "kid": None, "why": why, "hash": None,
-                           "notes": []}
-    if shape == "invalid":
-        if why is SIGNATURE_IN_SIGNING_INPUT_WHY:
-            out["code"] = "signature_in_signing_input"
-        return out
-    alg, kid, sigv = sig["alg"], sig["kid"], sig["sig"]
-    out.update({"alg": alg, "kid": kid})
-    try:
-        whole = jcs(receipt)                          # the entire receipt must canonicalize: it is the §6.7 pre-image
-        msg = jcs(body)
-    except (ValueError, TypeError) as ex:
-        out["why"] = f"receipt not canonicalizable (§6.7): {ex}"; return out
-    if alg not in ALGS:
-        out["why"] = f"alg {alg!r} is outside the §6.9 profile {ALGS}: rejected (a profile judgment, not a missing capability)"; return out
-    if not isinstance(kid, str) or not kid:
-        out["why"] = "kid missing"; return out
-    if body.get("issuer_id") != kid:                  # both shapes: attribution is issuer_id, resolution is kid — they MUST agree
-        out["why"] = "payload.issuer_id != signature.kid (§2.2 MUST)"; return out
+def _verify_signature(alg: str, key: Any, kid: str, sigv: Any, msg: bytes) -> Tuple[str, Optional[str], str]:
+    """(result, code, why) of the signature check under the relying party's key: pass, fail or undecidable."""
     if not isinstance(sigv, str) or not _HEX.match(sigv) or len(sigv) % 2:
-        out["why"] = "sig is not lowercase hex"; return out
-    if not isinstance(body.get("issued_at"), str) or not _valid_instant(body["issued_at"]):
-        out["why"] = "issued_at is not an RFC 3339 instant with a zone (§2.2)"; return out
-    if not isinstance(body.get("type"), str) or not body["type"]:
-        out["why"] = "type missing (§2.2)"; return out
-    if body.get("type") == "protectmcp:decision":
-        if body.get("decision") not in DECISIONS:
-            out["why"] = f"decision not in {DECISIONS} (§3.1)"; return out
-        if not isinstance(body.get("tool_name"), str) or not body["tool_name"]:
-            out["why"] = "tool_name missing (§3.1)"; return out
-    if "previousReceiptHash" in body:
-        v = body["previousReceiptHash"]
-        if not isinstance(v, str) or not v:
-            out["why"] = "previousReceiptHash is not a non-empty string (§2.2: omit it on a genesis, never null or empty)"; return out
-        if ":" in v and not v.startswith("sha256:"):
-            out["why"] = f"previousReceiptHash names an algorithm this verifier does not implement: {v.split(':')[0]!r} (§6.7)"; return out
-        if not _PREV_HASH.match(v):
-            out["why"] = "previousReceiptHash is not sha256:<64 lowercase hex> (§6.7)"; return out
-    if "policy_digest" in body and not (isinstance(body["policy_digest"], str) and _SHA256_PREFIXED.match(body["policy_digest"])):
-        # §6.8 compatibility note: an earlier-revision digest (16 hex, no prefix) is an opaque LABEL, not a commitment —
-        # the signature is still checked; the chain's policy binding refuses to bind on it
-        out["notes"].append("policy_digest is not an acta-policy-digest-v1 commitment (sha256:<64 hex>): an opaque label, not recomputable (§6.8)")
-    entry = keys.get(kid)
-    if entry is None:
-        # A kid absent from `keys` is ambiguous and the caller is the only one who can resolve it: "this IS my complete
-        # trust list, so that issuer is refused" (a judgment) versus "these are the keys I happen to hold" (an absence).
-        # Default is the absence, because answering "invalid" about a signature this host never checked asserts
-        # something it did not measure — the objection @TKCollective raised as AC-11 and @babyblueviper1 independently
-        # reached in preaction-governance-conformance. `ok` stays False either way: fail-closed, never a pass.
-        out["key_status"] = "unknown_key"
-        if keys_are_complete:
-            out["code"] = "issuer_not_trusted"
-            out["why"] = f"no key for kid {kid!r}: not in the relying party's complete trust list (§9.5)"
-        else:
-            out["code"] = "key_not_supplied"
-            out["why"] = f"no key for kid {kid!r}: the relying party supplied no key for this issuer, so the signature was NOT checked (§9.5)"
-            out["assessed"] = False; out["verdict"] = "not_assessed"
-        return out
-    # A key may be given as the material alone (as before) or as {"key": material, "valid_from":…, "valid_until":…}.
-    # The window is only checked when the relying party supplies one: §9.2 is a SHOULD "when available".
-    key = entry.get("key") if isinstance(entry, dict) else entry
-    has_window = isinstance(entry, dict) and (entry.get("valid_from") is not None or entry.get("valid_until") is not None)
-    window = _outside_window(body["issued_at"], entry)
-    if window is None:
-        out["key_status"] = "inside" if has_window else "no_window"
-    else:
-        kind, why_w = window
-        out["why"] = why_w
-        if kind == "outside":
-            out.update(key_status="outside", code="key_outside_validity_window")
-        elif kind == "bound":
-            # the relying party's window is unreadable: like unusable key material, a configuration defect — NOT a
-            # finding about the receipt (26/09/2026: this was a FAIL on a valid receipt)
-            out.update(key_status="undecidable", code="key_window_undecidable", assessed=False, verdict="not_assessed")
-        else:
-            out.update(key_status="undecidable", code="key_window_undecidable")
-        return out
-    problem = _key_material_problem(key)
-    if problem is not None:
-        out.update({"code": "key_material_invalid", "assessed": False, "verdict": "not_assessed",
-                    "why": f"the relying party's key for kid {kid!r} is unusable: {problem} — a configuration defect, not a "
-                           "finding about the receipt: the signature was NOT checked"})
-        return out
+        return "fail", "signature_invalid", "sig is not lowercase hex (§2.1.1)"
     raw = bytes.fromhex(sigv)
     try:
         if alg == "EdDSA":
             _, Ed25519PublicKey, _ = _ed()
             if isinstance(key, str) and not _HEX64_ANYCASE.match(key):
-                out["why"] = f"the key for kid {kid!r} is not an Ed25519 key, and the receipt declares EdDSA"; return out
+                return "fail", "signature_invalid", f"the key for kid {kid!r} is not an Ed25519 key, and the receipt declares EdDSA"
             pk = bytes.fromhex(key) if isinstance(key, str) else bytes(key)
             if len(pk) != 32 or len(raw) != 64:
-                out["why"] = "EdDSA needs a 32-byte key and a 64-byte signature"; return out
+                return "fail", "signature_invalid", "EdDSA needs a 32-byte key and a 64-byte signature"
             Ed25519PublicKey.from_public_bytes(pk).verify(raw, msg)
         elif alg == "ML-DSA-65":
             try:
                 from cryptography.hazmat.primitives.asymmetric import mldsa
             except ImportError:
-                out["why"] = "ML-DSA-65 not verifiable on this host (cryptography >= 48): NOT verified"; out["assessed"] = False; out["verdict"] = "not_assessed"; return out
+                return "undecidable", "unsupported_algorithm", "ML-DSA-65 is not implemented on this host (cryptography >= 48): NOT verified (§5.9)"
             try:
                 pk = base64.b64decode(key, validate=True) if isinstance(key, str) else bytes(key)
             except (binascii.Error, ValueError):
-                out["why"] = f"the key for kid {kid!r} is not an ML-DSA-65 key, and the receipt declares ML-DSA-65"; return out
+                return "fail", "signature_invalid", f"the key for kid {kid!r} is not an ML-DSA-65 key, and the receipt declares ML-DSA-65"
             if len(pk) != 1952 or len(raw) != 3309:
-                out["why"] = "ML-DSA-65 needs a 1952-byte key and a 3309-byte signature"; return out
+                return "fail", "signature_invalid", "ML-DSA-65 needs a 1952-byte key and a 3309-byte signature"
             mldsa.MLDSA65PublicKey.from_public_bytes(pk).verify(raw, msg)
         else:  # ES256 — the draft names the algorithm but not the signature encoding: IEEE P1363 r||s is read (declared)
             from cryptography.hazmat.primitives import hashes, serialization
@@ -677,89 +636,273 @@ def verify_receipt(receipt: Any, keys: Dict[str, Any], *, keys_are_complete: boo
             try:
                 pk = serialization.load_pem_public_key(bytes(key) if isinstance(key, (bytes, bytearray)) else str(key).encode())
             except ValueError:
-                out["why"] = f"the key for kid {kid!r} is not a PEM public key, and the receipt declares ES256"; return out
+                return "fail", "signature_invalid", f"the key for kid {kid!r} is not a PEM public key, and the receipt declares ES256"
             if not isinstance(pk, ec.EllipticCurvePublicKey) or pk.curve.name != "secp256r1" or len(raw) != 64:
-                out["why"] = "ES256 needs a P-256 key and a 64-byte r||s signature (encoding declared, not in the draft)"; return out
+                return "fail", "signature_invalid", "ES256 needs a P-256 key and a 64-byte r||s signature (encoding declared, not in the draft)"
             s_int = int.from_bytes(raw[32:], "big")
-            if s_int == 0 or s_int > P256_ORDER // 2:   # (r, n−s) verifies too and would change the §6.7 hash: only low-S is a receipt
-                out["why"] = "ES256 signature is not low-S canonical (malleable twin would change the receipt hash, §6.7)"; return out
-            pk.verify(encode_dss_signature(int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")), msg, ec.ECDSA(hashes.SHA256()))
+            if s_int == 0 or s_int > P256_ORDER // 2:   # (r, n−s) verifies too and would change the §5.7 hash: only low-S is a receipt
+                return "fail", "signature_invalid", "ES256 signature is not low-S canonical (malleable twin would change the receipt hash, §5.7)"
+            pk.verify(encode_dss_signature(int.from_bytes(raw[:32], "big"), s_int), msg, ec.ECDSA(hashes.SHA256()))
     except ImportError:
-        out["why"] = "cryptography not installed: NOT verified"; out["assessed"] = False; out["verdict"] = "not_assessed"; return out
+        return "undecidable", "dependency_missing", "cryptography not installed: NOT verified"
     except _unsupported() as ex:
-        out["why"] = f"{alg} not verifiable on this host ({ex}): NOT verified"; out["assessed"] = False; out["verdict"] = "not_assessed"; return out
+        return "undecidable", "unsupported_algorithm", f"{alg} not verifiable on this host ({ex}): NOT verified (§5.9)"
     except Exception as ex:  # noqa: BLE001 — any failure is one verdict
-        out["why"] = f"signature invalid ({type(ex).__name__})"; out["code"] = "signature_invalid"; return out
-    out.update({"ok": True, "verdict": "pass", "why": "ok", "hash": "sha256:" + hashlib.sha256(whole).hexdigest()})    # §6.7 pre-image: the whole receipt, both shapes
+        return "fail", "signature_invalid", f"signature invalid ({type(ex).__name__})"
+    return "pass", None, "ok"
+
+
+def _combine(checks: List[Tuple[str, str, Optional[str], str]]) -> Tuple[str, Optional[str], str]:
+    """-04 §5.4: invalid if any check ran and failed, undecidable if none failed and one could not run, valid only if
+    every check ran and passed. The code and reason reported are the first failure, else the first check that could not
+    run — in the order the checks were made."""
+    for want in ("fail", "undecidable"):
+        for _name, result, code, why in checks:
+            if result == want:
+                return ("invalid" if want == "fail" else "undecidable"), code, why
+    return "valid", None, "ok"
+
+
+def verify_receipt(receipt: Any, keys: Dict[str, Any], *, keys_are_complete: bool = False) -> Dict[str, Any]:
+    """One receipt, checked alone, under -04 §5.3/§5.4. `keys` = {kid: public key} — 32 raw Ed25519 bytes or 64-hex str
+    for EdDSA, 1952 raw bytes or a base64 str for ML-DSA-65, P-256 SubjectPublicKeyInfo PEM bytes for ES256. Keys come
+    from the relying party, never from the receipt (§8.5). A value may also be `{"key": <material>, "valid_from": …,
+    "valid_until": …}`: the window is applied to the signed issued_at (§5.6; see `_outside_window`).
+
+    Returns {ok, outcome, verdict, assessed, key_status, code, shape, alg, kid, why, hash, notes, checks,
+    payload_problems}. `outcome` is valid | invalid | undecidable (§5.4); `verdict` is the same in this module's older
+    words (pass | fail | not_assessed), `assessed` is False exactly when undecidable, `ok` True exactly when valid.
+    `code` names the check that decided (null when valid); `checks` gives each check's result. `key_status` is
+    not_reached (the key set was not consulted), unknown_key, no_window (validity at issuance NOT established), inside,
+    outside or undecidable. `payload_problems` lists what §5.4 reports apart (a member §2.2 or §3.1 requires that is
+    missing or does not conform): they do not change the outcome. `keys_are_complete` only changes the code of an
+    unknown kid (issuer_not_trusted instead of key_not_supplied): either way no key is available, which §5.4 calls
+    undecidable. `keys` must be a mapping: anything else is a programming error and raises TypeError."""
+    if not isinstance(keys, dict):
+        raise TypeError(f"keys must be a dict {{kid: key}}, not {type(keys).__name__}")
+    shape, body, sig, why = _shape(receipt)
+    out: Dict[str, Any] = {"ok": False, "outcome": "undecidable", "verdict": "not_assessed", "assessed": False,
+                           "key_status": "not_reached", "code": None, "shape": shape, "alg": None, "kid": None, "why": why,
+                           "hash": None, "notes": [], "checks": {}, "payload_problems": []}
+    if shape == "unrecognized":
+        out["code"] = "input_not_json" if isinstance(receipt, Unparsed) else "unrecognized_shape"
+        out["checks"]["shape"] = "undecidable"
+        return out
+    checks: List[Tuple[str, str, Optional[str], str]] = []
+
+    def add(name: str, result: str, code: Optional[str] = None, reason: str = "") -> None:
+        checks.append((name, result, code, reason))
+        out["checks"][name] = result
+
+    alg, kid, sigv = sig["alg"], sig["kid"], sig["sig"]
+    out.update({"alg": alg, "kid": kid})
+    # 1. signing input (§5.2)
+    msg: Optional[bytes] = None
+    if "signature" in body:
+        add("signing_input", "fail", "signature_in_signing_input", SIGNATURE_IN_SIGNING_INPUT_WHY)
+    try:
+        whole = jcs(receipt)                          # the entire receipt must canonicalize: it is the §5.7 pre-image
+        msg = jcs(body)
+    except (ValueError, TypeError) as ex:
+        add("signing_input", "undecidable", "not_canonicalizable", f"the signing input cannot be canonicalized (RFC 8785): {ex}")
+    else:
+        if "signing_input" not in out["checks"]:
+            add("signing_input", "pass")
+    # payload members (§2.2, §3.1): reported apart, never the outcome (§5.4)
+    pp = out["payload_problems"]
+    if not isinstance(body.get("type"), str) or not body["type"]:
+        pp.append("type missing (§2.2)")
+    if not isinstance(body.get("issued_at"), str) or not _valid_instant(body["issued_at"]):
+        pp.append("issued_at is absent or not an RFC 3339 instant with a zone (§2.2)")
+    if "issuer_id" not in body:
+        pp.append("issuer_id missing (§2.2)")
+    if body.get("type") == "protectmcp:decision":
+        if body.get("decision") not in DECISIONS:
+            pp.append(f"decision not in {DECISIONS} (§3.1.1)")
+        if not isinstance(body.get("tool_name"), str) or not body["tool_name"]:
+            pp.append("tool_name missing (§3.1.1)")
+    if "policy_digest" in body and not (isinstance(body["policy_digest"], str) and _SHA256_PREFIXED.match(body["policy_digest"])):
+        # §5.8 compatibility note: an earlier-revision digest (16 hex, no prefix) is an opaque LABEL, not a commitment —
+        # the signature is still checked; the chain's policy binding refuses to bind on it
+        out["notes"].append("policy_digest is not an acta-policy-digest-v1 commitment (sha256:<64 hex>): an opaque label, not recomputable (§5.8)")
+    # 2. algorithm (§5.9)
+    alg_ok = isinstance(alg, str) and alg in ALGS
+    if not alg_ok:
+        add("algorithm", "undecidable", "unsupported_algorithm", f"alg {alg!r} is not one this verifier implements {ALGS}: NOT verified (§5.9)")
+    # 3. key, signature, carried key (§5.3 steps 4 and 6, §8.5)
+    kid_ok = isinstance(kid, str) and bool(kid)
+    carried = [m for m in CARRIED_KEY_MEMBERS if m in body]
+    entry = keys.get(kid) if kid_ok else None
+    if kid_ok and entry is None:
+        # A kid absent from `keys`: no key from a trust anchor outside the receipt is available — undecidable (§5.4),
+        # whether the caller holds a complete trust list or not; the code says which.
+        out["key_status"] = "unknown_key"
+        if carried:
+            add("key", "undecidable", "embedded_key_rejected", f"the only key on offer is carried inside the receipt ({', '.join(carried)}), "
+                "which §8.5 forbids using; the relying party supplied none for kid {!r}: the signature was NOT checked".format(kid))
+        elif keys_are_complete:
+            add("key", "undecidable", "issuer_not_trusted", f"no key for kid {kid!r}: not in the relying party's complete trust list (§8.5): the signature was NOT checked")
+        else:
+            add("key", "undecidable", "key_not_supplied", f"no key for kid {kid!r}: the relying party supplied no key for this issuer, so the signature was NOT checked (§8.5)")
+    elif entry is not None:
+        key = entry.get("key") if isinstance(entry, dict) else entry
+        problem = _key_material_problem(key)
+        if problem is not None:
+            add("key", "undecidable", "key_material_invalid", f"the relying party's key for kid {kid!r} is unusable: {problem} — a "
+                "configuration defect, not a finding about the receipt: the signature was NOT checked")
+        else:
+            add("key", "pass")
+            if alg_ok and msg is not None:
+                add("signature", *_verify_signature(alg, key, kid, sigv, msg))
+            anchored = None if isinstance(key, (bytes, bytearray)) and bytes(key).lstrip().startswith(b"-----BEGIN") else _key_bytes(key)
+            for m in carried:
+                got = _key_bytes(body[m])
+                if anchored is None:
+                    add("carried_key", "undecidable", "carried_key_not_comparable", f"the receipt carries {m}, and the relying party's key "
+                        "is held in a form this module does not compare (PEM): whether it is that key cannot be established (§8.5)")
+                elif got != anchored:
+                    add("carried_key", "fail", "key_mismatch", f"the receipt carries {m}, which is not the relying party's key for kid {kid!r} (§8.5)")
+                elif "carried_key" not in out["checks"]:
+                    add("carried_key", "pass")
+    # 4. issuer and kid (§2.2, §5.4)
+    if not kid_ok:
+        add("issuer_kid", "undecidable", "kid_missing", "kid missing: no key can be resolved (§5.3 step 4)")
+    elif "issuer_id" in body and body["issuer_id"] != kid:
+        add("issuer_kid", "fail", "issuer_kid_mismatch", "payload.issuer_id != signature.kid (§2.2 MUST, §5.4)")
+    elif "issuer_id" in body:
+        add("issuer_kid", "pass")
+    # 5. chain link form (§5.7); whether it follows a predecessor is verify_chain's
+    if "previousReceiptHash" in body:
+        form, detail = link_form(body["previousReceiptHash"])
+        if form == "malformed":
+            add("chain_link", "fail", "malformed_chain_link", detail)
+        elif form == "other_algorithm":
+            add("chain_link", "undecidable", "unsupported_chain_hash_algorithm",
+                f"previousReceiptHash names the hash algorithm {detail!r}: -04 defines links under SHA-256 alone (§5.7)")
+        elif form == "null":
+            out["checks"]["chain_link"] = "absent"
+            out["notes"].append("previousReceiptHash is null: read as omitted, the receipt begins a chain; its issuer emitted "
+                                "a value it MUST NOT (§5.7.1)")
+        else:
+            out["checks"]["chain_link"] = "present"
+    else:
+        out["checks"]["chain_link"] = "absent"
+    # 6. key validity window (§5.6)
+    if entry is not None:
+        window = _outside_window(body.get("issued_at"), entry)
+        has_window = isinstance(entry, dict) and ("valid_from" in entry or "valid_until" in entry)
+        if window is None:
+            out["key_status"] = "inside" if has_window else "no_window"
+            add("key_window", "pass" if has_window else "not_established")
+        elif window[0] == "outside":
+            out["key_status"] = "outside"
+            add("key_window", "fail", "key_outside_validity_window", window[1])
+        else:
+            out["key_status"] = "undecidable"
+            add("key_window", "undecidable", "key_window_undecidable", window[1])
+    outcome, code, reason = _combine(checks)
+    out.update({"outcome": outcome, "verdict": _VERDICT[outcome], "assessed": outcome != "undecidable", "ok": outcome == "valid",
+                "code": code, "why": reason})
+    if outcome == "valid":
+        out["hash"] = "sha256:" + hashlib.sha256(whole).hexdigest()    # §5.7 pre-image: the whole receipt, both shapes
     return out
 
 
 def verify_chain(receipts: List[Any], keys: Dict[str, Any], policy_files: Optional[Dict[str, bytes]] = None,
-                 engine: str = "cedar", *, keys_are_complete: bool = False) -> Dict[str, Any]:
-    """Every receipt verified (§5.2); §6.7 links: receipt i's previousReceiptHash == hash of receipt i-1; a genesis omits
-    it; a bare-hex link is accepted on read and reported; policy_digest recomputed from `policy_files` when given."""
+                 engine: str = "cedar", *, keys_are_complete: bool = False, sequence: bool = False) -> Dict[str, Any]:
+    """Every receipt verified (§5.3, `verify_receipt`), the links read under -04 §5.7.1, and policy_digest recomputed
+    (§5.8) from `policy_files` when given.
+
+    Two readings. Default (a chain): each receipt is ASSERTED to follow the one before it — a supplied predecessor —
+    so it follows only if its previousReceiptHash is that receipt's link, in either form; absent, null or any other
+    link is `chain_break` (invalid), a link naming another hash algorithm is undecidable. `sequence=True` (a log that
+    holds one chain after another): a receipt without a link, or with null, begins a new chain and is never reported
+    as linked to the receipt before it; a receipt with a link is checked against the receipt before it. In both
+    readings the first receipt's link is reported, not checked (its predecessor was not supplied), and `chains` lists
+    the index where each chain begins. A link over the predecessor's payload alone never matches."""
     problems: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
     not_assessed: List[Dict[str, Any]] = []
     if not isinstance(receipts, list) or not receipts:
-        return {"ok": False, "verdict": "fail", "assessed": True, "problems": [{"i": -1, "why": "no receipts"}],
+        return {"ok": False, "outcome": "invalid", "verdict": "fail", "assessed": True,
+                "problems": [{"i": -1, "why": "no receipts", "code": "no_receipts"}],
                 "warnings": [], "not_assessed": [], "verified": 0, "draft": DRAFT}
     expected_pd = policy_digest(policy_files, engine) if policy_files is not None else None      # {} raises: no policy is not a policy
     ok_n = 0
-    prev: Optional[Dict[str, Any]] = None
-    prev_absent = False        # the preceding receipt was NOT assessed here (not: it failed) — the link inherits that
+    chains: List[int] = []
+    breaks: List[int] = []
+
+    def problem(i: int, code: str, why: str, adverse: bool = True) -> None:
+        problems.append({"i": i, "code": code, "why": why, "assessed": adverse})
+        if not adverse:
+            not_assessed.append({"i": i, "why": why})
+
     for i, r in enumerate(receipts):
         v = verify_receipt(r, keys, keys_are_complete=keys_are_complete)
-        if not v["ok"]:
-            # A not-assessed receipt stays in `problems` on purpose: `ok` must never read True over a receipt this host
-            # could not verify (fail-closed). `not_assessed` says WHY the run is inconclusive rather than adverse.
-            problems.append({"i": i, "why": v["why"], "assessed": v["assessed"]})
-            if not v.get("assessed", True):
-                not_assessed.append({"i": i, "why": v["why"]})
-        else:
+        if v["outcome"] == "valid":
             ok_n += 1
-        _sh, body, _sig, _why = _shape(r)                  # ONE shape decision (§6.6): the same members verify_receipt signed over
-        body = body if body is not None else {}
-        link = body.get("previousReceiptHash")
-        if i == 0:
-            if "previousReceiptHash" in body:
-                warnings.append({"i": i, "why": "first receipt carries previousReceiptHash: a segment of a longer chain, its first link is not checkable here (§2.2)"})
         else:
-            if link is None:
-                problems.append({"i": i, "why": "no previousReceiptHash: the receipt is not linked to the preceding one (§6.7)"})
-            elif prev is None:
-                why = "previous receipt did not verify: the link cannot be checked (§6.7)"
-                problems.append({"i": i, "why": why, "assessed": True})
-            elif v["shape"] != "invalid":
-                exp = receipt_hash(prev)
-                if link == exp:
-                    pass
-                elif isinstance(link, str) and link == exp.split(":", 1)[1]:
-                    warnings.append({"i": i, "why": "previousReceiptHash is a bare hex digest (earlier revisions): accepted on read, never emitted (§6.7)"})
-                else:
-                    problems.append({"i": i, "why": "previousReceiptHash does not match SHA-256(JCS(previous signed receipt)) (§6.7)"})
-        if v["ok"] and v["notes"]:
-            warnings.append({"i": i, "why": v["notes"][0]})
+            # An undecidable receipt stays in `problems` on purpose: `ok` must never read True over a receipt this host
+            # could not verify (fail-closed). `not_assessed` says WHY the run is inconclusive rather than adverse.
+            problem(i, v["code"], v["why"], v["outcome"] == "invalid")
+        for note in v["notes"]:
+            warnings.append({"i": i, "why": note})
+        _sh, body, _sig, _why = _shape(r)                  # ONE shape decision (§5.2): the same members verify_receipt signed over
+        if body is None:
+            if i == 0 or sequence:
+                chains.append(i)
+            else:
+                problem(i, "chain_link_undecidable", "the receipt's shape is not recognized: whether it follows the one before cannot be checked (§5.7.1)", False)
+            continue
+        form, detail = link_form(body["previousReceiptHash"]) if "previousReceiptHash" in body else ("absent", "")
+        if i == 0:
+            chains.append(0)
+            if form == "link":
+                warnings.append({"i": 0, "why": "the first receipt carries previousReceiptHash: a segment of a longer chain whose predecessor "
+                                                "was not supplied, so the link is reported, not checked (§5.7.1)"})
+        elif form in ("absent", "null"):
+            if sequence:
+                chains.append(i)
+            else:
+                breaks.append(i)
+                problem(i, "chain_break", f"previousReceiptHash is {'null' if form == 'null' else 'absent'}: the receipt does not follow "
+                                          "the receipt before it, which it is asserted to follow (§5.7.1)")
+        elif form == "link":
+            try:
+                exp = receipt_hash(receipts[i - 1])
+            except (ValueError, TypeError):
+                problem(i, "chain_link_undecidable", "the receipt before it cannot be canonicalized: its link cannot be computed (§5.7)", False)
+                continue
+            if body["previousReceiptHash"] == exp:
+                pass
+            elif body["previousReceiptHash"] == exp.split(":", 1)[1]:
+                warnings.append({"i": i, "why": "previousReceiptHash is a bare hex digest (earlier revisions): recognized on read, never emitted (§5.7)"})
+            else:
+                breaks.append(i)
+                problem(i, "chain_break", "previousReceiptHash is not SHA-256(JCS(the whole signed receipt before it)) (§5.7.1)")
+        # "malformed" and "other_algorithm" are verify_receipt's: invalid and undecidable, counted there once
         if expected_pd is not None:
+            pd = body.get("policy_digest")
             if "policy_digest" not in body:
-                problems.append({"i": i, "why": "policy binding requested but the receipt carries no policy_digest (§6.8)"})
-            elif v["notes"]:
-                problems.append({"i": i, "why": "policy binding requested but the receipt's policy_digest is an opaque label, not a recomputable commitment (§6.8)"})
-            elif body["policy_digest"] != expected_pd:
-                problems.append({"i": i, "why": f"policy_digest {body['policy_digest']!r} != recomputed {expected_pd!r} from the policy bytes (§6.8)"})
-        # The §6.7 link is a hash: it needs no signature backend. Keeping `prev` over a receipt this host could not
-        # ASSESS (rather than one that failed) keeps the link checkable, so a broken link stays a judgment.
-        prev = r if (v["ok"] or not v.get("assessed", True)) else None
-    # One total order, FAIL > NOT_ASSESSED > PASS: an adverse finding always wins, an absence never hides one and
-    # never becomes a pass. Two independent booleans could not express this — that is how the first fix got it wrong.
-    adverse = any(p.get("assessed", True) for p in problems)
-    verdict = "fail" if adverse else ("not_assessed" if problems else "pass")
-    return {"ok": not problems, "verdict": verdict, "assessed": verdict != "not_assessed",
-            "problems": problems, "warnings": warnings,
-            "not_assessed": not_assessed, "verified": ok_n, "receipts": len(receipts), "draft": DRAFT,
-            "scope": "signatures against the relying party's keys, §6.7 links, §6.8 policy digest when the policy bytes are given: integrity "
-                     "and attribution only — a chain truncated at its end is undetectable without an external commitment to its head (§9.7), "
-                     "the first receipt may be a genesis or a segment, and whether the policy is the one in force is a separate check"}
+                problem(i, "policy_digest_absent", "policy binding requested but the receipt carries no policy_digest (§5.8)")
+            elif not (isinstance(pd, str) and _SHA256_PREFIXED.match(pd)):
+                problem(i, "policy_digest_label", "policy binding requested but the receipt's policy_digest is an opaque label, not a recomputable commitment (§5.8)")
+            elif pd != expected_pd:
+                problem(i, "policy_digest_mismatch", f"policy_digest {pd!r} != recomputed {expected_pd!r} from the policy bytes (§5.8)")
+    # One total order, invalid > undecidable > valid (§5.4): an adverse finding always wins, an absence never hides one
+    # and never becomes a pass.
+    adverse = any(p["assessed"] for p in problems)
+    outcome = "invalid" if adverse else ("undecidable" if problems else "valid")
+    first = next((p for p in problems if p["assessed"]), problems[0] if problems else None)    # the problem that decided
+    return {"ok": outcome == "valid", "outcome": outcome, "verdict": _VERDICT[outcome], "assessed": outcome != "undecidable",
+            "code": first["code"] if first else None, "why": first["why"] if first else "ok",
+            "problems": problems, "warnings": warnings, "not_assessed": not_assessed, "verified": ok_n,
+            "receipts": len(receipts), "mode": "sequence" if sequence else "chain", "chains": chains, "chain_breaks": breaks,
+            "draft": DRAFT,
+            "scope": "signatures against the relying party's keys, §5.7 links, §5.8 policy digest when the policy bytes are given: integrity "
+                     "only — the set is NOT shown complete: a chain truncated at its end is undetectable without an external commitment "
+                     "to its head (§8.7), the first receipt may be a genesis or a segment, and whether the policy is the one in force is "
+                     "a separate check"}
 
 
 # ── Cedar evaluation (official bindings) and the test-vectors driver ─────────────────────────
@@ -779,8 +922,8 @@ def evaluate_cedar(policy_text: str, tool_name: str, context: Dict[str, Any], pr
 
 def run_vectors(repo_root: str, out_dir: str, seed_hex: str, issued_at_base: Optional[str] = None) -> Dict[str, Any]:
     """Driver for ScopeBlind/agent-governance-testvectors: fixtures/inputs/*.json evaluated against fixtures/policy/*.cedar
-    with cedarpy, one envelope receipt per input written to out_dir/receipt-NNNN.json, chained per §6.7, policy_digest per
-    §6.8. The fixtures' expected_decision is NOT read (a driver that copied it would prove nothing)."""
+    with cedarpy, one envelope receipt per input written to out_dir/receipt-NNNN.json, chained per §5.7, policy_digest per
+    §5.8. The fixtures' expected_decision is NOT read (a driver that copied it would prove nothing)."""
     inputs_dir = os.path.join(repo_root, "fixtures", "inputs")
     policy_dir = os.path.join(repo_root, "fixtures", "policy")
     files = {}
@@ -816,7 +959,7 @@ def run_vectors(repo_root: str, out_dir: str, seed_hex: str, issued_at_base: Opt
         summary["receipts"].append({"file": f"receipt-{seq:04d}.json", "tool_name": inp["tool_name"], "decision": decision, "reasons": reasons,
                                     "hash": receipt_hash(rec)})
         prev = rec
-    summary["jwks"] = {"keys": [{"kty": "OKP", "crv": "Ed25519", "kid": kid, "x": base64.urlsafe_b64encode(pub).rstrip(b"=").decode(), "use": "sig"}]}   # §5.3
+    summary["jwks"] = {"keys": [{"kty": "OKP", "crv": "Ed25519", "kid": kid, "x": base64.urlsafe_b64encode(pub).rstrip(b"=").decode(), "use": "sig"}]}   # §5.5
     return summary
 
 
@@ -905,8 +1048,8 @@ def keys_from_jwks(doc: Any, ignored: Optional[List[str]] = None) -> Dict[str, A
 
     REFUSED (ValueError), never skipped or resolved by order: a kid that appears twice, ignored entries included (RFC 7517
     §4.5); a JWK of OUR type with `x` but without `kty` or `crv`; `x` that is not strict base64url of 32 bytes; a small-
-    order key; `x` and `public_key_hex` together; a valid_from/valid_until that is not an RFC 3339 instant (null =
-    absent). `public_key_hex` (64 hex) is read as a non-JWK extension, with the same compatibility rule."""
+    order key; `x` and `public_key_hex` together; a valid_from/valid_until that is not an RFC 3339 instant (null
+    included: -04 §5.6 "A bound present as null is not a valid timestamp"). `public_key_hex` (64 hex) is read as a non-JWK extension, with the same compatibility rule."""
     if not isinstance(doc, dict) or not isinstance(doc.get("keys"), list):
         raise ValueError("expected an object with a 'keys' array (RFC 7517 §5)")
     out: Dict[str, Any] = {}
@@ -947,9 +1090,9 @@ def keys_from_jwks(doc: Any, ignored: Optional[List[str]] = None) -> Dict[str, A
             raise ValueError(f"kid {kid!r} carries no readable key material (x per RFC 8037, or public_key_hex of 64 hex)")
         entry: Dict[str, Any] = {"key": mat}
         for w in ("valid_from", "valid_until"):
-            if w in k and k[w] is not None:            # null = absent
+            if w in k:                                  # -04 §5.6: "A bound present as null is not a valid timestamp"
                 if _instant_exact(k[w]) is None:
-                    raise ValueError(f"kid {kid!r}: {w}={k[w]!r} is not an RFC 3339 instant: the key set is unusable as given")
+                    raise ValueError(f"kid {kid!r}: {w}={k[w]!r} is not an RFC 3339 instant (§5.6): the key set is unusable as given")
                 entry[w] = k[w]
         out[kid] = entry
     return out
@@ -1016,7 +1159,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     s = sub.add_parser("sign", help="sign a protectmcp:decision receipt")
     s.add_argument("--key", required=True, help="Ed25519 seed file (hex) — the cryptovalid signer keyfile")
     s.add_argument("--tool", required=True); s.add_argument("--decision", required=True, choices=DECISIONS)
-    s.add_argument("--policy-dir", help="directory of policy files: policy_digest per §6.8"); s.add_argument("--policy-ext", default=".cedar")
+    s.add_argument("--policy-dir", help="directory of policy files: policy_digest per §5.8"); s.add_argument("--policy-ext", default=".cedar")
     s.add_argument("--session"); s.add_argument("--reason"); s.add_argument("--previous", help="preceding signed receipt (JSON file)")
     s.add_argument("--issued-at"); s.add_argument("--out", required=True)
     v = sub.add_parser("verify", help="verify one receipt or a chain (JSON files in order)")
@@ -1025,11 +1168,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     v.add_argument("--key", action="append", default=[],
                                                        help="kid=<64 hex Ed25519 | file>; unusable key material is refused at load (exit 2)")
     v.add_argument("--jwks", help="JWKS file: the relying party's Ed25519 key set, with valid_from/valid_until when it declares them "
-                                  "(§5.5). Keys of another type or use (kty/crv/alg/use, key_ops without verify) are ignored and named on stderr "
+                                  "(§5.6). Keys of another type or use (kty/crv/alg/use, key_ops without verify) are ignored and named on stderr "
                                   "(RFC 7517 §5); duplicate kids, a malformed Ed25519 key or window are refused (exit 2)")
     v.add_argument("--keys-are-complete", action="store_true",
-                   help="declare this key set to be the whole trust list: an unknown kid is then a refusal, not an absence")
+                   help="declare this key set to be the whole trust list: an unknown kid is then reported as issuer_not_trusted "
+                        "instead of key_not_supplied; the outcome stays undecidable (-04 §5.4: no trust-anchored key)")
     v.add_argument("--policy-dir"); v.add_argument("--policy-ext", default=".cedar")
+    v.add_argument("--sequence", action="store_true",
+                   help="read the files as a sequence that may hold several chains (§5.7.1): a receipt without a link, or with "
+                        "null, begins a new chain instead of breaking the one before; without it each file is asserted to "
+                        "follow the one before")
     d = sub.add_parser("policy-digest"); d.add_argument("policy_dir"); d.add_argument("--engine", default="cedar"); d.add_argument("--ext", default=".cedar")
     r = sub.add_parser("run-vectors", help="drive ScopeBlind/agent-governance-testvectors")
     r.add_argument("repo_root"); r.add_argument("out_dir"); r.add_argument("--seed", required=True, help="64-hex Ed25519 seed"); r.add_argument("--issued-at-base")
@@ -1051,7 +1199,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             keys: Dict[str, Any] = {}
             if a.jwks:
                 # A JWKS is how a relying party normally holds keys, and it is the invocation the public conformance
-                # vectors declare. Windows are carried over when the set states them: §5.5 applies them to issued_at.
+                # vectors declare. Windows are carried over when the set states them: §5.6 applies them to issued_at.
                 # Read with the same strict parser as the receipts, and by `keys_from_jwks`: every refusal is exit 2.
                 try:
                     ignored: List[str] = []
@@ -1066,9 +1214,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     # Two sources for one kid: the later one used to replace the earlier one silently, dropping its window.
                     raise ValueError(f"--key {kid}: this kid is already supplied (by --jwks or an earlier --key): ambiguous, refused")
                 keys[kid] = mat
-            recs = []
+            recs: List[Any] = []
             for fn in a.files:
-                recs.append(load_json_strict(fn, "receipt"))
+                try:
+                    recs.append(load_json_strict(fn, "receipt"))
+                except ValueError as ex:    # JSONDecodeError, UnicodeDecodeError, duplicate keys, NaN, depth: §5.4 undecidable
+                    recs.append(Unparsed(f"{fn}: the input is not well-formed JSON this verifier reads: {type(ex).__name__}: {ex}"))
             files = None
             if a.policy_dir:
                 files = {}
@@ -1078,10 +1229,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if not files:
                     raise ValueError(f"--policy-dir {a.policy_dir} holds no {a.policy_ext} file: nothing to bind the receipts to")
             complete = bool(getattr(a, "keys_are_complete", False))
-            out = (verify_chain(recs, keys, files, keys_are_complete=complete) if len(recs) > 1 or a.policy_dir
+            out = (verify_chain(recs, keys, files, keys_are_complete=complete, sequence=a.sequence)
+                   if len(recs) > 1 or a.policy_dir or a.sequence
                    else verify_receipt(recs[0], keys, keys_are_complete=complete))
             emit(json.dumps(out, indent=1))
-            return {"pass": 0, "fail": 1, "not_assessed": 77}[out["verdict"]]   # 77 only when NOTHING adverse was found
+            # §5.4: the three outcomes stay distinct in the exit status; 77 only when NOTHING adverse was found
+            return {"valid": 0, "invalid": 1, "undecidable": 77}[out["outcome"]]
         if a.cmd == "run-vectors":
             emit(json.dumps(run_vectors(a.repo_root, a.out_dir, a.seed, a.issued_at_base), indent=1)); return 0
     except OutputNotWritten:

@@ -8,3 +8,6 @@
   (`00…01`, public key `4cb5abf6ad79fbf5abbccafcc269d85cd2651ed4b885b5869f241aedf0a5ba29`, kid `conformance`). They are the
   positive control of `verify_receipt` / `verify_chain` (envelope shape, §6.7 links, §6.8 digest) in `test_cryptovalid_acta.py`,
   and each is refused with its decision altered.
+- `chain-link/` and `embedded-key/`: vectors of the same repository at commit 5c749de (fetched 2026-11-23) for
+  draft-farley-acta-signed-receipts-04 §5.4, §5.7, §5.7.1 and §8.5, run by `test_cryptovalid_acta.py`; source and re-fetch
+  recipe in `chain-link/SOURCE.md`.
