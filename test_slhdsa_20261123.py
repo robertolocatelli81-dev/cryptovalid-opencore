@@ -258,5 +258,17 @@ class Closed(unittest.TestCase):
                 self.assertEqual(self.codes(dict(exact, **{k: v})), "length", (p, k))
 
 
+class TsBeyondTheIntToStrLimit(unittest.TestCase):
+    """caccia1 2026-11-23: a ts that is an int past the interpreter's int-to-str limit (4300 digits by default on
+    3.9.14+, 3.11+) made signed_message raise ValueError out of verify_anchor; the message of rule 2 has no bytes for it,
+    as for a lone surrogate in root: code `type`. (Such a dict does not come from json.loads, which refuses the number.)"""
+
+    def test_huge_int_ts_is_type(self):
+        a = anchors()[0]
+        out = S.verify_anchor(dict(a, ts=10 ** 5000))
+        self.assertEqual(out["code"], "type", out)
+        with no_lib():
+            self.assertEqual(S.verify_anchor(dict(a, ts=10 ** 5000))["code"], "type")
+
 if __name__ == "__main__":
     unittest.main()

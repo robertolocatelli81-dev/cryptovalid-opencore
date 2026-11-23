@@ -2,6 +2,11 @@
 
 The CryptoValid evidence format has one normative contract: `spec/vectors/*`.
 
+Not part of that contract: the material of other publishers kept under `spec/vectors/` with its own licence (NOTICE;
+among it `scitt-cose/`, `forestrie-mmr/`, `aac-cll-mmr/`, `rfc10073/`, the NIST files of `slhdsa/` and `beacon/nist/`). Their
+expected outcomes are their publishers'; where this verifier answers otherwise (`reject/es256-high-s` of Forestrie, the
+13 same-size cases of agent-action-capsule) SPEC §28 says so.
+
 ## ap2-evidence-pack (dependency since 0.18.0)
 
 The AP2 dispute-evidence format, its normative text (`SPEC_AP2_EVIDENCE.md`), its vector set (`spec/vectors/ap2/`, 42

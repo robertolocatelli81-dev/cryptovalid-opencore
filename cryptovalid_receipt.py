@@ -452,7 +452,7 @@ def cose_crit_problem(protected: Dict, unprotected: Dict, understood: frozenset)
         return None
     crit = protected[2]
     if (not isinstance(crit, list) or not crit
-            or not all(isinstance(x, str) or (isinstance(x, int) and not isinstance(x, bool)) for x in crit)):
+            or not all(type(x) in (int, str) for x in crit)):   # a label (RFC 9052 §1.4); not a bool, not a CBOR simple value
         return "crit_malformed"
     if any(x not in protected for x in crit):
         return "crit_label_not_in_protected"

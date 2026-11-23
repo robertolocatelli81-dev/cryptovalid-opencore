@@ -2605,13 +2605,13 @@ Written before `action.yml`. `uses: robertolocatelli81-dev/cryptovalid-opencore@
 2. The wheel `cryptovalid_opencore-<version>-py3-none-any.whl` is downloaded from this repository's GitHub Release
    `v<version>`, and its build provenance is verified with `gh attestation verify` for exactly the signer
    `https://github.com/robertolocatelli81-dev/cryptovalid-opencore/.github/workflows/release-build.yml@refs/tags/v<version>`,
-   the source ref `refs/tags/v<version>`, on a GitHub-hosted runner. A release without that attestation (before 0.23.0)
-   is refused.
+   the source ref `refs/tags/v<version>`, on a GitHub-hosted runner. A release without that attestation (0.24.0 and
+   earlier: the first wheel with one is that of 0.25.0, measured with `gh attestation verify` on 2026-11-23) is refused.
 3. Only then the wheel is installed, without dependencies, into a new virtual environment; with `cryptography: true`
    (default) `cryptography>=48` is installed from PyPI as well, by version range, not by hash.
 4. `args` is split on whitespace and passed as separate arguments, never through a shell (no quoting, globbing or
    substitution). The step's exit status is that of `cryptovalid-verify` (0 valid, 1 not valid, 2 usage, 74 a check
-   that could not run here), also given as the output `exit-code`; the output `wheel-sha256` is the SHA-256 of the
+   that could not run here, or a receipt not written whole), also given as the output `exit-code`; the output `wheel-sha256` is the SHA-256 of the
    wheel that was verified.
 Inputs reach the scripts only through environment variables. Not done by the action: pinning the PyPI dependency by
 hash, and any check of the evidence beyond what `cryptovalid-verify` does with the given arguments.
@@ -2704,7 +2704,7 @@ was written before the code.
    SHA512(M)` with Prefix the ASCII bytes of `CompositeAlgorithmSignatures2025` (§2.2) and the algorithm's Label; the
    ML-DSA-65 signature is checked over `M'` with the Label as its context, the traditional one over `M'`; the result is
    valid if and only if both are, and the answer names the component that failed.
-3. **Keys and signatures are closed** (§4.1, §4.3, §4: "if any of the component keys or signature values are not of
+3. **Keys and signatures are closed** (§4.1, §4.3; §3.3 step 2: "if any of the component keys or signature values are not of
    the correct type or length ... output Invalid signature"): the public key is `mldsaPK || tradPK` with the 1952 bytes
    of ML-DSA-65 first; the traditional key is 32 bytes for Ed25519, and for ECDSA an uncompressed X9.62 point (0x04,
    then 64 or 96 bytes; a compressed point is refused) on the algorithm's curve. The signature is `mldsaSig ||

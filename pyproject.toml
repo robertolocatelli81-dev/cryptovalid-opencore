@@ -30,7 +30,7 @@ sign = ["cryptography>=48"]
 # front-end does not pass: the branch that turns it into this front-end's 74 is kept for a later 1.x.
 ap2 = ["ap2-evidence-pack>=1.6.0,<2"]
 # SLH-DSA archival anchors (cryptovalid_slhdsa, SPEC §24): the slh-dsa package (LGPL-3.0-or-later, PyPI, read on
-# 2026-11-23), the library pq-scitt uses. Without it a well-formed anchor is CheckNotRun (exit 74), never valid.
+# 2026-11-23), the library pq-scitt uses. Without it a well-formed anchor raises CheckNotRun (no command line), never valid.
 slh = ["slh-dsa>=0.2.5"]
 
 [project.urls]

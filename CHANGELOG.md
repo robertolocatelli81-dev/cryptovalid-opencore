@@ -52,7 +52,8 @@ vds 3 was `UNSUPPORTED_VDS`.
   each folded by `consistent_roots` with every "-> ERROR" of the draft a refusal naming its class, and the signature
   over the accumulator; it returns the new state.
 - The protected header must be Core Deterministic CBOR (RFC 8949 §4.2.1, draft §7); a label not read is ignored
-  whatever its value and reported, one in `crit` is refused.
+  whatever its value and reported, one in `crit` is refused; `crit` holds labels only, int or text (RFC 9052 §1.4), so
+  a CBOR simple value there is refused too.
 - vds 3 is not an IANA value: the draft writes `TBD_1`; 3 is the value draft-bryce-cose-receipts-mmr-profile-04
   requested and the one Forestrie writes. It changes here when IANA assigns one.
 - External vectors, measured on 2026-11-23: forestrie/protocol KAT-39 (`spec/vectors/forestrie-mmr/`, MIT): 231/231
@@ -82,7 +83,8 @@ already requires for the `[sign]` extra (no new dependency). The hybrid of this 
   by SHA-256: the test extracts Appendix E from it at run time and fails when the file is missing or altered; the
   lamps-wg copy is compared when `CV_COMPOSITE_VECTORS` names it. The two M' of Appendix D are checked in the test;
   `test_hybrid_is_not_composite_20261115.py` now reads the same file instead of skipping.
-- Mindburn-Labs/helm-ai-kernel (ba872ee, its head on 2026-11-23): the comments of `core/pkg/crypto/hybrid_verifier.go`
+- Mindburn-Labs/helm-ai-kernel (ba872ee of 2026-11-15; the two files named here are the same at a41bc63, its head read at
+  19:40 UTC on 2026-11-23): the comments of `core/pkg/crypto/hybrid_verifier.go`
   use the word "composite" for its Ed25519 + ML-DSA-65 envelope, which is two independent signatures over the same
   preimage, ML-DSA with an empty context (`mldsa_verifier.go`): the construction of SPEC §15. Given to `verify` here
   as if they were an RFC 10073 key and signature, its vector pair is refused (measured on two messages: its ML-DSA
@@ -138,7 +140,7 @@ before and after). Each change below follows the text of -04:
 `examples/acta/chain-link/` and `examples/acta/embedded-key/`: the chain-link suite (27 cases) and the two
 embedded-key receipts of agent-governance-testvectors at 5c749de (Apache-2.0), pinned by SHA-256 and run through the
 command by `test_cryptovalid_acta.py`. Nine tests more (`Draft04_20261123`), among them an exhaustive one over 1 024
-combinations of ten defects against the outcome §5.4 predicts and §5.7 link forms against an independent reading on
+combinations of ten defects against the outcome §5.4 predicts and §5.7 link forms against a second reading of §5.7, written in the test character by character, on
 5 026 values; eight are red on b784901 (the ninth checks the vendored bytes). Twelve mutants of the new lines: eleven
 caught, one equivalent (the bare-link comparison after the exact one). Eleven existing tests changed with the rules above (one renamed).
 Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those of the suite above).
@@ -243,7 +245,16 @@ A `SOLANA_ANCHOR.json` or `MANIFEST.json` that is not a JSON object, an anchor w
 `--solana-digest` prints a memo only for a readable `MANIFEST.json` with a 64-hex `manifest_digest_sha256`; anything
 else is a usage error with the reason (exit 2), where before it printed a traceback or the digest of an empty string.
 `TestSolanaAnchor`, which stood after the `__main__` block of `test_report.py` since 2026-08-22, now runs (with
-`cryptography`, like the other classes of that file).
+`cryptography`, like the other classes of that file). Also in 0.28.1 (earlier releases not measured): a `signer_pubkeys` that is not a
+list stopped `render_html` with a TypeError (now shown as one line), and an anchor next to a manifest whose
+`manifest_digest_sha256` is not a string stopped `solana_status` with an AttributeError (now `verified: false` with the
+reason).
+
+### `cryptovalid-verify pack`: a manifest nested too deep is refused, not a traceback
+
+In 0.28.1 (earlier releases not measured), a `MANIFEST.json` nested about 100 000 levels made `cryptovalid-verify pack` (and `auto`, and
+the runs of a profile) end with a `RecursionError` traceback from `_pack_layers`; it is now the refusal of the
+manifest, like any other unreadable manifest.
 
 ## 0.28.1 (2026-11-23): verdicts change
 

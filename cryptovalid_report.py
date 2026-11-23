@@ -138,6 +138,9 @@ def solana_status(pack_dir: str, manifest: Dict, check: bool = False) -> Dict:
                 "note": "SOLANA_ANCHOR.json is not an object with an ASCII string tx_signature and a string "
                         "digest_sha3_hex"}
     declared = declared.strip().lower()
+    if not isinstance(manifest.get("manifest_digest_sha256"), str):   # nothing to bind to: a failure, never a traceback
+        return {"present": True, "checked": False, "verified": False,
+                "note": "MANIFEST.json has no string manifest_digest_sha256: the anchor cannot be bound to it"}
     expected = solana_anchor_digest(manifest)
     if not sig or declared != expected:
         return {"present": True, "checked": False, "verified": False,
@@ -277,6 +280,7 @@ def render_html(manifest: Dict, verification: Dict, lotl: Dict,
                 sp=_badge(lr.get("sig_pass")),
                 tr=_badge(lr.get("untruncated"), yes="INTACT", no="TRUNCATED")))
     signers = manifest.get("signer_pubkeys", [])
+    signers = signers if isinstance(signers, list) else [signers]   # shown as written, never a traceback
     signer_rows = "".join(f"<tr><td>{i+1}</td><td class='mono'>{_e(k)}</td></tr>"
                           for i, k in enumerate(signers)) or \
                   "<tr><td colspan='2' class='small'>none — unsigned ledgers</td></tr>"

@@ -496,5 +496,27 @@ class Edges(unittest.TestCase):
         self.assertEqual([(o["ok"], o["stage"]) for o in (a, b)], [(False, "BACKEND_MISSING")] * 2, (a, b))
 
 
+@TC.NEEDS_CRYPTO
+class CritLabelsAreLabels(unittest.TestCase):
+    """caccia1 2026-11-23: RFC 9052 §3.1 crit is [+ label], a label is an int or a text string (§1.4). The deterministic
+    reader of §28 rule 2 returns a CBOR simple value as an int subclass; crit [simple(1)] (0x81 0xe1) was read as
+    crit [1] and the receipt verified. A simple value is not a label: the receipt is refused."""
+
+    def test_a_simple_value_in_crit_is_refused(self):
+        log = Log(alg=-8)
+        bad = log.inclusion(5, raw_ph=bytes.fromhex("a3012702" "81e1" "19018b03"))
+        out = C.verify_receipt(bad, log.db[5], log.pem)
+        self.assertFalse(out["ok"], out)
+        self.assertIn("crit_malformed", out["why"])
+        good = log.inclusion(5, raw_ph=bytes.fromhex("a3012702" "8101" "19018b03"))     # control: crit [1]
+        self.assertTrue(C.verify_receipt(good, log.db[5], log.pem)["ok"])
+
+    def test_the_shared_crit_check_takes_labels_only(self):
+        class Sub(int):
+            pass
+        self.assertEqual(R.cose_crit_problem({1: -8, 2: [Sub(1)]}, {}, frozenset({1})), "crit_malformed")
+        self.assertEqual(R.cose_crit_problem({1: -8, 2: [True]}, {}, frozenset({1})), "crit_malformed")
+        self.assertIsNone(R.cose_crit_problem({1: -8, 2: [1]}, {}, frozenset({1})))
+
 if __name__ == "__main__":
     unittest.main()

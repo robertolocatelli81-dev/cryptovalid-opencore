@@ -92,6 +92,10 @@ def verify_anchor(anchor: Any, pub: Optional[Union[str, bytes]] = None) -> Dict[
         return _out("type", "root has no UTF-8 encoding (a lone surrogate)")
     if isinstance(ts, bool) or not isinstance(ts, (int, float)) or (isinstance(ts, float) and not math.isfinite(ts)):
         return _out("type", "ts is not a finite JSON number")
+    try:
+        message = signed_message(param, root, ts)
+    except ValueError:              # an integer past the interpreter's int-to-str limit: the message of rule 2 has no bytes here
+        return _out("type", "ts cannot be written in decimal here (an integer beyond the int-to-str limit)")
     if not isinstance(sig, str) or not isinstance(pk, str):
         return _out("type", "sig and pub are not strings")
     if not (_is_hex(sig) and _is_hex(pk)):
@@ -101,7 +105,7 @@ def verify_anchor(anchor: Any, pub: Optional[Union[str, bytes]] = None) -> Dict[
         return _out("length", f"{param}: pub must be {2 * n} bytes and sig {siglen} bytes")
     if pub is not None and pin != pk:
         return _out("pin", "pub is not the pinned key")
-    if not slh_verify(param, bytes.fromhex(pk), signed_message(param, root, ts), bytes.fromhex(sig)):
+    if not slh_verify(param, bytes.fromhex(pk), message, bytes.fromhex(sig)):
         return _out("signature", f"the SLH-DSA signature ({param}, pure, empty context) does not verify")
     return _out("ok", "verified with the pinned key" if pub is not None
                 else "verified with the key the anchor carries: intact, not who signed it")

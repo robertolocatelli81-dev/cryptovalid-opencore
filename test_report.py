@@ -352,5 +352,36 @@ class SolanaDigestCli(unittest.TestCase):
         self.assertEqual(out["solana_memo"], "sha3:" + out["digest_sha3_hex"])
 
 
+class ManifestMembersOfAnotherType(_Base):
+    """caccia1 2026-11-23: a manifest whose signer_pubkeys is not a list stopped render_html (TypeError), and one whose
+    manifest_digest_sha256 is not a string stopped solana_status when a SOLANA_ANCHOR.json is present (AttributeError):
+    a traceback instead of the red report. The verdict stays evidence_pack.verify_pack's."""
+
+    def _manifest(self, **kw):
+        p = os.path.join(self.pack, "MANIFEST.json")
+        with open(p, encoding="utf-8") as f:
+            m = json.load(f)
+        m.update(kw)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(m, f)
+
+    def test_signer_pubkeys_not_a_list(self):
+        for v in (5, 1.5, True, None, {"a": 1}):
+            with self.subTest(v=v):
+                self._manifest(signer_pubkeys=v)
+                r = report.generate_report(self.pack, html_only=True)
+                self.assertIs(r["valid"], evidence_pack.verify_pack(self.pack)["valid"])
+                self.assertTrue(r["html"])
+
+    def test_manifest_digest_not_a_string_with_an_anchor(self):
+        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+            json.dump({"tx_signature": "s", "digest_sha3_hex": "00"}, f)
+        for v in (5, None, ["a"], {"x": 1}):
+            with self.subTest(v=v):
+                self._manifest(manifest_digest_sha256=v)
+                r = report.generate_report(self.pack, html_only=True)
+                self.assertIs(r["valid"], False)
+                self.assertEqual((r["solana"]["present"], r["solana"]["verified"]), (True, False))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -32,8 +32,9 @@ Usage:
 Status: `auto`, `pack` and `ledger` are the maintained core; `archive`, `ap2` and `cldma` are EXPERIMENTAL
 (README, "Core and experimental modules"): kept and tested, no new scope is added to them.
 
-Exits 0 if the evidence is valid for what could be verified, 1 otherwise; 74 if the receipt was not written whole to
-stdout (full, closed, no reader), whatever the verdict (0.20.3).
+Exits 0 if the evidence is valid for what could be verified, 1 otherwise, 2 on a usage error; 74 if a check could not run
+here (the receipt is written whole, 0.22.0) or the receipt was not written whole to stdout (full, closed, no reader),
+whatever the verdict (0.20.3).
 """
 from __future__ import annotations
 
@@ -242,7 +243,7 @@ def _pack_layers(r: dict, pack_dir: str) -> list:
         # SPEC §5 step 0: opened once without blocking (a FIFO as MANIFEST.json blocked here until 0.26.0)
         with os.fdopen(_open_regular(os.path.join(pack_dir, "MANIFEST.json")), encoding="utf-8") as fh:
             sig_present = bool(json.load(fh).get("manifest_signature"))
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, RecursionError):   # nesting past the parser: unreadable, never a traceback
         sig_present = False
     # a manifest signature that is PRESENT but does not verify is tampering, never "unsigned" (audit V1 #1, 30/09/2026)
     layers.append(_check("pack.manifest_signature",
@@ -934,7 +935,8 @@ _COMMANDS = {
 _C2SP_COMMANDS = {"checkpoint": "verify", "tiles": "tiles", "vkey-rfc6962": "vkey-rfc6962"}
 _COMMANDS_HELP = ("commands:\n" + "".join(f"  {k:<12} {v}\n" for k, v in _COMMANDS.items())
                   + "\nexit status: 0 the evidence is valid for what could be checked here, 1 it is not, 2 usage error,\n"
-                    "74 the receipt was not written whole to stdout (whatever the verdict).")
+                    "74 a check could not run here (the receipt is written whole) or the receipt was not written whole\n"
+                    "to stdout (whatever the verdict).")
 
 
 # the name of the installed command (pyproject [project.scripts]); until 0.24.0 its help said "verify_evidence"

@@ -311,5 +311,23 @@ class TestLedgerReasons(unittest.TestCase):
         lay = VE.verify_ledger("/nonexistent/cv-0200.jsonl")["layers"][0]
         self.assertEqual(lay["status"], "FAIL"); self.assertIn("file not found", lay["reasons"])
 
+class DeepManifestIsNotATraceback(unittest.TestCase):
+    """caccia1 2026-11-23: a MANIFEST.json nested past the parser's limit reached json.load in _pack_layers, outside the
+    except (OSError, ValueError, AttributeError): RecursionError, exit 1 with a traceback (pack, auto, --profile)."""
+
+    def test_pack_and_auto(self):
+        import shutil
+        import subprocess
+        d = tempfile.mkdtemp(prefix="ve_deep_")
+        self.addCleanup(shutil.rmtree, d, True)
+        with open(os.path.join(d, "MANIFEST.json"), "w", encoding="ascii") as f:
+            f.write("[" * 100000)
+        for cmd in ("pack", "auto"):
+            p = subprocess.run([sys.executable, os.path.join(_HERE, "verify_evidence.py"), cmd, d], capture_output=True,
+                               text=True, timeout=120)
+            self.assertNotIn("Traceback", p.stderr, cmd)
+            self.assertEqual(p.returncode, 1, (cmd, p.stderr[-300:]))
+            self.assertIs(json.loads(p.stdout)["valid"], False)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
