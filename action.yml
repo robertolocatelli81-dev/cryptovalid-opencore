@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: "cryptovalid-verify"
+description: "Verify a hash-chained ledger, an evidence pack or an archive offline with cryptovalid-verify, from the release wheel whose build provenance is verified first"
+author: "Roberto Locatelli"
+branding:
+  icon: "check-circle"
+  color: "green"
+
+# Linux and macOS runners with python3 and gh (GitHub-hosted ubuntu-* and macos-*). The wheel of the release is
+# downloaded from this repository's GitHub Release, its build provenance is verified (`gh attestation verify`: built on a
+# GitHub-hosted runner by .github/workflows/release-build.yml of this repository at the tag v<version>), it is installed
+# with --no-deps into a new virtual environment, and `cryptovalid-verify` runs there with the arguments, split on
+# whitespace (no shell). Modelled on the action of omega-cra-evol (same author), which verifies a container image the
+# same way. Usage:
+#   - uses: robertolocatelli81-dev/cryptovalid-opencore@v0.29.0
+#     with:
+#       args: auto evidence/
+inputs:
+  args:
+    description: "Arguments of cryptovalid-verify, e.g. `auto evidence/` or `ledger audit.jsonl --log-key <hex>`; split on whitespace"
+    required: true
+  version:
+    description: "cryptovalid-opencore version (default: the version of this action's release); releases before 0.23.0 carry no build provenance"
+    required: false
+    default: "0.29.0"
+  cryptography:
+    description: "`true` (default) also installs cryptography >= 48 from PyPI (signatures, ML-DSA, DSSE); `false` keeps the stdlib-only hash verifier"
+    required: false
+    default: "true"
+  token:
+    description: "Token used by `gh` to download the release file and read its attestation (read access to public data is enough)"
+    required: false
+    default: ${{ github.token }}
+outputs:
+  wheel-sha256:
+    description: "SHA-256 of the wheel that was verified and installed"
+    value: ${{ steps.verify.outputs.wheel-sha256 }}
+  exit-code:
+    description: "Exit code of cryptovalid-verify: 0 valid, 1 not valid, 2 usage, 74 a check that could not run here (the step fails unless it is 0)"
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - id: verify
+      shell: bash
+      env:
+        V: ${{ inputs.version }}
+        CRYPTO: ${{ inputs.cryptography }}
+        GH_TOKEN: ${{ inputs.token }}
+        REPO: robertolocatelli81-dev/cryptovalid-opencore
+      run: |
+        set -euo pipefail
+        case "$V" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "::error::version '$V' is not X.Y.Z"; exit 1;; esac
+        case "$V" in *[!0-9.]*) echo "::error::version '$V' is not X.Y.Z"; exit 1;; esac
+        case "$CRYPTO" in true|false) ;; *) echo "::error::cryptography '$CRYPTO' is neither true nor false"; exit 1;; esac
+        d="$RUNNER_TEMP/cryptovalid-$V"
+        rm -rf "$d" && mkdir -p "$d"
+        whl="cryptovalid_opencore-$V-py3-none-any.whl"
+        gh release download "v$V" --repo "$REPO" --pattern "$whl" --dir "$d"
+        # exact signer identity: release-build.yml of this repository run for the tag v$V on a GitHub-hosted runner
+        gh attestation verify "$d/$whl" --repo "$REPO" \
+          --cert-identity "https://github.com/$REPO/.github/workflows/release-build.yml@refs/tags/v$V" \
+          --source-ref "refs/tags/v$V" --deny-self-hosted-runners > /dev/null
+        sum=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$d/$whl")
+        echo "provenance verified: $whl sha256 $sum (built by $REPO/.github/workflows/release-build.yml at refs/tags/v$V)"
+        python3 -m venv "$d/venv"
+        "$d/venv/bin/python" -m pip install --quiet --no-deps "$d/$whl"
+        if [ "$CRYPTO" = true ]; then "$d/venv/bin/python" -m pip install --quiet "cryptography>=48"; fi
+        echo "wheel-sha256=$sum" >> "$GITHUB_OUTPUT"
+        echo "bin=$d/venv/bin/cryptovalid-verify" >> "$GITHUB_OUTPUT"
+    - id: run
+      shell: bash
+      env:
+        BIN: ${{ steps.verify.outputs.bin }}
+        CV_ARGS: ${{ inputs.args }}
+      run: |
+        set -uo pipefail
+        set -f
+        argv=()
+        read -r -d '' -a argv <<< "$CV_ARGS" || true
+        [ "${#argv[@]}" -gt 0 ] || { echo "::error::args is empty"; exit 1; }
+        rc=0
+        "$BIN" "${argv[@]}" || rc=$?
+        echo "exit-code=$rc" >> "$GITHUB_OUTPUT"
+        exit "$rc"

@@ -406,8 +406,9 @@ them reads (`--list-checks`), and the verification profile (`--profile`), a clos
 party adds requirements and cannot remove a check. Additive: without `--profile` the verdict and the exit status are
 those of v0.14; the receipt gains the member `profile` (`"default"`) and each layer the member `id`.
 v0.15 also adds §24, the SLH-DSA archival anchor `omega-slhdsa-anchor-v2` (FIPS 205), verified by
-`cryptovalid_slhdsa.py`, §25, DSSE envelopes carrying in-toto Statements, verified by `cryptovalid_dsse.py`, and §26,
-the properties a weekly fuzz run holds three readers to. Additive: no existing input changes verdict.
+`cryptovalid_slhdsa.py`, §25, DSSE envelopes carrying in-toto Statements, verified by `cryptovalid_dsse.py`, §26,
+the properties a weekly fuzz run holds three readers to, and §27, the GitHub Action. Additive: no existing input
+changes verdict.
 
 ## 7. Conformance (normative)
 
@@ -2580,3 +2581,24 @@ members removed, added, renamed, written twice, of another type, nested) and req
    the same seed must then report violations, or the job fails.
 A violation fails the job; the inputs that broke a rule are kept as an artifact of the run. CodeQL (`codeql.yml`)
 analyses the Python code on every push and pull request to master and every week; its findings go to code scanning.
+
+## 27. The verification Action (NORMATIVE since v0.15, 2026-11-23)
+
+Written before `action.yml`. `uses: robertolocatelli81-dev/cryptovalid-opencore@v<version>` with `args` runs
+`cryptovalid-verify <args>` in a GitHub Actions job, in this order, each step stopping the job when it fails:
+
+1. `version` (default: the version of the release the action is taken from) must be three dot-separated numbers and
+   `cryptography` `true` or `false`, before anything is downloaded.
+2. The wheel `cryptovalid_opencore-<version>-py3-none-any.whl` is downloaded from this repository's GitHub Release
+   `v<version>`, and its build provenance is verified with `gh attestation verify` for exactly the signer
+   `https://github.com/robertolocatelli81-dev/cryptovalid-opencore/.github/workflows/release-build.yml@refs/tags/v<version>`,
+   the source ref `refs/tags/v<version>`, on a GitHub-hosted runner. A release without that attestation (before 0.23.0)
+   is refused.
+3. Only then the wheel is installed, without dependencies, into a new virtual environment; with `cryptography: true`
+   (default) `cryptography>=48` is installed from PyPI as well, by version range, not by hash.
+4. `args` is split on whitespace and passed as separate arguments, never through a shell (no quoting, globbing or
+   substitution). The step's exit status is that of `cryptovalid-verify` (0 valid, 1 not valid, 2 usage, 74 a check
+   that could not run here), also given as the output `exit-code`; the output `wheel-sha256` is the SHA-256 of the
+   wheel that was verified.
+Inputs reach the scripts only through environment variables. Not done by the action: pinning the PyPI dependency by
+hash, and any check of the evidence beyond what `cryptovalid-verify` does with the given arguments.

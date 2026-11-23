@@ -1,6 +1,6 @@
 # The sdist carries what it takes to run the test suite and to check the format from the sdist alone (15/11/2026: until
 # 0.24.0 it held 56 files and no test, specification, vector or CHANGELOG). Every tracked file, nothing built.
-include *.py *.md *.cff LICENSE NOTICE .gitignore .gitleaks.toml MANIFEST.in
+include *.py *.md *.cff LICENSE NOTICE .gitignore .gitleaks.toml MANIFEST.in action.yml
 graft spec
 graft examples
 graft testdata

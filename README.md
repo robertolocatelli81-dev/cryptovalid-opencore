@@ -305,6 +305,18 @@ ap2-evidence-pack >= 1.6.0, < 2 from PyPI; without it `cryptovalid-verify ap2` i
 listed in its `SHA256SUMS`; earlier releases are on GitHub and the index below only). An index that links only those release files, with `#sha256=` fragments that pip verifies, is at
 `https://robertolocatelli81-dev.github.io/pypi/` (`pip install --index-url … cryptovalid-opencore`). All documented `python3 <file>.py` commands also work from a clone.
 
+### In a GitHub Actions workflow
+
+```yaml
+- uses: robertolocatelli81-dev/cryptovalid-opencore@v0.29.0
+  with:
+    args: auto evidence/
+```
+
+The action (`action.yml`, SPEC §27) downloads the wheel of that release, verifies its build provenance with
+`gh attestation verify` (built by this repository's `release-build.yml` at the tag), installs it in a new virtual
+environment and runs `cryptovalid-verify` with `args`; the step fails unless the verdict is valid (exit 0).
+
 ## Credits
 
 Other people's work this repository uses, each under its own licence:
@@ -318,8 +330,9 @@ Other people's work this repository uses, each under its own licence:
   `spec/vectors/rfc3161/third_party/`; the Cedar policy and the key-window, chain-link and embedded-key vectors of
   ScopeBlind/agent-governance-testvectors (Apache-2.0, licence text beside them) and receipts made with protect-mcp 0.29.0 (MIT) in `examples/acta/`;
   84 SLH-DSA sigVer cases of NIST ACVP-Server (NIST notice kept) in `spec/vectors/slhdsa/`. See [NOTICE](NOTICE).
-- **Code ported from the author's Apache-2.0 projects**: the SLH-DSA anchor verification of pq-scitt (`cryptovalid_slhdsa.py`);
-  the DSSE envelope verification of omega-evidence (`cryptovalid_dsse.py`). The DSSE specification's test vector
+- **Code ported from the author's other projects** (Apache-2.0 unless named): the SLH-DSA anchor verification of
+  pq-scitt (`cryptovalid_slhdsa.py`); the DSSE envelope verification of omega-evidence (`cryptovalid_dsse.py`).
+  `action.yml` follows the action of omega-cra-evol (AGPL-3.0, same author). The DSSE specification's test vector
   (secure-systems-lab/dsse v1.0.2, Apache-2.0) is in `test_dsse_20261123.py`.
 - **Data not shipped**: no ISO 4217 table; `tools/iso4217_table.py` builds the one you pin (`--currency-table`) from your
   own download of list one (SPEC §18 "Currencies").

@@ -151,6 +151,24 @@ Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those 
   generated (the operator, the share of double mutations, the key order) or how lax the disabled ledger check is, not
   what the fuzzer judges.
 
+### A GitHub Action that verifies the release it runs (SPEC v0.15 §27)
+
+- `action.yml` (composite): `uses: robertolocatelli81-dev/cryptovalid-opencore@v<version>` with `args` downloads the
+  wheel of the GitHub Release `v<version>`, verifies its build provenance with `gh attestation verify` for exactly the
+  signer `release-build.yml@refs/tags/v<version>` on a GitHub-hosted runner, installs it without dependencies in a new
+  virtual environment (`cryptography>=48` from PyPI unless `cryptography: false`), and runs `cryptovalid-verify` with
+  `args` split on whitespace, never through a shell. Outputs `exit-code` and `wheel-sha256`. Modelled on the action of
+  omega-cra-evol (same author), which verifies a container image the same way.
+- Measured on 2026-11-23 by running the two steps of `action.yml` with bash and the real `gh` for version 0.28.1:
+  provenance verified (wheel sha256 2f5f302c…e709d9), the release's own ledger `ledger …-cra.ledger.jsonl` exit 0, the
+  same ledger with one entry changed exit 1; for 0.22.0, which has no attestation, `gh attestation verify` answers 404
+  and the step fails before anything is installed. `test_action_20261123.py` runs the same two scripts offline with a
+  recording `gh`: bad inputs stop before any call, a failed provenance check installs nothing, arguments are never
+  expanded, exit 0, 1, 2 and 74 are kept; each of 13 hand-made mutants of the two scripts and of the default version
+  (a check removed, the signer identity widened to a prefix, `--deny-self-hosted-runners` dropped, the install moved
+  before the provenance check, an unquoted command path, the exit status replaced) fails it. The default `version`,
+  0.29.0, works once the v0.29.0 release and its attestation exist; until then `version` must name an earlier release.
+
 ### The depth and surrogate scans of `verifier.py` jump to the characters that matter
 
 `json_nesting_depth` and `has_lone_surrogate`, run on every line the verifier and the writer read, walked each character
