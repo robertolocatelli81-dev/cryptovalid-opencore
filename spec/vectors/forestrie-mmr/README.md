@@ -9,11 +9,11 @@ profile's author). `LICENSE` is that repository's MIT License (Copyright (c) 202
 `SHA256SUMS` lists both files; `test_mmr_receipts_20261123.py` checks it before any vector is used.
 
 The file targets Forestrie's verifiers, whose rules are draft-ietf-scitt-receipts-mmr-profile plus decisions of
-Forestrie's own (ADR-0066). What `cryptovalid_cose_receipts` answers on it, measured on 2026-11-23 (SPEC §24):
+Forestrie's own (ADR-0066). What `cryptovalid_cose_receipts` answers on it, measured on 2026-11-23 (SPEC §28):
 every row of `consistency_pairs` (231), `consistency_negatives` (8), `receipt_chains` (3) and the ES256 rows of
 `receipts` (5) and `receipt_negatives` (5) agree, except `reject/es256-high-s` (accepted here: RFC 9053 §2.1 has no
 low-s rule). The ten `receipts` and five `receipt_negatives` carry Forestrie's older bare `bstr` under `vdp` -2, which
 draft -00 §7 does not have (`consistency-proofs = [ + consistency-proof ]`): in that form they are refused
 (`MALFORMED_PROOF`), and the ES256 ones are checked with that unprotected value put in an array (the unprotected
 header is not signed). The five KS256 rows (secp256k1 with Keccak-256) are `UNSUPPORTED_ALG`. Of the 52
-`protected_headers` rows, 45 agree and 7 follow the draft's text where Forestrie's ADR-0066 D9 differs (SPEC §24).
+`protected_headers` rows, 45 agree and 7 follow the draft's text where Forestrie's ADR-0066 D9 differs (SPEC §28).

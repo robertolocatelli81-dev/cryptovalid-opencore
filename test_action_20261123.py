@@ -108,6 +108,7 @@ class Action(unittest.TestCase):
     def test_bad_inputs_stop_before_any_call(self):
         self.gh()
         for ver, crypto in (("1.2", "true"), ("1.2.3;id", "true"), ("../1.2.3", "true"), ("1.2.3 ", "true"),
+                            ("1.2.3.4", "true"), ("1..3", "true"), ("1x2.3", "true"), ("1.2x3", "true"), (".2.3", "true"), ("1.2.", "true"), ("1.2.3\n4.5.6", "true"),
                             ("", "true"), ("v1.2.3", "true"), ("1.2.3", "yes"), ("1.2.3", "")):
             r = self.step("verify", V=ver, CRYPTO=crypto, REPO="o/r", GH_TOKEN="t")
             self.assertEqual(r.returncode, 1, (ver, crypto, r.stderr))

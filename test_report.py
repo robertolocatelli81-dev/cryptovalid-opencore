@@ -182,10 +182,7 @@ class TestNoRendererVerdict(_Base):
         self.assertIn("INVALID", doc)                          # il renderer obbedisce
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
-
+@NEEDS_CRYPTO
 class TestSolanaAnchor(_Base):
     """Seconda ancora (Solana) nel report: 4 stati onesti, legatura al pack, rete stubbata
     (il protocollo on-chain vero è coperto da test_cryptovalid_solana)."""
@@ -253,3 +250,107 @@ class TestSolanaAnchor(_Base):
             sol.verify_solana_anchor = orig
         self.assertIs(r2["solana"]["verified"], False)
         self.assertIn("spl-memo", r2["solana"]["note"])
+
+    def test_anchor_digest_is_sha3_256_of_the_manifest_digest_hex(self):   # expected: SHA3-256 of b"ab"
+        self.assertEqual(report.solana_anchor_digest({"manifest_digest_sha256": "ab"}),
+                         "5c828b33397f4762922e39a60c35699d2550466a52dd15ed44da37eb0bdc61e6")
+
+    def _with_verifier(self, fake):
+        import cryptovalid_solana as sol
+        orig, sol.verify_solana_anchor = sol.verify_solana_anchor, fake
+        try:
+            return report.generate_report(self.pack, html_only=True, solana=True)
+        finally:
+            sol.verify_solana_anchor = orig
+
+    def test_verifier_error_is_inconclusive_and_signer_is_passed(self):
+        d = report.solana_anchor_digest(self._manifest())
+        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+            json.dump({"tx_signature": "5" * 64, "digest_sha3_hex": " " + d.upper() + "\n", "expected_signer": "S1"}, f)
+        seen = {}
+
+        def fake_ok(sig, exp, **kw):
+            seen.update(kw, sig=sig, exp=exp)
+            return {"ok": True, "checks": [], "onchain": {"slot": 7, "witnesses": 2}}
+
+        r = self._with_verifier(fake_ok)
+        self.assertIs(r["solana"]["verified"], True)
+        self.assertEqual(seen, {"expected_signer": "S1", "sig": "5" * 64, "exp": d})
+
+        def boom(sig, exp, **kw):
+            raise OSError("no network")
+
+        r = self._with_verifier(boom)
+        self.assertEqual((r["solana"]["checked"], r["solana"]["verified"]), (True, None))
+        with open(r["html"], encoding="utf-8") as f:
+            self.assertIn("INCONCLUSIVE", f.read())
+
+    def test_malformed_anchor_is_a_failure_never_a_traceback(self):
+        d = report.solana_anchor_digest(self._manifest())
+
+        def never(sig, exp, **kw):
+            raise AssertionError("the verifier must not be reached")
+
+        bodies = ["[]", '"x"', "null", "1", "{}", "{not json", "[" * 100000,
+                  json.dumps({"tx_signature": "5" * 64, "digest_sha3_hex": 1}),
+                  json.dumps({"tx_signature": "5" * 64, "digest_sha3_hex": [d]}),
+                  json.dumps({"tx_signature": "5" * 64}),
+                  json.dumps({"digest_sha3_hex": d}),
+                  json.dumps({"tx_signature": "", "digest_sha3_hex": d}),
+                  json.dumps({"tx_signature": 5, "digest_sha3_hex": d}),
+                  json.dumps({"tx_signature": ["5"], "digest_sha3_hex": d}),
+                  json.dumps({"tx_signature": "\ud800", "digest_sha3_hex": d}),
+                  '{"tx_signature":NaN,"digest_sha3_hex":"%s"}' % d]
+        for body in bodies:
+            with self.subTest(body=body[:40]):
+                with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+                    f.write(body)
+                r = self._with_verifier(never)
+                self.assertEqual((r["solana"]["present"], r["solana"]["checked"], r["solana"]["verified"]),
+                                 (True, False, False))
+                self.assertTrue(r["valid"])            # the pack itself is untouched
+                with open(r["html"], encoding="utf-8") as f:
+                    self.assertIn("VERIFICATION FAILED", f.read())
+
+    def test_manifest_that_is_not_an_object_clean_error(self):
+        for body in ("[]", '"x"', "null", "1", "[" * 100000):
+            with self.subTest(body=body[:10]):
+                with open(os.path.join(self.pack, "MANIFEST.json"), "w", encoding="utf-8") as f:
+                    f.write(body)
+                r = report.generate_report(self.pack, html_only=True)
+                self.assertIs(r["valid"], False)
+                self.assertIn("MANIFEST.json unreadable", r.get("error", ""))
+
+
+class SolanaDigestCli(unittest.TestCase):
+    """--solana-digest prints a memo only for a readable MANIFEST.json that carries a 64-hex manifest_digest_sha256;
+    anything else is a usage error with the reason (exit 2), never a traceback and never the digest of "" (2026-11-23)."""
+
+    def run_cli(self, manifest_bytes):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            if manifest_bytes is not None:
+                with open(os.path.join(d, "MANIFEST.json"), "wb") as f:
+                    f.write(manifest_bytes)
+            return subprocess.run([sys.executable, report.__file__, d, "--solana-digest"],
+                                  capture_output=True, text=True, timeout=60)
+
+    def test_bad_manifests_are_usage_errors(self):
+        for m in (b"[]", b"null", b"{}", b'{"manifest_digest_sha256": "ab"}', b'{"manifest_digest_sha256": 1}',
+                  b'{"manifest_digest_sha256": "' + b"A" * 64 + b'"}', b"[[[[", b"\xff\xfe", b"[" * 100000, None):
+            r = self.run_cli(m)
+            self.assertEqual(r.returncode, 2, (m[:20] if m else m, r.stderr[-200:]))
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertEqual(r.stdout, "")
+
+    def test_a_good_manifest_prints_its_digest(self):
+        md = "a" * 64
+        r = self.run_cli(json.dumps({"manifest_digest_sha256": md}).encode())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["digest_sha3_hex"], report.solana_anchor_digest({"manifest_digest_sha256": md}))
+        self.assertEqual(out["solana_memo"], "sha3:" + out["digest_sha3_hex"])
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

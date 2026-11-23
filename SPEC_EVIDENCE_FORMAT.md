@@ -2439,12 +2439,17 @@ policy language (CUE, Rego): it names pins the verifiers of this repository alre
    valid, and a requirement that cannot be evaluated here leaves the result not valid.
    Runs (b) and (c) read the evidence again from the path. A ledger that is not a regular file (a pipe,
    `ledger <(...)`, read once by (a)) cannot be read again: every requirement is `not_evaluated`, nothing more is
-   read, the result is not valid. (d) Before (a) and after the last run, the command takes what `lstat` says of the
-   path and, for a directory, of every entry under it, symbolic links not followed: device, inode, type and mode,
-   size, mtime and ctime in nanoseconds (at most 2^20 entries). If the two differ, or either could not be taken, a
-   file was replaced, rewritten or renamed between the runs: `outcome` is `not_evaluated` and the result is not
-   valid. A change inside the reading of a single run, and a change that restores all these values (which needs
-   privileges to set ctime back), are outside this rule.
+   read, the result is not valid. (d) Before (a) and after the last run, the command takes a fingerprint of the
+   path and, for a directory, of every entry under it (at most 2^20): what `lstat` says (device, inode, type and
+   mode, size, mtime and ctime in nanoseconds); for a symbolic link also what `stat` says of what it names, since
+   the runs follow links; and the SHA-256 of the bytes of every regular file, since a file rewritten in the clock
+   tick of its last change keeps its timestamps (measured on Linux 6.6, btrfs: 1952 of 2000 files rewritten in
+   place right after they were written kept size, mtime and ctime). A link below the path that names a directory is
+   not walked (a run may follow it): the fingerprint cannot be taken. If the two fingerprints differ, or either
+   could not be taken, a file was replaced, rewritten or renamed between the runs, or that cannot be excluded:
+   `outcome` is `not_evaluated` and the result is not valid. Outside this rule: a change inside the reading of a
+   single run, and a change made and undone between the two fingerprints that restores the bytes and all these
+   values (it needs both writes in the clock tick of the file's last change, or privileges to set ctime back).
 4. **Refusals.** A profile that is not readable, not valid JSON, not closed as in rule 2, of a wrong type, with a
    value `false`, with a requirement missing what it needs, or with a file it names unreadable or not a certificate /
    CRL (rule 2), is a usage error: exit 2, the reason on stderr, nothing on stdout, nothing verified. `--profile` given with
@@ -2483,7 +2488,8 @@ its verification only (no key generation, no signing).
    `"slhdsa"` or `"oqs"` (the library that signed; informative only: the signature is the same scheme for both and is
    verified the same way); `param` is one of the twelve FIPS 205 parameter sets, written `sha2_128s`, `sha2_128f`,
    `sha2_192s`, `sha2_192f`, `sha2_256s`, `sha2_256f`, `shake_128s`, `shake_128f`, `shake_192s`, `shake_192f`,
-   `shake_256s`, `shake_256f`; `root` a non-empty string; `ts` a finite JSON number (not a boolean); `sig` and `pub`
+   `shake_256s`, `shake_256f`; `root` a non-empty string that has a UTF-8 encoding (a lone surrogate, which JSON can write as `"\ud800"`, has
+   none: refused, `type`); `ts` a finite JSON number (not a boolean); `sig` and `pub`
    lowercase hexadecimal of a whole number of bytes, `pub` of the parameter set's public key length (2n: 32, 48 or 64
    bytes) and `sig` of its signature length (FIPS 205 Table 2: 7856, 17088, 16224, 35664, 29792, 49856 bytes for 128s,
    128f, 192s, 192f, 256s, 256f, SHA2 and SHAKE alike).
@@ -2532,7 +2538,8 @@ only.
 
 1. **The envelope** is the JSON text (UTF-8, at most 64 MiB) of the DSSE JSON envelope: an object with `payload` (a
    string), `payloadType` (a string) and `signatures` (an array of objects, each with `sig`, a string, and optionally
-   `keyid`, a string). JSON is read with a name written twice in one object, `NaN` / `Infinity`, a byte order mark and
+   `keyid`, a string). A `payloadType` that has no UTF-8 encoding (a lone surrogate, which JSON can write as
+   `"\ud800"`) has no PAE (rule 2): code `envelope`. JSON is read with a name written twice in one object, `NaN` / `Infinity`, a byte order mark and
    nesting deeper than 512 refused (code `envelope`), as the payload is (rule 3). Members outside these are ignored, as
    envelope.md requires ("Consumers MUST ignore unrecognized fields"), and named in `unrecognized_fields`. `payload`
    and each `sig` are base64, standard or URL-safe (DSSE: "verifiers MUST accept either"), one alphabet per string,
@@ -2550,7 +2557,8 @@ only.
    "OR"; read as the two accepted forms), else `payload_type`. The payload is JSON read as in rule 1, an object whose
    `_type` is `https://in-toto.io/Statement/v1`, whose `subject` is an array of objects each with a non-empty `digest`
    object of strings, whose `predicateType` is a non-empty string, and whose `predicate`, when present, is an object;
-   else `statement`. Other members are ignored (in-toto "Parsing rules": "Consumers MUST ignore unrecognized fields").
+   else `statement`. Other members are ignored (in-toto "Parsing rules": "Consumers MUST ignore unrecognized fields unless
+   otherwise noted in the predicate specification"; the predicate is not read here, rule 5).
 4. **The artifact.** When the caller gives the artifact's bytes, at least one subject must carry, for an algorithm the
    caller accepts (default `sha256`; `sha384`, `sha512`, `sha3_256`, `sha3_384`, `sha3_512`), the hex digest of those
    bytes, compared without regard to case (validation.md, `matchedSubjects`); else `subject`. Without an artifact no

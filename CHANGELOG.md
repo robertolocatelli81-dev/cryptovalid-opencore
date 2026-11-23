@@ -27,9 +27,10 @@ run by the same author, not by a third party.
   (`tip_not_before` without `log_key`), certificate or CRL files that do not parse (a CRL is parsed only where
   `cryptography` is installed; without it the run decides, not valid), `--profile` with `ap2` or `cldma`. A ledger
   given as a pipe cannot be read again for the requirements: they are `not_evaluated`, not valid. The runs read the
-  path more than once: what `lstat` says of the path and of every entry under it (device, inode, mode, size, mtime,
-  ctime) is taken before the first run and after the last, and if it changed the outcome is `not_evaluated`, not valid
-  (receipt member `evidence_unchanged`).
+  path more than once: a fingerprint of the path and of every entry under it (what `lstat` says: device, inode,
+  mode, size, mtime, ctime; for a symbolic link also what it names; the SHA-256 of every regular file) is taken
+  before the first run and after the last, and if it changed, or could not be taken, the outcome is `not_evaluated`,
+  not valid (receipt member `evidence_unchanged`).
 - The receipt gains `profile` (`"default"`, or the profile's name, SHA-256 of its bytes, the SHA-256 of each
   certificate or CRL file it names, requirements and outcome) and
   each layer an `id`. Without `--profile`, the layers, `valid` and the exit status do not change.
@@ -55,7 +56,8 @@ vds 3 was `UNSUPPORTED_VDS`.
 - vds 3 is not an IANA value: the draft writes `TBD_1`; 3 is the value draft-bryce-cose-receipts-mmr-profile-04
   requested and the one Forestrie writes. It changes here when IANA assigns one.
 - External vectors, measured on 2026-11-23: forestrie/protocol KAT-39 (`spec/vectors/forestrie-mmr/`, MIT): 231/231
-  pairs and 8/8 negatives of the fold, 3/3 receipt chains, ES256 receipts and negatives as expected except
+  pairs of the fold and 8/8 of its negatives (six refused by the fold, two by the checks around it, in receipts
+  signed here), 3/3 receipt chains, ES256 receipts and negatives as expected except
   `reject/es256-high-s` (accepted: RFC 9053 has no low-s rule); the bare `bstr` form of its older receipts is refused
   (draft -00 has an array); KS256 is `UNSUPPORTED_ALG`; 45 of 52 protected-header rows agree, 7 follow the draft's
   text (bytewise key order; unread labels ignored whatever their value). agent-action-capsule CLL material
@@ -80,10 +82,11 @@ already requires for the `[sign]` extra (no new dependency). The hybrid of this 
   by SHA-256: the test extracts Appendix E from it at run time and fails when the file is missing or altered; the
   lamps-wg copy is compared when `CV_COMPOSITE_VECTORS` names it. The two M' of Appendix D are checked in the test;
   `test_hybrid_is_not_composite_20261115.py` now reads the same file instead of skipping.
-- Mindburn-Labs/helm-ai-kernel (ba872ee) calls its Ed25519 + ML-DSA-65 envelope "composite": it is two independent
-  signatures over the same preimage, ML-DSA with an empty context (`hybrid_verifier.go`, `mldsa_verifier.go`), the
-  construction of SPEC §15; its vector pair, presented as an RFC 10073 signature, is refused (measured on two messages;
-  its ML-DSA half signs the preimage with an empty context, not M'; not shipped).
+- Mindburn-Labs/helm-ai-kernel (ba872ee, its head on 2026-11-23): the comments of `core/pkg/crypto/hybrid_verifier.go`
+  use the word "composite" for its Ed25519 + ML-DSA-65 envelope, which is two independent signatures over the same
+  preimage, ML-DSA with an empty context (`mldsa_verifier.go`): the construction of SPEC §15. Given to `verify` here
+  as if they were an RFC 10073 key and signature, its vector pair is refused (measured on two messages: its ML-DSA
+  half signs the preimage with an empty context, not M'; not shipped).
 
 ### `cryptovalid_acta` follows draft-farley-acta-signed-receipts-04
 
@@ -149,7 +152,8 @@ Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those 
   `schema`). The members are a closed list; `sig` and `pub` must be lowercase hex of the parameter set's lengths; a
   pinned key that differs is `pin` before any signature is checked. Experimental, no command line.
 - The signature is checked with the `slh-dsa` package (LGPL-3.0-or-later), the new optional extra `slh`; without it a
-  well-formed anchor raises `CheckNotRun` (never valid), and the format refusals are the same.
+  well-formed anchor raises `CheckNotRun` (never valid), and the format refusals are the same. A `root` with a lone
+  surrogate, which has no UTF-8 encoding to sign, is `type`.
 - Vectors: 84 cases of the NIST ACVP SLH-DSA sigVer file (`spec/vectors/slhdsa/`, the twelve parameter sets, the first
   case of each of the seven reasons; NOTICE), each with its `testPassed`, and two anchors made by pq-scitt's own
   `create_anchor` (sha2_128f; shake_128s with a non-ASCII root). Measured on 2026-11-23 with slh-dsa 0.2.5 under Python
@@ -167,7 +171,8 @@ Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those 
   (`omega_evidence/interop/dsse.py`, Apache-2.0, same author): verification only. Signatures are checked only with the
   caller's keys (Ed25519; ECDSA P-256 / SHA-256 in DER or raw r||s; an SPKI or an X.509 certificate whose chain is not
   checked), `keyid` is not read, a threshold counts distinct keys (the same key given twice is an error of the caller).
-  Unknown envelope members are ignored as DSSE requires and listed in `unrecognized_fields`. Experimental, no command
+  Unknown envelope members are ignored as DSSE requires and listed in `unrecognized_fields`. A `payloadType` with a
+  lone surrogate, which has no UTF-8 encoding for the PAE, is `envelope`. Experimental, no command
   line; it needs `cryptography` (without it: `CheckNotRun`).
 - Measured on 2026-11-23 under Python 3.9, 3.11 and 3.13: the DSSE specification's test vector verifies (its payload
   type is not in-toto: code `payload_type`) and fails with one payload byte changed; the GitHub attestation of this
@@ -229,6 +234,16 @@ on a 4 KiB audit event is 5 to 7 times faster. It is slower where the characters
 `[]`, of `""` or of escapes inside a string, `json_nesting_depth` takes 5 to 7 times longer than before (about 0.16 to
 0.35 s per MiB under Python 3.11) and `has_lone_surrogate` about twice on escapes; both stay linear in the input, whose
 bounds did not change.
+
+### `cryptovalid-report`: a malformed anchor or manifest is a failed check, not a traceback
+
+A `SOLANA_ANCHOR.json` or `MANIFEST.json` that is not a JSON object, an anchor whose `tx_signature` or
+`digest_sha3_hex` is not a string (or a `tx_signature` that is not ASCII), or nesting past what the parser reads, made
+`generate_report` stop with a traceback; it is now a failed anchor or an unreadable manifest in the report.
+`--solana-digest` prints a memo only for a readable `MANIFEST.json` with a 64-hex `manifest_digest_sha256`; anything
+else is a usage error with the reason (exit 2), where before it printed a traceback or the digest of an empty string.
+`TestSolanaAnchor`, which stood after the `__main__` block of `test_report.py` since 2026-08-22, now runs (with
+`cryptography`, like the other classes of that file).
 
 ## 0.28.1 (2026-11-23): verdicts change
 

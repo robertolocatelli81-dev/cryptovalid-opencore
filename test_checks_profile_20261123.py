@@ -737,15 +737,15 @@ class TestReviewOutcomes(unittest.TestCase):
                          ["met", "not_met", "not_met", "not_met"], r["profile"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 # ─────────────────────────────────────────────── rule 3 (d): the evidence read by every run is the same
 
 class TestEvidenceUnchanged(Tmp):
     """SPEC §23 rule 3 (d): runs (a), (b) and (c) read the path more than once; a change in between leaves the outcome
-    not_evaluated and the result not valid. Added after the review of a156b15, which left this case declared only."""
+    not_evaluated and the result not valid. Added after the review of a156b15, which left this case declared only.
+    Review of 7d87346: this class stood after `unittest.main()` and never ran as `python3 test_....py` (the way the CI
+    runs it); run, two of its tests were red in 19 of 25 runs (a file rewritten in the clock tick of its last change
+    keeps its timestamps), and a path given as a symbolic link was not seen to change. The fingerprint now follows
+    links and holds the SHA-256 of every regular file."""
 
     def ledger(self):
         p = os.path.join(self.tmp, "l.jsonl")
@@ -762,9 +762,10 @@ class TestEvidenceUnchanged(Tmp):
         self.assertEqual(VE.evidence_fingerprint(p), f0)          # nothing changed: same
         self.assertEqual(VE.evidence_fingerprint(d), g0)
         st = os.stat(p)
-        data = _bytes(p)
-        with open(p, "wb") as f:                                   # same bytes written again, mtime set back:
-            f.write(data)                                          # ctime still moves
+        data = bytearray(_bytes(p))
+        data[len(data) // 2] ^= 1
+        with open(p, "r+b") as f:                                  # one bit, in place, same size, at once (the same
+            f.write(data)                                          # clock tick), times set back: the bytes differ
         os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
         self.assertNotEqual(VE.evidence_fingerprint(p), f0)
         q = os.path.join(self.tmp, "q.jsonl")                       # replaced by rename: another inode
@@ -780,13 +781,121 @@ class TestEvidenceUnchanged(Tmp):
     def test_fingerprint_does_not_follow_links_and_is_bounded(self):
         d = os.path.join(self.tmp, "d")
         os.mkdir(d)
-        os.symlink(self.tmp, os.path.join(d, "loop"))               # followed, this would never end
         self.assertIsNotNone(VE.evidence_fingerprint(d))
-        with mock.patch.object(VE, "FINGERPRINT_LIMIT", 1):
-            shutil.copy(SAMPLE, os.path.join(d, "a.jsonl"))
+        os.symlink(self.tmp, os.path.join(d, "loop"))               # a link to a directory below the path: not walked
+        self.assertIsNone(VE.evidence_fingerprint(d))               # (it would never end), so no fingerprint
+        os.remove(os.path.join(d, "loop"))
+        shutil.copy(SAMPLE, os.path.join(d, "a.jsonl"))
+        with mock.patch.object(VE, "FINGERPRINT_LIMIT", 1):         # the directory and one entry
             self.assertIsNone(VE.evidence_fingerprint(d))
+        with mock.patch.object(VE, "FINGERPRINT_LIMIT", 2):
+            self.assertIsNotNone(VE.evidence_fingerprint(d))
 
-    def _apply(self, path, change):
+    def test_fingerprint_follows_links_to_what_the_runs_read(self):
+        real = self.ledger()
+        link = os.path.join(self.tmp, "link.jsonl")
+        os.symlink(real, link)
+        f0 = VE.evidence_fingerprint(link)
+        self.assertEqual(VE.evidence_fingerprint(link), f0)
+        self.assertEqual(f0[0][-1], hashlib.sha256(_bytes(real)).hexdigest())   # the bytes behind the link
+        with open(real, "ab") as f:                                 # the file the link names is rewritten
+            f.write(b"\n")
+        f1 = VE.evidence_fingerprint(link)
+        self.assertNotEqual(f1, f0)
+        other = os.path.join(self.tmp, "other.jsonl")
+        shutil.copy(real, other)
+        os.remove(link)
+        os.symlink(other, link)                                     # the link names another file with the same bytes
+        self.assertNotEqual(VE.evidence_fingerprint(link), f1)
+        d = os.path.join(self.tmp, "d")
+        os.mkdir(d)
+        shutil.copy(SAMPLE, os.path.join(d, "a.jsonl"))
+        ld = os.path.join(self.tmp, "ld")
+        os.symlink(d, ld)                                           # the path is a link to a directory: walked
+        g0 = VE.evidence_fingerprint(ld)
+        self.assertEqual(len(g0), 2)
+        with open(os.path.join(d, "b"), "wb") as f:
+            f.write(b"x")
+        self.assertEqual(len(VE.evidence_fingerprint(ld)), 3)
+        outside = os.path.join(self.tmp, "outside.bin")
+        with open(outside, "wb") as f:
+            f.write(b"A" * 64)
+        os.symlink(outside, os.path.join(d, "l.bin"))               # a link below the path to a file outside it
+        h0 = VE.evidence_fingerprint(d)
+        with open(outside, "r+b") as f:
+            f.write(b"B" * 64)
+        self.assertNotEqual(VE.evidence_fingerprint(d), h0)
+        os.symlink(os.path.join(self.tmp, "nothing"), os.path.join(d, "dangling"))
+        self.assertIsNone(VE.evidence_fingerprint(d))
+
+    def test_fingerprint_holds_ctime_and_inode(self):
+        import time
+        p = self.ledger()
+        st, data, f0 = os.stat(p), _bytes(p), VE.evidence_fingerprint(p)
+        time.sleep(0.05)                                            # past the clock tick of the file's last change
+        with open(p, "r+b") as f:                                   # the same bytes, in place, mtime set back:
+            f.write(data)                                           # only ctime moved
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertNotEqual(VE.evidence_fingerprint(p), f0)
+        for k in range(20):                                         # a copy with the same bytes and mtime renamed over
+            p = os.path.join(self.tmp, "i%d" % k)                   # it at once: within one tick only the inode differs
+            shutil.copy(SAMPLE, p)
+            f0 = VE.evidence_fingerprint(p)
+            shutil.copy2(p, p + ".new")
+            os.replace(p + ".new", p)
+            self.assertNotEqual(VE.evidence_fingerprint(p), f0, k)
+
+    def test_cli_takes_the_fingerprint_before_the_first_run(self):
+        """a ledger that loses its last entry right after run (a) read it: still valid, the requirement still met, but
+        the runs did not read the same bytes"""
+        p = self.ledger()
+        prof = self.write("p.json", _profile({"ledger": {"ledger_id": _first_id(p)}}))
+        code = (
+            "import sys; sys.path.insert(0, %r); import verify_evidence as VE\n"
+            "real, done = VE.verify_ledger, []\n"
+            "def once(path, **pins):\n"
+            "    r = real(path, **pins)\n"
+            "    if not done:\n"
+            "        done.append(1)\n"
+            "        lines = open(path, 'rb').read().splitlines(keepends=True)\n"
+            "        open(path, 'wb').write(b''.join(lines[:-1]))\n"
+            "    return r\n"
+            "VE.verify_ledger = once\n"
+            "sys.exit(VE._main(['ledger', %r, '--profile', %r]))\n" % (HERE, p, prof))
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+        out = json.loads(r.stdout)
+        self.assertEqual((r.returncode, out["valid"], out["profile"]["evidence_unchanged"], out["profile"]["outcome"],
+                          [x["state"] for x in out["profile"]["requirements"]]),
+                         (1, False, False, "not_evaluated", ["met"]), r.stderr)
+
+    def test_fingerprint_reads_every_byte(self):
+        big = os.path.join(self.tmp, "big.bin")
+        with open(big, "wb") as f:
+            f.write(b"\0" * ((3 << 20) + 5))                        # more than one block of the reader
+        st = os.stat(big)
+        f0 = VE.evidence_fingerprint(big)
+        with open(big, "r+b") as f:
+            f.seek(-1, os.SEEK_END)
+            f.write(b"\1")
+        os.utime(big, ns=(st.st_atime_ns, st.st_mtime_ns))
+        f1 = VE.evidence_fingerprint(big)
+        self.assertNotEqual(f1, f0)
+        self.assertEqual((f0[0][-1], f1[0][-1]), (hashlib.sha256(b"\0" * ((3 << 20) + 5)).hexdigest(),
+                                                  hashlib.sha256(_bytes(big)).hexdigest()))
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "no FIFO here")
+    def test_fingerprint_never_waits_on_a_fifo(self):
+        d = os.path.join(self.tmp, "d")
+        os.mkdir(d)
+        os.mkfifo(os.path.join(d, "pipe"))                           # no writer: an open() would wait without end
+        code = "import sys; sys.path.insert(0, %r); import verify_evidence as VE; print(VE.evidence_fingerprint(%r) is not None)" % (HERE, d)
+        p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+        self.assertEqual((p.returncode, p.stdout.strip()), (0, "True"), p.stderr)
+
+    def _apply(self, path, change, target=None):
+        """`change`: None, "rewrite" (the file loses its last entry, in place: still a valid ledger with the same
+        first entry, so each run alone is fine) or "rename" (a copy with the same bytes takes its place)"""
+        target = target or path
         prof = VE.load_profile(self.write("p.json", _profile({"ledger": {"ledger_id": _first_id(path)}})))
         before = VE.evidence_fingerprint(path)
         r = VE.verify_ledger(path)
@@ -794,21 +903,30 @@ class TestEvidenceUnchanged(Tmp):
         real = VE._run_state
 
         def run(kind, p, pins):
-            if change:
-                data = _bytes(p)
-                with open(p, "wb") as f:                           # same bytes: only the reading changes
-                    f.write(data)
+            if change == "rewrite":
+                lines = _bytes(target).splitlines(keepends=True)
+                with open(target, "wb") as f:
+                    f.write(b"".join(lines[:-1]))
+            elif change == "rename":
+                shutil.copy(target, target + ".new")
+                os.replace(target + ".new", target)
             return real(kind, p, pins)
         with mock.patch.object(VE, "_run_state", run):
             return VE.apply_profile(r, path, prof, before)
 
     def test_a_change_between_runs_leaves_it_not_evaluated(self):
-        r = self._apply(self.ledger(), change=False)
+        r = self._apply(self.ledger(), change=None)
         self.assertEqual((r["valid"], r["profile"]["outcome"], r["profile"]["evidence_unchanged"]), (True, "met", True))
-        r = self._apply(self.ledger(), change=True)
-        self.assertEqual([x["state"] for x in r["profile"]["requirements"]], ["met"])   # each run alone was fine
-        self.assertEqual((r["valid"], r["profile"]["outcome"], r["profile"]["evidence_unchanged"]),
-                         (False, "not_evaluated", False))
+        link = os.path.join(self.tmp, "link.jsonl")
+        os.symlink(self.ledger(), link)
+        r = self._apply(link, change=None)                         # a link that does not change: no false refusal
+        self.assertEqual((r["valid"], r["profile"]["outcome"], r["profile"]["evidence_unchanged"]), (True, "met", True))
+        for change in ("rewrite", "rename"):
+            for path, target in ((self.ledger(), None), (link, self.ledger())):
+                r = self._apply(path, change, target)
+                self.assertEqual([x["state"] for x in r["profile"]["requirements"]], ["met"], change)  # each run alone was fine
+                self.assertEqual((r["valid"], r["profile"]["outcome"], r["profile"]["evidence_unchanged"]),
+                                 (False, "not_evaluated", False), (change, path))
 
     def test_no_fingerprint_before_is_not_valid(self):
         p = self.ledger()
@@ -824,3 +942,11 @@ class TestEvidenceUnchanged(Tmp):
         self.assertEqual((rc, r["profile"]["evidence_unchanged"], r["profile"]["outcome"]), (0, True, "met"), err)
         rc, out, err = _run("pack", p, "--profile", self.write("q.json", _profile({"pack": {"signature_domain": True}})))
         self.assertIn("evidence_unchanged", json.loads(out)["profile"])   # not_applicable or not valid: the member is there
+        link = os.path.join(self.tmp, "cli-link.jsonl")
+        os.symlink(p, link)
+        rc, out, err = _run("ledger", link, "--profile", self.write("p.json", _profile({"ledger": {"ledger_id": _first_id(p)}})))
+        self.assertEqual((rc, json.loads(out)["profile"]["evidence_unchanged"]), (0, True), err)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -795,24 +795,43 @@ FINGERPRINT_LIMIT = 1 << 20   # SPEC §23 rule 3 (d): entries walked at most; pa
 
 
 def evidence_fingerprint(path: str):
-    """SPEC §23 rule 3 (d): what lstat says of the path and, for a directory, of every entry under it (symbolic links not
-    followed): device, inode, type and mode, size, mtime and ctime in nanoseconds. A file replaced, rewritten or renamed
-    between two readings changes it; ctime cannot be set back without privileges. None when the walk is past the limit
-    or cannot read an entry (then the evidence counts as changed)."""
+    """SPEC §23 rule 3 (d): of the path and, for a directory, of every entry under it: what lstat says (device, inode,
+    type and mode, size, mtime and ctime in nanoseconds); for a symbolic link also what stat says of what it names (the
+    runs follow links); and the SHA-256 of the bytes of every regular file (timestamps move in ticks: a file rewritten
+    in the tick of its last change keeps them). A file replaced, rewritten or renamed between two readings changes it.
+    None when it cannot be taken (then the evidence counts as changed): an entry that cannot be read, a link below the
+    path that names a directory (the walk does not follow it, a run may), more entries than the limit."""
+    import hashlib
     import stat
+
+    def what(s):
+        return (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
 
     def one(p, rel):
         s = os.lstat(p)
-        return (rel, s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        row = (rel,) + what(s)
+        if stat.S_ISLNK(s.st_mode):
+            s = os.stat(p)
+            if rel != "." and stat.S_ISDIR(s.st_mode):
+                raise OSError(f"{p}: a link to a directory")
+            row += what(s)
+        if stat.S_ISREG(s.st_mode):
+            h = hashlib.sha256()
+            with os.fdopen(_open_regular(p), "rb") as f:
+                for block in iter(lambda: f.read(1 << 20), b""):
+                    h.update(block)
+            row += (h.hexdigest(),)
+        return row, stat.S_ISDIR(s.st_mode)
     try:
-        out = [one(path, ".")]
-        if stat.S_ISDIR(out[0][3]):
+        row, is_dir = one(path, ".")
+        out = [row]
+        if is_dir:
             def fail(e):
                 raise e
             for d, dirs, files in os.walk(path, onerror=fail, followlinks=False):
                 for n in dirs + files:
                     p = os.path.join(d, n)
-                    out.append(one(p, os.path.relpath(p, path)))
+                    out.append(one(p, os.path.relpath(p, path))[0])
                     if len(out) > FINGERPRINT_LIMIT:
                         return None
         return tuple(sorted(out))

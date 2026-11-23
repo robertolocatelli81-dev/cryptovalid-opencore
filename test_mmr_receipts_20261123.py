@@ -459,6 +459,42 @@ class Edges(unittest.TestCase):
             C.mmr_consistent_roots(1, 3, [], [[pay]])
         self.assertEqual(cm.exception.cls, "peak_count_mismatch")
 
+    def test_review_of_7d87346(self):
+        """what no test held: bytes after the receipt, a path on a peak both sizes share, a key on another curve than
+        the alg, the index at its bound"""
+        logs = {a: Log(a) for a in (-8, -7, -35)}
+        log = logs[-8]
+        good = log.inclusion(4, 39)
+        self.assertTrue(C.verify_receipt(good, log.db[4], log.pem)["ok"])
+        for tail in (b"\x00", b"\xf6", good):
+            self.assertFalse(C.verify_receipt(good + tail, log.db[4], log.pem)["ok"], tail[:1])
+        # 7 -> 8 nodes (4 -> 5 leaves): the peak of 7 is a peak of 8, its path MUST be empty (-00 §7.1.1)
+        peak7 = acc_of(7)
+        self.assertEqual(C.mmr_consistent_roots(7, 8, peak7, [[]]), (peak7, 1))
+        with self.assertRaises(C.MmrShapeError) as cm:
+            C.mmr_consistent_roots(7, 8, peak7, [[peak7[0]]])
+        self.assertEqual(cm.exception.cls, "path_length_mismatch")
+        for alg, other in ((-7, -35), (-35, -7)):
+            out = C.verify_receipt(logs[alg].inclusion(4, 39), logs[alg].db[4], logs[other].pem)
+            self.assertEqual((out["ok"], out["stage"]), (False, "KEY_CURVE_MISMATCH"), (alg, other, out))
+        for alg, other in ((-8, -7), (-7, -8), (-35, -8)):
+            self.assertFalse(C.verify_receipt(logs[alg].inclusion(4, 39), logs[alg].db[4], logs[other].pem)["ok"])
+        one = Log(-8, 1)
+        for index, ok in (((1 << 64) - 2, True), ((1 << 64) - 1, False)):
+            out = C.verify_receipt(one.inclusion(0, 1, proofs=[R.cbor_encode([index, []])]), one.db[0], one.pem)
+            self.assertEqual(out["ok"], ok, (index, out))
+        self.assertEqual(out["stage"], "MALFORMED_PROOF")
+        # without cryptography the signature is not evaluated: never ok, for inclusion and for consistency
+        from unittest import mock
+        blocked = {m: None for m in list(sys.modules) if m == "cryptography" or m.startswith("cryptography.")}
+        chain = KAT["receipt_chains"][0]
+        t = chain["trusted_tree_size_1"]
+        self.assertTrue(C.verify_mmr_consistency(X(chain["receipt_cbor_hex"]), es256_pem(), t, acc_of(t))["ok"])
+        with mock.patch.dict(sys.modules, blocked):
+            a = C.verify_receipt(good, log.db[4], log.pem)
+            b = C.verify_mmr_consistency(X(chain["receipt_cbor_hex"]), log.pem, t, acc_of(t))
+        self.assertEqual([(o["ok"], o["stage"]) for o in (a, b)], [(False, "BACKEND_MISSING")] * 2, (a, b))
+
 
 if __name__ == "__main__":
     unittest.main()

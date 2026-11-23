@@ -330,7 +330,11 @@ Other people's work this repository uses, each under its own licence:
   European Commission (LGPL-2.1) and dfandrich/fileviewinfo (MIT), licence text beside them, in
   `spec/vectors/rfc3161/third_party/`; the Cedar policy and the key-window, chain-link and embedded-key vectors of
   ScopeBlind/agent-governance-testvectors (Apache-2.0, licence text beside them) and receipts made with protect-mcp 0.29.0 (MIT) in `examples/acta/`;
-  84 SLH-DSA sigVer cases of NIST ACVP-Server (NIST notice kept) in `spec/vectors/slhdsa/`. See [NOTICE](NOTICE).
+  84 SLH-DSA sigVer cases of NIST ACVP-Server (NIST notice kept) in `spec/vectors/slhdsa/`; the KAT-39 MMR vectors of
+  forestrie/protocol (MIT) in `spec/vectors/forestrie-mmr/` and the CLL proof vectors of
+  action-state-group/agent-action-capsule (BSD-3-Clause) in `spec/vectors/aac-cll-mmr/`, each with its licence text;
+  the text of RFC 10073 (IETF Trust and the document authors), in full and without modification, in
+  `spec/vectors/rfc10073/`. See [NOTICE](NOTICE).
 - **Code ported from the author's other projects** (Apache-2.0 unless named): the SLH-DSA anchor verification of
   pq-scitt (`cryptovalid_slhdsa.py`); the DSSE envelope verification of omega-evidence (`cryptovalid_dsse.py`).
   `action.yml` follows the action of omega-cra-evol (AGPL-3.0, same author). The DSSE specification's test vector

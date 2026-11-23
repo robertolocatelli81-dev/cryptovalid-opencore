@@ -17,6 +17,7 @@ import random
 import re
 import sys
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -257,6 +258,49 @@ class Generated(unittest.TestCase):
         label, m = CC.ALGORITHMS["id-MLDSA65-ECDSA-P256-SHA512"][1], bytes(range(10))
         self.assertEqual(CC.m_prime(label, m).hex(), head + "00" + ph)
         self.assertEqual(CC.m_prime(label, m, bytes.fromhex("0813061205162623")).hex(), head + "080813061205162623" + ph)
+
+
+class Review(unittest.TestCase):
+    """review of 7d87346: what no test held"""
+
+    def test_oids_and_labels_are_those_of_section_6(self):
+        """read from the RFC's text, not from the module"""
+        t = rfc_text().decode("utf-8")
+        for name, (oid, label, _) in CC.ALGORITHMS.items():
+            m = re.search(r"\n   %s\n      OID:  ([0-9.]+)\n\n      Label:  (\S+)\n" % re.escape(name), t)
+            self.assertIsNotNone(m, name)
+            self.assertEqual((m.group(1), m.group(2).encode()), (oid, label), name)
+        self.assertEqual({v[0] for v in CC.ALGORITHMS.values()},
+                         {"1.3.6.1.5.5.7.6.45", "1.3.6.1.5.5.7.6.46", "1.3.6.1.5.5.7.6.48"})
+
+    def test_without_cryptography_nothing_is_valid(self):
+        blocked = {m: None for m in ("cryptography", "cryptography.exceptions", "cryptography.hazmat.primitives",
+                                     "cryptography.hazmat.primitives.asymmetric",
+                                     "cryptography.hazmat.primitives.asymmetric.ed25519",
+                                     "cryptography.hazmat.primitives.asymmetric.utils")}
+        e = appendix_e(rfc_text())
+        m = base64.b64decode(e["m"])
+        seen = 0
+        for t in e["tests"]:
+            if t["tcId"] not in CC.ALGORITHMS:
+                continue
+            seen += 1
+            with mock.patch.dict(sys.modules, blocked):
+                out = CC.verify(t["tcId"], base64.b64decode(t["pk"]), m, base64.b64decode(t["s"]))
+            self.assertEqual((out["ok"], out["stage"]), (False, "BACKEND_MISSING"), t["tcId"])
+            self.assertIn("not evaluated", out["why"])
+        self.assertEqual(seen, 3)
+
+    @NEEDS
+    def test_the_stage_of_a_key_or_signature_of_another_length(self):
+        for n in CC.ALGORITHMS:
+            sg = Signer(n)
+            sig = sg.sign(MSG)
+            self.assertEqual(CC.verify(n, sg.pk + b"\x00", MSG, sig)["stage"], "MALFORMED_KEY", n)
+            self.assertEqual(CC.verify(n, sg.pk[:-1], MSG, sig)["stage"], "MALFORMED_KEY", n)
+            self.assertEqual(CC.verify(n, sg.pk, MSG, sig[:CC.MLDSA65_SIG])["stage"], "MALFORMED_SIGNATURE", n)
+            self.assertEqual(CC.verify(n, sg.pk, MSG, sig[:CC.MLDSA65_SIG + 1])["stage"], "MALFORMED_KEY_OR_SIGNATURE", n)
+
 
 if __name__ == "__main__":
     unittest.main()

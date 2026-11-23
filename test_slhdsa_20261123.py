@@ -233,6 +233,30 @@ class Closed(unittest.TestCase):
                 self.codes(a, pub="00" * 32)}
         self.assertEqual(seen, set(S.CODES) - {"ok", "signature"})
 
+    def test_a_root_without_utf8_is_a_code_not_an_exception(self):
+        """review of 7d87346: JSON "\\ud800" parses to a lone surrogate; the message of rule 2 has no bytes for it and
+        verify_anchor raised UnicodeEncodeError, with and without slh-dsa"""
+        a = anchors()[0]
+        for root in ("\ud800", "ab\udfff", json.loads('"\\ud83d"'), a["root"] + "\udc00"):
+            self.assertEqual(self.codes(dict(a, root=root)), "type", repr(root))
+            self.assertEqual(self.codes(dict(a, root=root), pub=a["pub"]), "type")
+        if HAVE:   # a pair is a character: still the signature's business
+            self.assertEqual(S.verify_anchor(dict(a, root="\U0001f600"))["code"], "signature")
+
+    def test_sizes_are_those_of_fips_205_table_2(self):
+        """each constant by hand, not through the module: n, public key 2n, signature bytes"""
+        want = {"128s": (16, 7856), "128f": (16, 17088), "192s": (24, 16224), "192f": (24, 35664),
+                "256s": (32, 29792), "256f": (32, 49856)}
+        self.assertEqual(S.PARAMS, {f"{h}_{k}": v for h in ("sha2", "shake") for k, v in want.items()})
+        a = anchors()[0]
+        for p, (n, siglen) in S.PARAMS.items():   # the exact lengths pass rule 1 (then the signature decides)
+            exact = dict(a, param=p, pub="00" * (2 * n), sig="00" * siglen)
+            with no_lib():
+                with self.assertRaises(verifier.CheckNotRun):
+                    S.verify_anchor(exact)
+            for k, v in (("sig", "00" * (siglen + 1)), ("sig", "00" * (siglen - 1)), ("pub", "00" * (2 * n + 1))):
+                self.assertEqual(self.codes(dict(exact, **{k: v})), "length", (p, k))
+
 
 if __name__ == "__main__":
     unittest.main()

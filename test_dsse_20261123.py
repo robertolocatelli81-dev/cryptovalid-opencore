@@ -242,7 +242,10 @@ class Generated(unittest.TestCase):
         self.assertEqual(D._unb64("+/8="), b"\xfb\xff")
         self.assertEqual(D._unb64("-_8="), b"\xfb\xff")
         self.assertEqual(D._unb64(""), b"")
-        for bad in ("YQ", "YQ=", "YQ===", "+_8=", "YQ==YQ==", "Y Q==", "YQ==\n", "YQ!=", None, b"YQ==", 1):
+        # "YWJj=" and "YWJj==": whole quads, then padding; base64.b64decode(validate=True) of Python 3.9 and 3.11 reads
+        # them as b"abc" (3.13 refuses): the length rule is what makes the three agree (review of 7d87346)
+        for bad in ("YQ", "YQ=", "YQ===", "+_8=", "YQ==YQ==", "Y Q==", "YQ==\n", "YQ!=", None, b"YQ==", 1, "YWJj=",
+                    "YWJj==", "YWJjYWJj="):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 D._unb64(bad)
 
@@ -308,6 +311,50 @@ class Without(unittest.TestCase):
 
     def test_codes_are_closed(self):
         self.assertEqual(D.CODES, ("ok", "envelope", "base64", "signature", "payload_type", "statement", "subject"))
+
+
+@need
+class Review(unittest.TestCase):
+    """review of 7d87346"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ed = ed25519.Ed25519PrivateKey.generate()
+        cls.env = envelope([cls.ed])
+
+    def v(self, env):
+        return D.verify_envelope(env if isinstance(env, (bytes, str)) else js(env), [pem(self.ed)])
+
+    def test_a_payload_type_without_utf8_is_a_code_not_an_exception(self):
+        """JSON "\\ud800" parses to a lone surrogate; the PAE has no bytes for it and verify_envelope raised
+        UnicodeEncodeError"""
+        for pt in ('"\\ud800"', '"application/vnd.in-toto+json\\udfff"'):
+            for sigs in ("[]", '[{"sig": "AAAA"}]'):
+                out = self.v('{"payload": "", "payloadType": %s, "signatures": %s}' % (pt, sigs))
+                self.assertEqual((out["valid"], out["code"]), (False, "envelope"), (pt, sigs))
+        self.assertEqual(self.v(dict(self.env, keyid_hint="\ud800"))["code"], "ok")   # an unread member: ignored
+
+    def test_nesting_at_the_bound(self):
+        """rule 1: 512 levels are read, 513 refused (the envelope is one level, the member's arrays the others)"""
+        good = js(self.env).decode()
+        for extra, code in ((511, "ok"), (512, "envelope")):
+            text = good[:-1] + ', "x": ' + "[" * extra + "]" * extra + "}"
+            self.assertEqual(verifier.json_nesting_depth(text), extra + 1)
+            self.assertEqual(self.v(text)["code"], code, extra)
+        for extra, code in ((511, "ok"), (512, "statement")):   # the same bound on the payload (rule 3)
+            payload = json.dumps(statement())[:-1] + ', "x": ' + "[" * extra + "]" * extra + "}"
+            self.assertEqual(self.v(envelope([self.ed], payload.encode()))["code"], code, extra)
+
+    def test_the_size_bound_is_exact(self):
+        raw = js(self.env)
+        for limit, code in ((len(raw), "ok"), (len(raw) - 1, "envelope")):
+            with mock.patch.object(D, "MAX_ENVELOPE", limit):
+                self.assertEqual(self.v(raw)["code"], code, limit)
+                self.assertEqual(self.v(raw.decode())["code"], code, limit)
+        wide = json.dumps(dict(self.env, note="\u00e9"), ensure_ascii=False)   # one character, two bytes
+        with mock.patch.object(D, "MAX_ENVELOPE", len(wide)):
+            self.assertEqual(self.v(wide)["code"], "ok")                         # the text: characters
+            self.assertEqual(self.v(wide.encode("utf-8"))["code"], "envelope")   # the bytes: one too many
 
 
 if __name__ == "__main__":

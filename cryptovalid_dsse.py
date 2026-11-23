@@ -16,8 +16,8 @@ v1.2.0 (in-toto/attestation, spec/v1/statement.md, spec/v1/README.md "Parsing ru
 
 `envelope` is the JSON text (bytes or str) of a DSSE JSON envelope; `keys` the caller's trusted public keys (PEM text, or
 PEM / DER bytes, of a SubjectPublicKeyInfo or of an X.509 certificate whose chain is NOT checked): Ed25519 or ECDSA
-P-256 with SHA-256. `code` is one of CODES (SPEC §25 rule 6). The signatures are checked with `cryptography`; without it
-an envelope that decodes raises verifier.CheckNotRun.
+P-256 with SHA-256. `code` is one of CODES (SPEC §25 rule 6). The keys are loaded and the signatures checked with
+`cryptography`; without it every call with keys raises verifier.CheckNotRun, before the envelope is read.
 """
 import base64
 import binascii
@@ -182,6 +182,10 @@ def verify_envelope(envelope: Union[bytes, str], keys: Sequence[Union[str, bytes
     if not isinstance(env["payload"], str) or not isinstance(env["payloadType"], str) or \
             not isinstance(env["signatures"], list):
         return _out("envelope", "payload and payloadType must be strings, signatures an array")
+    try:
+        env["payloadType"].encode("utf-8")
+    except UnicodeEncodeError:      # a lone surrogate (JSON "\ud800"): the PAE of rule 2 has no bytes
+        return _out("envelope", "payloadType has no UTF-8 encoding (a lone surrogate)")
     unrecognized = sorted(k for k in env if k not in ("payload", "payloadType", "signatures"))
     for n, s in enumerate(env["signatures"]):
         if not isinstance(s, dict) or "sig" not in s or not isinstance(s["sig"], str) or \

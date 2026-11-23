@@ -56,6 +56,7 @@ import base64
 import hashlib
 import html
 import json
+import re
 import os
 import sys
 from datetime import datetime, timezone
@@ -127,11 +128,16 @@ def solana_status(pack_dir: str, manifest: Dict, check: bool = False) -> Dict:
         return {"present": False, "checked": False, "verified": None}
     try:   # SPEC §5 step 0: opened once without blocking
         a = json.loads(read_text_regular(path))
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RecursionError) as e:
         return {"present": True, "checked": False, "verified": False,
                 "note": f"SOLANA_ANCHOR.json unreadable: {type(e).__name__}"}
-    sig = a.get("tx_signature")
-    declared = (a.get("digest_sha3_hex") or "").strip().lower()
+    sig = a.get("tx_signature") if isinstance(a, dict) else None
+    declared = a.get("digest_sha3_hex") if isinstance(a, dict) else None
+    if not (isinstance(sig, str) and sig.isascii() and isinstance(declared, str)):
+        return {"present": True, "checked": False, "verified": False,   # closed: a failure, never a traceback
+                "note": "SOLANA_ANCHOR.json is not an object with an ASCII string tx_signature and a string "
+                        "digest_sha3_hex"}
+    declared = declared.strip().lower()
     expected = solana_anchor_digest(manifest)
     if not sig or declared != expected:
         return {"present": True, "checked": False, "verified": False,
@@ -403,7 +409,9 @@ def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = 
     is importable and not html_only. Returns paths + the UNMODIFIED verdict."""
     try:   # SPEC §5 step 0: opened once without blocking (a FIFO here waited, 18/11/2026)
         manifest = json.loads(read_text_regular(os.path.join(pack_dir, "MANIFEST.json")))
-    except (OSError, ValueError) as e:
+        if not isinstance(manifest, dict):
+            raise ValueError("not a JSON object")
+    except (OSError, ValueError, RecursionError) as e:
         # fail-closed E pulito: un auditor merita un errore leggibile, mai un traceback
         return {"valid": False, "html": None, "pdf": None,
                 "error": f"MANIFEST.json unreadable: {type(e).__name__}: {str(e)[:120]}"}
@@ -457,7 +465,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--title", default="Compliance Evidence — Audit Report")
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
     if a.solana_digest:
-        d = solana_anchor_digest(json.loads(read_text_regular(os.path.join(a.pack_dir, "MANIFEST.json"))))
+        # a digest is printed only for a readable manifest that carries its own digest: never a memo for "" or a traceback
+        try:
+            man = json.loads(read_text_regular(os.path.join(a.pack_dir, "MANIFEST.json")))
+        except (OSError, ValueError, RecursionError) as e:
+            p.error(f"--solana-digest: MANIFEST.json cannot be read ({type(e).__name__})")
+        md = man.get("manifest_digest_sha256") if isinstance(man, dict) else None
+        if not (isinstance(md, str) and re.fullmatch(r"[0-9a-f]{64}", md)):
+            p.error("--solana-digest: MANIFEST.json has no manifest_digest_sha256 of 64 lowercase hex characters")
+        d = solana_anchor_digest(man)
         emit(json.dumps({"solana_memo": f"sha3:{d}", "digest_sha3_hex": d,
                           "binding": "sha3_256(manifest_digest_sha256)"}, indent=1))
         return 0

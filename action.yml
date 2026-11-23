@@ -51,8 +51,7 @@ runs:
         REPO: robertolocatelli81-dev/cryptovalid-opencore
       run: |
         set -euo pipefail
-        case "$V" in [0-9]*.[0-9]*.[0-9]*) ;; *) echo "::error::version '$V' is not X.Y.Z"; exit 1;; esac
-        case "$V" in *[!0-9.]*) echo "::error::version '$V' is not X.Y.Z"; exit 1;; esac
+        [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version '$V' is not X.Y.Z"; exit 1; }
         case "$CRYPTO" in true|false) ;; *) echo "::error::cryptography '$CRYPTO' is neither true nor false"; exit 1;; esac
         d="$RUNNER_TEMP/cryptovalid-$V"
         rm -rf "$d" && mkdir -p "$d"

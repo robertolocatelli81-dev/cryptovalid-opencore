@@ -86,6 +86,10 @@ def verify_anchor(anchor: Any, pub: Optional[Union[str, bytes]] = None) -> Dict[
         return _out("type", "param is not one of the twelve FIPS 205 parameter sets")
     if not isinstance(root, str) or not root:
         return _out("type", "root is not a non-empty string")
+    try:
+        root.encode("utf-8")
+    except UnicodeEncodeError:      # a lone surrogate (JSON "\ud800"): the message of rule 2 has no bytes
+        return _out("type", "root has no UTF-8 encoding (a lone surrogate)")
     if isinstance(ts, bool) or not isinstance(ts, (int, float)) or (isinstance(ts, float) and not math.isfinite(ts)):
         return _out("type", "ts is not a finite JSON number")
     if not isinstance(sig, str) or not isinstance(pk, str):
