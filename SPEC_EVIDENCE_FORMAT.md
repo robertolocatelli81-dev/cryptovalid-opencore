@@ -406,8 +406,8 @@ them reads (`--list-checks`), and the verification profile (`--profile`), a clos
 party adds requirements and cannot remove a check. Additive: without `--profile` the verdict and the exit status are
 those of v0.14; the receipt gains the member `profile` (`"default"`) and each layer the member `id`.
 v0.15 also adds §24, the SLH-DSA archival anchor `omega-slhdsa-anchor-v2` (FIPS 205), verified by
-`cryptovalid_slhdsa.py`, and §25, DSSE envelopes carrying in-toto Statements, verified by `cryptovalid_dsse.py`.
-Additive: no existing input changes verdict.
+`cryptovalid_slhdsa.py`, §25, DSSE envelopes carrying in-toto Statements, verified by `cryptovalid_dsse.py`, and §26,
+the properties a weekly fuzz run holds three readers to. Additive: no existing input changes verdict.
 
 ## 7. Conformance (normative)
 
@@ -2561,3 +2561,22 @@ only.
 7. **Vectors.** DSSE's test vector (protocol.md v1.0.2: its signature verifies, its payload type is not in-toto, so
    the code is `payload_type`), and `testdata/dsse/github_attestation_cvo_0.28.1_wheel.json`, the Sigstore bundle
    GitHub's attestation service made for this repository's 0.28.1 wheel (`ok` with the key of its certificate).
+
+## 26. What the weekly fuzz run holds the readers to (NORMATIVE since v0.15, 2026-11-23)
+
+Written before the workflow. `.github/workflows/fuzz-weekly.yml` runs `tools/fuzz_readers.py` every week on a new seed
+(the run number; a finding is reproduced with `--seed`), for a time budget, under Python 3.9, 3.11 and 3.13, with and
+without `cryptography` and `slh-dsa`. It mutates the bytes of a valid input (bits, bytes, truncation, lines; JSON
+members removed, added, renamed, written twice, of another type, nested) and requires of the reader:
+
+1. **A changed input is accepted only when its signed content is unchanged.** `verifier.verify_ledger` says PASS only
+   when the entries, parsed by the fuzzer's own JSON reader (a name written twice refused), are a non-empty prefix of
+   the original entries (a chain cut at its tail is still a chain, §5); `cryptovalid_dsse.verify_envelope` is valid
+   only when the decoded payload and `payloadType` are the original ones; `cryptovalid_slhdsa.verify_anchor` is valid
+   only when the anchor is the original, `ts` of the same JSON type.
+2. **No undeclared exception.** On these inputs none of the three raises.
+3. **The run can fail.** Before it is trusted, each property is shown to catch a reader whose check is disabled in
+   the fuzzer's process (`--ablate ledger|dsse|slhdsa`: the chain verdict, the DSSE signature, the SLH-DSA signature):
+   the same seed must then report violations, or the job fails.
+A violation fails the job; the inputs that broke a rule are kept as an artifact of the run. CodeQL (`codeql.yml`)
+analyses the Python code on every push and pull request to master and every week; its findings go to code scanning.

@@ -129,6 +129,28 @@ Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those 
   code of rule 6; 94 of the 96 token mutants of the module are caught, the other two (`validate=True` after a regular
   expression that already admits only base64) change nothing.
 
+### CodeQL and a weekly fuzz run (SPEC v0.15 §26)
+
+- `.github/workflows/codeql.yml`: CodeQL analysis of the Python code (github/codeql-action v4.39.4) on every push and
+  pull request to master and every Monday; results to code scanning. Read-only token, `security-events: write` in that
+  job only.
+- `.github/workflows/fuzz-weekly.yml` with `tools/fuzz_readers.py`, ported from omega-evidence's weekly fuzz job
+  (Apache-2.0, same author): every Monday on a new seed (the run number), 20 minutes per cell, Python 3.9, 3.11 and
+  3.13, with and without `cryptography` and `slh-dsa`. It mutates a valid ledger, a signed DSSE envelope and an
+  SLH-DSA anchor and requires the rules of §26: a changed input accepted only when its signed content is unchanged
+  (checked with the fuzzer's own parser), no undeclared exception. Each run first disables, in its own process, the
+  check each rule rests on (`--ablate ledger|dsse|slhdsa`) and fails unless the same seed then reports violations.
+- Every action of both workflows is pinned to the commit of its release tag, read from the GitHub API on 2026-11-23
+  (actions/checkout v7.0.1, actions/setup-python v7.1.0, actions/upload-artifact v7.0.2, the same commits as the other
+  workflows; github/codeql-action v4.39.4).
+- Measured on 2026-11-23, seed 1123, 90 s per Python with both libraries: 126 778 (3.9), 176 852 (3.11) and 189 003
+  (3.13) mutants, no violation; without the two libraries (Python 3.11), 130 458 mutants of the ledger, 9 759 accepted
+  as unchanged by the fuzzer's own parser, no violation. With each check disabled, seed 1 reports violations (ledger
+  646, DSSE 23, anchor 77 in 1 500 iterations). 48 of the 69 token mutants of `tools/fuzz_readers.py` are caught by
+  `test_fuzz_readers_20261123.py` (one re-run by hand after a guard was added); the other 21 change which mutations are
+  generated (the operator, the share of double mutations, the key order) or how lax the disabled ledger check is, not
+  what the fuzzer judges.
+
 ### The depth and surrogate scans of `verifier.py` jump to the characters that matter
 
 `json_nesting_depth` and `has_lone_surrogate`, run on every line the verifier and the writer read, walked each character

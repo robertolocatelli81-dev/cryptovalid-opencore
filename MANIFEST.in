@@ -12,4 +12,4 @@ prune verifiers/rust/target
 prune verifiers/swift/.build
 prune verifiers/js/node_modules
 global-exclude __pycache__ *.py[cod] *.key .DS_Store
-include tools/iso4217_table.py
+include tools/iso4217_table.py tools/fuzz_readers.py tools/build_nist_acvp_slhdsa.py
