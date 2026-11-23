@@ -142,11 +142,12 @@ logs (SPEC §14); until that date they carried the same "no new scope" mark.
 | Payment entry profile `cryptovalid-payment/1` and a "not before" bound from the NIST Randomness Beacon 2.0 (SPEC §18, §19), since 0.26.0 | `cryptovalid_beacon.py`, `verify_evidence.py beacon` |
 | Integrity metadata (W3C SRI, as SD-JWT VC `#integrity` claims) and HTTP digests (RFC 3230, RFC 9530), since 0.26.0 | `cryptovalid_sri.py`, `cryptovalid_httpdigest.py` |
 | SLH-DSA (FIPS 205) archival anchors `omega-slhdsa-anchor-v2`, verification only (SPEC §24; the `slh` extra), since 0.29.0 | `cryptovalid_slhdsa.py` |
+| DSSE envelopes with in-toto Statements (GitHub and Sigstore attestations), verification only (SPEC §25), since 0.29.0 | `cryptovalid_dsse.py` |
 | Auditor report (HTML/PDF) | `cryptovalid_report.py` |
 | Regulatory profiles (SPEC §8) | `refresh_regulatory.py`, `spec/regulatory_profiles.json` |
 | Development tooling | `mutation_runner.py` |
 
-Each experimental module documents its use in its docstring; 20 of the 35 also print their usage with `--help`. The
+Each experimental module documents its use in its docstring; 20 of the 36 also print their usage with `--help`. The
 release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ### What omega-cra-evol relies on
@@ -317,7 +318,9 @@ Other people's work this repository uses, each under its own licence:
   `spec/vectors/rfc3161/third_party/`; the Cedar policy and the key-window, chain-link and embedded-key vectors of
   ScopeBlind/agent-governance-testvectors (Apache-2.0, licence text beside them) and receipts made with protect-mcp 0.29.0 (MIT) in `examples/acta/`;
   84 SLH-DSA sigVer cases of NIST ACVP-Server (NIST notice kept) in `spec/vectors/slhdsa/`. See [NOTICE](NOTICE).
-- **Code ported from the author's Apache-2.0 projects**: the SLH-DSA anchor verification of pq-scitt (`cryptovalid_slhdsa.py`).
+- **Code ported from the author's Apache-2.0 projects**: the SLH-DSA anchor verification of pq-scitt (`cryptovalid_slhdsa.py`);
+  the DSSE envelope verification of omega-evidence (`cryptovalid_dsse.py`). The DSSE specification's test vector
+  (secure-systems-lab/dsse v1.0.2, Apache-2.0) is in `test_dsse_20261123.py`.
 - **Data not shipped**: no ISO 4217 table; `tools/iso4217_table.py` builds the one you pin (`--currency-table`) from your
   own download of list one (SPEC §18 "Currencies").
 - **Independent implementations used as oracles in the tests** (not part of the package): pycose 1.1.0 (BSD-3-Clause)

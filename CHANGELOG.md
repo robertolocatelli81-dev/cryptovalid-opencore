@@ -110,6 +110,25 @@ Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those 
   and of the key) each give the code of SPEC §24 rule 5, with and without the library; the 42 token mutants of the
   module are each caught by `test_slhdsa_20261123.py`.
 
+### DSSE envelopes with in-toto Statements: `cryptovalid_dsse` (SPEC v0.15 §25)
+
+- `cryptovalid_dsse.verify_envelope(envelope, keys, artifact=None, digest_algorithms=("sha256",), threshold=1)` verifies
+  a DSSE JSON envelope (DSSE v1.0.2) carrying an in-toto Statement v1 (Attestation Framework v1.2.0), the format of
+  GitHub artifact attestations and Sigstore attestations, and returns `valid`, a closed `code`, the statement, the keys
+  that verified and the subjects that match the artifact. Ported from omega-evidence c26f4e6
+  (`omega_evidence/interop/dsse.py`, Apache-2.0, same author): verification only. Signatures are checked only with the
+  caller's keys (Ed25519; ECDSA P-256 / SHA-256 in DER or raw r||s; an SPKI or an X.509 certificate whose chain is not
+  checked), `keyid` is not read, a threshold counts distinct keys (the same key given twice is an error of the caller).
+  Unknown envelope members are ignored as DSSE requires and listed in `unrecognized_fields`. Experimental, no command
+  line; it needs `cryptography` (without it: `CheckNotRun`).
+- Measured on 2026-11-23 under Python 3.9, 3.11 and 3.13: the DSSE specification's test vector verifies (its payload
+  type is not in-toto: code `payload_type`) and fails with one payload byte changed; the GitHub attestation of this
+  repository's 0.28.1 wheel (`testdata/dsse/`) verifies with the key of its certificate, and fails with a subject
+  digest changed or another key. Generated envelopes (every member removed, every JSON type in every member, base64
+  variants, JSON outside the profile, statements outside in-toto v1, thresholds, 400 random mutations) each give the
+  code of rule 6; 94 of the 96 token mutants of the module are caught, the other two (`validate=True` after a regular
+  expression that already admits only base64) change nothing.
+
 ### The depth and surrogate scans of `verifier.py` jump to the characters that matter
 
 `json_nesting_depth` and `has_lone_surrogate`, run on every line the verifier and the writer read, walked each character

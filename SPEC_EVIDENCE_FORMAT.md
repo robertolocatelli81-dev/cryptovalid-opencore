@@ -406,7 +406,8 @@ them reads (`--list-checks`), and the verification profile (`--profile`), a clos
 party adds requirements and cannot remove a check. Additive: without `--profile` the verdict and the exit status are
 those of v0.14; the receipt gains the member `profile` (`"default"`) and each layer the member `id`.
 v0.15 also adds §24, the SLH-DSA archival anchor `omega-slhdsa-anchor-v2` (FIPS 205), verified by
-`cryptovalid_slhdsa.py`. Additive: no existing input changes verdict.
+`cryptovalid_slhdsa.py`, and §25, DSSE envelopes carrying in-toto Statements, verified by `cryptovalid_dsse.py`.
+Additive: no existing input changes verdict.
 
 ## 7. Conformance (normative)
 
@@ -2512,3 +2513,51 @@ Not in this section: the `oqs` backend (liboqs, which `pq-scitt` uses when it is
 binding without the C library starts a download and a build, so it is never imported here), the HashSLH-DSA
 (pre-hash) variants, the creation of anchors, and what `ts` means: it is the signer's statement of the time, not a
 time proof (§11 and §19 are the time proofs of this format).
+
+## 25. DSSE envelopes carrying in-toto Statements (NORMATIVE since v0.15, 2026-11-23)
+
+DSSE (Dead Simple Signing Envelope) with an in-toto Statement is the format of GitHub artifact attestations, of
+Sigstore's attestations and of SLSA provenance. This section says how `cryptovalid_dsse.verify_envelope` reads one; it
+was written before the code. Versions in force on 2026-11-23: DSSE v1.0.2 (secure-systems-lab/dsse, tag v1.0.2; master
+is 27 commits ahead, changing governance/, README.md, MAINTAINERS.md and background.md, not protocol.md or envelope.md)
+and the in-toto Attestation Framework v1.2.0 (in-toto/attestation, release of 2026-03-18; Statement v1). The code is
+ported from omega-evidence (`omega_evidence/interop/dsse.py`, commit c26f4e6, Apache-2.0, same author): verification
+only.
+
+1. **The envelope** is the JSON text (UTF-8, at most 64 MiB) of the DSSE JSON envelope: an object with `payload` (a
+   string), `payloadType` (a string) and `signatures` (an array of objects, each with `sig`, a string, and optionally
+   `keyid`, a string). JSON is read with a name written twice in one object, `NaN` / `Infinity`, a byte order mark and
+   nesting deeper than 512 refused (code `envelope`), as the payload is (rule 3). Members outside these are ignored, as
+   envelope.md requires ("Consumers MUST ignore unrecognized fields"), and named in `unrecognized_fields`. `payload`
+   and each `sig` are base64, standard or URL-safe (DSSE: "verifiers MUST accept either"), one alphabet per string,
+   padded, with nothing else (code `base64`).
+2. **Signatures.** Each signature is checked over PAE(`payloadType`, payload) — `"DSSEv1" SP len(type) SP type SP
+   len(body) SP body`, the lengths in decimal bytes — with the keys the caller trusts, and only those: a key the
+   envelope carries is never used, and `keyid` is not read (DSSE: it "MUST NOT be used for security decisions"). Keys
+   are Ed25519, or ECDSA P-256 with SHA-256 whose signature is DER (re-encoded byte for byte) or the raw 64 bytes r||s
+   of DSSE's own test vector; given as an SPKI or an X.509 certificate (its chain, validity and identity are not
+   checked here). The envelope passes this rule when the number of distinct keys that verify a signature is at least
+   the threshold (default 1; DSSE "Multi-signature Verification"); the same key given twice is an error of the caller.
+   Otherwise the code is `signature`.
+3. **The statement** (in-toto docs/validation.md, Statement layer, after the signature): `payloadType` must be
+   `application/vnd.in-toto+json` or `application/vnd.in-toto.<predicate>+json` (validation.md writes the test with
+   "OR"; read as the two accepted forms), else `payload_type`. The payload is JSON read as in rule 1, an object whose
+   `_type` is `https://in-toto.io/Statement/v1`, whose `subject` is an array of objects each with a non-empty `digest`
+   object of strings, whose `predicateType` is a non-empty string, and whose `predicate`, when present, is an object;
+   else `statement`. Other members are ignored (in-toto "Parsing rules": "Consumers MUST ignore unrecognized fields").
+4. **The artifact.** When the caller gives the artifact's bytes, at least one subject must carry, for an algorithm the
+   caller accepts (default `sha256`; `sha384`, `sha512`, `sha3_256`, `sha3_384`, `sha3_512`), the hex digest of those
+   bytes, compared without regard to case (validation.md, `matchedSubjects`); else `subject`. Without an artifact no
+   subject is matched and the result says so.
+5. **What is not checked here:** who the key belongs to (a Sigstore certificate's chain to Fulcio, its identity, the
+   Rekor inclusion or the signed timestamp), what the predicate says (SLSA provenance or any other type), and the
+   policy a relying party applies to it.
+6. **Result, closed.** `{"valid", "code", "detail", "payload_type", "statement", "verified_keys", "matched_subjects",
+   "unrecognized_fields"}`; `valid` is true only for `code: "ok"`. The codes, in the order they are decided:
+   `envelope`, `base64`, `signature`, `payload_type`, `statement`, `subject`. Errors of the caller (no key, a key
+   that does not load or is of another type, a threshold out of range, an unknown digest algorithm, an artifact that
+   is not bytes) raise ValueError or TypeError and decide nothing. Without `cryptography` the keys cannot be loaded:
+   `verifier.CheckNotRun`, never a verdict.
+7. **Vectors.** DSSE's test vector (protocol.md v1.0.2: its signature verifies, its payload type is not in-toto, so
+   the code is `payload_type`), and `testdata/dsse/github_attestation_cvo_0.28.1_wheel.json`, the Sigstore bundle
+   GitHub's attestation service made for this repository's 0.28.1 wheel (`ok` with the key of its certificate).

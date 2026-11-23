@@ -105,6 +105,19 @@ spec/vectors/slhdsa/anchors_pq_scitt.json were made on 2026-11-23 with that
 module's create_anchor and the slh-dsa package (colinxu2020/slhdsa, LGPL-3.0-
 or-later, not distributed here: the optional extra `slh` installs it).
 
+cryptovalid_dsse.py ports the verification of DSSE envelopes from
+omega-evidence (omega_evidence/interop/dsse.py, commit c26f4e6, Apache License
+2.0, by the same author, who licenses the port here under the AGPL).
+test_dsse_20261123.py holds the ECDSA P-256 test vector of the DSSE
+specification (https://github.com/secure-systems-lab/dsse, protocol.md at tag
+v1.0.2, section "Test Vectors": public key coordinates, payload, payload type
+and signature; Apache License 2.0, read on 2026-11-23).
+testdata/dsse/github_attestation_cvo_0.28.1_wheel.json is the Sigstore bundle
+that GitHub's artifact attestation service made for this repository's own
+0.28.1 wheel (its DSSE envelope, the Fulcio certificate and the Rekor entry):
+the `bundle` member of the GitHub API's answer of 2026-11-23, values unchanged,
+re-indented. Public data about this repository's release.
+
 The copyright statement above covers everything else in this repository.
 
 -------------------------------------------------------------------------------
