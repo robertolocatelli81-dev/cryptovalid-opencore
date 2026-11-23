@@ -638,10 +638,15 @@ def _v_files(load):
             raise ProfileError(f"{where}: a non-empty array of paths")
         if len(set(v)) != len(v):
             raise ProfileError(f"{where}: a path written twice")
-        out = [os.path.join(base, x) for x in v]   # relative paths: from the profile's directory
-        for x in out:
+        import cryptovalid_tsa
+        out = []
+        for x in v:
             try:
-                load(x)
+                # read ONCE (relative paths: from the profile's directory): the bytes checked here are the bytes the
+                # receipt names by their SHA-256 and the bytes every run is given (SPEC §23 rules 2 and 5)
+                data = cryptovalid_tsa._read_pin(os.path.join(base, x), where.rsplit(".", 1)[-1])
+                out.append(data)
+                load(data)
             except ImportError:   # the CRL parser needs cryptography: then the run decides (SPEC §23 rule 3)
                 pass
             except (ValueError, OSError) as e:
@@ -650,15 +655,14 @@ def _v_files(load):
     return check
 
 
-def _load_certs(path):
+def _load_certs(data):
     import cryptovalid_tsa
-    cryptovalid_tsa._pem_certs([path])
+    cryptovalid_tsa._pem_certs([data])
 
 
-def _load_crl(path):
+def _load_crl(data):
     import cryptovalid_tsa
-    cryptovalid_tsa._read_pin(path, "tsa_crls")
-    cryptovalid_tsa._load_crls([path])
+    cryptovalid_tsa._load_crls([data])
 
 
 # SPEC §23 rule 2: THE table of the requirements a profile may add. (kind, member) -> (keyword argument of the reference
@@ -742,7 +746,7 @@ def load_profile(path: str) -> dict:
     if not req:
         raise ProfileError("require: the profile requires nothing (name at least one requirement)")
     base = os.path.dirname(os.path.abspath(path))
-    out = {}
+    out, files = {}, []
     for kind in _PROFILE_KINDS:
         if kind not in req:
             continue
@@ -758,8 +762,17 @@ def load_profile(path: str) -> dict:
                 for n in needs:
                     if n not in sec:
                         raise ProfileError(f"require.{kind}.{m}: needs require.{kind}.{n}")
-                out[kind][m] = check(sec[m], f"require.{kind}.{m}", base)
-    return {"profile_format": PROFILE_FORMAT, "name": name, "sha256": hashlib.sha256(raw).hexdigest(), "require": out}
+                val = out[kind][m] = check(sec[m], f"require.{kind}.{m}", base)
+                if isinstance(val, list):   # rule 5: the files the profile names, by the bytes read
+                    files += [{"requirement": f"{kind}.require.{m}", "path": p, "sha256": hashlib.sha256(b).hexdigest()}
+                              for p, b in zip(sec[m], val)]
+    return {"profile_format": PROFILE_FORMAT, "name": name, "sha256": hashlib.sha256(raw).hexdigest(), "require": out,
+            "files": files}
+
+
+def _profile_head(prof: dict, kind) -> dict:
+    return {"profile_format": prof["profile_format"], "name": prof["name"], "sha256": prof["sha256"],
+            "files": prof["files"], "applies_to": kind}
 
 
 _VERIFY_BY_KIND = {"ledger": "verify_ledger", "pack": "verify_pack", "archive": "verify_archive"}
@@ -778,33 +791,71 @@ def _run_state(kind: str, path: str, pins: dict):
     return "not_met", "; ".join(failed)[:400] or "no layer verified"
 
 
-def apply_profile(r: dict, path: str, prof: dict) -> dict:
+FINGERPRINT_LIMIT = 1 << 20   # SPEC §23 rule 3 (d): entries walked at most; past it the evidence counts as changed
+
+
+def evidence_fingerprint(path: str):
+    """SPEC §23 rule 3 (d): what lstat says of the path and, for a directory, of every entry under it (symbolic links not
+    followed): device, inode, type and mode, size, mtime and ctime in nanoseconds. A file replaced, rewritten or renamed
+    between two readings changes it; ctime cannot be set back without privileges. None when the walk is past the limit
+    or cannot read an entry (then the evidence counts as changed)."""
+    import stat
+
+    def one(p, rel):
+        s = os.lstat(p)
+        return (rel, s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    try:
+        out = [one(path, ".")]
+        if stat.S_ISDIR(out[0][3]):
+            def fail(e):
+                raise e
+            for d, dirs, files in os.walk(path, onerror=fail, followlinks=False):
+                for n in dirs + files:
+                    p = os.path.join(d, n)
+                    out.append(one(p, os.path.relpath(p, path)))
+                    if len(out) > FINGERPRINT_LIMIT:
+                        return None
+        return tuple(sorted(out))
+    except OSError:
+        return None
+
+
+def apply_profile(r: dict, path: str, prof: dict, before=None) -> dict:
     """SPEC §23 rules 3 and 5: `r` is the receipt of the verification without a profile (a), unchanged but for `valid`
-    and `profile`"""
+    and `profile`; `before` is evidence_fingerprint(path) taken before (a)"""
     kind = r.get("kind")
     sec = prof["require"].get(kind) if kind in _PROFILE_KINDS else None
-    head = {"profile_format": prof["profile_format"], "name": prof["name"], "sha256": prof["sha256"], "applies_to": kind}
+    head = _profile_head(prof, kind)
     if not sec:
-        r["profile"] = dict(head, requirements=[], together=None, outcome="not_applicable")
+        r["profile"] = dict(head, requirements=[], together=None, evidence_unchanged=None, outcome="not_applicable")
         r["valid"] = False
         return r
+    # rule 3: (b) and (c) read the evidence again. A ledger given as a pipe (read once by (a)) would give no bytes,
+    # or other bytes: no requirement is run on it
+    again = ("the ledger is not a regular file: a requirement reads it again (SPEC §23 rule 3)"
+             if kind == "ledger" and os.path.exists(path) and not os.path.isfile(path) else None)
     pins_of = {m: {REQUIREMENTS[(kind, m)][0]: v} for m, v in sec.items()}
     reqs = []
     for m in sec:
         pins = dict(pins_of[m])
         for n in REQUIREMENTS[(kind, m)][2]:
             pins.update(pins_of[n])
-        state, detail = _run_state(kind, path, pins)
+        state, detail = ("not_evaluated", again) if again else _run_state(kind, path, pins)
         reqs.append({"id": f"{kind}.require.{m}", "state": state, "detail": detail})
     together = None
     if len(sec) > 1:
         allpins = {}
         for p in pins_of.values():
             allpins.update(p)
-        together = _run_state(kind, path, allpins)[0]
+        together = "not_evaluated" if again else _run_state(kind, path, allpins)[0]
     states = [x["state"] for x in reqs] + ([together] if together else [])
     outcome = "met" if all(s == "met" for s in states) else ("not_met" if "not_met" in states else "not_evaluated")
-    r["profile"] = dict(head, requirements=reqs, together=together, outcome=outcome)
+    # rule 3 (d): (a), (b) and (c) read the path more than once; if what is at the path changed in between, their
+    # results may be about different bytes, so none of them decides
+    stable = before is not None and evidence_fingerprint(path) == before
+    if not stable:
+        outcome = "not_evaluated"
+    r["profile"] = dict(head, requirements=reqs, together=together, evidence_unchanged=stable, outcome=outcome)
     r["valid"] = bool(r["valid"]) and outcome == "met"
     return r
 
@@ -847,7 +898,7 @@ def _list_checks_main(args) -> int:
 
 
 _COMMANDS = {
-    "auto":"recognise the path by the closed list of SPEC §12 and verify it with the command below\n"
+    "auto": "recognise the path by the closed list of SPEC §12 and verify it with the command below\n"
             "               that fits; anything else is refused as 'format not recognised', with the reason",
     "pack": "evidence pack directory (evidence_pack.py)",
     "archive": "ingest archive directory: segments, Merkle STH, signed HEAD (experimental)",
@@ -913,21 +964,22 @@ def _main(argv=None) -> int:
     fn = {"auto": verify_auto, "pack": verify_pack, "archive": verify_archive,
           "ledger": verify_ledger, "ap2": verify_ap2, "cldma": verify_cldma}[a.cmd]
     from verifier import CheckNotRun, check_not_run_exit
+    before = evidence_fingerprint(a.path) if prof is not None else None   # SPEC §23 rule 3 (d)
     try:
         r = fn(a.path)
     except CheckNotRun as e:   # 0.22.0: a check that could not run here, with the complete receipt: written whole, then 74
         if getattr(e, "receipt", None) is None:
             raise
-        e.receipt["profile"] = "default" if prof is None else {   # SPEC §23 rule 5: no requirement run
-            "profile_format": prof["profile_format"], "name": prof["name"], "sha256": prof["sha256"],
-            "applies_to": e.receipt.get("kind"), "requirements": [], "together": None, "outcome": "not_evaluated"}
+        e.receipt["profile"] = "default" if prof is None else dict(   # SPEC §23 rule 5: no requirement run
+            _profile_head(prof, e.receipt.get("kind")), requirements=[], together=None, evidence_unchanged=None,
+            outcome="not_evaluated")
         if prof is not None:
             e.receipt["valid"] = False
         return check_not_run_exit(e, json.dumps(e.receipt, ensure_ascii=False, indent=1))
     if prof is None:
         r["profile"] = "default"   # SPEC §23 rule 5-6: the only change without a profile
     else:
-        r = apply_profile(r, a.path, prof)
+        r = apply_profile(r, a.path, prof, before)
     why = write_stdout(json.dumps(r, ensure_ascii=False, indent=1))
     if why is not None:   # the receipt was not written whole: 74 (EX_IOERR), whatever `valid` says
         return receipt_not_written(why)

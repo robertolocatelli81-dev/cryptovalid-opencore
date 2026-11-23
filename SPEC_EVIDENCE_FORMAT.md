@@ -2378,7 +2378,8 @@ on 2026-11-23): in-toto 1.0 §5.2 runs every step of the final-product verificat
 may skip; Sigstore's policy-controller combines the matching ClusterImagePolicies with AND, and an image that matches no
 policy is refused by default; sigstore-python takes a verification policy for every verification, on top of the
 signature, inclusion and certificate checks; RFC 9943 (SCITT architecture, June 2026) §7.1 lets a relying party apply
-its own validation policy after the receipt is verified. Differences, declared: cosign `verify` has options that turn
+its own validation policies after the Transparent Statement (the signed statement with its receipts) has been verified
+and validated. Differences, declared: cosign `verify` has options that turn
 checks off (`--insecure-ignore-tlog`, `--insecure-ignore-sct`, `--check-claims=false`), policy-controller has
 `mode: warn` and a `static` authority that passes without any signature, sigstore-python has `UnsafeNoOp` ("This policy
 is fundamentally insecure"); this format has none of these, by rule 3. A profile here is a closed JSON document, not a
@@ -2392,8 +2393,8 @@ policy language (CUE, Rego): it names pins the verifiers of this repository alre
    (`verify_evidence.REQUIREMENTS`): a layer whose id is not in the table cannot be written, and an entry of the table
    that no code writes is a test failure (`test_checks_profile_20261123.py`). Each layer of a receipt carries its `id`.
    The JSON form is `{"list_format": "cryptovalid-verify-checks/1", "checks": [...]}`. The commands `checkpoint`,
-   `tiles`, `vkey-rfc6962` and `beacon` are run by their own modules (§13, §14, §19): `--list-checks` names them with
-   `checks: []` and the section that defines them; their checks are not in this list.
+   `tiles`, `vkey-rfc6962` and `beacon` are run by their own modules (§13, §14, §19): `--list-checks` names each in one
+   row (`id` the command, `layer: null`) with the section that defines it; their checks are not in this list.
 2. **The profile document** (`--profile FILE`) is read under §5 step 0 (a regular file, opened once without
    blocking), at most 1 MiB, UTF-8 without a byte order mark, one JSON object. It is refused (rule 4) when a key is
    written twice in any object, when it holds `NaN` or `Infinity`, or when any member is outside these lists:
@@ -2408,13 +2409,17 @@ policy language (CUE, Rego): it names pins the verifiers of this repository alre
    - `require.pack` (`evidence_pack.verify_pack`): `manifest_signer` (`manifest_signer_hex`, §10), `ledger_signer`
      (`signer_pubkey_hex`, §5 step 5), `ledger_pq_key` (`pq_pubkey_b64`, needs `ledger_signer`, §10, §15),
      `tsa_certs` (§10, §11, §22 rule 7: the RFC 3161 token is required and `time_anchor` must be `verified`),
-     `tsa_crls` (§11 step 8, needs `tsa_certs`), `signature_domain` (`true`: `require_signature_domain`, §22 rule 3).
+     `tsa_crls` (§11 step 8, needs `tsa_certs`), `signature_domain` (`true`: `require_signature_domain`, §22 rule 3:
+     a 1.1 pack is refused; it does not ask for a signature, an unsigned 1.2 pack meets it: `manifest_signer` does).
    - `require.archive` (`cryptovalid_ingest.verify_archive`): `head_key` (`expected_pubkey_hex`, §17 rule 4, §20
-     rule 8), `tsa_certs` (§22 rule 7), `signature_domain` (`true`, §22 rule 3).
+     rule 8), `tsa_certs` (§22 rule 7), `signature_domain` (`true`, §22 rule 3: a signed tree head or HEAD without
+     `sig_domain` is refused; an unsigned archive meets it: `head_key` asks for the signature).
    A key is 64 lowercase hexadecimal characters (an Ed25519 public key; `ledger_id`, a `self_hash` of §3); a
    post-quantum key is strict base64 of 1952 bytes (ML-DSA-65); `tsa_certs` and `tsa_crls` are non-empty arrays of
    distinct strings, each the path of a file of certificates (§11) or of one CRL, relative paths read from the
-   directory of the profile file; the files are read and parsed when the profile is read.
+   directory of the profile file; each file is read once, when the profile is read, and parsed (a CRL only where
+   `cryptography` is installed: without it the run of rule 3 decides, and it is not valid); the bytes read are the
+   bytes every run of rule 3 is given, and the ones rule 5 names.
 3. **A profile only adds.** No member and no command-line option turns a check of rule 1 off; the only boolean value a
    profile takes is `true`, and `false` is refused with the reason. The verification of a profiled run is, in order:
    (a) the verification without a profile, unchanged; (b) for each requirement, the same verification with the pins
@@ -2423,18 +2428,29 @@ policy language (CUE, Rego): it names pins the verifiers of this repository alre
    `not_evaluated` when a check of that run could not run here (`CheckNotRun`); `valid` is true only when (a) is valid,
    every requirement is `met` and (c), when run, is valid. So a profile cannot turn a verdict of (a) from not valid to
    valid, and a requirement that cannot be evaluated here leaves the result not valid.
+   Runs (b) and (c) read the evidence again from the path. A ledger that is not a regular file (a pipe,
+   `ledger <(...)`, read once by (a)) cannot be read again: every requirement is `not_evaluated`, nothing more is
+   read, the result is not valid. (d) Before (a) and after the last run, the command takes what `lstat` says of the
+   path and, for a directory, of every entry under it, symbolic links not followed: device, inode, type and mode,
+   size, mtime and ctime in nanoseconds (at most 2^20 entries). If the two differ, or either could not be taken, a
+   file was replaced, rewritten or renamed between the runs: `outcome` is `not_evaluated` and the result is not
+   valid. A change inside the reading of a single run, and a change that restores all these values (which needs
+   privileges to set ctime back), are outside this rule.
 4. **Refusals.** A profile that is not readable, not valid JSON, not closed as in rule 2, of a wrong type, with a
    value `false`, with a requirement missing what it needs, or with a file it names unreadable or not a certificate /
-   CRL, is a usage error: exit 2, the reason on stderr, nothing on stdout, nothing verified. `--profile` given with
+   CRL (rule 2), is a usage error: exit 2, the reason on stderr, nothing on stdout, nothing verified. `--profile` given with
    `ap2` or `cldma` (no requirement is defined for them) or given twice is exit 2. The commands of rule 1's last
    sentence take their own options: `checkpoint`, `vkey-rfc6962` and `beacon` refuse `--profile` as an unknown
    option, exit 2; `tiles` has its own `--profile`, the name of a C2SP log profile (§14: `static-ct-api` or
    `tlog-tiles`), unrelated to this section.
 5. **The receipt names the profile.** Without `--profile` the receipt has `"profile": "default"`. With it,
-   `profile` is an object: `profile_format`, `name`, `sha256` (of the bytes of the file as read), `applies_to` (the
+   `profile` is an object: `profile_format`, `name`, `sha256` (of the bytes of the file as read), `files` (one
+   `{"requirement", "path", "sha256"}` for each certificate or CRL file the profile names, in any section: the path
+   as written and the SHA-256 of the bytes read; `[]` when it names none), `applies_to` (the
    kind verified, the one `auto` chose), `requirements` (each `{"id", "state", "detail"}` in the order of the
-   table), `together` (the state of run (c), or `null` when there was one requirement), and `outcome`: `met`,
-   `not_met`, `not_evaluated`, or `not_applicable` when the profile has no section for the kind verified (`auto` routed
+   table), `together` (the state of run (c), or `null` when there was one requirement), `evidence_unchanged` (the
+   comparison of rule 3 (d); `null` when no requirement was run), and `outcome`: `not_evaluated` when `evidence_unchanged` is false, otherwise `met` when
+   every state is `met`, otherwise `not_met` when one is, otherwise `not_evaluated`; or `not_applicable` when the profile has no section for the kind verified (`auto` routed
    the path to another kind; then `valid` is false). When the verification without a profile could not run a check
    (exit 74, §10), the receipt carries the profile with `outcome: "not_evaluated"` and no requirement run.
 6. **Without `--profile` nothing changes** but the two added members (`profile`, and `id` in each layer): the layers,

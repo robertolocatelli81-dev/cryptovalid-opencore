@@ -234,8 +234,9 @@ cryptovalid-verify pack pack_dir/ --profile bank.json  # add requirements: a pin
 The list is printed from the tables the code reads when it writes each layer of a receipt, so it cannot drift from what
 runs. A profile can only add requirements: the checks of each command (chain, hashes, signatures, closed forms, as
 `--list-checks` shows them) always run, and no member or option turns them off. An unknown member, a wrong type, `false`, a key written twice or a malformed file is
-refused with the reason, exit 2. The receipt names the profile (`name` and the SHA-256 of its bytes, or `"default"`)
-and the state of each requirement; a requirement that cannot be checked here leaves the result not valid. Members,
+refused with the reason, exit 2. The receipt names the profile (`name`, the SHA-256 of its bytes and of each
+certificate or CRL file it names, or `"default"`) and the state of each requirement; a requirement that cannot be
+checked here leaves the result not valid. Members,
 rules and the norm behind each one: SPEC §23.
 
 ## Checkpoints and tiles of transparency logs

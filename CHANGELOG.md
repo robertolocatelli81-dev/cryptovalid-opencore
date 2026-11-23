@@ -24,8 +24,14 @@ run by the same author, not by a third party.
   requirement that could not run here is `not_evaluated` and the result is not valid; a profile with no section for
   the kind `auto` chose is `not_applicable`, not valid. Refused with exit 2 and the reason: unknown members at any
   level, wrong types, `false`, keys written twice, `NaN`, a byte order mark, more than 1 MiB, a missing dependency
-  (`tip_not_before` without `log_key`), certificate or CRL files that do not parse, `--profile` with `ap2` or `cldma`.
-- The receipt gains `profile` (`"default"`, or the profile's name, SHA-256 of its bytes, requirements and outcome) and
+  (`tip_not_before` without `log_key`), certificate or CRL files that do not parse (a CRL is parsed only where
+  `cryptography` is installed; without it the run decides, not valid), `--profile` with `ap2` or `cldma`. A ledger
+  given as a pipe cannot be read again for the requirements: they are `not_evaluated`, not valid. The runs read the
+  path more than once: what `lstat` says of the path and of every entry under it (device, inode, mode, size, mtime,
+  ctime) is taken before the first run and after the last, and if it changed the outcome is `not_evaluated`, not valid
+  (receipt member `evidence_unchanged`).
+- The receipt gains `profile` (`"default"`, or the profile's name, SHA-256 of its bytes, the SHA-256 of each
+  certificate or CRL file it names, requirements and outcome) and
   each layer an `id`. Without `--profile`, the layers, `valid` and the exit status do not change.
 - Direction followed and differences (sources read on 2026-11-23): in-toto 1.0 §5.2, Sigstore policy-controller,
   sigstore-python, RFC 9943 §7.1; unlike cosign `verify` (`--insecure-ignore-tlog`, `--insecure-ignore-sct`),
