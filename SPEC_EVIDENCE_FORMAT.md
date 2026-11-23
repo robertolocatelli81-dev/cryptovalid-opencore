@@ -405,6 +405,8 @@ v0.15 (2026-11-23, cryptovalid-opencore 0.29.0) adds §23: the list of the check
 them reads (`--list-checks`), and the verification profile (`--profile`), a closed JSON document by which the relying
 party adds requirements and cannot remove a check. Additive: without `--profile` the verdict and the exit status are
 those of v0.14; the receipt gains the member `profile` (`"default"`) and each layer the member `id`.
+v0.15 also adds §24, the SLH-DSA archival anchor `omega-slhdsa-anchor-v2` (FIPS 205), verified by
+`cryptovalid_slhdsa.py`. Additive: no existing input changes verdict.
 
 ## 7. Conformance (normative)
 
@@ -2459,3 +2461,54 @@ policy language (CUE, Rego): it names pins the verifiers of this repository alre
 Not in this section: requirements for the experimental `ap2` and `cldma` commands (ap2-evidence-pack has its own
 pins), for the modules without a `cryptovalid-verify` command (`cryptovalid_acta.py`, `cryptovalid_aps.py`), and the
 `lotl_check` of the archive verifier (it reads the EU trusted lists from the network).
+
+## 24. SLH-DSA archival anchors, `omega-slhdsa-anchor-v2` (NORMATIVE since v0.15, 2026-11-23)
+
+An archival anchor binds a hash (a checkpoint root, a segment root) to a signature whose security rests on hash
+functions only: SLH-DSA, FIPS 205 (CSRC document history, read on 2026-11-23: draft 08/24/23, final 08/13/24, nothing
+later). It is the leg of an archive that is meant to outlast the Ed25519 and ECDSA signatures NIST IR 8547 (§15)
+deprecates after 2030 and disallows after 2035. This section was written before the code. The format is that of
+pq-scitt (`src/pq_scitt/anchors/slh_dsa.py`, commit 9692a74, Apache-2.0, same author); `cryptovalid_slhdsa.py` ports
+its verification only (no key generation, no signing).
+
+1. **The anchor** is one JSON object with exactly the members `schema`, `backend`, `param`, `root`, `ts`, `sig`,
+   `pub`; a missing or an extra member is a refusal. `schema` is the string `"omega-slhdsa-anchor-v2"`; `backend` is
+   `"slhdsa"` or `"oqs"` (the library that signed; informative only: the signature is the same scheme for both and is
+   verified the same way); `param` is one of the twelve FIPS 205 parameter sets, written `sha2_128s`, `sha2_128f`,
+   `sha2_192s`, `sha2_192f`, `sha2_256s`, `sha2_256f`, `shake_128s`, `shake_128f`, `shake_192s`, `shake_192f`,
+   `shake_256s`, `shake_256f`; `root` a non-empty string; `ts` a finite JSON number (not a boolean); `sig` and `pub`
+   lowercase hexadecimal of a whole number of bytes, `pub` of the parameter set's public key length (2n: 32, 48 or 64
+   bytes) and `sig` of its signature length (FIPS 205 Table 2: 7856, 17088, 16224, 35664, 29792, 49856 bytes for 128s,
+   128f, 192s, 192f, 256s, 256f, SHA2 and SHAKE alike).
+2. **The signed message** is the UTF-8 bytes of the JSON object `{"param", "root", "schema", "ts"}` with the values of
+   the anchor, serialised as Python's `json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`
+   writes it: not the canonical form of §3 (non-ASCII characters are written as UTF-8, not escaped, and `ts` is
+   usually a float, written as Python's shortest round-trip representation, e.g. `1763900000.123456`). An
+   implementation in another language must reproduce these bytes; a float whose Python representation differs from
+   its language's (`1e+16` and `10000000000000000`) is a known source of a false refusal, never of a false acceptance.
+3. **The signature** is FIPS 205 "pure" SLH-DSA, `slh_verify` (Algorithm 24), with an empty context string, over the
+   message of rule 2, with the public key `pub` (or the pinned key, rule 4).
+4. **Pinning.** Without a pin the key is the one the anchor carries: the result says the anchor is intact, not who
+   signed it. With a pin (the caller's expected public key), a `pub` that differs from it is a refusal (`pin`) before
+   any signature is checked.
+5. **Result, closed.** `verify_anchor(anchor, pub=None)` returns `{"valid", "code", "detail"}` with `valid` true only
+   for `code: "ok"`. The refusals, in the order they are checked: `not_object`, `schema` (another value of `schema`;
+   `omega-slhdsa-anchor-v1` is refused here: its `slhdsa` backend signed with the library's internal interface,
+   `slh_verify_internal` without the FIPS 205 domain prefix, measured by pq-scitt on the NIST vectors),
+   `members`, `type` (a member of the wrong type, or a value outside rule 1), `encoding` (`sig` or `pub` not
+   lowercase hexadecimal), `length` (rule 1's lengths), `pin`, `signature` (it does not verify). A pin that is not a
+   string or bytes is a TypeError, a pin string that is not hexadecimal a ValueError: errors of the caller, not
+   verdicts on the anchor.
+6. **A check that cannot run here.** The signature is checked with the `slh-dsa` package (PyPI, LGPL-3.0-or-later,
+   the library pq-scitt uses; the optional extra `slh` of this package). Where it is not installed, an anchor that
+   passes rules 1 and 4 raises `verifier.CheckNotRun` with the reason: never `valid: true`, never a refusal of an
+   anchor that may be valid. Rules 1, 4 and 5 run without it.
+7. **Vectors.** `spec/vectors/slhdsa/nist_acvp_slhdsa_sigver.jsonl.gz`: 84 cases of the NIST ACVP SLH-DSA sigVer
+   file (FIPS 205, external interface, pure, every parameter set, the first case of each of the seven reasons; NOTICE
+   and `tools/build_nist_acvp_slhdsa.py` say what was selected and how). The primitive of rule 3 must give each case's
+   `testPassed`, with the case's context.
+
+Not in this section: the `oqs` backend (liboqs, which `pq-scitt` uses when it is installed: importing its Python
+binding without the C library starts a download and a build, so it is never imported here), the HashSLH-DSA
+(pre-hash) variants, the creation of anchors, and what `ts` means: it is the signer's statement of the time, not a
+time proof (§11 and §19 are the time proofs of this format).

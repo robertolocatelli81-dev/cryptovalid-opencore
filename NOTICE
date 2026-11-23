@@ -81,6 +81,30 @@ No currency table is distributed here (SPEC §18 "Currencies"): the caller may
 pin one, which tools/iso4217_table.py writes from the caller's own download of
 ISO 4217 list one, under that publisher's terms.
 
+spec/vectors/slhdsa/nist_acvp_slhdsa_sigver.jsonl.gz holds 84 SLH-DSA (FIPS 205)
+signature verification cases of the NIST Automated Cryptographic Validation
+Protocol server (https://github.com/usnistgov/ACVP-Server, commit
+975de31eb83d87039ec88934fdc47d8c312b892d, gen-val/json-files/
+SLH-DSA-sigVer-FIPS205/internalProjection.json, SHA-256 in the file's first
+line). Source: the National Institute of Standards and Technology. Changed on
+2026-11-23 by tools/build_nist_acvp_slhdsa.py: only the external / pure groups,
+the first case of each reason in each group, without the secret keys and the
+signing randomness; one JSON object per line, gzip. The notice of ACVP-Server
+(its README, section License, read on 2026-11-23), kept intact:
+
+  NIST-developed software is provided by NIST as a public service. You may use, copy, and distribute copies of the software in any medium, provided that you keep intact this entire notice. You may improve, modify, and create derivative works of the software or any portion of the software, and you may copy and distribute such modifications or works. Modified works should carry a notice stating that you changed the software and should note the date and nature of any such change. Please explicitly acknowledge the National Institute of Standards and Technology as the source of the software.
+
+  NIST-developed software is expressly provided "AS IS." NIST MAKES NO WARRANTY OF ANY KIND, EXPRESS, IMPLIED, IN FACT, OR ARISING BY OPERATION OF LAW, INCLUDING, WITHOUT LIMITATION, THE IMPLIED WARRANTY OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND DATA ACCURACY. NIST NEITHER REPRESENTS NOR WARRANTS THAT THE OPERATION OF THE SOFTWARE WILL BE UNINTERRUPTED OR ERROR-FREE, OR THAT ANY DEFECTS WILL BE CORRECTED. NIST DOES NOT WARRANT OR MAKE ANY REPRESENTATIONS REGARDING THE USE OF THE SOFTWARE OR THE RESULTS THEREOF, INCLUDING BUT NOT LIMITED TO THE CORRECTNESS, ACCURACY, RELIABILITY, OR USEFULNESS OF THE SOFTWARE.
+
+  You are solely responsible for determining the appropriateness of using and distributing the software and you assume all risks associated with its use, including but not limited to the risks and costs of program errors, compliance with applicable laws, damage to or loss of data, programs or equipment, and the unavailability or interruption of operation. This software is not intended to be used in any situation where a failure could cause risk of injury or damage to property. The software developed by NIST employees is not subject to copyright protection within the United States.
+
+cryptovalid_slhdsa.py ports the verification of SLH-DSA anchors from pq-scitt
+(src/pq_scitt/anchors/slh_dsa.py, commit 9692a74, Apache License 2.0, by the
+same author, who licenses the port here under the AGPL); the two anchors of
+spec/vectors/slhdsa/anchors_pq_scitt.json were made on 2026-11-23 with that
+module's create_anchor and the slh-dsa package (colinxu2020/slhdsa, LGPL-3.0-
+or-later, not distributed here: the optional extra `slh` installs it).
+
 The copyright statement above covers everything else in this repository.
 
 -------------------------------------------------------------------------------

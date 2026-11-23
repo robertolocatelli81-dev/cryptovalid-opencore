@@ -141,11 +141,12 @@ logs (SPEC §14); until that date they carried the same "no new scope" mark.
 | Domain records: DORA incidents, IRS 1099-DA transactions, fund metrics, microfinance | `dora_incident.py`, `tx_evidence.py`, `fundcert_canonical.py`, `fundcert_crosssource.py`, `microfinance.py` |
 | Payment entry profile `cryptovalid-payment/1` and a "not before" bound from the NIST Randomness Beacon 2.0 (SPEC §18, §19), since 0.26.0 | `cryptovalid_beacon.py`, `verify_evidence.py beacon` |
 | Integrity metadata (W3C SRI, as SD-JWT VC `#integrity` claims) and HTTP digests (RFC 3230, RFC 9530), since 0.26.0 | `cryptovalid_sri.py`, `cryptovalid_httpdigest.py` |
+| SLH-DSA (FIPS 205) archival anchors `omega-slhdsa-anchor-v2`, verification only (SPEC §24; the `slh` extra), since 0.29.0 | `cryptovalid_slhdsa.py` |
 | Auditor report (HTML/PDF) | `cryptovalid_report.py` |
 | Regulatory profiles (SPEC §8) | `refresh_regulatory.py`, `spec/regulatory_profiles.json` |
 | Development tooling | `mutation_runner.py` |
 
-Each experimental module documents its use in its docstring; 20 of the 34 also print their usage with `--help`. The
+Each experimental module documents its use in its docstring; 20 of the 35 also print their usage with `--help`. The
 release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ### What omega-cra-evol relies on
@@ -314,8 +315,9 @@ Other people's work this repository uses, each under its own licence:
   services in `spec/vectors/rfc3161/`; RFC 3161 tokens committed in thebristolsound/birdbrain (MIT), esig/dss of the
   European Commission (LGPL-2.1) and dfandrich/fileviewinfo (MIT), licence text beside them, in
   `spec/vectors/rfc3161/third_party/`; the Cedar policy and the key-window, chain-link and embedded-key vectors of
-  ScopeBlind/agent-governance-testvectors (Apache-2.0, licence text beside them) and receipts made with protect-mcp 0.29.0 (MIT) in `examples/acta/`. See
-  [NOTICE](NOTICE).
+  ScopeBlind/agent-governance-testvectors (Apache-2.0, licence text beside them) and receipts made with protect-mcp 0.29.0 (MIT) in `examples/acta/`;
+  84 SLH-DSA sigVer cases of NIST ACVP-Server (NIST notice kept) in `spec/vectors/slhdsa/`. See [NOTICE](NOTICE).
+- **Code ported from the author's Apache-2.0 projects**: the SLH-DSA anchor verification of pq-scitt (`cryptovalid_slhdsa.py`).
 - **Data not shipped**: no ISO 4217 table; `tools/iso4217_table.py` builds the one you pin (`--currency-table`) from your
   own download of list one (SPEC §18 "Currencies").
 - **Independent implementations used as oracles in the tests** (not part of the package): pycose 1.1.0 (BSD-3-Clause)
@@ -324,7 +326,7 @@ Other people's work this repository uses, each under its own licence:
   and filippo.io/mldsa (BSD-3-Clause) for notes, checkpoints and tiles (`verifiers/note_oracle`, `verifiers/tile_oracle`);
   @veritasacta/verify 0.10.18 (Apache-2.0) for the Acta receipts.
 - **Libraries and tools at run time**: OpenSSL (Apache-2.0) for RFC 3161 tokens and certificate chains; pyca/cryptography
-  (Apache-2.0 or BSD-3-Clause).
+  (Apache-2.0 or BSD-3-Clause); slh-dsa (colinxu2020/slhdsa, LGPL-3.0-or-later, the optional `slh` extra) for SLH-DSA.
 - **Formats and prior art** cited where they are used: the deployed NIST Beacon 2.0 serialization, cross-checked with
   clcert/beacon-verifier (MIT, no code copied; SPEC §19); Tierion's Chainpoint and IACR ePrint 2019/644 (SPEC §19 rule 10);
   the RFCs, C2SP specifications, W3C and IETF drafts named with their versions in the SPEC.

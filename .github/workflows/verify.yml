@@ -28,14 +28,14 @@ jobs:
 
       - name: Install optional deps (hash verifier itself is stdlib-only) + a REAL PKCS#11 HSM bench
         run: |
-          pip install cryptography 'ap2-evidence-pack>=1.6.0,<2' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
+          pip install cryptography 'ap2-evidence-pack>=1.6.0,<2' 'slh-dsa>=0.2.5' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
           sudo apt-get update -qq && sudo apt-get install -y -qq softhsm2 opensc
 
       - name: Unit tests — every suite in the repo (signer, evidence pack, merkle, TSA, LOTL, KMS/HSM)
         run: |
           for t in test_*.py; do
             echo "== $t"
-            CV_REQUIRE_CRYPTO=1 python3 "$t"
+            CV_REQUIRE_CRYPTO=1 CV_REQUIRE_SLHDSA=1 python3 "$t"
           done
 
       - name: "AP2 front-end without the package: a refusal that names it, exit 1, never a traceback"

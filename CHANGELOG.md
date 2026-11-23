@@ -92,6 +92,24 @@ combinations of ten defects against the outcome §5.4 predicts and §5.7 link fo
 caught, one equivalent (the bare-link comparison after the exact one). Eleven existing tests changed with the rules above (one renamed).
 Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those of the suite above).
 
+### SLH-DSA (FIPS 205) archival anchors: `cryptovalid_slhdsa` (SPEC v0.15 §24)
+
+- `cryptovalid_slhdsa.verify_anchor(anchor, pub=None)` verifies an `omega-slhdsa-anchor-v2`, the archival anchor of
+  pq-scitt (a hash signed with SLH-DSA, FIPS 205 pure, empty context), and returns `valid`, a closed `code` and the
+  reason. Ported from pq-scitt 9692a74 (`src/pq_scitt/anchors/slh_dsa.py`, Apache-2.0, same author): verification only,
+  v2 only (a v1 anchor of the `slhdsa` backend is the library's internal interface, not FIPS 205 pure: refused with
+  `schema`). The members are a closed list; `sig` and `pub` must be lowercase hex of the parameter set's lengths; a
+  pinned key that differs is `pin` before any signature is checked. Experimental, no command line.
+- The signature is checked with the `slh-dsa` package (LGPL-3.0-or-later), the new optional extra `slh`; without it a
+  well-formed anchor raises `CheckNotRun` (never valid), and the format refusals are the same.
+- Vectors: 84 cases of the NIST ACVP SLH-DSA sigVer file (`spec/vectors/slhdsa/`, the twelve parameter sets, the first
+  case of each of the seven reasons; NOTICE), each with its `testPassed`, and two anchors made by pq-scitt's own
+  `create_anchor` (sha2_128f; shake_128s with a non-ASCII root). Measured on 2026-11-23 with slh-dsa 0.2.5 under Python
+  3.9, 3.11 and 3.13: 84/84 and 2/2; the twelve valid cases with one bit flipped, refused. Generated inputs (every member
+  removed, unknown members, every JSON type in every member, hex variants, other sets' lengths, bits of the signature
+  and of the key) each give the code of SPEC §24 rule 5, with and without the library; the 42 token mutants of the
+  module are each caught by `test_slhdsa_20261123.py`.
+
 ### The depth and surrogate scans of `verifier.py` jump to the characters that matter
 
 `json_nesting_depth` and `has_lone_surrogate`, run on every line the verifier and the writer read, walked each character
