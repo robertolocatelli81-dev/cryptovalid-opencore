@@ -143,11 +143,12 @@ logs (SPEC §14); until that date they carried the same "no new scope" mark.
 | Integrity metadata (W3C SRI, as SD-JWT VC `#integrity` claims) and HTTP digests (RFC 3230, RFC 9530), since 0.26.0 | `cryptovalid_sri.py`, `cryptovalid_httpdigest.py` |
 | SLH-DSA (FIPS 205) archival anchors `omega-slhdsa-anchor-v2`, verification only (SPEC §24; the `slh` extra), since 0.29.0 | `cryptovalid_slhdsa.py` |
 | DSSE envelopes with in-toto Statements (GitHub and Sigstore attestations), verification only (SPEC §25), since 0.29.0 | `cryptovalid_dsse.py` |
+| Verification of composite ML-DSA signatures (RFC 10073: ML-DSA-65 with Ed25519, ECDSA P-256 or P-384; SPEC §29), since 0.29.0 | `cryptovalid_composite.py` |
 | Auditor report (HTML/PDF) | `cryptovalid_report.py` |
 | Regulatory profiles (SPEC §8) | `refresh_regulatory.py`, `spec/regulatory_profiles.json` |
 | Development tooling | `mutation_runner.py` |
 
-Each experimental module documents its use in its docstring; 20 of the 36 also print their usage with `--help`. The
+Each experimental module documents its use in its docstring; 20 of the 37 also print their usage with `--help`. The
 release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ### What omega-cra-evol relies on

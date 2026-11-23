@@ -63,6 +63,26 @@ vds 3 was `UNSUPPORTED_VDS`.
   consistency proofs, its 13 same-size cases refused as draft -00 §7.1.1 writes. No public receipt of inclusion in the
   draft -00 form was found: the inclusion tests use receipts signed here (`test_mmr_receipts_20261123.py`).
 
+### Verification of composite ML-DSA signatures, RFC 10073 (SPEC v0.15 §29)
+
+New experimental module `cryptovalid_composite.py`: `verify(alg, public_key, message, signature, ctx=b"")` for
+`id-MLDSA65-Ed25519-SHA512`, `id-MLDSA65-ECDSA-P256-SHA512` and `id-MLDSA65-ECDSA-P384-SHA512` (by name or OID), as
+RFC 10073 §3.3 writes it: valid if and only if the ML-DSA-65 signature (over M', the Label as context) and the
+traditional one (over M') both are; exact key and signature lengths, an uncompressed point, ECDSA in DER only; the
+answer names the component that failed. It signs nothing and uses the ML-DSA-65 of `cryptography` the repository
+already requires for the `[sign]` extra (no new dependency). The hybrid of this format is still not a composite (SPEC
+§15), and the module never reads a ledger entry's `signer` / `signer_pq`.
+
+- Vectors, measured on 2026-11-23: RFC 10073 Appendix E as printed in rfc10073.txt and as in lamps-wg/draft-composite-sigs
+  `src/testvectors.json` (commit b9e2674): for the three algorithms, `s` and `sWithContext` verify, and are refused
+  with one bit changed, with the other ctx and under the other two algorithms; the two copies are identical. Both are
+  IETF contributions under BCP 78 and are not shipped: the test reads them from `CV_RFC10073_TXT` /
+  `CV_COMPOSITE_VECTORS` and is skipped, saying so, without them. The two M' of Appendix D are checked in the test.
+- Mindburn-Labs/helm-ai-kernel (ba872ee) calls its Ed25519 + ML-DSA-65 envelope "composite": it is two independent
+  signatures over the same preimage, ML-DSA with an empty context (`hybrid_verifier.go`, `mldsa_verifier.go`), the
+  construction of SPEC §15; its vector pair, presented as an RFC 10073 signature, is refused (measured on two messages;
+  its ML-DSA half signs the preimage with an empty context, not M'; not shipped).
+
 ### `cryptovalid_acta` follows draft-farley-acta-signed-receipts-04
 
 The -04 of the draft was posted on 2026-11-22 (datatracker, checked on 2026-11-23: revision 04, no -05; individual

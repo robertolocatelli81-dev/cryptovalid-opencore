@@ -410,7 +410,9 @@ v0.15 also adds §24, the SLH-DSA archival anchor `omega-slhdsa-anchor-v2` (FIPS
 the properties a weekly fuzz run holds three readers to, and §27, the GitHub Action. Additive: no existing input
 changes verdict.
 v0.15 also adds §28, the COSE Receipts of an MMR (vds 3, draft-ietf-scitt-receipts-mmr-profile-00) in the experimental
-`cryptovalid_cose_receipts.py`: additive, a receipt with vds 3 was `UNSUPPORTED_VDS` before.
+`cryptovalid_cose_receipts.py`: additive, a receipt with vds 3 was `UNSUPPORTED_VDS` before. And §29, the verification of a
+composite ML-DSA signature of RFC 10073 (three ML-DSA-65 algorithms) in the new experimental `cryptovalid_composite.py`:
+additive.
 
 ## 7. Conformance (normative)
 
@@ -1018,7 +1020,9 @@ Rules of this format (NORMATIVE since v0.8):
    (`expected_pq_pubkey_b64`, `require_pq`: the stripped layer is then `pq_missing`, §5), not the signature itself. A
    reader who needs "both or nothing" inside one signature value needs the composite, not this format.
 
-Not claimed: that anything in this repository implements RFC 10073. The test builds composite signatures with a helper
+Since v0.15 (§29) `cryptovalid_composite.py` verifies composite signatures of RFC 10073 for three ML-DSA-65
+algorithms; it signs nothing, and the hybrid of this section stays what it is. Until v0.15: nothing in this repository
+implemented RFC 10073. The test builds composite signatures with a helper
 of its own; with the RFC's text given (`CV_RFC10073_TXT=<path to rfc10073.txt>`) it also checks that helper against the
 two signatures of Appendix E for `id-MLDSA65-Ed25519-SHA512` (they verified on 2026-11-15); the vector is not shipped
 here.
@@ -2674,3 +2678,38 @@ file, this verifier follows the draft's text:
   (`-1` before `24`) is refused here. Forestrie refuses an array, a map, a tag, `undefined`, simple value 40 and a
   negative label beyond 64 bits under a label it does not read; the draft ignores such a label "whatever the type of
   its values": the six rows are accepted here. The other 45 rows agree.
+
+## 29. Verification of a composite ML-DSA signature, RFC 10073 (NORMATIVE since v0.15, 2026-11-23)
+
+`cryptovalid_composite.py` (experimental module) verifies a signature of RFC 10073, *Composite Module-Lattice-Based
+Digital Signature Algorithm (ML-DSA) for Use in X.509 Public Key Infrastructure* (Proposed Standard, November 2026;
+rfc-editor.org read on 2026-11-23: not obsoleted, not updated; one erratum, 9300, Reported on 2026-11-10, on the
+`CODE STARTS` tag of the ASN.1 module of §7, which this section does not use). It does not sign,
+and nothing in this format is signed with it: §15 stays, the hybrid of this format is not a composite. This section
+was written before the code.
+
+1. **Algorithms** (RFC 10073 §6), each by its name or its OID: `id-MLDSA65-Ed25519-SHA512` (1.3.6.1.5.5.7.6.48),
+   `id-MLDSA65-ECDSA-P256-SHA512` (1.3.6.1.5.5.7.6.45, ecdsa-with-SHA256 on secp256r1) and
+   `id-MLDSA65-ECDSA-P384-SHA512` (1.3.6.1.5.5.7.6.46, ecdsa-with-SHA384 on secp384r1): ML-DSA-65 with the
+   traditional algorithms the COSE verifiers of this repository already check. Any other name is refused
+   (`UNSUPPORTED_ALG`); the RSA, brainpool, Ed448, ML-DSA-44 and ML-DSA-87 combinations are not verified here.
+2. **Verify** follows §3.3: `ctx` longer than 255 bytes is an error; `M' = Prefix || Label || len(ctx) || ctx ||
+   SHA512(M)` with Prefix the ASCII bytes of `CompositeAlgorithmSignatures2025` (§2.2) and the algorithm's Label; the
+   ML-DSA-65 signature is checked over `M'` with the Label as its context, the traditional one over `M'`; the result is
+   valid if and only if both are, and the answer names the component that failed.
+3. **Keys and signatures are closed** (§4.1, §4.3, §4: "if any of the component keys or signature values are not of
+   the correct type or length ... output Invalid signature"): the public key is `mldsaPK || tradPK` with the 1952 bytes
+   of ML-DSA-65 first; the traditional key is 32 bytes for Ed25519, and for ECDSA an uncompressed X9.62 point (0x04,
+   then 64 or 96 bytes; a compressed point is refused) on the algorithm's curve. The signature is `mldsaSig ||
+   tradSig` with the 3309 bytes of ML-DSA-65 first; Ed25519 64 bytes; ECDSA an `Ecdsa-Sig-Value` in DER (RFC 3279
+   §2.2.3; §4: "All ASN.1 objects SHALL be encoded using DER"): a value that is not DER (a long-form length, a
+   superfluous leading zero, a byte after the SEQUENCE, COSE's raw r || s) is refused before any signature check.
+4. **Keys do not move between the two constructions** (§15 rule 3; RFC 10073 §5.3, §9.3): the verifier takes the
+   composite public key as one value and never reads the `signer` / `signer_pq` fields of a ledger entry, and the
+   ledger verifier never reads a composite key. A relying party that holds a hybrid pair of this format has no
+   composite key: it MUST NOT concatenate them into one.
+5. **Vectors.** The test vectors of RFC 10073 Appendix E (the copy of lamps-wg/draft-composite-sigs, `src/testvectors.json`,
+   commit b9e2674) are IETF contributions under BCP 78, not shipped here (as in §15); the test reads them from a
+   path given in `CV_COMPOSITE_VECTORS` or `CV_RFC10073_TXT`. Measured on 2026-11-23 with both: the signatures `s`
+   (empty ctx) and `sWithContext` of the three algorithms verify, and are refused with one bit changed, with the
+   other ctx, under another of the three algorithms and with the ECDSA signature re-encoded in non-minimal BER.
