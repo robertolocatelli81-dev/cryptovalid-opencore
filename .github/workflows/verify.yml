@@ -164,7 +164,7 @@ jobs:
           if cargo run -q --release --manifest-path verifiers/rust/Cargo.toml -- examples/sample_ledger_tampered.jsonl; then
             echo "::error::rust verifier accepted a tampered ledger"; exit 1; fi
           cargo run -q --release --manifest-path verifiers/rust/Cargo.toml -- examples/sample_ledger.jsonl > /dev/null
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: "1.27"   # crypto/mldsa (ML-DSA-65 hybrid tip) is stdlib since Go 1.27; older toolchains build the compat file (pq_unverifiable)
       - name: Go verifier + writer — race tests, shared vectors, rejects the tampered ledger
