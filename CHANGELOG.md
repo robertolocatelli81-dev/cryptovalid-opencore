@@ -184,10 +184,19 @@ Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those 
   code of rule 6; 94 of the 96 token mutants of the module are caught, the other two (`validate=True` after a regular
   expression that already admits only base64) change nothing.
 
+### CI on every Python, macOS and Windows, on every branch
+
+- `verify.yml`: the suites, the conformance vectors and the steps without `cryptography` run on Python 3.9, 3.10, 3.11,
+  3.12, 3.13 and 3.14 (before: 3.9 and 3.11); a new job `other-os` runs every `test_*.py` with and without
+  `cryptography`, and `conformance.py`, on macOS and Windows with Python 3.13.
+- `codeql.yml` and `governance.yml` run on a push to any branch, not only to master; on a push of a branch other than
+  master the DCO job checks every commit not on master (before, only on pull requests). The OpenSSF Scorecard stays
+  on master: it rates the default branch.
+
 ### CodeQL and a weekly fuzz run (SPEC v0.15 §26)
 
 - `.github/workflows/codeql.yml`: CodeQL analysis of the Python code (github/codeql-action v4.39.4) on every push and
-  pull request to master and every Monday; results to code scanning. Read-only token, `security-events: write` in that
+  pull request, on any branch, and every Monday; results to code scanning. Read-only token, `security-events: write` in that
   job only.
 - `.github/workflows/fuzz-weekly.yml` with `tools/fuzz_readers.py`, ported from omega-evidence's weekly fuzz job
   (Apache-2.0, same author): every Monday on a new seed (the run number), 20 minutes per cell, Python 3.9, 3.11 and

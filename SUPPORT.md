@@ -19,8 +19,8 @@ time for questions. Security reports have the times stated in SECURITY.md.
   supported on the day the next one is published. There are no maintenance branches. Before 1.0 a minor release
   (0.y) may contain a breaking change of the declared API, announced as [API.md](API.md) says; pin with
   `cryptovalid-opencore~=0.Y.0` to stay on one minor.
-- **Python:** the versions run by CI on every push, 3.9 and 3.11; the package declares `>=3.9`. A Python version is
-  dropped only in a minor release, with a line in `CHANGELOG.md`, and not before its upstream end of life.
+- **Python:** the versions run by CI on every push, 3.9 to 3.14 on Linux, and 3.13 on macOS and Windows; the
+  package declares `>=3.9`. A Python version is dropped only in a minor release, with a line in `CHANGELOG.md`, and not before its upstream end of life.
 - **The evidence format:** a ledger that is valid under a published version of `SPEC_EVIDENCE_FORMAT.md` stays
   verifiable by later releases (the versioning rules are in §6 of the specification). This outlives the support of
   any single release, because the records are meant to.

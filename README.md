@@ -87,7 +87,8 @@ reader gone), whatever the verdict.
 ## Proofs
 
 - **CI on every push and weekly** ([verify.yml](.github/workflows/verify.yml)): every `test_*.py` suite on Python 3.9
-  and 3.11, the conformance vectors, a real PKCS#11 token (SoftHSM2) signing a ledger end to end, a tampered ledger
+  to 3.14 on Linux and 3.13 on macOS and Windows, with and without `cryptography`, the conformance vectors, a real
+  PKCS#11 token (SoftHSM2) signing a ledger end to end, a tampered ledger
   that must be refused, the declared dependency floors, and the verifiers in the other languages.
 - **Verifiers in six languages, by the same author:** Python (`verifier.py`, the reference), JavaScript
   (`verifiers/js`), Go (`verifiers/go`, which also writes ledgers), Java (`verifiers/java/CvVerify.java`, JDK

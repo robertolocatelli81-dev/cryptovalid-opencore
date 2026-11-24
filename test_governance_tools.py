@@ -163,9 +163,10 @@ class TestGovernanceFilesNameRealThings(unittest.TestCase):
         for cmd in ("for t in test_*.py; do", "python3 conformance.py", "python3 verifiers/differential_oracle.py"):
             self.assertIn(cmd, contributing)
             self.assertIn(cmd, ci)
-        self.assertIn('python-version: ["3.9", "3.11"]', ci)       # the versions CONTRIBUTING.md and SUPPORT.md state
+        self.assertIn('python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]', ci)   # what CONTRIBUTING.md and SUPPORT.md state
+        self.assertIn("os: [macos-latest, windows-latest]", ci)
         for doc in ("CONTRIBUTING.md", "SUPPORT.md"):
-            self.assertRegex(self.read(doc), r"3\.9 and 3\.11")
+            self.assertRegex(self.read(doc), r"3\.9 to 3\.14 on Linux, and 3\.13\s+on macOS and Windows")
         gov = self.read(os.path.join(".github", "workflows", "governance.yml"))
         for script in re.findall(r"python3 ((?:tools/)?[a-z_]+\.py)", contributing + gov):
             self.assertTrue(os.path.isfile(os.path.join(HERE, script)), script)

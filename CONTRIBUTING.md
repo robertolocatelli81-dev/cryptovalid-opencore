@@ -41,7 +41,8 @@ its idea is welcome as an issue.
    python3 verifiers/differential_oracle.py     # needs node, go, cargo and a JDK; CI runs it if you cannot
    ```
 
-   These are the commands of `.github/workflows/verify.yml`, which runs them on Python 3.9 and 3.11.
+   These are the commands of `.github/workflows/verify.yml`, which runs them on Python 3.9 to 3.14 on Linux, and 3.13
+   on macOS and Windows.
 3. **The core hash verifier stays standard-library only.** `verifier.py` must import and run on a Python with no
    third-party package installed.
 4. **A change of behaviour of a verifier is made in every verifier** (`verifier.py` and `verifiers/`), or the change

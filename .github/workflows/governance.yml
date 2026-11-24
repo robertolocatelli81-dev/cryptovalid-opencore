@@ -6,7 +6,6 @@ name: governance
 on:
   pull_request:
   push:
-    branches: [master]
 
 permissions:
   contents: read
@@ -14,15 +13,18 @@ permissions:
 jobs:
   dco:
     # OSPS Baseline LE-01.01: every commit asserts the right to contribute it (Signed-off-by, file DCO)
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Every commit of a pushed branch that is not on master is signed off by its author
+        if: github.event_name == 'push' && github.ref != 'refs/heads/master'
+        run: python3 tools/check_dco.py --exempt-author '49699333+dependabot[bot]@users.noreply.github.com' "origin/master..$GITHUB_SHA"
       - name: Every commit of the pull request is signed off by its author
+        if: github.event_name == 'pull_request'
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}

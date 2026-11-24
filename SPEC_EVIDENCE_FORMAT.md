@@ -2593,7 +2593,7 @@ members removed, added, renamed, written twice, of another type, nested) and req
    the fuzzer's process (`--ablate ledger|dsse|slhdsa`: the chain verdict, the DSSE signature, the SLH-DSA signature):
    the same seed must then report violations, or the job fails.
 A violation fails the job; the inputs that broke a rule are kept as an artifact of the run. CodeQL (`codeql.yml`)
-analyses the Python code on every push and pull request to master and every week; its findings go to code scanning.
+analyses the Python code on every push and pull request and every week; its findings go to code scanning.
 
 ## 27. The verification Action (NORMATIVE since v0.15, 2026-11-23)
 

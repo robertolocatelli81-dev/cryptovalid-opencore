@@ -5,9 +5,7 @@ name: codeql
 
 on:
   push:
-    branches: [master]
   pull_request:
-    branches: [master]
   schedule:
     - cron: "29 4 * * 1"   # Mondays 04:29 UTC
 
