@@ -142,9 +142,14 @@ class ArchiveUnsealedSegment(unittest.TestCase):
                 if kind == "directory":
                     os.mkdir(op)
                 elif kind == "device":
+                    if os.name == "nt":   # a link to a device needs privileges there: the device case is \\.\NUL in Readers
+                        continue
                     os.symlink("/dev/zero", op)
                 elif kind == "fifo":
-                    os.mkfifo(op)
+                    from test_platforms_20261124 import fifo_at   # a segment name inside the archive: POSIX only
+                    if not hasattr(os, "mkfifo"):
+                        continue
+                    fifo_at(self, op)
                 r = I.verify_archive(d)
                 with self.subTest(kind=kind):
                     if kind in ("regular", "gone"):

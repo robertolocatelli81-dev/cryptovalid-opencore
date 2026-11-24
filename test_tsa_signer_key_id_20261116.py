@@ -213,7 +213,9 @@ class SignerByKeyId(unittest.TestCase):
         store = os.path.join(self.td, "store")
         os.makedirs(store, exist_ok=True)
         shutil.copy(self.other.j("ca.crt"), os.path.join(store, "b-ca.pem"))
-        _run("openssl", "rehash", store)
+        # the hashed name `openssl rehash` makes (<subject hash>.0); the Windows builds of openssl have no rehash command
+        h = _run("openssl", "x509", "-hash", "-noout", "-in", os.path.join(store, "b-ca.pem")).stdout.decode().strip()
+        shutil.copy(os.path.join(store, "b-ca.pem"), os.path.join(store, h + ".0"))
         tok = self.other.resign(self.tok)
         old = os.environ.get("SSL_CERT_DIR")
         os.environ["SSL_CERT_DIR"] = store

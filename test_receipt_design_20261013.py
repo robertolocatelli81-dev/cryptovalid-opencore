@@ -20,7 +20,7 @@ the 13/10 bench found still open after the first 0.20.3 commits, and the command
 - a check that cannot be RUN here (openssl that cannot be started under RLIMIT_NPROC 1, no temporary file for it) is 74,
   never a verdict on the input (a valid evidence pack was `valid: false`, exit 1);
 - a command run under a file size limit no longer leaves a cut .pyc that makes every later run exit 1 (CPython 3.9, 3.11).
-Every test here fails on 0.20.2 (c289480). Linux only (bash `ulimit`, O_NONBLOCK pipes); macOS and Windows not measured."""
+Every test here fails on 0.20.2 (c289480). Measured on Linux, macOS and Windows (CI); the `ulimit -f` cases skip on Windows, which has no such limit."""
 import json
 import os
 import shlex
@@ -40,6 +40,7 @@ SAMPLE = os.path.join(HERE, "examples", "sample_ledger.jsonl")
 TAMPERED = os.path.join(HERE, "examples", "sample_ledger_tampered.jsonl")
 EX_IOERR = 74
 ENV = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+NO_FSIZE = ("Windows has no per-process file-size limit (RLIMIT_FSIZE, ulimit -f): a write cut at a chosen byte cannot be made there; ENOSPC is measured on the full volume (test_receipt_not_written)")
 
 
 def _crypto():
@@ -54,6 +55,8 @@ def _crypto():
 
 def sh(script, argv, env=None, timeout=120):
     """bash -c script with "$@" = argv; returns (rc, stdout, stderr)"""
+    if os.name == "nt" and "ulimit" in script:
+        raise unittest.SkipTest(NO_FSIZE)
     p = subprocess.run([BASH, "-c", script, "_"] + list(argv), capture_output=True, timeout=timeout, env=env or ENV)
     return p.returncode, p.stdout, p.stderr
 
@@ -377,6 +380,8 @@ class TestLedgerWholeLine(_Tmp):
             self.assertEqual(f.read(), before)
 
     def test_ingest_flush(self):
+        if os.name == "nt":
+            self.skipTest(NO_FSIZE)
         script = r'''
 import os, resource, sys, json
 sys.path.insert(0, sys.argv[1])
