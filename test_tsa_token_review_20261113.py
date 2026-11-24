@@ -213,7 +213,8 @@ class HandBuiltTokens(unittest.TestCase):
                                   "import os, subprocess, sys\nif sys.argv[1:2] == ['ts']:\n    os._exit(-1073741819)\n"
                                   "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:]))")
         try:
-            with self.assertRaises(CheckNotRun):
+            from test_platforms_20261124 import fake_calls
+            with self.assertRaises(CheckNotRun, msg=fake_calls(os.path.join(self.d, "binkill"))):
                 T.verify_token(self.token(self.k, self.c, self.tstinfo()), DIGEST, "sha256", [self.pin])
         finally:
             restore()
@@ -242,7 +243,9 @@ class HandBuiltTokens(unittest.TestCase):
                                   "import os, subprocess, sys\nif sys.argv[1:2] == ['ts']:\n    sys.exit(0)\n"
                                   "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:]))")
         try:
-            self.assertEqual(self.outcome(tok, self.pin), ("invalid", "not_issued_by_pinned_tsa"))
+            from test_platforms_20261124 import fake_calls
+            self.assertEqual(self.outcome(tok, self.pin), ("invalid", "not_issued_by_pinned_tsa"),
+                             fake_calls(os.path.join(self.d, "bin")))
         finally:
             restore()
 

@@ -321,17 +321,41 @@ def make_private(path):
 
 _FAKE_SITE = r'''
 import os, sys
-if os.path.basename(sys.executable).lower() == "openssl.exe" and os.environ.get("CV_FAKE_OPENSSL"):
+_body = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "fake_body.py")
+if os.path.basename(sys.executable).lower() == "openssl.exe" and os.path.isfile(_body):
     sys.argv = list(sys.orig_argv[1:])   # the arguments openssl was given (sys.argv is not set yet here)
+    with open(os.path.join(os.path.dirname(_body), "fake_calls.log"), "a", encoding="utf-8") as _f:
+        _f.write(repr(sys.argv) + "\n")   # what the stand-in was asked, for a failing test to show
     code = 0
     try:
-        exec(os.environ["CV_FAKE_OPENSSL"])
+        with open(_body, encoding="utf-8") as _f:
+            exec(compile(_f.read(), _body, "exec"))
     except SystemExit as e:
         code = e.code if isinstance(e.code, int) else 1
+    except BaseException as e:   # a body that breaks says so in the log, not as a silent exit 1
+        code = 1
+        with open(os.path.join(os.path.dirname(_body), "fake_calls.log"), "a", encoding="utf-8") as _f:
+            _f.write("  body raised %r\n" % (e,))
+    with open(os.path.join(os.path.dirname(_body), "fake_calls.log"), "a", encoding="utf-8") as _f:
+        _f.write("  -> exit %s\n" % code)
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(code)
 '''
+
+
+def fake_calls(bindir):
+    """the argument lists the stand-in openssl was called with (Windows), or a note that it never was"""
+    try:
+        with open(os.path.join(bindir, "fake_calls.log"), encoding="utf-8") as f:
+            return "fake openssl calls: " + f.read()
+    except OSError:
+        return "the fake openssl was never called" if os.name == "nt" else "(POSIX shell stand-in)"
+
+
+def _write_fake_body(d, body, real):
+    with open(os.path.join(d, "fake_body.py"), "w", encoding="utf-8", newline="") as f:
+        f.write("import os\nos.environ.setdefault('CV_REAL_OPENSSL', %r)\n%s\n" % (real, body))
 
 
 def fake_openssl(tc, bindir, sh_body, py_body):
@@ -368,16 +392,27 @@ def fake_openssl(tc, bindir, sh_body, py_body):
     base = os.path.dirname(getattr(sys, "_base_executable", sys.executable))
     with open(os.path.join(bindir, "pyvenv.cfg"), "w", encoding="utf-8", newline="") as f:
         f.write("home = %s\ninclude-system-site-packages = true\nversion = %s\n" % (base, sysconfig.get_python_version()))
-    site = os.path.join(bindir, "site")
+    # everything the stand-in needs lies beside it, nothing in the environment: the venv's own site-packages holds the
+    # hook (the base Python reads it as the venv's), fake_body.py the body (run 45474879960: the stand-in answered the
+    # probe but not the calls the code made, the environment variables it relied on were not what that run had)
+    site = os.path.join(bindir, "Lib", "site-packages")
     os.makedirs(site, exist_ok=True)
     with open(os.path.join(site, "sitecustomize.py"), "w", encoding="utf-8", newline="") as f:
         f.write(_FAKE_SITE)
-    env.update(PYTHONPATH=site, CV_FAKE_OPENSSL=py_body)
-    # the stand-in must answer as itself before a test relies on it: a launcher that did not start this Python, or a
-    # hook that did not run, fails here with what it printed (not later as an unexplained verdict)
-    probe = subprocess.run([exe, "probe-1", "probe 2"], capture_output=True, timeout=120,
-                           env=dict(os.environ, **dict(env, CV_FAKE_OPENSSL="import sys; print('FAKE', sys.argv)")))
-    if probe.stdout.strip() != b"FAKE ['probe-1', 'probe 2']":
+    _write_fake_body(bindir, py_body, real)
+    probe_dir = os.path.join(bindir, "probe")
+    os.makedirs(probe_dir, exist_ok=True)
+    for n in os.listdir(bindir):   # a second stand-in, for the probe only, with its own body
+        if n.lower() in ("openssl.exe", "pyvenv.cfg"):
+            shutil.copy(os.path.join(bindir, n), os.path.join(probe_dir, n))
+    shutil.copytree(os.path.join(bindir, "Lib"), os.path.join(probe_dir, "Lib"))
+    # the probe also goes through to the real openssl, as the bodies do
+    _write_fake_body(probe_dir, "import os, subprocess, sys\nr = subprocess.run([os.environ['CV_REAL_OPENSSL'], 'version'], "
+                     "capture_output=True)\nprint('FAKE', sys.argv, r.returncode, r.stderr[-200:])", real)
+    clean = {k: v for k, v in os.environ.items() if not k.startswith(("PYTHON", "CV_FAKE"))}
+    probe = subprocess.run([os.path.join(probe_dir, "openssl.exe"), "probe-1", "probe 2"], capture_output=True,
+                           timeout=120, env=clean)
+    if probe.stdout.strip() != b"FAKE ['probe-1', 'probe 2'] 0 b''":
         tc.fail("the fake openssl.exe did not run its body: rc %s, stdout %r, stderr %r"
                 % (probe.returncode, probe.stdout[-300:], probe.stderr[-300:]))
     return env
@@ -960,8 +995,8 @@ class FakeOpensslOnWindows(unittest.TestCase):
             f.write(_FAKE_SITE)
         exe = os.path.join(d, "openssl.exe")
         os.symlink(sys.executable, exe)
-        env = dict(os.environ, PYTHONPATH=site,
-                   CV_FAKE_OPENSSL="import sys; print('|'.join(sys.argv)); sys.exit(127)")
+        _write_fake_body(d, "import sys; print('|'.join(sys.argv)); sys.exit(127)", "openssl")
+        env = dict(os.environ, PYTHONPATH=site)   # here the hook is found through PYTHONPATH (not a venv)
         r = subprocess.run([exe, "ts", "-verify", "-in", "x"], capture_output=True, env=env, timeout=60)
         self.assertEqual((r.returncode, r.stdout.strip()), (127, b"ts|-verify|-in|x"), r.stderr[-300:])
         r = subprocess.run([sys.executable, "-c", "print('python')"], capture_output=True, env=env, timeout=60)
