@@ -97,7 +97,7 @@ there should know:
   written in the ANSI code page, cp1252, with CRLF; a reason outside it ended in exit 74). `PYTHONIOENCODING` still
   chooses another encoding.
 - **Key files** (`keygen`) and WORM objects are the owner's alone: on Windows through the access list (one entry, the
-  user, full control, nothing inherited; set with `icacls` before the first byte), since a mode there only sets the
+  user, full control, nothing inherited; set with SetFileSecurityW before the first byte), since a mode there only sets the
   read-only attribute.
 - **Locks between processes** (the witness state, the SCITT ledger) are byte-range locks on Windows, `flock` elsewhere.
 - **The trusted-list cache** is `~/.cache/cryptovalid`, i.e. `%USERPROFILE%\.cache\cryptovalid` on Windows.

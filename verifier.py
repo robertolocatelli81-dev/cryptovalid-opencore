@@ -359,21 +359,36 @@ def _fchmod(fd: int, path: str, mode: int) -> None:
 
 
 def owner_only(path: str) -> None:
-    """Windows' equivalent of mode 0600 / 0400 (a mode there only sets the read-only attribute): a protected DACL that
-    grants the user running this process alone full control, nothing inherited (icacls /inheritance:r /grant:r
-    *SID:F; the SID from whoami). OSError when it cannot be set: a private file is then not written."""
+    """Windows' equivalent of mode 0600 / 0400 (a mode there only sets the read-only attribute): the file's access list
+    is replaced by one entry, the user running this process, full control, protected from inheritance (SDDL
+    "D:P(A;;FA;;;<SID>)", SetFileSecurityW; the SID from whoami). OSError when it cannot be set: a private file is
+    then not written. (icacls /inheritance:r /grant:r left the explicit entries a new file gets on a runner: SYSTEM,
+    Administrators, OWNER RIGHTS; CI run 45356889667.)"""
+    import ctypes
     import re
     import subprocess
+    from ctypes import wintypes
     sysdir = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
     who = subprocess.run([os.path.join(sysdir, "whoami.exe"), "/user", "/fo", "csv", "/nh"], capture_output=True,
                          timeout=60)
     sid = re.findall(rb'"(S-1-[0-9-]+)"', who.stdout)
     if who.returncode != 0 or len(sid) != 1:
         raise OSError(f"cannot read the SID of this user (whoami exit {who.returncode})")
-    r = subprocess.run([os.path.join(sysdir, "icacls.exe"), path, "/inheritance:r", "/grant:r",
-                        "*" + sid[0].decode("ascii") + ":F"], capture_output=True, timeout=60)
-    if r.returncode != 0:
-        raise OSError(f"cannot restrict the file to its owner (icacls exit {r.returncode})")
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    conv = adv.ConvertStringSecurityDescriptorToSecurityDescriptorW
+    conv.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p)
+    conv.restype = wintypes.BOOL
+    setsec = adv.SetFileSecurityW
+    setsec.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
+    setsec.restype = wintypes.BOOL
+    sd = ctypes.c_void_p()
+    if not conv("D:P(A;;FA;;;%s)" % sid[0].decode("ascii"), 1, ctypes.byref(sd), None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        if not setsec(os.fspath(path), 0x4 | 0x80000000, sd):   # DACL | PROTECTED_DACL_SECURITY_INFORMATION
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        ctypes.WinDLL("kernel32").LocalFree(sd)
 
 
 def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = None) -> str:
