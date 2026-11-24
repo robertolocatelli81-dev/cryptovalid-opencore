@@ -247,10 +247,11 @@ class TestPromisedFileOverExisting(_Tmp):
         priv = os.path.join(self.d, "priv.json")
         with open(priv, "w", encoding="utf-8", newline="") as f:
             f.write("x")
-        os.chmod(priv, 0o600)
+        from test_platforms_20261124 import assert_private, make_private   # Windows: the access list
+        make_private(priv)
         p = subprocess.run([BASH, "-c", 'umask 022; exec "$@"', "_", PY, v, SAMPLE, "--out", priv], capture_output=True, env=ENV)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(stat.S_IMODE(os.stat(priv).st_mode), 0o600, "the receipt's mode was widened")
+        assert_private(self, priv, 0o600)   # the receipt's mode (Windows: its access list) was not widened
 
     def test_pack_copy_keeps_mode_and_refuses_read_only(self):
         from verifier import OutputNotWritten, copy_output
@@ -259,13 +260,14 @@ class TestPromisedFileOverExisting(_Tmp):
         dst = os.path.join(self.d, "dst.jsonl")
         with open(dst, "w", encoding="utf-8", newline="") as f:
             f.write("old")
-        os.chmod(dst, 0o600)
+        from test_platforms_20261124 import assert_private, make_private   # Windows: the access list
+        make_private(dst)
         old = os.umask(0o022)
         try:
             copy_output(src, dst)
         finally:
             os.umask(old)
-        self.assertEqual(stat.S_IMODE(os.stat(dst).st_mode), 0o600)
+        assert_private(self, dst, 0o600)
         with open(dst, "rb") as a, open(SAMPLE, "rb") as b:
             self.assertEqual(a.read(), b.read())
         os.chmod(dst, 0o444)
@@ -608,6 +610,9 @@ class TestLibraryPaths(unittest.TestCase):
 
 class TestIngestBatchKept(unittest.TestCase):
     def test_failed_batch_written_by_the_next_flush(self):
+        if os.name == "nt":
+            self.skipTest("Windows has no per-process file-size limit (RLIMIT_FSIZE): a write cut at a chosen byte "
+                          "cannot be made there")
         d = tempfile.mkdtemp(prefix="cv-review-")
         script = r'''
 import resource, signal, sys

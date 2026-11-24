@@ -295,6 +295,15 @@ def make_unreadable(tc, path):
     tc.addCleanup(cleanup)
 
 
+def make_private(path):
+    """mode 0600 on POSIX; on Windows the access list of a key (verifier.owner_only)"""
+    if os.name == "nt":
+        import verifier
+        verifier.owner_only(path)
+    else:
+        os.chmod(path, 0o600)
+
+
 
 def _git(*args):
     return subprocess.run(["git", "-C", _HERE] + list(args), capture_output=True)
@@ -508,6 +517,26 @@ class PrivateFiles(unittest.TestCase):
         self.assertTrue(events[0][1].startswith("k.key.") and events[2][1].startswith("obj."))
         self.assertEqual(events[4], ("chmod", "obj", 0o400))   # read-only once the temporary name is gone
         self.assertEqual(sorted(os.listdir(d)), ["k.key", "obj", "r.json"])
+
+    def test_a_replaced_file_keeps_its_access_list_on_windows(self):
+        """the mode of a file write_output or copy_output replaces is kept; on Windows its access list is (run
+        45356889667: a private receipt replaced by the rename got the folder's list)"""
+        import tempfile
+        from unittest import mock
+        import verifier as V
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        p, src = os.path.join(d, "r.json"), os.path.join(d, "src")
+        for q in (p, src):
+            with open(q, "wb") as f:
+                f.write(b"old")
+        copied = []
+        with mock.patch.object(os, "name", "nt"), mock.patch.object(V, "_replace", os.replace), \
+                mock.patch.object(V, "_copy_dacl", lambda a, b: copied.append((a, os.path.basename(b)))):
+            V.write_output(p, "{}")
+            V.copy_output(src, p)
+        self.assertEqual([a for a, _ in copied], [os.path.realpath(p)] * 2)
+        self.assertTrue(all(b.startswith("r.json.") and b.endswith(".tmp") for _, b in copied), copied)
 
     def test_a_key_and_a_worm_object_are_private(self):
         import tempfile

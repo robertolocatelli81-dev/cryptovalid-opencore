@@ -398,7 +398,34 @@ def owner_only(path: str) -> None:
         ctypes.WinDLL("kernel32").LocalFree(sd)
 
 
-def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = None) -> str:
+def _copy_dacl(src: str, dst: str) -> None:
+    """Windows: `dst` gets the access list of `src` (GetFileSecurityW / SetFileSecurityW, DACL and its protection): the
+    equivalent of keeping the mode of the file a temporary replaces (a private receipt replaced by a rename was given
+    the folder's inherited list: run 45356889667, test_outcome_review "the receipt's mode was widened")."""
+    import ctypes
+    from ctypes import wintypes
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    get = adv.GetFileSecurityW
+    get.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD))
+    get.restype = wintypes.BOOL
+    ctl = adv.GetSecurityDescriptorControl
+    ctl.argtypes = (ctypes.c_void_p, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD))
+    setsec = adv.SetFileSecurityW
+    setsec.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
+    setsec.restype = wintypes.BOOL
+    need = wintypes.DWORD(0)
+    get(os.fspath(src), 0x4, None, 0, ctypes.byref(need))   # DACL_SECURITY_INFORMATION: the size first
+    buf = ctypes.create_string_buffer(need.value or 1)
+    if not get(os.fspath(src), 0x4, buf, need, ctypes.byref(need)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    c, rev = wintypes.WORD(0), wintypes.DWORD(0)
+    ctl(buf, ctypes.byref(c), ctypes.byref(rev))
+    info = 0x4 | (0x80000000 if c.value & 0x1000 else 0x20000000)   # SE_DACL_PROTECTED: PROTECTED_ / UNPROTECTED_DACL
+    if not setsec(os.fspath(dst), info, buf):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = None, like: Optional[str] = None) -> str:
     """Write `data` (str as UTF-8, or bytes) to a NEW temporary file next to `path` and return its name; on failure
     remove it and raise OutputNotWritten. The name is `<path>.<16 random hex>.tmp`, created with O_CREAT|O_EXCL (never
     an existing file, a symlink or a FIFO planted at a predictable name); written in a loop that checks the count,
@@ -416,7 +443,9 @@ def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = No
         try:
             if exact_mode is not None:
                 _fchmod(fd, tmp, exact_mode)
-            if os.name == "nt" and (mode if exact_mode is None else exact_mode) & 0o077 == 0:
+            if os.name == "nt" and like is not None:
+                _copy_dacl(like, tmp)   # before the first byte: the access list of the file it will replace
+            elif os.name == "nt" and (mode if exact_mode is None else exact_mode) & 0o077 == 0:
                 owner_only(tmp)   # before the first byte: a key is never readable by another user, even for a moment
             _write_fd(fd, raw)
             os.fsync(fd)
@@ -499,7 +528,7 @@ def write_output(path: str, data, mode: int = 0o666) -> None:
         return
     # an existing file keeps its mode (a caller that asks for a mode, the key files, gets that mode)
     keep = stat.S_IMODE(st.st_mode) if st is not None and mode == 0o666 else None
-    commit_tmp(write_tmp(path, data, mode, exact_mode=keep), path)
+    commit_tmp(write_tmp(path, data, mode, exact_mode=keep, like=path if st is not None and os.name == "nt" else None), path)
 
 
 def write_new(path: str, data, mode: int = 0o600) -> None:
@@ -547,6 +576,8 @@ def copy_output(src: str, path: str) -> None:
                 if st is not None:
                     try:
                         _fchmod(fd, tmp, stat.S_IMODE(st.st_mode))   # the existing file's mode, as shutil.copyfile kept it
+                        if os.name == "nt":
+                            _copy_dacl(path, tmp)   # and on Windows its access list, the mode's equivalent there
                     except OSError as e:
                         raise lost(e) from None
                 while True:
