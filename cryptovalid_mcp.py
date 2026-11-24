@@ -59,6 +59,10 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Dict, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -411,7 +415,7 @@ def main() -> int:
         if not line:
             continue
         try:   # NaN / Infinity are not JSON (RFC 8259 §6): a parse error, never an id echoed back as NaN
-            msg = json.loads(line, parse_constant=_not_json)
+            msg = json_loads(line, parse_constant=_not_json)
         except (ValueError, RecursionError):   # RecursionError: a line nested deeper than the parser goes
             emit(json.dumps(_rpc_error(None, -32700, "parse error")), flush=True)
             continue

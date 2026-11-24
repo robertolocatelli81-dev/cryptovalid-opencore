@@ -84,6 +84,10 @@ import stat
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 DRAFT = "draft-farley-acta-signed-receipts-04 (2026-11-22, expires 2027-05-26; individual Internet-Draft)"
 DECISIONS = ("allow", "deny", "rate_limit", "require_approval")
@@ -941,7 +945,7 @@ def run_vectors(repo_root: str, out_dir: str, seed_hex: str, issued_at_base: Opt
     summary = {"kid": kid, "public_key_hex": pub.hex(), "policy_digest": pd, "receipts": []}
     inputs = sorted(f for f in os.listdir(inputs_dir) if f.endswith(".json"))
     for n, fname in enumerate(inputs, 1):
-        inp = json.loads(read_regular(os.path.join(inputs_dir, fname)).decode("utf-8"))
+        inp = json_loads(read_regular(os.path.join(inputs_dir, fname)).decode("utf-8"))
         seq = inp.get("sequence", n)
         if not isinstance(seq, int) or isinstance(seq, bool) or not 1 <= seq <= 999:
             raise ValueError(f"{fname}: sequence must be an integer in 1..999 (it becomes the millisecond of issued_at)")
@@ -1009,7 +1013,7 @@ def load_json_strict(path: str, what: str = "JSON") -> Any:
     text = read_regular(path).decode("utf-8")
     if _json_nesting_exceeds(text, JCS_MAX_DEPTH):
         raise ValueError(f"{what} {path}: nesting deeper than {JCS_MAX_DEPTH} levels refused (the JCS limit of this module)")
-    return json.loads(text, parse_constant=_no_constant, object_pairs_hook=_no_dup_keys)
+    return json_loads(text, parse_constant=_no_constant, object_pairs_hook=_no_dup_keys)
 
 
 def _b64url_ed25519_x(kid: str, x: Any) -> bytes:

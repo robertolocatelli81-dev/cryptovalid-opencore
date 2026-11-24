@@ -45,6 +45,10 @@ import json
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Dict, List
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 from fundcert_canonical import _canon_quantity   # riuso: stessa canonicalizzazione, zero divergenza
 
@@ -191,7 +195,7 @@ def verify_attestation(att: Dict, txs: List[Tx]) -> Dict:
 
 
 def _load_txs(path: str) -> List[Tx]:
-    rows = json.loads(read_text_regular(path))   # SPEC §5 step 0: opened once without blocking
+    rows = json_loads(read_text_regular(path))   # SPEC §5 step 0: opened once without blocking
     return [Tx(txid=str(r.get("txid", i)), kind=r["kind"], asset=r["asset"],
                qty=str(r["qty"]), unit_price=str(r.get("unit_price", "0")),
                currency=r.get("currency", "USD"), ts=r.get("ts", ""),
@@ -225,7 +229,7 @@ def main(argv=None) -> int:
                          ensure_ascii=False, indent=1))
         return 0
     if a.cmd == "verify":
-        att = json.loads(read_text_regular(a.attestation_json))
+        att = json_loads(read_text_regular(a.attestation_json))
         r = verify_attestation(att, _load_txs(a.transactions_json))
         emit(json.dumps(r, ensure_ascii=False, indent=1))
         return 0 if r["valid"] else 1

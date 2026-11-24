@@ -78,6 +78,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Dict, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 import cryptovalid_net as _net
 
@@ -593,7 +597,7 @@ class AwsKmsHttpBackend:
         op = target.rsplit(".", 1)[-1]
         try:   # 08/11/2026: HTTP/network/answer errors = one readable RuntimeError (no credentials in the text)
             with _net.open_url(req, 20, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP) as r:   # fixed AWS endpoint, or loopback
-                return json.loads(_net.read_body(r))   # SPEC v0.13 §21 rule 6: bounded
+                return json_loads(_net.read_body(r))   # SPEC v0.13 §21 rule 6: bounded
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"AWS KMS {op} HTTP {e.code} for {self._key_id}: {_http_error_text(e)}") from None
         except urllib.error.URLError as e:
@@ -633,7 +637,7 @@ class AwsKmsHttpBackend:
 def _http_error_text(e) -> str:
     """Short reason from an HTTP error body (Vault {"errors": [...]}, AWS {"__type", "message"}); never the request."""
     try:
-        body = json.loads(_net.read_body(e, 1 << 20).decode("utf-8", "replace") or "{}")   # SPEC v0.13 §21 rule 6
+        body = json_loads(_net.read_body(e, 1 << 20).decode("utf-8", "replace") or "{}")   # SPEC v0.13 §21 rule 6
     except Exception:  # noqa: BLE001 — a body that is not JSON: only the status is reported
         return ""
     if isinstance(body, dict):
@@ -684,7 +688,7 @@ class VaultTransitBackend:
         except (OSError, ValueError) as e:   # socket timeout (TimeoutError), reset, bad URL
             raise RuntimeError(f"Vault unreachable at {self._url}: {type(e).__name__}: {str(e)[:150]}") from None
         try:
-            return json.loads(raw.decode())
+            return json_loads(raw.decode())
         except ValueError:
             raise RuntimeError(f"Vault answered {method} {path} with something that is not JSON") from None
 
@@ -813,7 +817,7 @@ class NetHsmBackend:
                                               "Content-Type": "application/json"})
         with _net.open_url(req, 30, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP) as r:
             raw = _net.read_body(r)   # SPEC v0.13 §21 rule 6: bounded
-            return json.loads(raw.decode()) if raw else {}
+            return json_loads(raw.decode()) if raw else {}
 
     def keygen(self) -> str:
         """Genera la Ed25519 SULL'HSM (serve il ruolo Administrator)."""

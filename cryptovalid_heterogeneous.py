@@ -35,6 +35,10 @@ if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecod
         _L0210.get_code = _get_code_0210
 import json
 from typing import Callable, Dict, List, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 
 def _verify_solana(att: Dict, digest_hex: str) -> bool:
@@ -136,7 +140,7 @@ def main(argv=None):
     p.add_argument("attestations_json", help="JSON file: list of attestations [{\"domain\": ...}, ...]")
     p.add_argument("--min-domains", type=int, default=2)
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
-    atts = json.loads(read_text_regular(a.attestations_json))   # SPEC §5 step 0: opened once without blocking
+    atts = json_loads(read_text_regular(a.attestations_json))   # SPEC §5 step 0: opened once without blocking
     r = verify_heterogeneous_anchor(a.digest_sha3_hex, atts, min_domains=a.min_domains)
     emit(json.dumps(r, ensure_ascii=False, indent=1))
     return 0 if r.get("ok") else 1

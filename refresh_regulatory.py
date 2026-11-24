@@ -42,6 +42,10 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Dict, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PROFILES = os.path.join(_HERE, "spec", "regulatory_profiles.json")
@@ -71,7 +75,7 @@ def _reachable(url: str, timeout: int = 15) -> bool:
 def refresh(profiles_path: str = PROFILES, check_urls: bool = False, now: Optional[datetime] = None) -> Dict:
     """`now` (timezone-aware) defaults to the system clock; tests pass a fixed instant so their verdict does not
     depend on the calendar. The command line always uses the clock: staleness is what it reports."""
-    prof = json.loads(read_text_regular(profiles_path))   # SPEC §5 step 0: a regular file, opened once without blocking
+    prof = json_loads(read_text_regular(profiles_path))   # SPEC §5 step 0: a regular file, opened once without blocking
     if now is None:
         now = datetime.now(timezone.utc)
     elif now.tzinfo is None:

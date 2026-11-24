@@ -67,6 +67,10 @@ import threading
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 import cryptovalid_merkle as merkle
 
@@ -245,7 +249,7 @@ class Ingestor:
                     good_end += len(line)
                     continue
                 try:
-                    e = json.loads(line)
+                    e = json_loads(line)
                 except (ValueError, RecursionError):          # not JSON, not UTF-8, nested too deep to parse
                     e = None
                 if not isinstance(e, dict):
@@ -451,7 +455,7 @@ class Ingestor:
         prev = self._seg_path(self._seq - 1) + ".sth.json" if self._seq > 0 else None
         if prev and os.path.exists(prev):
             import verifier
-            return _sth_canonical_hash(json.loads(verifier.read_text_regular(prev)))   # SPEC §5 step 0
+            return _sth_canonical_hash(json_loads(verifier.read_text_regular(prev)))   # SPEC §5 step 0
         return GENESIS_PREV
 
     def close(self, seal: bool = True):
@@ -506,7 +510,7 @@ def _load_json_object(path):
     """(object, None) or (None, reason): a file that is not UTF-8 JSON, or not a JSON object, is a named failure."""
     import verifier
     try:   # SPEC §5 step 0: opened once without blocking (a FIFO as *.sth.json or *.head.json blocked here, 18/11/2026)
-        obj = json.loads(verifier.read_regular(path).decode("utf-8"), object_pairs_hook=verifier._reject_dup)
+        obj = json_loads(verifier.read_regular(path).decode("utf-8"), object_pairs_hook=verifier._reject_dup)
     except (OSError, ValueError, RecursionError) as e:   # UnicodeDecodeError and JSONDecodeError are ValueError
         if str(e).startswith("duplicate JSON key"):   # SPEC v0.13 §21 rule 2: a tree head or a HEAD with a key written
             return None, "duplicate_key"              # twice is refused (until 0.27.0 the last value was read, ok true)

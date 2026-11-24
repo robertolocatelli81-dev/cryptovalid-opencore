@@ -46,6 +46,10 @@ import json
 import os
 import sys
 from typing import Dict, List, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 
 # attestation fields excluded from the content hash: classical (signature/signer) and, since 0.12.0, the
@@ -447,7 +451,7 @@ def _load_line(ln):
     # SPEC §3: "duplicate object keys — a strict parser MUST reject them"; SPEC v0.13 §21 rule 2: until 0.27.0 this
     # reader kept the last of two equal keys and verified the signature over it (verifier.py refused the same line)
     try:
-        return json.loads(ln, object_pairs_hook=_no_duplicate_keys)
+        return json_loads(ln, object_pairs_hook=_no_duplicate_keys)
     except _DuplicateKey:
         return _Undecodable("duplicate_key")
     except (ValueError, RecursionError):

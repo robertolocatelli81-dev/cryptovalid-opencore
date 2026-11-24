@@ -56,6 +56,10 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 # i verificatori di riferimento (verifier.py, evidence_pack.py…) possono stare:
@@ -242,7 +246,7 @@ def _pack_layers(r: dict, pack_dir: str) -> list:
     try:
         # SPEC §5 step 0: opened once without blocking (a FIFO as MANIFEST.json blocked here until 0.26.0)
         with os.fdopen(_open_regular(os.path.join(pack_dir, "MANIFEST.json")), encoding="utf-8") as fh:
-            sig_present = bool(json.load(fh).get("manifest_signature"))
+            sig_present = bool(json_loads(fh.read()).get("manifest_signature"))
     except (OSError, ValueError, AttributeError, RecursionError):   # nesting past the parser: unreadable, never a traceback
         sig_present = False
     # a manifest signature that is PRESENT but does not verify is tampering, never "unsigned" (audit V1 #1, 30/09/2026)
@@ -373,7 +377,7 @@ def verify_cldma(path: str) -> dict:
         import committed_attestation as cldma
         import verifier
         # SPEC §5 step 0 (v0.11): opened once without blocking, bounded (a FIFO here hung until 0.26.0)
-        att = json.loads(verifier.read_regular(path, _AUTO_JSON_LIMIT).decode("utf-8"))
+        att = json_loads(verifier.read_regular(path, _AUTO_JSON_LIMIT).decode("utf-8"))
         ok = cldma.verify_attestation(att)
         layers.append(_check("cldma.totals", "PASS" if ok else "FAIL"))
         # disciplina dual-hash (2026-08-22): guardia di coerenza che SA fallire — riproducibilita' del calcolo
@@ -409,7 +413,7 @@ def _not_recognised(why: str) -> dict:
 
 def _json_value(text: str, what: str):
     try:
-        return json.loads(text)
+        return json_loads(text)
     except RecursionError:
         raise _NotRecognised(f"{what}: JSON nested deeper than the parser allows") from None
     except ValueError as e:
@@ -723,7 +727,7 @@ def load_profile(path: str) -> dict:
     if raw.startswith(b"\xef\xbb\xbf"):
         raise ProfileError("starts with a UTF-8 byte order mark")
     try:
-        doc = json.loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
+        doc = json_loads(raw.decode("utf-8"), object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
     except UnicodeDecodeError as e:
         raise ProfileError(f"not UTF-8 (byte {e.start})") from None
     except RecursionError:

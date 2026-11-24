@@ -31,6 +31,10 @@ import os
 import stat
 import struct
 import zlib
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 
 def leaf_hash(data: bytes) -> bytes:
@@ -170,7 +174,7 @@ def leaves_from_ledger(path):
     # the file is JSON, so UTF-8 whatever the locale; closed deterministically; SPEC §5 step 0: a regular file, opened
     # once without blocking (InputNotRegular / InputTooLarge are OSError)
     with os.fdopen(open_regular(path), encoding="utf-8") as f:
-        return [canonical(json.loads(line)) for line in f if line.strip()]
+        return [canonical(json_loads(line)) for line in f if line.strip()]
 
 
 def tree_head(leaves):

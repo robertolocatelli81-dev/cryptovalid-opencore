@@ -48,6 +48,10 @@ import argparse
 import base64
 import hashlib
 import json
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 try:  # depth bound shared with the reference verifier (same repo, flat layout)
     from verifier import MAX_JSON_DEPTH as _MAX_JSON_DEPTH, json_nesting_depth as _json_depth
 except Exception:  # noqa: BLE001 — packaged/relative layouts
@@ -84,7 +88,7 @@ def _canon(obj: Dict) -> bytes:
 def _first_entry(path: str) -> Dict:
     try:
         with os.fdopen(verifier.open_regular(path), encoding="utf-8") as f:   # SPEC §5 step 0
-            return json.loads(f.readline() or "{}")
+            return json_loads(f.readline() or "{}")
     except Exception:  # noqa: BLE001
         return {}
 
@@ -106,7 +110,7 @@ def _entries_and_head_data(data: bytes):
             for ln in f:
                 if ln.strip():
                     n += 1
-                    head = json.loads(ln).get("self_hash")
+                    head = json_loads(ln).get("self_hash")
     except Exception:  # noqa: BLE001
         pass
     return n, head
@@ -398,7 +402,7 @@ def _has_signature_field_data(data: bytes) -> bool:
                 if not ln.strip():
                     continue
                 try:
-                    e = json.loads(ln)
+                    e = json_loads(ln)
                 except (ValueError, RecursionError):
                     continue
                 if isinstance(e, dict) and any(k in e for k in _SIG_FIELDS):
@@ -578,7 +582,7 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
         # Nesting beyond the normative bound (linear pre-scan, same rule as verifier.py, 2026-09-13)
         return _refused(f"json_too_deep: MANIFEST nesting {depth} exceeds the acceptance-profile bound {_MAX_JSON_DEPTH}", "malformed")
     try:
-        man = json.loads(raw, object_pairs_hook=verifier._reject_dup)   # 0.22.0: a key twice is a refusal, not "last wins"
+        man = json_loads(raw, object_pairs_hook=verifier._reject_dup)   # 0.22.0: a key twice is a refusal, not "last wins"
     except ValueError as e:
         if str(e).startswith("duplicate JSON key"):
             return _refused(f"manifest_duplicate_key: {str(e)[19:][:120]}", "malformed")

@@ -57,6 +57,10 @@ import base64
 import hashlib
 import json
 from typing import Any, Dict, List, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 import cryptovalid_receipt as R
 from cryptovalid_acta import _no_dup_keys, jcs
@@ -232,7 +236,7 @@ def _loads_lines(text: str, what: str) -> List[Dict[str, Any]]:
             if _deeper_than(line, MAX_DEPTH):
                 raise CedulonError(LINE_STAGE[what], f"{what} line {i + 1}: nested more than {MAX_DEPTH} deep")
             try:
-                v = json.loads(line, object_pairs_hook=_no_dup_keys,
+                v = json_loads(line, object_pairs_hook=_no_dup_keys,
                                parse_constant=lambda x: (_ for _ in ()).throw(ValueError(f"non-JSON constant {x}")))
             except ValueError as e:                       # the stage that reads this file
                 raise CedulonError(LINE_STAGE[what], f"{what} line {i + 1}: {e}")
@@ -288,7 +292,7 @@ def _webauthn_ok(sig: Dict[str, Any], cred: Dict[str, Any], rp_ids: Optional[Lis
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     ad, cdj, sg = _b64u(sig["authenticatorData"]), _b64u(sig["clientDataJSON"]), _b64u(sig["signature"])
-    cd = json.loads(cdj, object_pairs_hook=_no_dup_keys)
+    cd = json_loads(cdj, object_pairs_hook=_no_dup_keys)
     if not isinstance(cd, dict) or cd.get("type") != "webauthn.get" or len(ad) < 37:
         return False
     if rp_ids is None:

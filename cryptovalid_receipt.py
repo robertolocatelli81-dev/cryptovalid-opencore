@@ -49,6 +49,10 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cryptovalid_merkle as M  # noqa: E402
@@ -238,7 +242,7 @@ def inclusion_receipt(ledger_path: str, index: int, keyfile: str, tsa_url: Optio
     sth = signed_tree_head(leaves, keyfile)
     path = [h.hex() for h in M.inclusion_proof(index, leaves)]
     import io
-    entry = [json.loads(l) for l in io.StringIO(read_text_regular(ledger_path)) if l.strip()][index]   # SPEC §5 step 0
+    entry = [json_loads(l) for l in io.StringIO(read_text_regular(ledger_path)) if l.strip()][index]   # SPEC §5 step 0
     r = {"kind": KIND, "proof_type": "inclusion", "vds": "RFC9162_SHA256",
          "leaf_index": index, "tree_size": len(leaves), "inclusion_path": path,
          "leaf_sha256": M.leaf_hash(leaves[index]).hex(), "entry_self_hash": entry.get("self_hash"),
@@ -547,7 +551,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             write_output(args.cose, to_cose(r, args.keyfile))   # 0.20.3: whole, or exit 74
         emit(json.dumps(r, indent=1)); return 0
     if args.cmd == "consistency":
-        old = json.loads(read_input_text(args.old_sth_json))   # SPEC §5 step 0: a regular file or a pipe, bounded
+        old = json_loads(read_input_text(args.old_sth_json))   # SPEC §5 step 0: a regular file or a pipe, bounded
         r = consistency_receipt(old.get("sth", old), args.ledger, args.keyfile)
         emit(json.dumps(r, indent=1)); return 0 if r.get("ok", True) else 1
     def _no_dup(pairs):   # SPEC v0.13 §21 rule 2: a key written twice is refused (until 0.27.0 the last value was read)
@@ -560,7 +564,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     def _load(path, what):   # unreadable / not JSON / not an object: a verdict, never a traceback (audit V1 #7)
         try:
-            obj = json.loads(read_text_regular(path), object_pairs_hook=_no_dup)   # SPEC §5 step 0: opened once without blocking
+            obj = json_loads(read_text_regular(path), object_pairs_hook=_no_dup)   # SPEC §5 step 0: opened once without blocking
         except (OSError, ValueError, RecursionError) as e:
             return None, f"{what} unreadable: " + ("duplicate_key" if str(e) == "duplicate_key" else type(e).__name__)
         return (obj, None) if isinstance(obj, dict) else (None, f"{what} is not a JSON object")

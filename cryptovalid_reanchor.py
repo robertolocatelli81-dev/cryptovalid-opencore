@@ -33,6 +33,10 @@ if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecod
         _L0210.get_code = _get_code_0210
 import json
 from typing import Callable, Dict, List, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 
 def assess(retention: Dict, age_days: Optional[float], min_witnesses: int = 2,
@@ -97,7 +101,7 @@ def main(argv=None):
     p.add_argument("--age-days", type=float, required=True)
     p.add_argument("--min-witnesses", type=int, default=2)
     a = p.parse_args(sys.argv[1:] if argv is None else argv)
-    ret = json.loads(read_text_regular(a.retention_json))   # SPEC §5 step 0: opened once without blocking
+    ret = json_loads(read_text_regular(a.retention_json))   # SPEC §5 step 0: opened once without blocking
     r = assess(ret, a.age_days, a.min_witnesses)
     emit(json.dumps(r, ensure_ascii=False, indent=1))
     return 1 if r["needs_reanchor"] else 0

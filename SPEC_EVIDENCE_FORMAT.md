@@ -844,7 +844,8 @@ does not exist or cannot be read; anything that is neither a directory nor a reg
 reads a pipe); an empty or blank file; bytes that are not UTF-8 in a line up to the first non-blank one (later lines of a
 ledger are judged by `ledger`, which names them); a JSON value other than those of the table (an array, a
 string, an object with other members); a first line that is not a JSON object (a document written over several lines,
-binary data); JSON nested deeper than the parser allows.
+binary data); JSON nested deeper than 512 levels (§30; until 0.29.0 the parser's limit, which moved with the
+Python version).
 
 The rows of a directory are tried in the order of the table (an evidence pack first). A file is read as a signed note
 only when it was read whole and holds at most 1 MiB, the limit of a note file on the command line (§13).
@@ -2722,3 +2723,14 @@ was written before the code.
    (`src/testvectors.json`, commit b9e2674): identical for the three algorithms. Measured on 2026-11-23: the signatures `s`
    (empty ctx) and `sWithContext` of the three algorithms verify, and are refused with one bit changed, with the
    other ctx, under another of the three algorithms and with the ECDSA signature re-encoded in non-minimal BER.
+
+## 30. One nesting bound for every JSON text (NORMATIVE since v0.15, 2026-11-24)
+
+Every JSON text the reference implementation reads — ledger lines, tree heads and HEADs, manifests, receipts, tips,
+profiles, state files, MCP messages, documents of other formats — is refused when its nesting exceeds 512 levels
+(`MAX_JSON_DEPTH`, the bound §3 already set for a ledger line), measured by a linear scan before it is parsed. Each
+reader answers such a text as it answers a text too deep to parse (the same reason and the same outcome), at every depth
+over 512 and on every Python. Until 0.29.0 most readers left the depth to Python's parser, whose limit moved with the
+version (measured on 2026-11-24: a `RecursionError` from 1 100 levels under Python 3.9 and 3.11, 20 000 under 3.13,
+100 000 under 3.14): a text 5 000 levels deep was refused under 3.9 and read under 3.13. A format with a lower bound
+of its own (Cedulon: 500) keeps it.

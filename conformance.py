@@ -34,6 +34,10 @@ import json
 import os
 import sys
 from typing import Callable, Dict
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
@@ -62,7 +66,7 @@ def run(verify_fn: Callable[[str], Dict] = verifier.verify_ledger) -> Dict:
     results, conformant = [], True
     for exp_path in sorted(glob.glob(os.path.join(VDIR, "*.expected.json"))):
         with open(exp_path, encoding="utf-8") as f:
-            exp = json.load(f)
+            exp = json_loads(f.read())
         n = exp["normative"]
         got = _normalize(verify_fn(os.path.join(VDIR, exp["input"])))
         ok = all(got[k] == n[k] for k in NORMATIVE_KEYS)

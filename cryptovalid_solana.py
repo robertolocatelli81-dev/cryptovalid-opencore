@@ -48,6 +48,10 @@ import json
 import re
 import urllib.request
 import urllib.parse
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 import cryptovalid_net as _net
 
@@ -80,7 +84,7 @@ def _rpc(url, method, params, timeout):
                                  headers={"Content-Type": "application/json",
                                           "User-Agent": "cryptovalid-solana/1.0"})
     with _net.open_url(req, timeout, _net.ALLOW_HTTP_OR_HTTPS) as r:
-        d = json.loads(_net.read_body(r).decode())   # SPEC v0.13 §21 rule 6: bounded
+        d = json_loads(_net.read_body(r).decode())   # SPEC v0.13 §21 rule 6: bounded
     if "error" in d:
         raise ValueError(f"rpc error: {str(d['error'])[:120]}")
     return d.get("result")

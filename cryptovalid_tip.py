@@ -50,6 +50,10 @@ import re
 import sys
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 KIND = "cryptovalid_tip/1"
 # SPEC v0.14 §22 rule 2: the tip is a CLOSED object, these members and no other (the five signed ones, the key and
@@ -155,7 +159,7 @@ def chain_tip(ledger_path: str) -> Dict:
                 continue
             n += 1
             try:
-                obj = json.loads(line)
+                obj = json_loads(line)
                 h = obj["self_hash"]
             except (ValueError, KeyError, TypeError):
                 raise ValueError(f"line {n}: not a JSON object with a self_hash — cannot compute the tip of a broken file")

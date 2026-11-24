@@ -50,6 +50,10 @@ import sys
 import threading
 import time
 from typing import Dict, List, Optional, Union
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 import cryptovalid_checkpoint as C
 
@@ -61,7 +65,7 @@ def _load_state(path: str) -> Dict:
     if not os.path.exists(path):
         return {"origins": {}}
     try:
-        st = json.loads(read_text_regular(path))   # SPEC §5 step 0: the witness's own state, a regular file
+        st = json_loads(read_text_regular(path))   # SPEC §5 step 0: the witness's own state, a regular file
     except (OSError, ValueError) as e:      # unreadable or not JSON: a clear error, not a dead connection
         raise C.NoteError(f"witness state file unreadable: {os_error_text(e)}") from None
     if not isinstance(st, dict) or not isinstance(st.get("origins"), dict):
@@ -298,7 +302,7 @@ def _cosign_locked(state_path, cp, proof, witness_name, witness_seed, timestamp,
                 lines = lines[1:]           # the first piece is the tail of a cut line (a full line is kept)
             for line in lines:
                 try:
-                    rec = json.loads(line.decode("utf-8"))
+                    rec = json_loads(line.decode("utf-8"))
                 except ValueError:
                     continue
                 if not isinstance(rec, dict):
@@ -782,7 +786,7 @@ def main(argv=None) -> int:
         refuse_directory(a.out)   # 0.20.3: before the state records the cosignature, never after it
         try:
             note = read_input(a.note)   # SPEC §5 step 0: a regular file or a pipe, bounded
-            proof = json.loads(a.proof) if a.proof else None
+            proof = json_loads(a.proof) if a.proof else None
             if proof is not None and not (isinstance(proof, list) and all(isinstance(x, str) for x in proof)):
                 raise C.NoteError("--proof must be a JSON list of base64 strings")
             r = witness_cosign(a.state, note, a.log_vkey, a.name, C.load_seed_hex(a.key), proof,

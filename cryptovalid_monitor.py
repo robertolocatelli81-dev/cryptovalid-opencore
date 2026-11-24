@@ -40,6 +40,10 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cryptovalid_merkle as M  # noqa: E402
@@ -53,7 +57,7 @@ def _now() -> str:
 def _load_state(path: str) -> Optional[Dict]:
     if not os.path.exists(path):
         return None
-    return json.loads(read_text_regular(path))   # SPEC §5 step 0: opened once without blocking
+    return json_loads(read_text_regular(path))   # SPEC §5 step 0: opened once without blocking
 
 
 def find_matches(ledger_path: str, patterns: List[str], since_index: int = 0) -> Dict:
@@ -75,7 +79,7 @@ def find_matches(ledger_path: str, patterns: List[str], since_index: int = 0) ->
             if not line.strip():
                 continue
             idx += 1
-            entry = json.loads(line)
+            entry = json_loads(line)
             canon = M.canonical(entry).decode("utf-8")
             for pat, rg in regs:
                 m = rg.search(canon)
@@ -193,7 +197,7 @@ def run(ledger_path: str, state_path: str, keyfile: Optional[str] = None, max_si
             sth_ext = None
             if sth_path and os.path.exists(sth_path):
                 try:
-                    doc = json.loads(read_text_regular(sth_path))   # SPEC §5 step 0: opened once without blocking
+                    doc = json_loads(read_text_regular(sth_path))   # SPEC §5 step 0: opened once without blocking
                     # accetta sia {"sth": {...}} (stato del writer) sia lo STH nudo; tutto il resto è «non valido»
                     sth_ext = doc.get("sth", doc) if isinstance(doc, dict) else None
                     if not isinstance(sth_ext, dict):

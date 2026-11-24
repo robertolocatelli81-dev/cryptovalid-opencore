@@ -274,6 +274,18 @@ In 0.28.1 (earlier releases not measured), a `MANIFEST.json` nested deeper than 
 at 1 100 levels under Python 3.9 and 3.11, at 20 000 under 3.13; not at 900); the runs of a profile, new in this
 release, did the same until this change. It is now the refusal of the manifest, like any other unreadable manifest.
 
+### One nesting bound for every JSON text, on every Python (SPEC §30)
+
+The depth at which Python's JSON parser gives up moved with the version (measured on 2026-11-24: a `RecursionError`
+from 1 100 levels under Python 3.9 and 3.11, 20 000 under 3.13, 100 000 under 3.14), and most readers left the depth to
+it, so the same bytes had two answers: `auto` answered a file 1 100 levels deep "nested deeper than the parser allows"
+under 3.9 and read it under 3.13, and the MCP server answered a message 1 100 levels deep with a parse error under 3.9
+and with a result under 3.13. Every JSON text the code reads now goes through `verifier.json_loads_bounded`: past 512
+levels (the bound §3 already set for a ledger line) it is refused before parsing, and each reader gives the answer it
+gave a text too deep to parse, at every depth and on every Python. Texts 513 to 1 099 levels deep, read until 0.29.0,
+are refused. `test_platforms_20261124.py` checks four readers at 513, 1 100, 5 000 and 30 000 levels (each failed under
+3.9 and 3.13 before the change) and that no module calls `json.loads` or `json.load` outside the bounded reader.
+
 ## 0.28.1 (2026-11-23): verdicts change
 
 ### The segment writer seals before a segment is longer than a verifier reads (SPEC §5 step 0)

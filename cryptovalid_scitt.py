@@ -41,6 +41,10 @@ import os
 import sys
 import time
 from typing import Dict, List, Optional, Tuple
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 import cryptovalid_merkle as M
 import cryptovalid_receipt as R
@@ -175,7 +179,7 @@ def register(cose: bytes, ledger_path: str, issuer_pubkey_hex: str, payload: Opt
         entries = []
         if os.path.exists(ledger_path):
             with os.fdopen(open_regular(ledger_path), encoding="utf-8") as f:   # SPEC §5 step 0: the ledger appended to
-                entries = [json.loads(l) for l in f if l.strip()]
+                entries = [json_loads(l) for l in f if l.strip()]
         prev = entries[-1]["self_hash"] if entries else "0" * 64
         e = {"idx": len(entries), "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
              "data": {"scitt": {"statement_sha256": sid, "iss": v["iss"], "sub": v["sub"],
@@ -276,7 +280,7 @@ def verify_transparent_statement(cose: bytes, issuer_pubkey_hex: str, ts_pubkey_
             leaf_canon = ruh.get(L_LEAF)
             if not isinstance(leaf_canon, bytes):
                 res["why"] = "receipt carries no canonical leaf (cryptovalid.leaf)"; continue
-            entry = json.loads(leaf_canon.decode("utf-8"))
+            entry = json_loads(leaf_canon.decode("utf-8"))
             if not (isinstance(entry, dict) and isinstance(entry.get("data"), dict) and isinstance(entry["data"].get("scitt"), dict)):
                 res["why"] = "the receipt's leaf is not a SCITT registration entry"; continue
             if entry["data"]["scitt"].get("statement_sha256") != want:

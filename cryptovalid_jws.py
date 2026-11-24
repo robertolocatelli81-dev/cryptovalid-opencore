@@ -36,6 +36,10 @@ import json
 import os
 import sys
 from typing import Dict, List, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cryptovalid_merkle as M  # noqa: E402
@@ -109,7 +113,7 @@ def verify(jws: str, trusted_pubkey_hex: Optional[str] = None) -> Dict:
         # RFC 7515 §10.12 (read at rfc-editor.org on 2026-11-20): "JWS parsers MUST either reject JWSs with duplicate
         # Header Parameter names" or keep the lexically last; rejected here (SPEC v0.13 §21 rule 2)
         try:
-            header = json.loads(_b64u_dec(h), object_pairs_hook=_no_duplicate_keys)
+            header = json_loads(_b64u_dec(h), object_pairs_hook=_no_duplicate_keys)
         except _DuplicateKey as e:
             return {"ok": False, "why": f"header_duplicate_key: {e}"[:160]}
         if not isinstance(header, dict):
@@ -136,7 +140,7 @@ def verify(jws: str, trusted_pubkey_hex: Optional[str] = None) -> Dict:
             return {"ok": False, "why": "kid differs from the trusted key"}
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(pk)).verify(_b64u_dec(s), f"{h}.{p}".encode("ascii"))
         try:   # the payload is a ledger record: SPEC §3, a key twice in one object is refused (until 0.27.0 the last won)
-            payload = json.loads(_b64u_dec(p), object_pairs_hook=_no_duplicate_keys)
+            payload = json_loads(_b64u_dec(p), object_pairs_hook=_no_duplicate_keys)
         except _DuplicateKey as e:
             return {"ok": False, "signature_valid": True, "why": f"payload_duplicate_key: {e}"[:160]}
         return {"ok": bool(trusted_pubkey_hex), "signature_valid": True, "header": header, "record": payload,
@@ -163,7 +167,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = p.parse_args(argv)
     if args.cmd == "sign":
         import io
-        entries = [json.loads(l) for l in io.StringIO(read_input_text(args.ledger)) if l.strip()]   # SPEC §5 step 0
+        entries = [json_loads(l) for l in io.StringIO(read_input_text(args.ledger)) if l.strip()]   # SPEC §5 step 0
         emit(sign_entry(entries[args.index], args.keyfile, args.x5c)); return 0
     r = verify(read_text_regular(args.jws_file).strip(), args.trusted_pubkey_hex)   # SPEC §5 step 0: never waits
     emit(json.dumps(r, indent=1, ensure_ascii=False)); return 0 if r["ok"] else 1

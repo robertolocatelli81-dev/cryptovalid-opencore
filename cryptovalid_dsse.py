@@ -25,6 +25,10 @@ import hashlib
 import json
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 import verifier
 
@@ -57,7 +61,7 @@ def _loads(text: str) -> Any:
     """JSON with a name written twice in one object, NaN / Infinity and nesting over 512 refused."""
     if verifier.json_nesting_depth(text) > verifier.MAX_JSON_DEPTH:
         raise ValueError(f"nesting over {verifier.MAX_JSON_DEPTH}")
-    return json.loads(text, object_pairs_hook=verifier._reject_dup,
+    return json_loads(text, object_pairs_hook=verifier._reject_dup,
                       parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f"JSON constant {c}")))
 
 

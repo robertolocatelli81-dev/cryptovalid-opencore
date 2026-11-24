@@ -41,6 +41,10 @@ import json
 import os
 import re
 import cryptovalid_net as _net
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 LOTL_URL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
 _TSL_NS = "http://uri.etsi.org/02231/v2#"   # ETSI TS 119 612 trusted list namespace
@@ -728,7 +732,7 @@ def load_qualified_status(member_states=None, cache_path=None, timeout=45, log=l
             from verifier import read_text_regular
         except ImportError:   # python3 -m opencore.<module> from the parent directory
             from opencore.verifier import read_text_regular
-        d = json.loads(read_text_regular(cache_path))
+        d = json_loads(read_text_regular(cache_path))
         built = _when(d.get("built_at")) if isinstance(d, dict) and isinstance(d.get("built_at"), str) else None
         age = (datetime.now(timezone.utc) - built).total_seconds() if built else None
         if isinstance(d, dict) and d.get("rule") == RULE and isinstance(d.get("fingerprints"), list) \

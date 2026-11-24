@@ -45,6 +45,10 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 DORA_VERSION = "dora-incident-1.0"
 # scadenze DORA (ore/giorni) — ancorate al testo, ri-configurabili se la normativa cambia
@@ -174,7 +178,7 @@ def verify_attestation(att: Dict, phases: List[Phase]) -> Dict:
 
 
 def _load_phases(path: str) -> List[Phase]:
-    rows = json.loads(read_text_regular(path))   # SPEC §5 step 0: opened once without blocking
+    rows = json_loads(read_text_regular(path))   # SPEC §5 step 0: opened once without blocking
     return [Phase(phase=r["phase"], ts=r["ts"], detail=r.get("detail", {})) for r in rows]
 
 
@@ -205,7 +209,7 @@ def main(argv=None) -> int:
                          ensure_ascii=False, indent=1))
         return 0
     if a.cmd == "verify":
-        att = json.loads(read_text_regular(a.attestation_json))   # SPEC §5 step 0: opened once without blocking
+        att = json_loads(read_text_regular(a.attestation_json))   # SPEC §5 step 0: opened once without blocking
         r = verify_attestation(att, _load_phases(a.phases_json))
         emit(json.dumps(r, ensure_ascii=False, indent=1))
         return 0 if r["valid"] else 1

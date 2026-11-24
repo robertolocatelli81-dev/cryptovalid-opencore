@@ -51,6 +51,10 @@ import os
 import sys
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cryptovalid_merkle as M  # noqa: E402
@@ -111,7 +115,7 @@ def _tsa_tokens(entries, tsa_certs=None):
 def _entries(path: str) -> List[Dict]:
     import io
     # SPEC §5 step 0: opened once without blocking; the lines as open() gave them
-    return [json.loads(l) for l in io.StringIO(read_text_regular(path)) if l.strip()]
+    return [json_loads(l) for l in io.StringIO(read_text_regular(path)) if l.strip()]
 
 
 def assess(ledger_path: str, deployment: Optional[Dict] = None, tsa_certs=None) -> Dict:
@@ -279,7 +283,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="pin the TSA certificate (or a CA above it), repeatable: a tsa_token counts only when verified "
                         "against it (SPEC §11)")
     a = p.parse_args(argv)
-    dep = json.loads(a.deployment) if a.deployment else None
+    dep = json_loads(a.deployment) if a.deployment else None
     if a.report:
         emit(json.dumps(ledger_report(a.ledger, a.tsa_cert), indent=1)); return 0
     if a.practice_statement:

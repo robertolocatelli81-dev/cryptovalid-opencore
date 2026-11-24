@@ -37,6 +37,10 @@ import json
 import os
 import time
 import urllib.request
+try:   # SPEC §30: one nesting bound for every JSON text, on every Python
+    from verifier import json_loads_bounded as json_loads
+except ImportError:   # python3 -m opencore.<module> from the parent directory
+    from opencore.verifier import json_loads_bounded as json_loads
 
 import cryptovalid_net as _net
 from typing import Dict, Optional
@@ -66,7 +70,7 @@ def _read_text(path: str) -> str:
 
 def pack_digest(pack_dir: str) -> str:
     """Il digest da depositare: il manifest_digest del pack (già impegna tutto il pack)."""
-    man = json.loads(_read_text(os.path.join(pack_dir, "MANIFEST.json")))
+    man = json_loads(_read_text(os.path.join(pack_dir, "MANIFEST.json")))
     d = man.get("manifest_digest_sha256")
     if not d:
         raise ValueError("MANIFEST.json without manifest_digest_sha256")
@@ -83,7 +87,7 @@ class LocalQeasStub:
         self._path = store_path
         self._db: Dict[str, Dict] = {}
         if os.path.exists(store_path):
-            self._db = json.loads(_read_text(store_path))
+            self._db = json_loads(_read_text(store_path))
 
     def deposit(self, digest_hex: str, subject: str, now: float) -> Dict:
         rid = _sha256(f"{digest_hex}|{subject}|{now}".encode())[:32]
@@ -125,7 +129,7 @@ class HttpQeasBackend:
                                      headers={"Authorization": f"Bearer {self._token}",
                                               "Content-Type": "application/json"})
         with _net.open_url(req, self._timeout, _net.ALLOW_HTTPS) as r:
-            return json.loads(_net.read_body(r).decode())   # SPEC v0.13 §21 rule 6: bounded
+            return json_loads(_net.read_body(r).decode())   # SPEC v0.13 §21 rule 6: bounded
 
     def deposit(self, digest_hex: str, subject: str, now: float) -> Dict:
         r = self._req("POST", "deposit", {"digest_sha256": digest_hex, "subject": subject})
@@ -156,7 +160,7 @@ def verify_pack_archive(pack_dir: str, backend) -> Dict:
     rp = os.path.join(pack_dir, "QEAS_RECEIPT.json")
     if not os.path.exists(rp):
         return {"present": False, "note": "no QEAS_RECEIPT.json (pack not archived)"}
-    saved = json.loads(_read_text(rp))
+    saved = json_loads(_read_text(rp))
     current = pack_digest(pack_dir)
     local_match = current == saved.get("pack_digest")
     remote = backend.verify(saved["receipt"])

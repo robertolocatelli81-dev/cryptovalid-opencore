@@ -907,6 +907,21 @@ class JsonTooDeep(ValueError):
     pass
 
 
+class JsonTooDeepToRead(JsonTooDeep, RecursionError):
+    """A JSON text nested deeper than MAX_JSON_DEPTH, refused before the parser (SPEC §30). Both a ValueError and a
+    RecursionError: each reader keeps the answer it gave when Python's parser ran out of stack, now at one depth on
+    every Python (the parser's own limit: 1 100 levels under 3.9 and 3.11, 20 000 under 3.13, 100 000 under 3.14)."""
+
+
+def json_loads_bounded(s, **kw):
+    """json.loads, with nesting deeper than MAX_JSON_DEPTH refused first by a linear scan (JsonTooDeepToRead). Bytes
+    are scanned as Latin-1: brackets, quotes and backslashes are ASCII and no byte of a multi-byte UTF-8 sequence is."""
+    text = s.decode("latin-1") if isinstance(s, (bytes, bytearray)) else s
+    if isinstance(text, str) and json_nesting_depth(text) > MAX_JSON_DEPTH:
+        raise JsonTooDeepToRead(f"JSON nested deeper than {MAX_JSON_DEPTH} levels")
+    return json.loads(s, **kw)
+
+
 # A raw surrogate code point in the decoded text can only come from bytes that are not UTF-8 (the file is read with
 # errors="surrogateescape", which maps each such byte to U+DC80..U+DCFF): valid UTF-8 never decodes to one. SPEC §1/§3:
 # a ledger is UTF-8 and MUST NOT contain non-UTF-8 bytes — refused, never hashed as the code point the decoder made up

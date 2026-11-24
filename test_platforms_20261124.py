@@ -311,5 +311,99 @@ class ErrorTexts(unittest.TestCase):
         self.assertIn("cannot read the path (FileNotFoundError: %s);" % os.strerror(2), r["layers"][0]["detail"])
 
 
+class OneNestingBound(unittest.TestCase):
+    """Python's JSON parser recurses once per level and its limit moved with the version (measured 24/11/2026: a
+    RecursionError from 1 100 levels under 3.9 and 3.11, 20 000 under 3.13, 100 000 under 3.14), so a reader that
+    relied on it answered a text 5 000 deep one way on 3.9 and another on 3.13. SPEC §30: past 512 every reader
+    refuses before parsing, the same answer at every depth and on every Python."""
+
+    DEPTHS = (513, 1100, 5000, 30000)
+
+    @staticmethod
+    def _deep(d):
+        return '{"a":' * (d - 1) + '[1]' + '}' * (d - 1)   # d levels: d - 1 objects and one array
+
+    def test_the_depth_scan_counts_levels(self):
+        import verifier as V
+        self.assertEqual(V.json_nesting_depth(self._deep(513)), 513)
+        V.json_loads_bounded(self._deep(512))   # control: the bound itself is read
+        with self.assertRaises(RecursionError):
+            V.json_loads_bounded(self._deep(513))
+        with self.assertRaises(ValueError):
+            V.json_loads_bounded(self._deep(513).encode())
+
+    def _same_everywhere(self, outcome):
+        got = {d: outcome(self._deep(d)) for d in self.DEPTHS}
+        self.assertEqual(len(set(got.values())), 1, got)
+        return got[513]
+
+    def test_readers_answer_alike_at_every_depth(self):
+        import tempfile
+        import cryptovalid_ingest as I
+        import verify_evidence as VE
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+
+        def at(text, name="x.json"):
+            p = os.path.join(d, name)
+            with open(p, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            return p
+
+        def auto(text):
+            try:
+                VE._json_value(text, "the file")
+                return "read"
+            except VE._NotRecognised as e:
+                return str(e)
+
+        def profile(text):
+            try:
+                VE.load_profile(at(text, "p.json"))
+                return "read"
+            except VE.ProfileError as e:
+                return str(e)
+        self.assertIn("deeper", self._same_everywhere(auto))
+        self.assertIn("deeper", self._same_everywhere(profile))
+        self.assertIsNotNone(self._same_everywhere(lambda t: I._load_json_object(at(t))[1]))
+
+    def test_the_mcp_server_answers_alike_at_every_depth(self):
+        out = []
+        for depth in self.DEPTHS:
+            line = '{"jsonrpc":"2.0","id":1,"method":"ping","params":' + self._deep(depth) + "}\n"
+            p = subprocess.run([sys.executable, os.path.join(_HERE, "cryptovalid_mcp.py")], input=line.encode(),
+                               capture_output=True, timeout=120)
+            out.append(p.stdout)
+        self.assertEqual(len(set(out)), 1, out)
+        self.assertIn(b"-32700", out[0])
+
+    def test_no_reader_calls_the_parser_directly(self):
+        """closed by construction: json.loads / json.load appear only inside verifier's two bounded readers"""
+        import ast
+        bad = []
+        for root, dirs, names in os.walk(_HERE):
+            dirs[:] = [x for x in dirs if not x.startswith(".") and x not in ("__pycache__", "node_modules", "target",
+                                                                              "verifiers", "tools", "bench", "spec",
+                                                                              "examples")]
+            for n in names:
+                if not n.endswith(".py") or n.startswith("test_") or root != _HERE and "cryptovalid" not in root:
+                    continue
+                p = os.path.join(root, n)
+                with open(p, encoding="utf-8") as f:
+                    tree = ast.parse(f.read())
+                funcs = {}
+                for fn in ast.walk(tree):
+                    if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        for c in ast.walk(fn):
+                            funcs.setdefault(id(c), fn.name)
+                for c in ast.walk(tree):
+                    if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr in ("loads", "load") \
+                            and isinstance(c.func.value, ast.Name) and c.func.value.id == "json":
+                        where = funcs.get(id(c))
+                        if not (n == "verifier.py" and where in ("_loads_strict", "json_loads_bounded")):
+                            bad.append((n, c.lineno, where))
+        self.assertEqual(bad, [])
+
+
 if __name__ == "__main__":
     unittest.main()
