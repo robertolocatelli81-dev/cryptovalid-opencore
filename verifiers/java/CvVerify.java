@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Roberto Locatelli
 //
-// CvVerify — independent Java verifier of the cryptovalid evidence-ledger profile (spec/CONFORMANCE.md), JDK
+// CvVerify \u2014 independent Java verifier of the cryptovalid evidence-ledger profile (spec/CONFORMANCE.md), JDK
 // standard library only (no dependencies): strict JSON per the acceptance profile (nesting <= 512, no floats,
 // no duplicate keys, no lone surrogates, integers within +/-(2^53-1)), canonical JSON identical byte for byte to
 // Python json.dumps(sort_keys=True, separators=(",",":"), ensure_ascii=True), SHA-256 / SHA3-256 hash chain,
-// per-entry Ed25519 (JDK 15+) and ML-DSA-65 (JDK 24+, FIPS 204, EMPTY context — JEP 497 has no context API,
+// per-entry Ed25519 (JDK 15+) and ML-DSA-65 (JDK 24+, FIPS 204, EMPTY context \u2014 JEP 497 has no context API,
 // which is why the profile uses none) signatures, and the signed chain tip (cryptovalid_tip/1), with the SAME
 // tri-state and rules as signer.py / cvverify (Go). Run:  java CvVerify.java <ledger.jsonl> [flags]  (JDK 24+)
 //   flags: -tip F -trusted-pubkey HEX -trusted-pq-pubkey B64 -require-tip -tip-not-before ISO -expect-ledger-id HEX
@@ -13,6 +13,8 @@
 // Exit 0 = PASS, 1 = FAIL, 2 = usage, 74 = the receipt was not written whole (stdout full, closed or a reader gone:
 // a write to fd 1 that fails; 0.20.3), whatever the verdict. Output: one JSON receipt (fields named as the Go
 // verifier's).
+// ASCII only (non-ASCII written as Unicode escapes): javac before JDK 18 reads a source in the platform encoding, and on
+// Windows the plus-minus and section signs of the texts became other characters (CI run 45437498313, the four verifiers differed)
 import java.io.*;
 import java.nio.charset.*;
 import java.nio.file.*;
@@ -25,22 +27,22 @@ public class CvVerify {
     static final int MAX_DEPTH = 512;
     static final long SAFE_INT = (1L << 53) - 1;
     static final long MAX_INPUT_BYTES = 256L * 1024 * 1024;   // verifier.py MAX_INPUT_BYTES
-    static final long MAX_INPUT_LINES = 1L << 20, MAX_JSON_TOKENS = 1L << 23;   // SPEC §22 rule 9 (verifier.py MAX_INPUT_LINES, MAX_JSON_TOKENS)
+    static final long MAX_INPUT_LINES = 1L << 20, MAX_JSON_TOKENS = 1L << 23;   // SPEC \u00a722 rule 9 (verifier.py MAX_INPUT_LINES, MAX_JSON_TOKENS)
     static long countTokens(byte[] b) { long t = 0; for (byte c : b) if (c == '{' || c == '[' || c == ',' || c == ':') t++; return t; }
     static final String GENESIS = "0".repeat(64);
     static final String TIP_KIND = "cryptovalid_tip/1";
     static final Set<String> TIP_MEMBERS = Set.of("kind", "entries", "ledger_id", "tip_sha256", "ts", "log_pubkey_hex", "signature_hex", "signature_pq_hex", "log_pq_pubkey_b64");
-    static final Set<String> ATTEST = Set.of("self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token");   // SPEC §3; tsa_token since 0.20.2
-    // SPEC_EVIDENCE_FORMAT §2.1 (2026-10-10): the CLOSED entry schema (core + optional fields of §2), as verifier.py ENTRY_KEYS.
+    static final Set<String> ATTEST = Set.of("self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token");   // SPEC \u00a73; tsa_token since 0.20.2
+    // SPEC_EVIDENCE_FORMAT \u00a72.1 (2026-10-10): the CLOSED entry schema (core + optional fields of \u00a72), as verifier.py ENTRY_KEYS.
     // A top-level key outside it is the named failure `unknown_field:<keys>`, never a silent PASS (measured 2026-10-11 on this
-    // verifier: an extra top-level key with self_hash recomputed over it was PASS with no trace). Keys inside `data` stay free (§4).
+    // verifier: an extra top-level key with self_hash recomputed over it was PASS with no trace). Keys inside `data` stay free (\u00a74).
     static final Set<String> ENTRY_KEYS = Set.of("idx", "ts", "data", "prev_hash", "self_hash", "signature", "signer", "tsa_token", "signature_pq", "signer_pq");
     static final byte[] ED_SPKI = hex("302a300506032b6570032100");
     static final byte[] MLDSA65_SPKI = hex("308207b2300b0609608648016503040312038207a100");
     static final Pattern TS = Pattern.compile("^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})$");
     static final String SCOPE = "single-snapshot check of the cryptovalid profile: self_hash recompute, prev_hash linkage, sequential idx, genesis; entry signatures and the signed chain tip when asked. Does NOT see a truncated tail unless a signed chain tip is checked.";
 
-    // ───────────────────────── strict JSON (acceptance profile) ─────────────────────────
+    // \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 strict JSON (acceptance profile) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     static final class Obj { final List<String> keys = new ArrayList<>(); final Map<String, Object> vals = new HashMap<>(); }
     static final class Num { final String lexeme; Num(String s) { lexeme = s; } }
     static final class Bad extends Exception { Bad(String m) { super(m); } }
@@ -77,7 +79,7 @@ public class CvVerify {
         }
         return false;
     }
-    static Integer hex4(byte[] t, int at) {   // 4 ASCII hex digits or null — never Integer.parseInt (it takes a sign and Unicode digits: r5)
+    static Integer hex4(byte[] t, int at) {   // 4 ASCII hex digits or null \u2014 never Integer.parseInt (it takes a sign and Unicode digits: r5)
         if (at + 4 > t.length) return null;
         int v = 0;
         for (int k = 0; k < 4; k++) { int d = hexDigit((char) (t[at + k] & 0xff)); if (d < 0) return null; v = (v << 4) | d; }
@@ -180,7 +182,7 @@ public class CvVerify {
         }
     }
 
-    // ───────────────────────── canonical JSON (Python ensure_ascii, sorted keys by code point) ─────────────────────────
+    // \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 canonical JSON (Python ensure_ascii, sorted keys by code point) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     static final Comparator<String> BY_CODEPOINT = (a, b) -> {
         int[] x = a.codePoints().toArray(), y = b.codePoints().toArray();
         for (int k = 0; k < Math.min(x.length, y.length); k++) if (x[k] != y[k]) return Integer.compare(x[k], y[k]);
@@ -221,7 +223,7 @@ public class CvVerify {
         return toHex(MessageDigest.getInstance(algo.equals("sha256") ? "SHA-256" : "SHA3-256").digest(p));
     }
 
-    // ───────────────────────── helpers ─────────────────────────
+    // \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     static byte[] hex(String s) { byte[] o = new byte[s.length() / 2]; for (int k = 0; k < o.length; k++) o[k] = (byte) Integer.parseInt(s.substring(2 * k, 2 * k + 2), 16); return o; }
     static String toHex(byte[] b) { StringBuilder sb = new StringBuilder(); for (byte x : b) sb.append(String.format("%02x", x)); return sb.toString(); }
     static boolean isHexN(String s, int n) { if (s == null || s.length() != n) return false; for (char c : s.toCharArray()) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false; return true; }
@@ -295,10 +297,10 @@ public class CvVerify {
     static Boolean mldsaSupported() { try { Signature.getInstance("ML-DSA-65"); return true; } catch (Exception e) { return false; } }
     static boolean mldsaVerify(byte[] pk, byte[] msg, byte[] sig) { try { Signature v = Signature.getInstance("ML-DSA-65"); v.initVerify(key("ML-DSA", MLDSA65_SPKI, pk)); v.update(msg); return v.verify(sig); } catch (Exception e) { return false; } }
 
-    // ───────────────────────── instants (same value profile as Python/JS/Go) ─────────────────────────
+    // \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 instants (same value profile as Python/JS/Go) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     static long[] parseInstant(String s) throws Bad {   // (epoch seconds, nanos) or Bad
         Matcher m = TS.matcher(s == null ? "" : s);
-        if (!m.matches()) throw new Bad("timestamp outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|±hh:mm)");
+        if (!m.matches()) throw new Bad("timestamp outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|\u00b1hh:mm)");
         int y = Integer.parseInt(m.group(1)), mo = Integer.parseInt(m.group(2)), d = Integer.parseInt(m.group(3));
         int h = Integer.parseInt(m.group(4)), mi = Integer.parseInt(m.group(5)), sec = Integer.parseInt(m.group(6));
         if (y < 1 || y > 9999 || mo < 1 || mo > 12 || h > 23 || mi > 59 || sec > 59) throw new Bad("timestamp field out of range");
@@ -317,7 +319,7 @@ public class CvVerify {
     }
     static boolean before(long[] a, long[] b) { return a[0] < b[0] || (a[0] == b[0] && a[1] < b[1]); }
 
-    // ───────────────────────── receipt (minimal JSON writer) ─────────────────────────
+    // \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 receipt (minimal JSON writer) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     static String j(Object v) {
         if (v == null) return "null";
         if (v instanceof Boolean || v instanceof Integer || v instanceof Long) return String.valueOf(v);
@@ -327,9 +329,9 @@ public class CvVerify {
         return "\"?\"";
     }
 
-    // ───────────────────────── the verdict ─────────────────────────
+    // \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 the verdict \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     public static void main(String[] args) {
-        // stderr in UTF-8 on every system: on Windows the default is the code page, and "±" of a usage line reached a
+        // stderr in UTF-8 on every system: on Windows the default is the code page, and "\u00b1" of a usage line reached a
         // UTF-8 reader as a byte it does not take (CI run 45377477990); the receipt itself is ASCII (j() escapes)
         System.setErr(new java.io.PrintStream(new java.io.FileOutputStream(java.io.FileDescriptor.err), true, StandardCharsets.UTF_8));
         try { run(args); }
@@ -351,7 +353,7 @@ public class CvVerify {
             } catch (ArrayIndexOutOfBoundsException e) { usage(); return; }
         }
         if (ledger == null) { usage(); return; }
-        if (!lid.isEmpty() && !isHexN(lid, 64)) { usage(); return; }   // SPEC v0.9 §17: a value that can match no ledger is a usage error
+        if (!lid.isEmpty() && !isHexN(lid, 64)) { usage(); return; }   // SPEC v0.9 \u00a717: a value that can match no ledger is a usage error
         Map<String, Object> out = verify(ledger, tip, tpk, tpq, epk, epq, reqPQ, reqTip, nb, lid);
         emit(j(out), "PASS".equals(out.get("verdict")) ? 0 : 1);
     }
@@ -382,7 +384,7 @@ public class CvVerify {
         System.exit(code);
     }
     // a value flag given with "" or with a flag as its value would silently mean "not given": usage (21/09/2026, one grammar in the five)
-    // a value flag given twice: usage (the first value would be dropped: SPEC v0.9 §17, NEMESIS 16/11/2026)
+    // a value flag given twice: usage (the first value would be dropped: SPEC v0.9 \u00a717, NEMESIS 16/11/2026)
     static String once(String current, String[] args, int k) { if (!current.isEmpty()) usage(); return val(args, k); }
     static String val(String[] args, int k) { if (k >= args.length || args[k].isEmpty() || args[k].startsWith("-")) usage(); return args[k]; }
     static void usage() { System.err.println("usage: java CvVerify.java <ledger.jsonl> [-tip F] [-trusted-pubkey HEX] [-trusted-pq-pubkey B64] [-require-tip] [-tip-not-before ISO] [-expect-ledger-id HEX] [-pubkey HEX] [-pq-pubkey B64] [-require-pq]"); System.exit(2); }
@@ -393,10 +395,10 @@ public class CvVerify {
         boolean hashOK = true, linkOK = true; String algo = ""; String prev = GENESIS, first = ""; int i = 0, line = 0;
         List<byte[]> lines = new ArrayList<>();
         try {
-            // SPEC §22 rule 8: a regular file or a FIFO of at most MAX_INPUT_BYTES (fail-closed on size, like verifier.py, r5),
+            // SPEC \u00a722 rule 8: a regular file or a FIFO of at most MAX_INPUT_BYTES (fail-closed on size, like verifier.py, r5),
             // a FIFO idle FIFO_IDLE_SECONDS at most (it waited without end until 2026-11-22), a directory or a device not read
             ByteArrayOutputStream cur = new ByteArrayOutputStream();
-            long[] cnt = new long[3];   // SPEC §22 rule 9: LF, tokens, last byte (0 none, 1 LF, 2 other); past a bound only counted
+            long[] cnt = new long[3];   // SPEC \u00a722 rule 9: LF, tokens, last byte (0 none, 1 LF, 2 other); past a bound only counted
             readInput(Path.of(ledgerPath), MAX_INPUT_BYTES, true, (b, n) -> {
                 for (int k = 0; k < n; k++) {
                     byte c = b[k];
@@ -419,7 +421,7 @@ public class CvVerify {
             try { val = parse(raw); } catch (Bad e) { failures.add("line " + line + ": " + e.getMessage()); hashOK = false; objects.add(null); i++; continue; }
             if (!(val instanceof Obj)) { failures.add("line " + line + ": entry is not an object"); hashOK = false; objects.add(null); i++; continue; }
             Obj e = (Obj) val; objects.add(e);
-            List<String> unk = unknownFields(e);   // SPEC §2.1: closed entry schema — named, never silent (a LIST: the empty key "" is unknown too)
+            List<String> unk = unknownFields(e);   // SPEC \u00a72.1: closed entry schema \u2014 named, never silent (a LIST: the empty key "" is unknown too)
             if (!unk.isEmpty()) failures.add("entry " + i + ": unknown_field:" + joinCut(unk));
             Object shv = e.vals.get("self_hash"); String self = shv instanceof String ? (String) shv : null;
             if (algo.isEmpty()) {   // no early return (r5): fall back to sha256 like the Python reference and keep going
@@ -441,14 +443,14 @@ public class CvVerify {
         v.put("verdict", pass ? "PASS" : "FAIL"); v.put("algo", algo); v.put("entries_count", i);
         v.put("hash_recompute_passed", hashOK); v.put("link_passed", linkOK); v.put("failures", failures);
         if (!first.isEmpty()) v.put("first_self_hash", first); if (i > 0) v.put("last_self_hash", prev);
-        // SPEC v0.9 §17 rule 1 (16/11/2026): the ledger identity is entry 0's self_hash, readable without a tip, so the expected
+        // SPEC v0.9 \u00a717 rule 1 (16/11/2026): the ledger identity is entry 0's self_hash, readable without a tip, so the expected
         // identity is compared in every branch (until 0.25.0 only inside checkTip: without a tip another ledger was PASS)
         if (!lid.isEmpty() && (i == 0 || !lid.equals(first))) { v.put("verdict", "FAIL"); failures.add("ledger_id_mismatch: entry 0's self_hash is not the ledger id you expect (-expect-ledger-id)" + (i == 0 ? "; the file has no entry" : "")); }
 
         // per-entry signatures (same rules as signer.py / Go VerifyLedgerFull)
         if (reqPQ && epq.isEmpty()) { failures.add("require_pq_without_key: -require-pq needs -pq-pubkey (a post-quantum layer verified against the key inside the ledger is self-declared)"); v.put("verdict", "FAIL"); v.put("scope", SCOPE); return v; }
         if (!epq.isEmpty() && epk.isEmpty()) { failures.add("pq_key_without_ed25519_key: -pq-pubkey needs -pubkey (hybrid means both keys are pinned)"); v.put("verdict", "FAIL"); v.put("scope", SCOPE); return v; }
-        // 0.21.0 (SPEC v0.4 §5 step 5, signature profile): the layer is any of the four signature fields in any entry (until
+        // 0.21.0 (SPEC v0.4 \u00a75 step 5, signature profile): the layer is any of the four signature fields in any entry (until
         // 0.20.3 only "signature"), and a layer that does not verify is a FAIL with or without a key (until 0.20.3 only with -pubkey)
         boolean hasSig = false;
         for (Obj o : objects) if (o != null && (o.vals.containsKey("signature") || o.vals.containsKey("signer") || o.vals.containsKey("signature_pq") || o.vals.containsKey("signer_pq"))) { hasSig = true; break; }
@@ -462,9 +464,9 @@ public class CvVerify {
                 v.put("verdict", "FAIL"); failures.add("signatures_failed: the signature layer the ledger carries does not verify (no key pinned)");
             }
         }
-        // signed chain tip; SPEC v0.9 §17 rule 2: the oldest acceptable tip makes the tip required (until 0.25.0: without a tip, PASS)
+        // signed chain tip; SPEC v0.9 \u00a717 rule 2: the oldest acceptable tip makes the tip required (until 0.25.0: without a tip, PASS)
         if (!nb.isEmpty()) reqTip = true;
-        if (!tpk.isEmpty()) reqTip = true;   // SPEC v0.14 §22 rule 1: the trusted log key makes the tip required (until 0.27.0 without a tip: PASS)
+        if (!tpk.isEmpty()) reqTip = true;   // SPEC v0.14 \u00a722 rule 1: the trusted log key makes the tip required (until 0.27.0 without a tip: PASS)
         if (!tpq.isEmpty()) { reqTip = true; if (tpk.isEmpty()) { failures.add("pq_key_without_log_key: -trusted-pq-pubkey needs -trusted-pubkey (the post-quantum layer sits on top of the Ed25519 tip, never instead of it)"); v.put("verdict", "FAIL"); v.put("scope", SCOPE); return v; } }
         if (tipPath.isEmpty() && Files.exists(Path.of(ledgerPath + ".tip.json"))) tipPath = ledgerPath + ".tip.json";
         if (tipPath.isEmpty()) {
@@ -538,7 +540,7 @@ public class CvVerify {
         return sc;
     }
 
-    // SPEC §22 rule 2, rows 4-13: the first reason (without "tip_invalid: ") or null when every row holds
+    // SPEC \u00a722 rule 2, rows 4-13: the first reason (without "tip_invalid: ") or null when every row holds
     static String tipShape(Obj t) {
         if (!TIP_KIND.equals(str(t, "kind"))) return "not a cryptovalid_tip/1 document";
         List<String> unk = new ArrayList<>();
@@ -558,11 +560,11 @@ public class CvVerify {
             if (spq == null || !isHexN(spq, 6618)) return "signature_pq_hex must be 6618 lowercase hex characters (ML-DSA-65)";
             if (kpq == null || b64Strict(kpq, 1952) == null) return "log_pq_pubkey_b64 must be strict base64 of a 1952-byte ML-DSA-65 public key";
         }
-        if (!plainTS(ts)) return "ts outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|±hh:mm)";
+        if (!plainTS(ts)) return "ts outside the profile YYYY-MM-DDThh:mm:ss[.fraction](Z|\u00b1hh:mm)";
         return null;
     }
 
-    // SPEC §22 rule 2, row 1: a FIFO, a device, a directory or a file larger than MAX_INPUT_BYTES is "cannot be read";
+    // SPEC \u00a722 rule 2, row 1: a FIFO, a device, a directory or a file larger than MAX_INPUT_BYTES is "cannot be read";
     // read by readInput (rule 8): a path swapped for a FIFO after its attributes were read is row 1 after
     // FIFO_IDLE_SECONDS, not a wait for a writer, and the read is bounded whatever the file has become
     static byte[] readTipFile(Path p) throws IOException {
@@ -571,7 +573,7 @@ public class CvVerify {
         return out.toByteArray();
     }
 
-    // SPEC §22 rule 8 (§5 step 0 of verifier.py: open_ledger_input). The JDK has no non-blocking open: the type is read
+    // SPEC \u00a722 rule 8 (\u00a75 step 0 of verifier.py: open_ledger_input). The JDK has no non-blocking open: the type is read
     // from the attributes of the path (unix:mode; where that view is absent only a regular file passes), then the path
     // is opened and read in a second thread, and this one stops waiting after FIFO_IDLE_SECONDS without a byte and
     // without the end (a FIFO with no writer, or a path swapped for a FIFO after its attributes were read). At most
@@ -633,13 +635,13 @@ public class CvVerify {
 
     static Map<String, Object> checkTip(String path, int entries, String first, String last, String tpk, String tpq, String nb, String lid) {
         Map<String, Object> tc = new LinkedHashMap<>(); tc.put("ok", false); tc.put("checked", true); tc.put("trusted", false); tc.put("tip_path", path); tc.put("pq_protected", false);
-        // SPEC §22 rule 2: the table of the reasons of a tip, rows 1-15 in order, the same words as Python, JS and Go
+        // SPEC \u00a722 rule 2: the table of the reasons of a tip, rows 1-15 in order, the same words as Python, JS and Go
         byte[] rawTip;
         try { rawTip = readTipFile(Path.of(path)); }   // row 1: a regular file of at most MAX_INPUT_BYTES, as Python's read_regular
         catch (Exception e) { tc.put("why", "tip_unreadable: the tip file cannot be read"); return tc; }
         Object parsed;
-        try { if (countTokens(rawTip) > MAX_JSON_TOKENS) throw new Bad("json_too_many_tokens"); parsed = parse(rawTip); }   // SPEC §22 rule 9
-        catch (Bad | RuntimeException e) { tc.put("why", "tip_unreadable: not a JSON text of the profile of SPEC §3"); return tc; }
+        try { if (countTokens(rawTip) > MAX_JSON_TOKENS) throw new Bad("json_too_many_tokens"); parsed = parse(rawTip); }   // SPEC \u00a722 rule 9
+        catch (Bad | RuntimeException e) { tc.put("why", "tip_unreadable: not a JSON text of the profile of SPEC \u00a73"); return tc; }
         if (!(parsed instanceof Obj)) { tc.put("why", "tip_unreadable: not a JSON object"); return tc; }
         Obj t = (Obj) parsed;
         String shape = tipShape(t);
@@ -656,7 +658,7 @@ public class CvVerify {
         if (!lid.isEmpty() && !ledgerId.equals(lid)) { tc.put("why", "ledger_id_mismatch: the tip belongs to a different ledger than the one you expect"); return tc; }
         if (entries > 0 && !ledgerId.equals(first)) { tc.put("why", "tip_of_another_ledger: the tip's ledger_id is not this file's first self_hash"); return tc; }
         if (!nb.isEmpty()) {
-            long[] nbT; try { nbT = parseInstant(nb); } catch (Bad e) { tc.put("why", "bad_not_before: -tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|±hh:mm)"); return tc; }
+            long[] nbT; try { nbT = parseInstant(nb); } catch (Bad e) { tc.put("why", "bad_not_before: -tip-not-before must be YYYY-MM-DDThh:mm:ss[.f](Z|\u00b1hh:mm)"); return tc; }
             try { if (before(parseInstant(ts), nbT)) { tc.put("why", "tip_rolled_back: the tip is dated " + ts + ", before the required " + nb); return tc; } } catch (Bad e) { tc.put("why", "tip_invalid: ts outside the profile"); return tc; }
         }
         if (entries < n) { tc.put("why", "tail_truncated: file has " + entries + " entries, the signed tip commits to " + n); return tc; }

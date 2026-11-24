@@ -952,5 +952,33 @@ class FakeOpensslOnWindows(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), b"python")   # control: any other Python is not touched
 
 
+class JavaSourceIsAscii(unittest.TestCase):
+    """javac before JDK 18 reads a source in the platform encoding: on Windows (cp1252) the UTF-8 "±" and "§" of
+    CvVerify.java became other characters and the Java verifier's texts differed from the other three (CI run
+    45437498313). The source is ASCII, the characters written as Unicode escapes."""
+
+    JAVA = os.path.join(_HERE, "verifiers", "java", "CvVerify.java")
+
+    def test_the_source_is_ascii(self):
+        with open(self.JAVA, "rb") as f:
+            raw = f.read()
+        self.assertEqual([i for i, b in enumerate(raw) if b > 0x7F][:5], [])
+
+    @unittest.skipUnless(shutil.which("javac") and shutil.which("java"), "needs a JDK")
+    def test_the_texts_are_the_same_whatever_encoding_javac_reads(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        subprocess.run(["javac", "-encoding", "windows-1252", "-d", d, self.JAVA], check=True, capture_output=True)
+        tip = os.path.join(d, "tip.json")
+        with open(tip, "wb") as f:
+            f.write(b"x")
+        r = subprocess.run(["java", "-cp", d, "CvVerify", "-tip", tip, "-trusted-pubkey", "00" * 32,
+                            os.path.join(_HERE, "examples", "sample_ledger.jsonl")], capture_output=True, timeout=120)
+        import json
+        self.assertIn("entry 3: tip_unreadable: not a JSON text of the profile of SPEC \u00a73",
+                      json.loads(r.stdout)["failures"], r.stdout[-300:])
+
+
 if __name__ == "__main__":
     unittest.main()
