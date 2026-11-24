@@ -1,0 +1,3 @@
+# every file is checked out with the bytes of the repository: digests, vectors, ledgers and notes are pinned byte for byte
+# (core.autocrlf=true, the default of Git for Windows, would otherwise write CRLF and the pinned digests would not match)
+* -text
