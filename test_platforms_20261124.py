@@ -710,5 +710,25 @@ class MemoryLimit(unittest.TestCase):
             self.assertGreater(peak, 64 << 20)
 
 
+class FingerprintOnWindows(unittest.TestCase):
+    """SPEC §23 rule 3: an in-place rewrite with mtime set back moves ctime on POSIX; on Windows st_ctime is the
+    creation time, so the fingerprint did not change (test_checks_profile on windows-latest). There ChangeTime is
+    read from the file."""
+
+    def test_the_change_time_enters_the_fingerprint_there(self):
+        import tempfile
+        from unittest import mock
+        import verify_evidence as VE
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        p = os.path.join(d, "l.jsonl")
+        with open(p, "wb") as f:
+            f.write(b"{}\n")
+        ticks = iter(range(100, 200))
+        with mock.patch.object(os, "name", "nt"), \
+                mock.patch.object(VE, "_windows_change_time", lambda fd: next(ticks), create=True):
+            self.assertNotEqual(VE.evidence_fingerprint(p), VE.evidence_fingerprint(p))   # the change time moved
+
+
 if __name__ == "__main__":
     unittest.main()

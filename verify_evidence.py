@@ -799,9 +799,30 @@ def _run_state(kind: str, path: str, pins: dict):
 FINGERPRINT_LIMIT = 1 << 20   # SPEC §23 rule 3 (d): entries walked at most; past it the evidence counts as changed
 
 
+def _windows_change_time(fd: int) -> int:
+    """Windows: the file's ChangeTime (GetFileInformationByHandleEx, FileBasicInfo), the time its data or attributes
+    last changed, which an in-place rewrite moves even with mtime set back. Python's st_ctime on Windows is the
+    creation time (CI of f1e95d5: the fingerprint did not change after such a rewrite)."""
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class _Basic(ctypes.Structure):
+        _fields_ = [("CreationTime", ctypes.c_int64), ("LastAccessTime", ctypes.c_int64),
+                    ("LastWriteTime", ctypes.c_int64), ("ChangeTime", ctypes.c_int64), ("FileAttributes", wintypes.DWORD)]
+    get = ctypes.WinDLL("kernel32", use_last_error=True).GetFileInformationByHandleEx
+    get.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+    get.restype = wintypes.BOOL
+    info = _Basic()
+    if not get(msvcrt.get_osfhandle(fd), 0, ctypes.byref(info), ctypes.sizeof(info)):   # 0: FileBasicInfo
+        raise ctypes.WinError(ctypes.get_last_error())
+    return info.ChangeTime
+
+
 def evidence_fingerprint(path: str):
     """SPEC §23 rule 3 (d): of the path and, for a directory, of every entry under it: what lstat says (device, inode,
-    type and mode, size, mtime and ctime in nanoseconds); for a symbolic link also what stat says of what it names (the
+    type and mode, size, mtime and ctime in nanoseconds; on Windows, where st_ctime is the creation time, also the
+    file's ChangeTime); for a symbolic link also what stat says of what it names (the
     runs follow links); and the SHA-256 of the bytes of every regular file (timestamps move in ticks: a file rewritten
     in the tick of its last change keeps them). A file replaced, rewritten or renamed between two readings changes it.
     None when it cannot be taken (then the evidence counts as changed): an entry that cannot be read, a link below the
@@ -823,6 +844,8 @@ def evidence_fingerprint(path: str):
         if stat.S_ISREG(s.st_mode):
             h = hashlib.sha256()
             with os.fdopen(_open_regular(p), "rb") as f:
+                if os.name == "nt":   # st_ctime is the creation time there: the change time is asked of the file
+                    row += (_windows_change_time(f.fileno()),)
                 for block in iter(lambda: f.read(1 << 20), b""):
                     h.update(block)
             row += (h.hexdigest(),)

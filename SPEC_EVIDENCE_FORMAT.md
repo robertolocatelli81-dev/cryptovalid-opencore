@@ -2442,7 +2442,8 @@ policy language (CUE, Rego): it names pins the verifiers of this repository alre
    `ledger <(...)`, read once by (a)) cannot be read again: every requirement is `not_evaluated`, nothing more is
    read, the result is not valid. (d) Before (a) and after the last run, the command takes a fingerprint of the
    path and, for a directory, of every entry under it (at most 2^20): what `lstat` says (device, inode, type and
-   mode, size, mtime and ctime in nanoseconds); for a symbolic link also what `stat` says of what it names, since
+   mode, size, mtime and ctime in nanoseconds; on Windows, where `st_ctime` is the creation time, also the file's
+   ChangeTime, since 0.29.0); for a symbolic link also what `stat` says of what it names, since
    the runs follow links; and the SHA-256 of the bytes of every regular file, since a file rewritten in the clock
    tick of its last change keeps its timestamps (measured on Linux 6.6, btrfs: 1952 of 2000 files rewritten in
    place right after they were written kept size, mtime and ctime). A link below the path that names a directory is
