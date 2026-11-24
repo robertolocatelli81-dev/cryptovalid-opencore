@@ -300,8 +300,8 @@ class Revocation(unittest.TestCase):
 
     def test_crl_path_that_is_a_fifo(self):
         """a pinned CRL path that is a FIFO is a ValueError at once, never a read that blocks (stat before open)"""
-        fifo = os.path.join(self.td, "crl.fifo")
-        os.mkfifo(fifo)
+        from test_platforms_20261124 import fifo as make_fifo   # Windows: a named pipe
+        fifo = make_fifo(self, os.path.join(self.td, "crl.fifo"))
         code = ("import sys; sys.path.insert(0, %r); import cryptovalid_tsa as T\n"
                 "try:\n    T._load_crls([%r])\nexcept ValueError as e:\n    print('ValueError', e)" % (ROOT, fifo))
         r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", timeout=60)

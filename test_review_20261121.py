@@ -898,7 +898,8 @@ class TestRowOneOfTheTableInTheFourVerifiers(unittest.TestCase):
                 tip = (json.loads(cp.stdout).get("tip") or {}) if cp.stdout.strip().startswith("{") else {}
                 return cp.returncode, tip.get("error") if name in ("python", "js") else tip.get("why")
             want = (1, "tip_unreadable: the tip file cannot be read")
-            os.mkfifo(tipf)
+            from test_platforms_20261124 import fifo_at   # the four verifiers on one name: POSIX only
+            fifo_at(self, tipf)
             for name in bins:
                 self.assertEqual(run(name), want, ("fifo", name))
             os.remove(tipf)

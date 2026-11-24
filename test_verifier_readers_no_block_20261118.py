@@ -61,10 +61,12 @@ class Readers(unittest.TestCase):
         return p
 
     def test_fifo_device_directory_never_wait(self):
-        fifo = os.path.join(self.td, "f.fifo")
-        os.mkfifo(fifo)
-        dev = os.path.join(self.td, "zero")
-        os.symlink("/dev/zero", dev)
+        from test_platforms_20261124 import DEVICE, fifo as make_fifo   # Windows: a named pipe and NUL
+        fifo = make_fifo(self, os.path.join(self.td, "f.fifo"))
+        dev = DEVICE
+        if os.name != "nt":
+            dev = os.path.join(self.td, "zero")
+            os.symlink(DEVICE, dev)
         sub = os.path.join(self.td, "d")
         os.mkdir(sub)
         for bad in (fifo, dev, sub):
@@ -95,12 +97,13 @@ class PackReaders(unittest.TestCase):
             pack = os.path.join(td, "pack")
             subprocess.run([sys.executable, "evidence_pack.py", "build", pack, os.path.join("examples", "sample_ledger.jsonl"),
                             "--subject", "t"], cwd=ROOT, check=True, capture_output=True, env=env)
-            os.mkfifo(os.path.join(pack, "SOLANA_ANCHOR.json"))
+            from test_platforms_20261124 import fifo_at
+            fifo_at(self, os.path.join(pack, "SOLANA_ANCHOR.json"))
             p = subprocess.run([sys.executable, "cryptovalid_report.py", "--html-only", "--out", os.path.join(td, "r.html"),
                                 pack], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=WAIT, env=env)
             self.assertIn("SOLANA_ANCHOR.json unreadable: InputNotRegular", p.stdout)
             os.remove(os.path.join(pack, "MANIFEST.json"))
-            os.mkfifo(os.path.join(pack, "MANIFEST.json"))
+            fifo_at(self, os.path.join(pack, "MANIFEST.json"))
             code = ("import json, sys, cryptovalid_mcp as M; r = M.t_verify_pack({'pack_dir': sys.argv[1]}); "
                     "print(json.dumps([r['result']['valid'], r['provenance']['sha256']]))")
             p = subprocess.run([sys.executable, "-c", code, pack], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=WAIT, env=env)

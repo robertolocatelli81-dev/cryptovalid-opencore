@@ -981,7 +981,8 @@ class OpenPointsA3_20260926(unittest.TestCase):
     def test_7_a_fifo_is_refused_not_waited_on(self):
         import threading
         with tempfile.TemporaryDirectory() as d:
-            fifo = os.path.join(d, "f.json"); os.mkfifo(fifo)
+            from test_platforms_20261124 import fifo as make_fifo   # Windows: a named pipe
+            fifo = make_fifo(self, os.path.join(d, "f.json"))
             res = {}
             def run():
                 try:

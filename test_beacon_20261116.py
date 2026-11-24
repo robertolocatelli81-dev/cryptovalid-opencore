@@ -474,8 +474,8 @@ class PulseGrammar(unittest.TestCase):
             self.assertEqual((r["status"], r["reason"]), ("refused", "input_unreadable"))
             r = run(LEDGER, p=os.path.join(td, "absent"))
             self.assertEqual((r["status"], r["reason"]), ("refused", "input_unreadable"))
-            os.mkfifo(os.path.join(td, "fifo"))
-            r = run(LEDGER, p=os.path.join(td, "fifo"))
+            from test_platforms_20261124 import fifo   # Windows: a named pipe
+            r = run(LEDGER, p=fifo(self, os.path.join(td, "fifo")))
             self.assertEqual((r["status"], r["reason"]), ("refused", "input_unreadable"))
 
 

@@ -85,6 +85,36 @@ def _measured_pipe_capacity():
         os.close(w)
 
 
+def fifo(tc, path):
+    """A pipe a reader is given by name, to be refused without waiting: a FIFO at `path` on POSIX; on Windows, which
+    has no FIFO in a directory, its equivalent, a named pipe \\\\.\\pipe\\cv-<random> with 64 listening instances (each
+    reader that opens it takes one; it is a pipe to fstat: S_IFIFO). Returns the name to give the reader."""
+    if hasattr(os, "mkfifo"):
+        os.mkfifo(path)
+        return path
+    import _winapi
+    import secrets
+    name = r"\\.\pipe\cv-" + secrets.token_hex(8)
+    for _ in range(64):
+        h = _winapi.CreateNamedPipe(name, _winapi.PIPE_ACCESS_DUPLEX, _winapi.PIPE_TYPE_BYTE | _winapi.PIPE_WAIT,
+                                    _winapi.PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, _winapi.NULL)
+        tc.addCleanup(_winapi.CloseHandle, h)
+    return name
+
+
+def fifo_at(tc, path):
+    """A FIFO at a given name inside a directory (a pack member): POSIX only; Windows has named pipes only under
+    \\\\.\\pipe\\, so no pipe can stand at that name there (skipped with this reason)."""
+    if not hasattr(os, "mkfifo"):
+        tc.skipTest("a FIFO at a name inside a directory: Windows has named pipes only under \\\\.\\pipe\\")
+    os.mkfifo(path)
+    return path
+
+
+# the device a reader must refuse at once: Linux and macOS /dev/zero, Windows NUL (\\.\NUL, a character device)
+DEVICE = r"\\.\NUL" if os.name == "nt" else "/dev/zero"
+
+
 
 def _git(*args):
     return subprocess.run(["git", "-C", _HERE] + list(args), capture_output=True)

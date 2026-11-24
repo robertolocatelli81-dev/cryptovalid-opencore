@@ -302,8 +302,8 @@ class TestProfileIsClosed(Tmp):
         for p in (os.path.join(self.tmp, "missing.json"), self.tmp):
             with self.assertRaises(VE.ProfileError):
                 VE.load_profile(p)
-        fifo = os.path.join(self.tmp, "fifo")
-        os.mkfifo(fifo)
+        from test_platforms_20261124 import fifo as make_fifo   # Windows: a named pipe
+        fifo = make_fifo(self, os.path.join(self.tmp, "fifo"))
         with self.assertRaises(VE.ProfileError):
             VE.load_profile(fifo)   # opened without blocking (§5 step 0): refused, never waited on
 
@@ -591,8 +591,8 @@ class TestReviewClosed(Tmp):
         import time
         other = os.path.join(HERE, "spec", "vectors", "beacon", "conformance", "ledgers", "record_salt_120_bits.jsonl")
         self.assertNotEqual(_first_id(other), _first_id(SAMPLE))
-        fifo = os.path.join(self.tmp, "l.jsonl")
-        os.mkfifo(fifo)
+        from test_platforms_20261124 import fifo_at
+        fifo = fifo_at(self, os.path.join(self.tmp, "l.jsonl"))
 
         served = []
 
