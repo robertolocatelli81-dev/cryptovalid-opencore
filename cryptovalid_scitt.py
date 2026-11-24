@@ -41,10 +41,6 @@ import os
 import sys
 import time
 from typing import Dict, List, Optional, Tuple
-try:
-    import fcntl
-except ImportError:                  # pragma: no cover
-    fcntl = None
 
 import cryptovalid_merkle as M
 import cryptovalid_receipt as R
@@ -175,10 +171,7 @@ def register(cose: bytes, ledger_path: str, issuer_pubkey_hex: str, payload: Opt
     if not v["ok"]:
         raise ScittError(f"registration refused: {v['why']}")
     sid = statement_id(cose)
-    lock_fd = None
-    if fcntl is not None:                # the read-append is atomic across processes (POSIX flock on <ledger>.lock)
-        lock_fd = os.open(ledger_path + ".lock", os.O_RDWR | os.O_CREAT, 0o600); fcntl.flock(lock_fd, fcntl.LOCK_EX)
-    try:
+    with file_lock(ledger_path + ".lock"):   # the read-append is atomic across processes (flock / Windows byte lock)
         entries = []
         if os.path.exists(ledger_path):
             with os.fdopen(open_regular(ledger_path), encoding="utf-8") as f:   # SPEC §5 step 0: the ledger appended to
@@ -190,9 +183,6 @@ def register(cose: bytes, ledger_path: str, issuer_pubkey_hex: str, payload: Opt
              "prev_hash": prev}
         e["self_hash"] = hashlib.sha256(json.dumps(e, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         append_line(ledger_path, (json.dumps(e) + "\n").encode("utf-8"))   # 0.20.3: the whole line or nothing (truncated back)
-    finally:
-        if lock_fd is not None:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN); os.close(lock_fd)
     return {"index": e["idx"], "self_hash": e["self_hash"], "statement_sha256": sid}
 
 
@@ -327,9 +317,9 @@ def _read_bytes(path: str) -> bytes:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import append_line, emit, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
+    from verifier import append_line, emit, file_lock, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import append_line, emit, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
+    from opencore.verifier import append_line, emit, file_lock, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
 
 
 @receipt_cli

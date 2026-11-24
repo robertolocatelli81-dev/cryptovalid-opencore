@@ -49,10 +49,6 @@ import re
 import sys
 import threading
 import time
-try:
-    import fcntl                     # POSIX: a cross-process lock on the state file (two witness processes, CLI + server)
-except ImportError:                  # pragma: no cover — Windows: single-process assumption, stated in witness_cosign
-    fcntl = None
 from typing import Dict, List, Optional, Union
 
 import cryptovalid_checkpoint as C
@@ -96,16 +92,10 @@ def _load_state(path: str) -> Dict:
 
 @contextlib.contextmanager
 def _state_lock(path: str):
-    """Exclusive advisory lock on <state>.lock for the whole read-check-write of witness_cosign (POSIX flock). On a
-    platform without fcntl the lock is a no-op and the single-process assumption holds."""
-    if fcntl is None:
-        yield; return
-    fd = os.open(path + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+    """Exclusive lock on <state>.lock for the whole read-check-write of witness_cosign, between processes (the CLI
+    and a `serve` process): flock on POSIX, a byte-range lock on Windows (verifier.file_lock)."""
+    with file_lock(path + ".lock"):
         yield
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)
 
 
 def _save_state(path: str, st: Dict) -> None:
@@ -195,9 +185,8 @@ def witness_cosign(state_path: str, note: bytes, log_vkey: Union[str, List[str]]
     dropped first (a dropped root cannot become proof later). So a client replaying the log's public history,
     backwards or forwards, cannot grow the evidence file, and grows the state only up to those two rings — every
     request rewrites and fsyncs the state file at most once (the cost of remembering it).
-    The read-check-write on the state file is under an exclusive file lock (POSIX flock on <state>.lock), so a
-    CLI `cosign` and a `serve` process on the same state cannot interleave; on a platform without fcntl the
-    assumption is one process per state file."""
+    The read-check-write on the state file is under an exclusive file lock on <state>.lock (flock on POSIX, a
+    byte-range lock on Windows), so a CLI `cosign` and a `serve` process on the same state cannot interleave."""
     out = {"stato": STATO_RIFIUTO, "motivo": None, "note": None, "cosignature": None, "evidenza": None, "origin": None,
            "size": None, "http_status": 400, "stored_size": None}
     try:
@@ -724,9 +713,9 @@ def submit_checkpoint(url: str, note: bytes, leaves: List[bytes], witness_vkeys:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import append_line, emit, open_regular, OutputNotWritten, Parser, read_input, read_regular, read_text_regular, receipt_cli, refuse_directory, say, write_output
+    from verifier import append_line, emit, file_lock, open_regular, OutputNotWritten, Parser, read_input, read_regular, read_text_regular, receipt_cli, refuse_directory, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import append_line, emit, open_regular, OutputNotWritten, Parser, read_input, read_regular, read_text_regular, receipt_cli, refuse_directory, say, write_output
+    from opencore.verifier import append_line, emit, file_lock, open_regular, OutputNotWritten, Parser, read_input, read_regular, read_text_regular, receipt_cli, refuse_directory, say, write_output
 
 
 @receipt_cli

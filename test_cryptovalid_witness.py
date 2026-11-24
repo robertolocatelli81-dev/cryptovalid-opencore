@@ -448,14 +448,15 @@ class TestWitness(unittest.TestCase):
         self.assertEqual(st["origins"][LOG]["size"], 5)
         self.assertFalse(os.path.exists(self.st1 + ".tmp"))
         # the cross-process lock: while another process holds <state>.lock, cosign waits (measured with a timeout)
-        if W.fcntl is not None:
-            import subprocess as sp
-            holder = sp.Popen([sys.executable, "-c", "import fcntl,os,sys,time; fd=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT); "
-                               "fcntl.flock(fd,fcntl.LOCK_EX); print('held',flush=True); time.sleep(1.5)", self.st1 + ".lock"], stdout=sp.PIPE)
-            self.assertEqual(holder.stdout.readline().strip(), b"held")
-            t0 = time.monotonic(); r = self._w1(self.n5, ts=T0 + 20); waited = time.monotonic() - t0
-            holder.wait(); holder.stdout.close()
-            self.assertEqual(r["stato"], "COSIGNED"); self.assertGreater(waited, 0.5)
+        # (flock on POSIX, a byte-range lock on Windows: verifier.file_lock, the lock the witness takes, on every system)
+        import subprocess as sp
+        holder = sp.Popen([sys.executable, "-c", "import sys,time; sys.path.insert(0, sys.argv[2]); import verifier as V\n"
+                           "with V.file_lock(sys.argv[1]):\n print('held',flush=True); time.sleep(1.5)", self.st1 + ".lock",
+                           os.path.dirname(os.path.abspath(__file__))], stdout=sp.PIPE)
+        self.assertEqual(holder.stdout.readline().strip(), b"held")
+        t0 = time.monotonic(); r = self._w1(self.n5, ts=T0 + 20); waited = time.monotonic() - t0
+        holder.wait(); holder.stdout.close()
+        self.assertEqual(r["stato"], "COSIGNED"); self.assertGreater(waited, 0.5)
         # same checkpoint again (same size, same root, no proof): cosigned again, same size stored, new timestamp;
         # a caller timestamp OLDER than the stored one is refused (the state never moves backwards in time)
         r = self._w1(self.n5, ts=T0 + 30)

@@ -496,6 +496,48 @@ def write_file(path: str, text: str) -> Optional[str]:
         return str(e)
 
 
+class file_lock:
+    """An exclusive lock between processes on `path` (created if absent), held for the `with` block: flock on POSIX;
+    on Windows, which has no flock, its equivalent, a byte-range lock (msvcrt.locking on byte 0, retried until taken:
+    LK_LOCK gives up after 10 one-second tries). Until 0.29.0 the witness and the SCITT ledger had no lock there."""
+
+    def __init__(self, path: str):
+        self.path = path
+
+    def __enter__(self):
+        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                while True:
+                    try:
+                        os.lseek(self.fd, 0, os.SEEK_SET)
+                        msvcrt.locking(self.fd, msvcrt.LK_LOCK, 1)
+                        break
+                    except OSError:   # EDEADLOCK: still held by another process after 10 s; wait again
+                        continue
+            else:
+                import fcntl
+                fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except BaseException:
+            os.close(self.fd)
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            if os.name == "nt":
+                import msvcrt
+                os.lseek(self.fd, 0, os.SEEK_SET)
+                msvcrt.locking(self.fd, msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self.fd)
+        return False
+
+
 def append_line(path: str, line: bytes, *, mode: int = 0o666, opened=None, sync: bool = True) -> None:
     """Append whole ledger lines (bytes ending in b"\\n") or nothing: unbuffered os.write in a loop, fsync (`sync`); on any
     failure the file is truncated back to the bytes it had and OutputNotWritten names what is left. `opened` = an

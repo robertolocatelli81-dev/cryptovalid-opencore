@@ -258,5 +258,34 @@ class PrivateFiles(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(d)), ["k.key", "obj"])   # no temporary name left
 
 
+class FileLock(unittest.TestCase):
+    """The witness state and the SCITT ledger are locked between processes: flock on POSIX, a byte-range lock on
+    Windows (until 0.29.0 no lock at all there: fcntl does not exist)."""
+
+    def test_a_second_process_waits_for_the_lock(self):
+        import tempfile
+        import time
+        import verifier as V
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        lock, flag = os.path.join(d, "s.lock"), os.path.join(d, "held")
+        child = ("import os, sys, time; sys.path.insert(0, sys.argv[1]); import verifier as V\n"
+                 "with V.file_lock(sys.argv[2]):\n    open(sys.argv[3], 'wb').close(); time.sleep(2)\n")
+        p = subprocess.Popen([sys.executable, "-c", child, _HERE, lock, flag])
+        self.addCleanup(p.wait)
+        t0 = time.monotonic()
+        while not os.path.exists(flag):
+            self.assertLess(time.monotonic() - t0, 60, "the child never took the lock")
+            time.sleep(0.02)
+        t1 = time.monotonic()
+        with V.file_lock(lock):
+            waited = time.monotonic() - t1
+        self.assertGreater(waited, 1.0)   # the child held it for 2 s from just before the flag
+        self.assertEqual(p.wait(timeout=60), 0)
+        t2 = time.monotonic()
+        with V.file_lock(lock):           # control: free, taken at once
+            self.assertLess(time.monotonic() - t2, 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
