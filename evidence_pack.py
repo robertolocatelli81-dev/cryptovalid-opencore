@@ -517,6 +517,25 @@ def _pinned_time_anchor(tsr_b64: str, digest_hex: str, tsa_certs, tsa_crls=None)
     raise ValueError(f"verify_token with pinned certificates gave status {v['status']!r}")   # signature_only: impossible
 
 
+def _manifest_name_inside(name) -> bool:
+    """a file name of a MANIFEST.json that stays inside the pack (SPEC §10): not absolute, rooted or with a drive, no '..'"""
+    # separators of THIS platform only (on POSIX "\\" is an ordinary character, not a separator: NEMESIS P2, 01/10/2026)
+    if not (isinstance(name, str) and name != "" and not os.path.isabs(name) and "\0" not in name):
+        return False
+    # Windows (Python 3.13: "/etc/hostname" is no longer isabs there): a rooted name, a drive ("C:x", "\\\\host\\s")
+    # or a colon (an alternate data stream) names a file outside the pack or another file: refused as on POSIX
+    if name.startswith(("/", os.sep)) or os.path.splitdrive(name)[0] or (os.name == "nt" and ":" in name):
+        return False
+    try:
+        os.fsencode(name)   # a lone surrogate (JSON "\ud800") names no file here: a refusal, never a traceback
+    except UnicodeEncodeError:
+        return False
+    parts = name
+    for sep in {os.sep, os.altsep or os.sep, "/"}:
+        parts = parts.replace(sep, "/")
+    return ".." not in parts.split("/")
+
+
 def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubkey_hex: Optional[str] = None,
                 manifest_signer_hex: Optional[str] = None, tsa_certs: Optional[List] = None,
                 tsa_crls: Optional[List] = None, require_signature_domain: bool = False) -> Dict:
@@ -591,18 +610,7 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
         return _refused(f"manifest_not_json: {type(e).__name__}", "malformed")
     # shape of the parts this function reads (audit V1 #5): anything else is a named refusal, never a traceback; a file
     # name must stay inside the pack (no absolute path, no '..' component), like a vector name in the runners
-    def _inside(name):
-        # separators of THIS platform only (on POSIX "\\" is an ordinary character, not a separator: NEMESIS P2, 01/10/2026)
-        if not (isinstance(name, str) and name != "" and not os.path.isabs(name) and "\0" not in name):
-            return False
-        try:
-            os.fsencode(name)   # a lone surrogate (JSON "\ud800") names no file here: a refusal, never a traceback
-        except UnicodeEncodeError:
-            return False
-        parts = name
-        for sep in {os.sep, os.altsep or os.sep, "/"}:
-            parts = parts.replace(sep, "/")
-        return ".." not in parts.split("/")
+    _inside = _manifest_name_inside
     if not isinstance(man, dict):
         return _refused("manifest_not_an_object", "malformed")
     # 0.22.0 — SPEC §10: the format first (until 0.21.0 the field was not read). A later revision may add members: its

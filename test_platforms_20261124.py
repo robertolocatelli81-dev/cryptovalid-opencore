@@ -405,5 +405,26 @@ class OneNestingBound(unittest.TestCase):
         self.assertEqual(bad, [])
 
 
+class ManifestNamesOnWindows(unittest.TestCase):
+    """Python 3.13 no longer calls a rooted name absolute on Windows ("/etc/hostname"), so a MANIFEST.json naming it
+    passed the name check there and was read as D:\\etc\\hostname (test_evidence_pack on windows-latest: no named
+    refusal). Each Windows form that leaves the pack is refused by name."""
+
+    def test_windows_forms_are_refused(self):
+        import ntpath
+        from unittest import mock
+        import evidence_pack as E
+        with mock.patch.object(os, "path", ntpath), mock.patch.object(os, "sep", "\\"), \
+                mock.patch.object(os, "altsep", "/"), mock.patch.object(os, "name", "nt"):
+            for bad in ("/etc/hostname", "\\etc\\hostname", "C:x.jsonl", "C:\\x.jsonl", "\\\\host\\share\\x",
+                        "a.jsonl:stream", "..\\x", "a/../../x"):
+                self.assertFalse(E._manifest_name_inside(bad), bad)
+            for good in ("signed.jsonl", "dir\\signed.jsonl", "dir/signed.jsonl"):
+                self.assertTrue(E._manifest_name_inside(good), good)
+        for good in ("signed.jsonl", "a\\..\\b.jsonl" if os.sep == "/" else "x.jsonl"):   # POSIX: "\\" is a character
+            self.assertTrue(E._manifest_name_inside(good), good)
+        self.assertFalse(E._manifest_name_inside("/etc/hostname"))
+
+
 if __name__ == "__main__":
     unittest.main()
