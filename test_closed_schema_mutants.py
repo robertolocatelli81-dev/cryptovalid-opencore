@@ -29,6 +29,7 @@ class TestClosedSchemaMutants(unittest.TestCase):
     def _run(self, *extra):
         out = os.path.join(self.d, "out.json")
         r = subprocess.run([sys.executable, BENCH, "--quick", "--seed", "20261011", "--out", out, *extra], capture_output=True, text=True, encoding="utf-8", timeout=1800)
+        self.assertTrue(os.path.exists(out), f"the bench wrote no summary (exit {r.returncode}): {r.stderr[-2000:]}")
         with open(out, encoding="utf-8") as f:
             return r.returncode, json.load(f), r.stdout[-2000:]
 

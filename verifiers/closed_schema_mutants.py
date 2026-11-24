@@ -461,4 +461,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):   # Windows: a pipe gets the ANSI code page; this tool writes UTF-8 everywhere
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     sys.exit(main())
