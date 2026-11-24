@@ -304,8 +304,19 @@ Changes to the tests and the CI: `.gitattributes` keeps the repository's bytes i
 of pinned digests); OpenSSL configuration paths are escaped; a test's home is set in `USERPROFILE` too; the address
 oracle of `test_sentry` is inet_aton, not this host's resolver; text I/O names its encoding everywhere; the full
 volume, Git's bash, the pipe capacity and the fsync/write faults have their macOS and Windows equivalents; OpenSSL 3
-from Homebrew on macOS. Left as skips with the reason, where Windows has no equivalent the code uses yet: a FIFO at a
-name inside a directory, and a non-blocking stdout pipe (the writers wait with `select`, sockets only on Windows).
+from Homebrew on macOS.
+
+After the second run (45356889667, 2026-11-24): stderr is UTF-8 on Windows too; a private file keeps its access list
+when a writer replaces it (`SetFileSecurityW`, the list set whole: `icacls` had left three explicit entries); an openssl
+that crashed is a check not run on Windows too (an NTSTATUS exit such as 0xC0000005, not only a signal); a full
+non-blocking stdout is waited for on Windows through the pipe's own state (`NtQueryInformationFile`), not `select`;
+the evidence fingerprint of SPEC §23 reads the file's change time on Windows (`st_ctime` is the creation time there);
+an `Ingestor` whose construction fails closes the segment it opened; the JS verifier reads a FIFO by polling its
+descriptor (on macOS the socket it used reported nothing); the tests bound memory with a Job Object on Windows,
+make files unreadable with an empty access list, and use named pipes for FIFOs. Left as skips with the reason, where
+Windows has no equivalent the tests use yet: a FIFO at a name inside a directory, a per-process file-size limit
+(`ulimit -f`), a link to a device, a fake openssl written as a shell script (the code runs `openssl.exe` by name there). Not fixed here: ap2-evidence-pack writes its evidence file in text mode (`os.fdopen(fd, "w")`), so on Windows
+it gets CRLF and its own digest no longer matches; the fix belongs to that package.
 Whether the other-os job is green with these changes is measured by the CI of the release branch, not here.
 
 ### One nesting bound for every JSON text, on every Python (SPEC §30)

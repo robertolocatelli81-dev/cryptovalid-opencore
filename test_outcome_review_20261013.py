@@ -314,6 +314,8 @@ class TestCheckNotRunMore(_Tmp):
         return out
 
     def _fake_openssl(self, body):
+        if os.name == "nt":
+            self.skipTest("a fake openssl is a POSIX shell script; on Windows the code runs openssl.exe by name and a script cannot stand in for it (an .exe shim is not built here)")
         b = os.path.join(self.d, "bin")
         os.mkdir(b)
         p = os.path.join(b, "openssl")

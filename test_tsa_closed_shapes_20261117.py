@@ -146,6 +146,7 @@ class ClosedShapes(unittest.TestCase):
                 a[1][1][1][0][1].append([0x30, []])
         self.assertIn("not {certs, policies?}", self.anchor(K.enc(t)))
 
+    @unittest.skipIf(os.name == "nt", "a fake openssl is a POSIX shell script; on Windows the code runs openssl.exe by name and a script cannot stand in for it (an .exe shim is not built here)")
     def test_openssl_without_no_castore(self):
         bindir = os.path.join(self.td, "bin")
         os.makedirs(bindir, exist_ok=True)
