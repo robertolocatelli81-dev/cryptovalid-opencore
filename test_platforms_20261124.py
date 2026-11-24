@@ -343,6 +343,8 @@ def fake_openssl(tc, bindir, sh_body, py_body):
         os.chmod(p, 0o755)
         return env
     exe = os.path.join(bindir, "openssl.exe")
+    if py_body is not None and sys.version_info < (3, 10):
+        tc.skipTest("the Windows fake openssl reads sys.orig_argv, new in Python 3.10")
     if py_body is None:
         with open(exe, "wb") as f:
             f.write(b"not a program\r\n")
@@ -931,6 +933,7 @@ class FakeOpensslOnWindows(unittest.TestCase):
     Measured here through a link named openssl.exe to this Python (the launcher itself runs on Windows only)."""
 
     @unittest.skipIf(os.name == "nt", "the launcher route is measured by the tests that use it on Windows")
+    @unittest.skipIf(sys.version_info < (3, 10), "the hook reads sys.orig_argv, new in Python 3.10")
     def test_the_site_hook_runs_the_body_with_the_arguments(self):
         import tempfile
         d = tempfile.mkdtemp()
