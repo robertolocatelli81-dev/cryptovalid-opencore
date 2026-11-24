@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -135,12 +136,18 @@ class TestTheBudgetOfALedgerInTheFourVerifiers(unittest.TestCase):
             for _ in range(128):
                 f.write(b"0\n" * (1 << 20))
         try:
+            # Linux enforces RLIMIT_DATA; macOS refuses to set it (the preexec_fn failed, CI of f1e95d5) and does not
+            # enforce it: there the peak resident size of each child is measured instead (ru_maxrss, bytes on macOS)
+            linux = sys.platform.startswith("linux")
             for name, argv in self.bins.items():
-                cap = (lambda: resource.setrlimit(resource.RLIMIT_DATA, (2 << 30, 2 << 30))) if name in ("python", "go") else None
+                cap = (lambda: resource.setrlimit(resource.RLIMIT_DATA, (2 << 30, 2 << 30))) \
+                    if name in ("python", "go") and linux else None
                 cp = subprocess.run(argv + [p], capture_output=True, text=True, encoding="utf-8", timeout=120, stdin=subprocess.DEVNULL,
                                     preexec_fn=cap)
                 self.assertEqual(cp.returncode, 1, (name, cp.stderr[-200:]))
                 self.assertEqual(_reason(name, json.loads(cp.stdout)), TOO_MANY_LINES, name)
+                if not linux and name in ("python", "go"):
+                    self.assertLess(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss, 2 << 30, name)
         finally:
             os.remove(p)
 
