@@ -836,13 +836,26 @@ class InputTooLarge(OSError):
     """SPEC §5 step 0: the file is larger than the bound"""
 
 
+def _open_input(path: str) -> int:
+    """os.open for reading without blocking. Windows cannot open a directory as a file (PermissionError): that is a
+    directory, not a file this user may not read, so InputNotRegular as on POSIX (where fstat says so). Until 0.29.0 an
+    archive segment that was a directory was read there as a missing file and the archive was valid (run 45377477990)."""
+    try:
+        return os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0)
+                       | getattr(os, "O_BINARY", 0))
+    except PermissionError:
+        if os.name == "nt" and os.path.isdir(path):
+            raise InputNotRegular(f"{path}: not a regular file") from None
+        raise
+
+
 def open_regular(path: str, limit: int = MAX_INPUT_BYTES) -> int:
     """SPEC §5 step 0 (v0.11): a descriptor of a REGULAR file of at most `limit` bytes, opened once WITHOUT blocking and
     judged on the open descriptor (fstat), so a FIFO put at the path is never waited on and nothing is checked on one
     file and read from another. Raises InputNotRegular, InputTooLarge, or the OSError of os.open (FileNotFoundError...).
     O_NONBLOCK does not change reads of a regular file."""
     import stat
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+    fd = _open_input(path)
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
@@ -870,7 +883,7 @@ def open_ledger_input(path: str, limit: int = MAX_INPUT_BYTES, idle: float = FIF
     InputIdle, or the OSError of os.open."""
     import select
     import stat
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+    fd = _open_input(path)
     try:
         st = os.fstat(fd)
         if stat.S_ISREG(st.st_mode):

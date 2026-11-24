@@ -842,5 +842,28 @@ class CrashedOpenssl(unittest.TestCase):
         self.assertIn("0xC0000005", str(c.exception))
 
 
+class DirectoryAsInput(unittest.TestCase):
+    """Windows refuses to open a directory as a file with PermissionError: an input that is a directory was taken for
+    an unreadable (or, as an archive segment, a missing) file; on POSIX fstat says "not a regular file". Same answer
+    now (run 45377477990: an archive with a directory as its unsealed segment was valid on Windows)."""
+
+    def test_a_directory_is_not_a_regular_file_on_windows_too(self):
+        import tempfile
+        from unittest import mock
+        import verifier as V
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        real_open = os.open
+
+        def windows_open(path, flags, *a):
+            if os.path.isdir(path):
+                raise PermissionError(13, "Permission denied", path)
+            return real_open(path, flags, *a)
+        with mock.patch.object(os, "open", windows_open), mock.patch.object(os, "name", "nt"):
+            for reader in (V.open_regular, V.open_ledger_input):
+                with self.assertRaises(V.InputNotRegular, msg=reader.__name__):
+                    reader(d)
+
+
 if __name__ == "__main__":
     unittest.main()
