@@ -274,6 +274,30 @@ In 0.28.1 (earlier releases not measured), a `MANIFEST.json` nested deeper than 
 at 1 100 levels under Python 3.9 and 3.11, at 20 000 under 3.13; not at 900); the runs of a profile, new in this
 release, did the same until this change. It is now the refusal of the manifest, like any other unreadable manifest.
 
+### Windows and macOS: the same bytes, the same verdict
+
+The first run of the suites on macos-latest and windows-latest (Python 3.13, CI run 45334981283 of 2026-11-24) failed
+8 test files on macOS and 52 on Windows. Changes to the code (each with a case in `test_platforms_20261124.py` that
+fails without it):
+
+- receipts on Windows are UTF-8 with LF (they were cp1252 with CRLF: `--quiet` wrote `PASS\r\n`, and a reason or an
+  MCP reply with a character outside cp1252 ended in exit 74); `openssl ts -text` output is decoded as UTF-8 (in the
+  code page a byte such as 0x81 emptied it, and a granted token read as not granted);
+- an OSError in a reason is written with the C library's text on every system (Windows' own text was "The system
+  cannot find the file specified");
+- Windows: no directory fsync (a directory cannot be opened there; every `Ingestor` failed); renames use
+  `MoveFileExW(MOVEFILE_WRITE_THROUGH)`; key files and WORM objects get an access list for the owner alone; the
+  witness state and the SCITT ledger get a byte-range lock (there was no lock there); a manifest file name rooted or
+  with a drive (`/etc/hostname`, `C:x`; Python 3.13 no longer calls `/etc/hostname` absolute on Windows) is refused.
+
+Changes to the tests and the CI: `.gitattributes` keeps the repository's bytes in every checkout (CRLF broke 13 files
+of pinned digests); OpenSSL configuration paths are escaped; a test's home is set in `USERPROFILE` too; the address
+oracle of `test_sentry` is inet_aton, not this host's resolver; text I/O names its encoding everywhere; the full
+volume, Git's bash, the pipe capacity and the fsync/write faults have their macOS and Windows equivalents; OpenSSL 3
+from Homebrew on macOS. Left as skips with the reason, where Windows has no equivalent the code uses yet: a FIFO at a
+name inside a directory, and a non-blocking stdout pipe (the writers wait with `select`, sockets only on Windows).
+Whether the other-os job is green with these changes is measured by the CI of the release branch, not here.
+
 ### One nesting bound for every JSON text, on every Python (SPEC §30)
 
 The depth at which Python's JSON parser gives up moved with the version (measured on 2026-11-24: a `RecursionError`

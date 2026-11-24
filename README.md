@@ -84,10 +84,31 @@ signed tip commits to 3`, and every receipt carries a `scope` field that says wh
 Exit codes: 0 PASS, 1 FAIL, 2 usage, 74 the receipt could not be written whole (stdout or `--out` full, closed, or a
 reader gone), whatever the verdict.
 
+## Windows and macOS
+
+The same bytes get the same verdict on Linux, macOS and Windows (0.29.0; `test_platforms_20261124.py`). What a user
+there should know:
+
+- **Ledgers, packs and vectors are judged on their bytes.** Git for Windows checks text files out with CRLF line
+  endings by default (`core.autocrlf=true`): a ledger or a pack kept in a Git repository on Windows then has other
+  bytes and fails. This repository turns the conversion off (`.gitattributes`: `* -text`); do the same for your
+  evidence (`*.jsonl -text`, or `* -text` in the folder that holds it).
+- **Receipts are UTF-8 with LF line endings on every system**, also on a Windows pipe or file (until 0.29.0 they were
+  written in the ANSI code page, cp1252, with CRLF; a reason outside it ended in exit 74). `PYTHONIOENCODING` still
+  chooses another encoding.
+- **Key files** (`keygen`) and WORM objects are the owner's alone: on Windows through the access list (one entry, the
+  user, full control, nothing inherited; set with `icacls` before the first byte), since a mode there only sets the
+  read-only attribute.
+- **Locks between processes** (the witness state, the SCITT ledger) are byte-range locks on Windows, `flock` elsewhere.
+- **The trusted-list cache** is `~/.cache/cryptovalid`, i.e. `%USERPROFILE%\.cache\cryptovalid` on Windows.
+- **OpenSSL 3** is needed for the RFC 3161 token checks; on macOS `/usr/bin/openssl` is LibreSSL: put Homebrew's
+  `openssl@3` first on `PATH`.
+
 ## Proofs
 
 - **CI on every push and weekly** ([verify.yml](.github/workflows/verify.yml)): every `test_*.py` suite on Python 3.9
-  to 3.14 on Linux and 3.13 on macOS and Windows, with and without `cryptography`, the conformance vectors, a real
+  to 3.14 on Linux and 3.13 on macOS and Windows (there, a case the system cannot run is skipped with its reason),
+  with and without `cryptography`, the conformance vectors, a real
   PKCS#11 token (SoftHSM2) signing a ledger end to end, a tampered ledger
   that must be refused, the declared dependency floors, and the verifiers in the other languages.
 - **Verifiers in six languages, by the same author:** Python (`verifier.py`, the reference), JavaScript
