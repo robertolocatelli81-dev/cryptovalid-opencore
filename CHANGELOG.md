@@ -286,6 +286,16 @@ the review of 2026-10-01, NEMESIS P2), while on Windows the same name was a path
 
 ### Fleet audit of 2026-11-24 (the classes found in pq-scitt)
 
+- **Security, choice of the binary:** `openssl` (RFC 3161 checks) and `pkcs11-tool` were started by their bare name.
+  On Windows CreateProcess looks in the program's folder, the current folder and System32 before PATH, so the binary
+  started could be another than the one `shutil.which` had found, for instance one placed in the current folder (CI
+  runs 45460009605 and 45460749218: a stand-in first on PATH was not the one that ran). Both are now run by the
+  path `shutil.which` names; `openssl` gone from PATH is a check not run. Tests that failed before:
+  `test_platforms_20261124.OpensslByItsPath`, `test_kms.TestPkcs11ToolByItsPath`. Audit of the same class in this
+  package: no other production module starts a program by a bare name (`mutation_runner.py` runs the command its
+  caller gives; the benches in `verifiers/` and `tools/` start git, go, cargo, swift, node and openssl by name, as
+  developer tools run from the repository).
+
 - PKCS#11 (`pkcs11:` backend): public-key reads and signatures run in a child process killed at the time limit
   (until now a thread that a call blocked in the module kept for good); the child ignores the current folder, keeps
   its answers off a stdout the module may print on, and is stopped by an answer out of form. The public key is read

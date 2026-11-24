@@ -478,7 +478,10 @@ class Pkcs11Backend:
     name = "pkcs11"
 
     def __init__(self, module: str, token: str, key: str, pin: str = "env:CRYPTOVALID_PIN", timeout: float = 60.0):
-        if shutil.which("pkcs11-tool") is None:
+        # the tool is run by the path which names: on Windows a bare name is looked up in the program's folder, the
+        # current folder and System32 before PATH (the class of cryptovalid_tsa._run_openssl, 0.29.0)
+        self._tool = shutil.which("pkcs11-tool")
+        if self._tool is None:
             raise RuntimeError("pkcs11-tool not found (install opensc)")
         if not pin.startswith("env:"):
             raise ValueError("pin must be 'env:VARNAME' (argv PINs leak via ps)")
@@ -489,7 +492,7 @@ class Pkcs11Backend:
         self._child = _Pkcs11Child(timeout)
 
     def _run(self, extra, login=False, what="call"):
-        cmd = ["pkcs11-tool", "--module", self._module, "--token-label", self._token]
+        cmd = [self._tool, "--module", self._module, "--token-label", self._token]
         if login:
             cmd += ["--login", "--pin", self._pin]      # pkcs11-tool reads env:VAR itself: the PIN is not on argv
         try:

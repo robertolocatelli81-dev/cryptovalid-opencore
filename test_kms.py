@@ -496,5 +496,21 @@ class TestPkcs11ChildAndShapes(unittest.TestCase):
             self.assertEqual((u, ctypes.sizeof(a), a.ulValueLen.offset), (4, 16, 12))   # Win64, pack(1)
 
 
+class TestPkcs11ToolByItsPath(unittest.TestCase):
+    """pkcs11-tool is run by the path shutil.which names (a bare name on Windows: program folder, current folder and
+    System32 come before PATH)"""
+
+    def test_the_path_which_names_is_run(self):
+        from unittest import mock
+        seen = []
+        with mock.patch.object(kms.shutil, "which", lambda n: "/opt/opensc/bin/pkcs11-tool" if n == "pkcs11-tool" else None), \
+                mock.patch.dict(os.environ, {"CV_TEST_PIN": "1"}):
+            b = kms.Pkcs11Backend("m.so", "t", "k", pin="env:CV_TEST_PIN")
+            with mock.patch.object(kms.subprocess, "run",
+                                   lambda cmd, **kw: (seen.append(cmd[0]), subprocess.CompletedProcess(cmd, 0, b"", b""))[1]):
+                b._run(["--list-objects"])
+        self.assertEqual(seen, ["/opt/opensc/bin/pkcs11-tool"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
