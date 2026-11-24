@@ -19,12 +19,8 @@
   cryptovalid_heterogeneous counts when openssl verifies and lets CheckNotRun through; an evidence pack build whose
   stamp cannot run openssl is 74.
 The fsync and write faults: an LD_PRELOAD shim on Linux (C); on macOS and Windows a sitecustomize that wraps os.fsync
-and stdout's raw write, the same failures seen by the same code (os.fsync, FileIO.write). Non-blocking pipes need
-fcntl: skipped on Windows with the reason."""
-try:
-    import fcntl
-except ImportError:   # Windows
-    fcntl = None
+and stdout's raw write, the same failures seen by the same code (os.fsync, FileIO.write). Non-blocking pipes: O_NONBLOCK
+on POSIX, PIPE_NOWAIT on Windows (os.set_blocking, Python 3.12+), read with FIONREAD / PeekNamedPipe."""
 import json
 import os
 import shlex
@@ -40,10 +36,8 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_platforms_20261124 import BASH, full_sink, pipe_capacity  # noqa: E402
-NEEDS_FCNTL = unittest.skipIf(fcntl is None, "a non-blocking pipe through fcntl (O_NONBLOCK, FIONREAD): Windows has the "
-                              "equivalents (PIPE_NOWAIT, PeekNamedPipe) but the writers wait with select, which Windows "
-                              "has for sockets only: not implemented there")
+from test_platforms_20261124 import (BASH, NEEDS_NONBLOCKING_PIPES, cpu_seconds, full_sink, pipe_bytes,  # noqa: E402
+                                     pipe_capacity, set_nonblocking)
 
 FAULTS_PY = r'''
 import io, os, sys
@@ -469,33 +463,23 @@ class TestWriter(_Tmp):
 
     def _nonblocking(self, args, env=None):
         r, w = os.pipe()
-        fcntl.fcntl(w, fcntl.F_SETFL, fcntl.fcntl(w, fcntl.F_GETFL) | os.O_NONBLOCK)
+        set_nonblocking(w)
         p = subprocess.Popen([PY] + args, stdout=w, stderr=subprocess.PIPE, env=env or ENV)
         os.close(w)
         return r, p
 
     @NEEDS_CRYPTO
-    @NEEDS_FCNTL
+    @NEEDS_NONBLOCKING_PIPES
     def test_waits_in_the_kernel_not_spinning(self):
         big = big_unsigned(self.d)
         r, p = self._nonblocking([os.path.join(HERE, "signer.py"), "verify", big])
 
         def cpu():
-            if not os.path.exists(f"/proc/{p.pid}/stat"):   # macOS has no /proc: ps reads the same counters
-                t = subprocess.run(["ps", "-o", "time=", "-p", str(p.pid)], capture_output=True).stdout.decode().strip()
-                parts = [float(x) for x in t.replace("-", ":").split(":")]
-                return sum(v * m for v, m in zip(reversed(parts), (1, 60, 3600, 86400)))
-            with open(f"/proc/{p.pid}/stat", encoding="utf-8") as f:
-                fields = f.read().rsplit(")", 1)[1].split()
-            return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
-        import array
-        import termios
+            return cpu_seconds(p)
         cap = pipe_capacity(r)
         t0 = time.time()
         while time.time() - t0 < 60:   # the pipe full: from here on the writer only waits
-            n = array.array("i", [0])
-            fcntl.ioctl(r, termios.FIONREAD, n, True)
-            if n[0] >= cap:
+            if pipe_bytes(r) >= cap:
                 break
             time.sleep(0.02)
         time.sleep(0.2)
@@ -516,7 +500,7 @@ class TestWriter(_Tmp):
         self.assertTrue(json.loads(data))
 
     @NEEDS_CRYPTO
-    @NEEDS_FCNTL
+    @NEEDS_NONBLOCKING_PIPES
     def test_last_flush_waited_for(self):
         big = big_unsigned(self.d)
         for _ in range(3):
@@ -536,12 +520,12 @@ class TestWriter(_Tmp):
             self.assertEqual(rc, 1, tail)
             self.assertTrue(json.loads(data))
 
-    @NEEDS_FCNTL
+    @NEEDS_NONBLOCKING_PIPES
     def test_caller_text_first_in_process(self):
         script = r'''
-import fcntl, os, sys, threading, time
+import os, sys, threading, time
 sys.path.insert(0, sys.argv[1]); import verifier
-r, w = os.pipe(); fcntl.fcntl(w, fcntl.F_SETFL, fcntl.fcntl(w, fcntl.F_GETFL) | os.O_NONBLOCK)
+r, w = os.pipe(); os.set_blocking(w, False)
 try:
     while True: os.write(w, b"P" * 4096)
 except BlockingIOError: pass

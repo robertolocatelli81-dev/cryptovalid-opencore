@@ -64,8 +64,8 @@ def pipe_capacity(fd):
     """How many bytes a pipe holds before a writer waits. Linux: F_GETPIPE_SZ (1032, the read end will do). macOS has
     no such fcntl (1032 there is another operation: EBADF, CI of f1e95d5): measured on a fresh pipe filled by 64 KiB
     writes, the size the writers use (macOS grows a pipe to 64 KiB under large writes)."""
-    import fcntl
     if sys.platform.startswith("linux"):
+        import fcntl
         return fcntl.fcntl(fd, 1032)
     return _measured_pipe_capacity()
 
@@ -73,7 +73,7 @@ def pipe_capacity(fd):
 def _measured_pipe_capacity():
     r, w = os.pipe()
     try:
-        os.set_blocking(w, False)
+        set_nonblocking(w)
         n = 0
         try:
             while True:
@@ -113,6 +113,59 @@ def fifo_at(tc, path):
 
 # the device a reader must refuse at once: Linux and macOS /dev/zero, Windows NUL (\\.\NUL, a character device)
 DEVICE = r"\\.\NUL" if os.name == "nt" else "/dev/zero"
+
+
+def set_nonblocking(fd):
+    """O_NONBLOCK on POSIX; on Windows PIPE_NOWAIT, which os.set_blocking sets on a pipe since Python 3.12"""
+    os.set_blocking(fd, False)
+
+
+NONBLOCKING_PIPES = os.name != "nt" or sys.version_info >= (3, 12)
+NEEDS_NONBLOCKING_PIPES = unittest.skipUnless(NONBLOCKING_PIPES, "a non-blocking pipe on Windows needs Python 3.12 "
+                                              "(os.set_blocking on a pipe)")
+
+
+def pipe_bytes(r):
+    """bytes waiting in a pipe: FIONREAD on POSIX, PeekNamedPipe (TotalBytesAvail) on Windows"""
+    if os.name == "nt":
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+        n = wintypes.DWORD(0)
+        peek = ctypes.WinDLL("kernel32", use_last_error=True).PeekNamedPipe
+        peek.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD),
+                         ctypes.c_void_p)
+        peek.restype = wintypes.BOOL
+        if not peek(msvcrt.get_osfhandle(r), None, 0, None, ctypes.byref(n), None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return n.value
+    import array
+    import fcntl
+    import termios
+    n = array.array("i", [0])
+    fcntl.ioctl(r, termios.FIONREAD, n, True)
+    return n[0]
+
+
+def cpu_seconds(p):
+    """user + system CPU seconds of the running child `p` (a Popen): /proc on Linux, ps on macOS, GetProcessTimes on
+    Windows"""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        t = [wintypes.FILETIME() for _ in range(4)]
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+        if not k.GetProcessTimes(int(p._handle), *[ctypes.byref(x) for x in t]):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return sum((x.dwHighDateTime << 32 | x.dwLowDateTime) for x in t[2:]) / 1e7
+    if os.path.exists(f"/proc/{p.pid}/stat"):
+        with open(f"/proc/{p.pid}/stat", encoding="utf-8") as f:
+            fields = f.read().rsplit(")", 1)[1].split()
+        return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
+    t = subprocess.run(["ps", "-o", "time=", "-p", str(p.pid)], capture_output=True).stdout.decode().strip()
+    parts = [float(x) for x in t.replace("-", ":").split(":")]
+    return sum(v * m for v, m in zip(reversed(parts), (1, 60, 3600, 86400)))
 
 
 
@@ -512,6 +565,49 @@ class ManifestNamesOnWindows(unittest.TestCase):
             self.assertFalse(E._manifest_name_inside(bad), bad)
         for good in ("signed.jsonl", "dir/signed.jsonl"):
             self.assertTrue(E._manifest_name_inside(good), good)
+
+
+class NonBlockingStdoutOnWindows(unittest.TestCase):
+    """A full non-blocking stdout was waited for with select, which Windows has for sockets only ("stdout is
+    non-blocking and cannot be waited for", exit 74). There the wait asks the pipe (NtQueryInformationFile)."""
+
+    def test_the_windows_wait_is_used_there(self):
+        import io
+        from unittest import mock
+        import verifier as V
+        calls = []
+        r, w = os.pipe()
+        self.addCleanup(os.close, r)
+        self.addCleanup(os.close, w)
+        with mock.patch.object(os, "name", "nt"), mock.patch.object(V, "_wait_pipe_writable_windows", calls.append):
+            V._wait_writable(io.FileIO(w, "wb", closefd=False))
+        self.assertEqual(calls, [w])
+
+    @unittest.skipUnless(os.name == "nt" and NONBLOCKING_PIPES, "the Windows pipe API: measured by the other-os job")
+    def test_a_full_pipe_is_waited_for_then_written(self):
+        import threading
+        import time
+        import verifier as V
+        r, w = os.pipe()
+        set_nonblocking(w)
+        n = 0
+        try:
+            while True:
+                n += os.write(w, b"x" * 4096)
+        except BlockingIOError:
+            pass
+        threading.Thread(target=lambda: (time.sleep(1), os.read(r, 1 << 16)), daemon=True).start()
+        t0 = time.monotonic()
+        while True:   # as _write_stdout does: wait, write again
+            V._wait_pipe_writable_windows(w)
+            try:
+                self.assertGreater(os.write(w, b"y"), 0)
+                break
+            except BlockingIOError:
+                self.assertLess(time.monotonic() - t0, 30, "the reader drained the pipe after 1 s")
+        self.assertGreater(time.monotonic() - t0, 0.5)   # it waited for the reader
+        os.close(w)
+        os.close(r)
 
 
 if __name__ == "__main__":

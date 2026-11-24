@@ -21,10 +21,6 @@ the 13/10 bench found still open after the first 0.20.3 commits, and the command
   never a verdict on the input (a valid evidence pack was `valid: false`, exit 1);
 - a command run under a file size limit no longer leaves a cut .pyc that makes every later run exit 1 (CPython 3.9, 3.11).
 Every test here fails on 0.20.2 (c289480). Linux only (bash `ulimit`, O_NONBLOCK pipes); macOS and Windows not measured."""
-try:
-    import fcntl
-except ImportError:   # Windows
-    fcntl = None
 import json
 import os
 import shlex
@@ -37,10 +33,8 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_platforms_20261124 import BASH, full_sink, pipe_capacity  # noqa: E402
-NEEDS_FCNTL = unittest.skipIf(fcntl is None, "a non-blocking pipe through fcntl (O_NONBLOCK, FIONREAD): Windows has the "
-                              "equivalents (PIPE_NOWAIT, PeekNamedPipe) but the writers wait with select, which Windows "
-                              "has for sockets only: not implemented there")
+from test_platforms_20261124 import (BASH, NEEDS_NONBLOCKING_PIPES, cpu_seconds, full_sink, pipe_bytes,  # noqa: E402
+                                     pipe_capacity, set_nonblocking)
 PY = sys.executable
 SAMPLE = os.path.join(HERE, "examples", "sample_ledger.jsonl")
 TAMPERED = os.path.join(HERE, "examples", "sample_ledger_tampered.jsonl")
@@ -77,14 +71,10 @@ def read_after_full(r, p, timeout=120):
     """Read the pipe's read end only once the writer has FILLED the pipe (FIONREAD = its capacity) or exited: a fixed
     sleep was not late for a slow starter (the JVM needs about 1 s to reach its write), so the EAGAIN path was not
     always exercised (a mutant that gives up on EAGAIN survived 2 runs of 3, 13/10/2026). Returns all the bytes."""
-    import array
-    import termios
     cap = pipe_capacity(r)
     t0 = time.time()
     while time.time() - t0 < timeout and p.poll() is None:
-        n = array.array("i", [0])
-        fcntl.ioctl(r, termios.FIONREAD, n, True)
-        if n[0] >= cap:
+        if pipe_bytes(r) >= cap:
             break
         time.sleep(0.02)
     time.sleep(0.3)
@@ -123,7 +113,7 @@ class TestUnbufferedFileSizeLimit(_Tmp):
             self.assertOneLine74(rc, err, f"-u {cmd[-1]}")
 
 
-@NEEDS_FCNTL
+@NEEDS_NONBLOCKING_PIPES
 class TestNonBlockingStdout(_Tmp):
     """a non-blocking pipe read only once it is full: the receipt arrives whole and the code is the verdict's"""
 
@@ -133,7 +123,7 @@ class TestNonBlockingStdout(_Tmp):
         big = big_unsigned(self.d)
         for unbuffered in ("", "1"):
             r, w = os.pipe()
-            fcntl.fcntl(w, fcntl.F_SETFL, fcntl.fcntl(w, fcntl.F_GETFL) | os.O_NONBLOCK)
+            set_nonblocking(w)
             env = dict(ENV, PYTHONUNBUFFERED=unbuffered) if unbuffered else ENV
             p = subprocess.Popen([PY, os.path.join(HERE, "signer.py"), "verify", big], stdout=w, stderr=subprocess.PIPE, env=env)
             os.close(w)
@@ -146,7 +136,7 @@ class TestNonBlockingStdout(_Tmp):
             self.assertIs(json.loads(data)["ok"], False)
 
 
-@NEEDS_FCNTL
+@NEEDS_NONBLOCKING_PIPES
 class TestJavaNonBlocking(_Tmp):
     """CvVerify.java: a non-blocking stdout read once full gets a receipt larger than the pipe buffer whole, exit 1 (it was
     74 with 65 536 bytes in the pipe: FileOutputStream.write threw EAGAIN); stdout opened read-only (EBADF) is 74"""
@@ -167,7 +157,7 @@ class TestJavaNonBlocking(_Tmp):
                 f.write(json.dumps({"idx": i, "ts": "2026-08-13T10:00:00Z", "data": {"e": i}, "prev_hash": "%064x" % (i + 1),
                                     "self_hash": "%064x" % (i + 7)}) + "\n")
         r, w = os.pipe()
-        fcntl.fcntl(w, fcntl.F_SETFL, fcntl.fcntl(w, fcntl.F_GETFL) | os.O_NONBLOCK)
+        set_nonblocking(w)
         p = subprocess.Popen([java, "-cp", cp, "CvVerify", big], stdout=w, stderr=subprocess.PIPE, env=ENV)
         os.close(w)
         data = read_after_full(r, p)
@@ -183,7 +173,7 @@ class TestJavaNonBlocking(_Tmp):
         self.assertOneLine74(rc, err, "java stdout read-only")
 
 
-@NEEDS_FCNTL
+@NEEDS_NONBLOCKING_PIPES
 class TestJavaWaitShape(_Tmp):
     """review of 0.20.3, 13/10: the Java wait is sleeps of 1 to 50 ms, not a spin and not an unbounded back-off: under 0.3 s of CPU
     in 3 s of waiting on a full non-blocking stdout, the receipt whole within 0.6 s of the reader starting, and it ends
@@ -197,8 +187,6 @@ class TestJavaWaitShape(_Tmp):
             if os.environ.get("CV_REQUIRE_JAVA") == "1":
                 raise RuntimeError("CV_REQUIRE_JAVA=1 and no JDK")
             self.skipTest("no JDK")
-        if not os.path.exists("/proc/self/stat"):
-            self.skipTest("no /proc")
         cp = os.path.join(self.d, "cls")
         subprocess.run([javac, "-d", cp, os.path.join(HERE, "verifiers", "java", "CvVerify.java")], check=True, capture_output=True)
         small = subprocess.run([java, "-cp", cp, "CvVerify", SAMPLE], capture_output=True, env=ENV)
@@ -208,18 +196,14 @@ class TestJavaWaitShape(_Tmp):
             for i in range(20000):
                 f.write(json.dumps({"idx": i, "ts": "2026-08-13T10:00:00Z", "data": {"e": i}, "prev_hash": "%064x" % (i + 1),
                                     "self_hash": "%064x" % (i + 7)}) + "\n")
-        import array
-        import termios
         r, w = os.pipe()
-        fcntl.fcntl(w, fcntl.F_SETFL, fcntl.fcntl(w, fcntl.F_GETFL) | os.O_NONBLOCK)
+        set_nonblocking(w)
         p = subprocess.Popen([java, "-cp", cp, "CvVerify", big], stdout=w, stderr=subprocess.DEVNULL, env=ENV)
         os.close(w)
         cap = pipe_capacity(r)
         t0 = time.time()
         while time.time() - t0 < 120 and p.poll() is None:
-            n = array.array("i", [0])
-            fcntl.ioctl(r, termios.FIONREAD, n, True)
-            if n[0] >= cap:
+            if pipe_bytes(r) >= cap:
                 break
             time.sleep(0.02)
         # 0.22.0: 2 s for the JVM to settle before the CPU window (was 0.3 s): its own compiler and GC threads, still at work
@@ -229,8 +213,7 @@ class TestJavaWaitShape(_Tmp):
         time.sleep(2.0)
 
         def cpu():
-            f = open("/proc/%d/stat" % p.pid, encoding="utf-8").read().rsplit(")", 1)[1].split()
-            return (int(f[11]) + int(f[12])) / os.sysconf("SC_CLK_TCK")
+            return cpu_seconds(p)
         c1 = cpu()
         time.sleep(3)
         c2 = cpu()

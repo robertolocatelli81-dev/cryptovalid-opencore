@@ -122,12 +122,56 @@ def _text_layer_bytes(out, buf, text: str) -> bytes:
 def _wait_writable(buf) -> None:
     """stdout is non-blocking and full: wait until it can take more, as a blocking write would (the reader is slow, not
     gone; one that goes away makes the next write EPIPE). `select` sleeps in the kernel and Python retries it after a
-    signal (PEP 475). A byte stream with no descriptor (io.BytesIO under a TextIOWrapper) never blocks. POSIX only."""
+    signal (PEP 475). A byte stream with no descriptor (io.BytesIO under a TextIOWrapper) never blocks. Windows, where
+    select waits on sockets only: _wait_pipe_writable_windows."""
     import select
+    if os.name == "nt":
+        try:
+            fd = buf.fileno()
+        except (OSError, ValueError) as e:
+            raise OSError(f"stdout is non-blocking and cannot be waited for: {e}")
+        _wait_pipe_writable_windows(fd)
+        return
     try:
         select.select([], [buf.fileno()], [])
     except (OSError, ValueError) as e:   # no descriptor, or one select cannot wait on
         raise OSError(f"stdout is non-blocking and cannot be waited for: {e}")
+
+
+def _wait_pipe_writable_windows(fd: int) -> None:
+    """Windows' equivalent of select for a pipe set non-blocking (PIPE_NOWAIT; os.set_blocking since Python 3.12): ask
+    the pipe how much it can take (NtQueryInformationFile, FilePipeLocalInformation: WriteQuotaAvailable, the call libuv
+    makes for the same purpose) and sleep between questions, 1 ms doubling to 50 ms, so a slow reader costs no CPU. It
+    returns when the pipe has room, when it is no longer connected (the next write then fails: the reader is gone),
+    or after 0.5 s (the caller's next write answers).
+    An anonymous pipe has no overlapped I/O to wait on; a handle that is not a pipe returns at once."""
+    import ctypes
+    import msvcrt
+    import time
+    from ctypes import wintypes
+
+    class _Iosb(ctypes.Structure):
+        _fields_ = [("Status", ctypes.c_void_p), ("Information", ctypes.c_void_p)]
+
+    class _PipeInfo(ctypes.Structure):
+        _fields_ = [(n, wintypes.ULONG) for n in ("NamedPipeType", "NamedPipeConfiguration", "MaximumInstances",
+                                                  "CurrentInstances", "InboundQuota", "ReadDataAvailable",
+                                                  "OutboundQuota", "WriteQuotaAvailable", "NamedPipeState",
+                                                  "NamedPipeEnd")]
+    query = ctypes.WinDLL("ntdll").NtQueryInformationFile
+    query.argtypes = (wintypes.HANDLE, ctypes.POINTER(_Iosb), ctypes.c_void_p, wintypes.ULONG, ctypes.c_int)
+    query.restype = ctypes.c_long
+    handle = msvcrt.get_osfhandle(fd)
+    delay, waited = 0.001, 0.0
+    while waited < 0.5:   # then the caller writes again: if the quota read wrong, the write itself is the answer
+        iosb, info = _Iosb(), _PipeInfo()
+        if query(handle, ctypes.byref(iosb), ctypes.byref(info), ctypes.sizeof(info), 24) != 0:   # 24: FilePipeLocalInformation
+            return
+        if info.WriteQuotaAvailable > 0 or info.NamedPipeState != 3:   # 3: FILE_PIPE_CONNECTED_STATE
+            return
+        time.sleep(delay)
+        waited += delay
+        delay = min(delay * 2, 0.05)
 
 
 def write_all(text: str) -> None:
