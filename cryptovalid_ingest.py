@@ -266,7 +266,9 @@ class Ingestor:
                 body = {k: v for k, v in e.items()
                         if k not in ("self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token")}
                 recomputed = hashlib.sha256(_canonical(body)).hexdigest()
-                if (e.get("idx") != self._idx or e.get("prev_hash") != self._prev
+                # type(...) is int: True and 1.0 equal 1 in Python, and the verifier refuses both (FAIL), so they must
+                # not resume a chain here (audit of 2026-11-24 from pq-scitt)
+                if (type(e.get("idx")) is not int or e["idx"] != self._idx or e.get("prev_hash") != self._prev
                         or e.get("self_hash") != recomputed):
                     raise ValueError(f"{path}: broken/tampered chain at idx {self._idx} — "
                                      "refusing to resume (run the verifier on it)")

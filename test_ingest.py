@@ -4,6 +4,7 @@
 # Copyright (C) 2026 Roberto Locatelli
 """Ingestion tests — every bench carries a NEGATIVE control (tamper -> FAIL).
 Throughput is MEASURED and printed; the assertion is only a conservative floor."""
+import hashlib
 import json
 import os
 import shutil
@@ -757,6 +758,38 @@ class TestCloseOnError(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 w.close()
             self.assertTrue(fh.closed)
+
+
+class TestResumeReadsIdxAsTheVerifierDoes(unittest.TestCase):
+    """the verifier refuses an idx that is a boolean or a float (FAIL); resuming compared it with !=, so `true` or
+    `1.0` passed as 1 and the writer appended to a chain the verifier rejects"""
+
+    def test_true_or_one_point_zero_is_not_one(self):
+        import verifier as V
+        for bad in ("true", "1.0"):
+            with tempfile.TemporaryDirectory() as d:
+                w = ing.Ingestor(d, fsync=False)
+                for i in range(3):
+                    w.append({"i": i})
+                w.close(seal=False)
+                seg = sorted(x for x in os.listdir(d) if x.endswith(".jsonl"))[0]
+                p = os.path.join(d, seg)
+                with open(p, "rb") as f:
+                    lines = f.read().splitlines(keepends=True)
+                e = json.loads(lines[1])
+                e["idx"] = json.loads(bad)
+                body = {k: v for k, v in e.items() if k != "self_hash"}
+                e["self_hash"] = hashlib.sha256(ing._canonical(body)).hexdigest()
+                lines[1] = (json.dumps(e) + "\n").encode()
+                e2 = json.loads(lines[2]); e2["prev_hash"] = e["self_hash"]   # noqa: E702
+                body = {k: v for k, v in e2.items() if k != "self_hash"}
+                e2["self_hash"] = hashlib.sha256(ing._canonical(body)).hexdigest()
+                lines[2] = (json.dumps(e2) + "\n").encode()
+                with open(p, "wb") as f:
+                    f.write(b"".join(lines))
+                self.assertEqual(V.verify_ledger(p)["verdict"], "FAIL", bad)   # control: the verifier refuses it
+                with self.assertRaises(ValueError, msg=bad):
+                    ing.Ingestor(d, fsync=False)
 
 
 class TestConstructorFailureClosesTheSegment(unittest.TestCase):
