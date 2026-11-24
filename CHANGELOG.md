@@ -325,8 +325,12 @@ the evidence fingerprint of SPEC §23 reads the file's change time on Windows (`
 an `Ingestor` whose construction fails closes the segment it opened; the JS verifier reads a FIFO by polling its
 descriptor (on macOS the socket it used reported nothing); the tests bound memory with a Job Object on Windows,
 make files unreadable with an empty access list, and use named pipes for FIFOs. Left as skips with the reason, where
-Windows has no equivalent the tests use yet: a FIFO at a name inside a directory, a per-process file-size limit
-(`ulimit -f`), a link to a device, a fake openssl written as a shell script (the code runs `openssl.exe` by name there). Not fixed here: ap2-evidence-pack writes its evidence file in text mode (`os.fdopen(fd, "w")`), so on Windows
+Windows has no equivalent: a FIFO at a name inside a directory, a per-process file-size limit (`ulimit -f`), a link to
+a device. The fake openssl of the tests is, on Windows, this Python's venv launcher copied as `openssl.exe` (a crash
+there is an NTSTATUS exit). After the third run (45377477990): a directory given as an input file is "not a regular
+file" on Windows too (it was taken for an unreadable or missing file); the Go verifier waits for a FIFO with select
+on macOS (the runtime poller read a FIFO with no writer yet as empty); the JS verifier reads a fast FIFO without
+pausing between full reads; the Java verifier writes stderr in UTF-8 and its receipt with "\n" on every system. Not fixed here: ap2-evidence-pack writes its evidence file in text mode (`os.fdopen(fd, "w")`), so on Windows
 it gets CRLF and its own digest no longer matches; the fix belongs to that package.
 Whether the other-os job is green with these changes is measured by the CI of the release branch, not here.
 

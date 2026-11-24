@@ -101,6 +101,9 @@ there should know:
   read-only attribute.
 - **Locks between processes** (the witness state, the SCITT ledger) are byte-range locks on Windows, `flock` elsewhere.
 - **The trusted-list cache** is `~/.cache/cryptovalid`, i.e. `%USERPROFILE%\.cache\cryptovalid` on Windows.
+- **Known limit (ap2-evidence-pack, not this package):** `verify-evidence ap2` reads files that ap2-evidence-pack writes;
+  that package writes them in text mode, so on Windows they get CRLF and their own digest does not match. The fix belongs
+  to ap2-evidence-pack; until it is released, build AP2 evidence on Linux or macOS.
 - **OpenSSL 3** is needed for the RFC 3161 token checks; on macOS `/usr/bin/openssl` is LibreSSL: put Homebrew's
   `openssl@3` first on `PATH`.
 
