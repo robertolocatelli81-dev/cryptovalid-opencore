@@ -73,7 +73,8 @@ class TestSigner(unittest.TestCase):
     def test_keygen_0600(self):
         info = signer.keygen(self.key)
         self.assertEqual(len(info["public_key_hex"]), 64)
-        self.assertEqual(oct(os.stat(self.key).st_mode)[-3:], "600")
+        from test_platforms_20261124 import assert_private
+        assert_private(self, self.key, 0o600)   # Windows: the access list (a mode there is only the read-only bit)
 
     def test_sign_then_verify(self):
         signer.keygen(self.key)

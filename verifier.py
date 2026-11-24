@@ -286,6 +286,33 @@ def _write_fd(fd: int, data) -> None:
         data = data[n:]
 
 
+def _fchmod(fd: int, path: str, mode: int) -> None:
+    """os.fchmod, or os.chmod by name where there is none (Windows before Python 3.13): there a mode only sets or
+    clears the read-only attribute"""
+    if hasattr(os, "fchmod"):
+        os.fchmod(fd, mode)
+    else:
+        os.chmod(path, mode)
+
+
+def owner_only(path: str) -> None:
+    """Windows' equivalent of mode 0600 / 0400 (a mode there only sets the read-only attribute): a protected DACL that
+    grants the user running this process alone full control, nothing inherited (icacls /inheritance:r /grant:r
+    *SID:F; the SID from whoami). OSError when it cannot be set: a private file is then not written."""
+    import re
+    import subprocess
+    sysdir = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    who = subprocess.run([os.path.join(sysdir, "whoami.exe"), "/user", "/fo", "csv", "/nh"], capture_output=True,
+                         timeout=60)
+    sid = re.findall(rb'"(S-1-[0-9-]+)"', who.stdout)
+    if who.returncode != 0 or len(sid) != 1:
+        raise OSError(f"cannot read the SID of this user (whoami exit {who.returncode})")
+    r = subprocess.run([os.path.join(sysdir, "icacls.exe"), path, "/inheritance:r", "/grant:r",
+                        "*" + sid[0].decode("ascii") + ":F"], capture_output=True, timeout=60)
+    if r.returncode != 0:
+        raise OSError(f"cannot restrict the file to its owner (icacls exit {r.returncode})")
+
+
 def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = None) -> str:
     """Write `data` (str as UTF-8, or bytes) to a NEW temporary file next to `path` and return its name; on failure
     remove it and raise OutputNotWritten. The name is `<path>.<16 random hex>.tmp`, created with O_CREAT|O_EXCL (never
@@ -303,7 +330,9 @@ def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = No
     try:
         try:
             if exact_mode is not None:
-                os.fchmod(fd, exact_mode)
+                _fchmod(fd, tmp, exact_mode)
+            if os.name == "nt" and (mode if exact_mode is None else exact_mode) & 0o077 == 0:
+                owner_only(tmp)   # before the first byte: a key is never readable by another user, even for a moment
             _write_fd(fd, raw)
             os.fsync(fd)
         finally:
@@ -391,8 +420,10 @@ def write_output(path: str, data, mode: int = 0o666) -> None:
 def write_new(path: str, data, mode: int = 0o600) -> None:
     """Create `path` with the whole `data`, never over an existing path: the bytes go to a temporary file (write_tmp),
     which is then hard-linked at `path` (FileExistsError, as O_EXCL, when something is already there) and removed. A
-    key or a WORM object is either absent or whole at its path, never cut."""
-    tmp = write_tmp(path, data, mode)
+    key or a WORM object is either absent or whole at its path, never cut. Windows: a read-only file cannot be
+    removed, so a read-only `mode` (a WORM object, 0400) is set on `path` after the temporary name is gone."""
+    late = os.name == "nt" and not mode & 0o200
+    tmp = write_tmp(path, data, (mode | 0o200) if late else mode)
     try:
         os.link(tmp, path)
     except FileExistsError:
@@ -401,6 +432,11 @@ def write_new(path: str, data, mode: int = 0o600) -> None:
         raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
     finally:
         _unlink_quietly(tmp)
+    if late:
+        try:
+            os.chmod(path, mode)
+        except OSError as e:
+            raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
 
 
 def copy_output(src: str, path: str) -> None:
@@ -425,7 +461,7 @@ def copy_output(src: str, path: str) -> None:
             try:
                 if st is not None:
                     try:
-                        os.fchmod(fd, stat.S_IMODE(st.st_mode))   # the existing file's mode, as shutil.copyfile kept it
+                        _fchmod(fd, tmp, stat.S_IMODE(st.st_mode))   # the existing file's mode, as shutil.copyfile kept it
                     except OSError as e:
                         raise lost(e) from None
                 while True:

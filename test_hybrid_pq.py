@@ -51,7 +51,8 @@ class TestHybridEntries(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_keygen_pq_is_0600_and_refuses_overwrite(self):
-        self.assertEqual(oct(os.stat(self.k + ".pq").st_mode & 0o777), "0o600")
+        from test_platforms_20261124 import assert_private
+        assert_private(self, self.k + ".pq", 0o600)   # Windows: the access list (a mode there is only the read-only bit)
         with self.assertRaises(FileExistsError):
             signer.keygen_pq(self.k + ".pq")
 

@@ -21,6 +21,27 @@ def cnf_path(path: str) -> str:
     with one of them was read as another path (50 openssl failures in the CI of f1e95d5). Each is escaped."""
     return "".join("\\" + c if c in "\\$#\"'" else c for c in path)
 
+def assert_private(tc, path, mode=0o600):
+    """A key (0600) or a WORM object (0400) is the owner's alone. POSIX: the mode. Windows, where a mode only sets the
+    read-only attribute: one access entry, the user running the test, full control, nothing inherited (icacls), and
+    the read-only attribute exactly when `mode` has no write bit."""
+    import stat
+    if os.name != "nt":
+        tc.assertEqual(stat.S_IMODE(os.stat(path).st_mode), mode, path)
+        return
+    import re
+    sysdir = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    out = subprocess.run([os.path.join(sysdir, "icacls.exe"), path], capture_output=True).stdout.decode("utf-8", "replace")
+    who = subprocess.run([os.path.join(sysdir, "whoami.exe")], capture_output=True).stdout.decode("utf-8", "replace").strip()
+    aces = [x.strip() for x in out.replace(path, "", 1).splitlines() if re.search(r":\(", x)]
+    tc.assertEqual(len(aces), 1, out)
+    name, _, rights = aces[0].partition(":")
+    tc.assertEqual(name.lower(), who.lower(), out)
+    tc.assertEqual(rights, "(F)", out)
+    readonly = bool(os.stat(path).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY)
+    tc.assertEqual(readonly, not mode & 0o200, path)
+
+
 
 def _git(*args):
     return subprocess.run(["git", "-C", _HERE] + list(args), capture_output=True)
@@ -198,6 +219,43 @@ class TextModeEverywhere(unittest.TestCase):
                     'run(c, text=True)\nrun(c, universal_newlines=True, encoding="utf-8")\nPopen(c, text=True)\n')
         self.assertEqual(_text_calls_without_encoding(p), [("x.py", 1, "open"), ("x.py", 2, "open"), ("x.py", 5, "text"),
                                                            ("x.py", 7, "text")])
+
+
+class PrivateFiles(unittest.TestCase):
+    """Keys (0600) and WORM objects (0400): Windows has no POSIX mode (st_mode read 0o666 after keygen, CI of f1e95d5);
+    its equivalent is the access control list, restricted before the first byte is written."""
+
+    def test_write_new_restricts_before_the_first_byte_on_windows(self):
+        import tempfile
+        from unittest import mock
+        import verifier as V
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        events = []
+        real_write = V._write_fd
+        with mock.patch.object(os, "name", "nt"), \
+                mock.patch.object(V, "owner_only", lambda p: events.append(("acl", os.path.basename(p)))), \
+                mock.patch.object(V, "_write_fd", lambda fd, raw: (events.append(("write",)), real_write(fd, raw))), \
+                mock.patch.object(os, "chmod", lambda p, m: events.append(("chmod", os.path.basename(p), m))):
+            V.write_new(os.path.join(d, "k.key"), "seed", mode=0o600)
+            V.write_new(os.path.join(d, "obj"), b"blob", mode=0o400)
+            V.write_new(os.path.join(d, "r.json"), "{}", mode=0o644)   # not private: no access list change
+        self.assertEqual([e[0] for e in events], ["acl", "write", "acl", "write", "chmod", "write"])
+        self.assertTrue(events[0][1].startswith("k.key.") and events[2][1].startswith("obj."))
+        self.assertEqual(events[4], ("chmod", "obj", 0o400))   # read-only once the temporary name is gone
+        self.assertEqual(sorted(os.listdir(d)), ["k.key", "obj", "r.json"])
+
+    def test_a_key_and_a_worm_object_are_private(self):
+        import tempfile
+        import verifier as V
+        d = tempfile.mkdtemp()
+        self.addCleanup(lambda: (os.name == "nt" and [os.chmod(os.path.join(d, n), 0o600) for n in os.listdir(d)],
+                                 shutil.rmtree(d)))
+        V.write_new(os.path.join(d, "k.key"), "seed", mode=0o600)
+        V.write_new(os.path.join(d, "obj"), b"blob", mode=0o400)
+        assert_private(self, os.path.join(d, "k.key"), 0o600)
+        assert_private(self, os.path.join(d, "obj"), 0o400)
+        self.assertEqual(sorted(os.listdir(d)), ["k.key", "obj"])   # no temporary name left
 
 
 if __name__ == "__main__":
