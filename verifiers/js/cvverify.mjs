@@ -12,7 +12,6 @@
 import { createHash, verify as edVerify, createPublicKey } from "node:crypto";
 import { readdirSync, existsSync, fstatSync, writeSync, openSync, closeSync, readSync, constants as fsc } from "node:fs";
 import { join } from "node:path";
-import { Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 
 const GENESIS_PREV = "0".repeat(64);
@@ -311,17 +310,32 @@ export function readLedgerInput(p, done, idleMs = FIFO_IDLE_SECONDS * 1000, limi
     done(fail, out); return;
   }
   if (!st.isFIFO()) { closeSync(fd); done({ verdict: "FAIL", error: LEDGER_NOT_REGULAR }, null); return; }
-  // a FIFO: libuv reads it when the poller says it is readable (a byte, or the writer gone), so a FIFO no writer has
-  // opened yet is waited for, not read as empty (Linux reads it as its end), as verifier.py's select
-  let sock;
-  try { sock = new Socket({ fd, readable: true, writable: false }); }
-  catch (e) { try { closeSync(fd); } catch { /* closed */ } done({ verdict: "FILE_ERROR", error: e.code || e.message }, null); return; }
-  const parts = []; let n = 0, finished = false;
-  const finish = (fail, out) => { if (finished) return; finished = true; sock.destroy(); done(fail, out); };
-  sock.setTimeout(idleMs, () => finish({ verdict: "FAIL", error: LEDGER_FIFO_IDLE }, null));
-  sock.on("data", (b) => { n += b.length; if (n > limit) finish({ verdict: "FAIL", error: LEDGER_TOO_LARGE }, null); else parts.push(b); });
-  sock.on("end", () => finish(null, Buffer.concat(parts, n)));
-  sock.on("error", (e) => finish({ verdict: "FILE_ERROR", error: e.code || e.message }, null));
+  // a FIFO: read on the descriptor opened above (O_NONBLOCK), polled every 10 ms: a byte is data; EAGAIN is a writer
+  // there with nothing yet; 0 is the end once a writer was seen (a byte or an EAGAIN), and no writer yet before that, as
+  // verifier.py's select tells them apart. The idle time counts from the last byte. Until 0.29.0 a net.Socket on the
+  // descriptor: on macOS it never reported a byte nor the end (CI of f1e95d5: "FIFO idle" with a writer present).
+  const parts = []; let n = 0, last = Date.now(), seen = false;
+  const step = () => {
+    for (;;) {
+      const b = Buffer.alloc(1 << 16);
+      let r;
+      try { r = readSync(fd, b, 0, b.length, null); }
+      catch (e) {
+        if (e.code === "EAGAIN" || e.code === "EWOULDBLOCK") { seen = true; break; }
+        closeSync(fd); done({ verdict: "FILE_ERROR", error: e.code || e.message }, null); return;
+      }
+      if (r === 0) {
+        if (seen) { closeSync(fd); done(null, Buffer.concat(parts, n)); return; }
+        break;   // no writer has opened it yet
+      }
+      seen = true; last = Date.now(); n += r;
+      if (n > limit) { closeSync(fd); done({ verdict: "FAIL", error: LEDGER_TOO_LARGE }, null); return; }
+      parts.push(b.subarray(0, r));
+    }
+    if (Date.now() - last >= idleMs) { closeSync(fd); done({ verdict: "FAIL", error: LEDGER_FIFO_IDLE }, null); return; }
+    setTimeout(step, 10);
+  };
+  setTimeout(step, 0);
 }
 export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = null, notBefore = null, firstSelfHash = null, expectLedgerId = null) {
   if (tip && tip[TIP_UNREADABLE]) return { ok: false, pq_protected: false, error: tip[TIP_UNREADABLE] };
