@@ -212,7 +212,12 @@ class Ingestor:
         self._fh = None
         self.recovered_bytes = 0          # torn-tail bytes truncated on reopen (0 = clean)
         os.makedirs(directory, exist_ok=True)
-        self._open_or_resume()
+        try:
+            self._open_or_resume()
+        except BaseException:   # the segment handle opened before the failure is not left open (Windows: the
+            if self._fh is not None and not self._fh.closed:   # directory could not be removed, CI of f1e95d5)
+                self._fh.close()
+            raise
 
     # ── segment bookkeeping ──────────────────────────────────────────────────
     def _seg_path(self, seq: int) -> str:

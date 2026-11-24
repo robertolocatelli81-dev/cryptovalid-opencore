@@ -759,5 +759,28 @@ class TestCloseOnError(unittest.TestCase):
             self.assertTrue(fh.closed)
 
 
+class TestConstructorFailureClosesTheSegment(unittest.TestCase):
+    """an Ingestor whose construction fails after it opened its segment does not leave the segment open (on Windows
+    the open handle kept the directory from being removed: CI of f1e95d5, when the directory fsync failed there)"""
+
+    def test_a_failure_after_the_open_closes_the_handle(self):
+        from unittest import mock
+        opened = []
+        real_open = open
+
+        def tracking_open(*a, **k):
+            f = real_open(*a, **k)
+            opened.append(f)
+            return f
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch("builtins.open", tracking_open), \
+                    mock.patch.object(ing, "_fsync_dir", side_effect=PermissionError(13, "Permission denied")):
+                with self.assertRaises(PermissionError):
+                    ing.Ingestor(d, fsync=False)
+            segs = [f for f in opened if str(getattr(f, "name", "")).endswith(".jsonl")]
+            self.assertTrue(segs)   # control: the segment was opened before the failure
+            self.assertTrue(all(f.closed for f in segs))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
