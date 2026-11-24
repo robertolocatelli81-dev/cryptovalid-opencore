@@ -314,7 +314,11 @@ def _openssl_tmpdir() -> str:
     except OSError as e:
         raise _not_run("cannot write a temporary file for openssl", OSError("no usable temporary directory")) from e
     try:
-        return tempfile.mkdtemp(prefix="cv-openssl-", dir=base)
+        from verifier import create_private
+    except ImportError:   # imported as opencore.cryptovalid_tsa
+        from opencore.verifier import create_private
+    try:
+        return create_private(base, "cv-openssl-", directory=True)[1]   # not mkdtemp: its Windows retry loop
     except OSError as e:
         raise _not_run("cannot write a temporary file for openssl", e) from e
 

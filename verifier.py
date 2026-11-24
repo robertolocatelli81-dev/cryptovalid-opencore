@@ -48,6 +48,7 @@ if __name__ == "__main__":   # 0.20.3: run as a command, never write the bytecod
                 return self.source_to_code(self.get_data(path), path)
         _L0210.get_code = _get_code_0210
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -423,6 +424,26 @@ def _copy_dacl(src: str, dst: str) -> None:
     info = 0x4 | (0x80000000 if c.value & 0x1000 else 0x20000000)   # SE_DACL_PROTECTED: PROTECTED_ / UNPROTECTED_DACL
     if not setsec(os.fspath(dst), info, buf):
         raise ctypes.WinError(ctypes.get_last_error())
+
+
+def create_private(folder: str, prefix: str, suffix: str = "", directory: bool = False):
+    """A new file (fd, path) or folder (None, path) under `folder`, private to this user (0o600 / 0o700), at a random
+    name made with O_CREAT|O_EXCL|O_NOFOLLOW (mkdir for a folder). Only a name already taken is tried again, at most 64
+    times; any other OSError is raised at once. tempfile.mkstemp/mkdtemp retry a PermissionError on Windows while
+    os.access(folder, W_OK) is true, and os.access reads only the read-only attribute, not the access list: in a
+    folder an access list denies, that is up to 10000 tries (the class found in ap2-evidence-pack, 0.29.0)."""
+    import secrets
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    for _ in range(64):
+        path = os.path.join(folder, prefix + secrets.token_hex(8) + suffix)
+        try:
+            if directory:
+                os.mkdir(path, 0o700)
+                return None, path
+            return os.open(path, flags, 0o600), path
+        except FileExistsError:
+            continue
+    raise FileExistsError(errno.EEXIST, "64 random names already taken", folder)
 
 
 def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = None, like: Optional[str] = None) -> str:

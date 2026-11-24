@@ -286,6 +286,16 @@ the review of 2026-10-01, NEMESIS P2), while on Windows the same name was a path
 
 ### Fleet audit of 2026-11-24 (the classes found in pq-scitt)
 
+- **Temporary names on Windows (the class found in ap2-evidence-pack):** `tempfile.mkstemp`/`mkdtemp` try again
+  after a PermissionError on Windows, up to `TMP_MAX` times (read today in the sources: 3.9 and 3.11 while
+  `os.access(dir, W_OK)` is true, which reads only the read-only attribute and not the access list; 3.13 without
+  that condition), so a temporary folder an access list denies was a loop of up to `TMP_MAX` creations. The private folder for
+  openssl (`cryptovalid_tsa`) and the private copy of a ledger (`cryptovalid_beacon`) now come from
+  `verifier.create_private`: a random name with O_CREAT|O_EXCL|O_NOFOLLOW (mkdir 0o700 for a folder), tried again
+  only when the name is taken (at most 64 times); any other error is a check not run (exit 74) at the first try.
+  `test_platforms_20261124.TemporaryNamesOnWindows` simulates the Windows conditions; its control counts 10000 tries
+  of `mkstemp` (TMP_MAX bounded for the test), and the two callers failed it before.
+
 - **Security, choice of the binary:** `openssl` (RFC 3161 checks) and `pkcs11-tool` were started by their bare name.
   On Windows CreateProcess looks in the program's folder, the current folder and System32 before PATH, so the binary
   started could be another than the one `shutil.which` had found, for instance one placed in the current folder (CI

@@ -623,7 +623,10 @@ def window(t: datetime, period_ms: int, gen_time: str, max_window_s: int, clock_
 
 def _entries(ledger_bytes: bytes) -> List[Dict]:
     """the entries of a ledger that passes SPEC §5 steps 1-4 (Invalid('ledger_invalid') otherwise)"""
-    fd, tmp = tempfile.mkstemp(prefix="cv-beacon-", suffix=".jsonl")
+    try:   # not mkstemp: its Windows retry loop on an access list that denies (verifier.create_private)
+        fd, tmp = verifier.create_private(tempfile.gettempdir(), "cv-beacon-", ".jsonl")
+    except OSError as e:
+        raise verifier.CheckNotRun(f"cannot write a temporary copy of the ledger: {verifier.os_reason(e)}") from None
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(ledger_bytes)

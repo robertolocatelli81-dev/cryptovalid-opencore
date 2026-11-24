@@ -1070,5 +1070,86 @@ class OpensslByItsPath(unittest.TestCase):
                 T._run_openssl(["openssl", "version"], capture_output=True)
 
 
+class TemporaryNamesOnWindows(unittest.TestCase):
+    """tempfile.mkstemp/mkdtemp retry a PermissionError on Windows while os.access(dir, W_OK) is true, which reads only
+    the read-only attribute: in a folder an access list denies, thousands of tries. verifier.create_private tries
+    again only a name already taken (the class found in ap2-evidence-pack df398fa)"""
+
+    def _denied(self, counter):
+        from unittest import mock
+
+        def deny(*a, **k):
+            counter.append(1)
+            raise PermissionError(13, "Permission denied")
+        # the Windows conditions: os.name nt, os.access true, every creation refused
+        return [mock.patch.object(os, "open", deny), mock.patch.object(os, "mkdir", deny),
+                mock.patch.object(os, "access", lambda *a, **k: True), mock.patch.object(os, "name", "nt")]
+
+    def _with(self, patches, fn):
+        import contextlib
+        with contextlib.ExitStack() as st:
+            for p in patches:
+                st.enter_context(p)
+            return fn()
+
+    def test_mkstemp_loops_there(self):   # positive control: the defect is what the bench sees
+        import tempfile
+        from unittest import mock
+        n = []
+        # TMP_MAX bounded for the control, whatever the C library of this system says
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(tempfile, "TMP_MAX", 10000):
+            with self.assertRaises((PermissionError, FileExistsError)):
+                self._with(self._denied(n), lambda: tempfile.mkstemp(dir=d))
+        self.assertEqual(len(n), 10000)
+
+    def test_one_try_on_a_refusal(self):
+        import tempfile
+        import verifier
+        import cryptovalid_tsa as T
+        import cryptovalid_beacon as B
+        with tempfile.TemporaryDirectory() as d:
+            for directory in (False, True):
+                n = []
+                with self.assertRaises(PermissionError):
+                    self._with(self._denied(n), lambda: verifier.create_private(d, "x-", directory=directory))
+                self.assertEqual(len(n), 1)
+            n = []
+            with self.assertRaises(verifier.CheckNotRun):
+                self._with(self._denied(n), T._openssl_tmpdir)
+            self.assertEqual(len(n), 1)
+            n = []
+            with self.assertRaises(verifier.CheckNotRun):
+                self._with(self._denied(n), lambda: B._entries(b""))
+            self.assertEqual(len(n), 1)
+
+    def test_a_taken_name_is_tried_again_64_times(self):
+        import tempfile
+        from unittest import mock
+        import verifier
+        n = []
+
+        def taken(*a, **k):
+            n.append(1)
+            raise FileExistsError(17, "File exists")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(os, "open", taken):
+            with self.assertRaises(FileExistsError):
+                verifier.create_private(d, "x-")
+        self.assertEqual(len(n), 64)
+
+    def test_a_real_private_file_and_folder(self):
+        import tempfile
+        import verifier
+        with tempfile.TemporaryDirectory() as d:
+            fd, p = verifier.create_private(d, "y-", ".z")
+            os.close(fd)
+            self.assertTrue(os.path.basename(p).startswith("y-") and p.endswith(".z") and os.path.isfile(p))
+            _, q = verifier.create_private(d, "w-", directory=True)
+            self.assertTrue(os.path.isdir(q))
+            if os.name != "nt":
+                um = os.umask(0)
+                os.umask(um)
+                self.assertEqual((os.stat(p).st_mode & 0o777, os.stat(q).st_mode & 0o777), (0o600 & ~um, 0o700 & ~um))
+
+
 if __name__ == "__main__":
     unittest.main()
