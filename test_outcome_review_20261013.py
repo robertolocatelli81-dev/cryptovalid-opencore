@@ -181,6 +181,7 @@ class TestPromisedFileOverExisting(_Tmp):
             before = f.read()
         for mode in (0o600, 0o400):
             os.chmod(key, mode)
+            mode = stat.S_IMODE(os.stat(key).st_mode)   # Windows: only the read-only bit follows the mode
             rc, out, err = self.run_py([sg, "keygen", key])
             self.assertEqual((rc, out), (2, b""), err)
             self.assertEqual(err.count(b"\n"), 1, err)
@@ -276,8 +277,8 @@ class TestPromisedFileOverExisting(_Tmp):
                 copy_output(src, dst)
 
     def test_out_fifo_written_directly(self):
-        fifo = os.path.join(self.d, "f")
-        os.mkfifo(fifo)
+        from test_platforms_20261124 import fifo_at   # a FIFO at a name in a directory: POSIX only
+        fifo = fifo_at(self, os.path.join(self.d, "f"))
         got = []
 
         def reader():
@@ -313,16 +314,21 @@ class TestCheckNotRunMore(_Tmp):
             json.dump(m, f, ensure_ascii=False, indent=1, sort_keys=True)
         return out
 
+    # each fake as a POSIX shell script, and its Windows equivalent run by test_platforms.fake_openssl: a crash there
+    # is an NTSTATUS exit (0xC0000005), since Windows has no signals; None = a file that is not a program
+    _WINDOWS_FAKES = {
+        "#!/bin/sh\nsleep 25\nexec /usr/bin/env -i openssl \"$@\"\n":
+            "import os, subprocess, sys, time; time.sleep(25); "
+            "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:]))",
+        "#!/nonexistent/interpreter\n": None,
+        "#!/bin/sh\nkill -KILL $$\n": "import os; os._exit(-1073741819)",
+        "#!/bin/sh\nkill -SEGV $$\n": "import os; os._exit(-1073741819)",
+        "#!/bin/sh\nexit 127\n": "import os; os._exit(127)",
+    }
+
     def _fake_openssl(self, body):
-        if os.name == "nt":
-            self.skipTest("a fake openssl is a POSIX shell script; on Windows the code runs openssl.exe by name and a script cannot stand in for it (an .exe shim is not built here)")
-        b = os.path.join(self.d, "bin")
-        os.mkdir(b)
-        p = os.path.join(b, "openssl")
-        with open(p, "w", encoding="utf-8", newline="") as f:
-            f.write(body)
-        os.chmod(p, 0o755)
-        return dict(ENV, PATH=b + os.pathsep + ENV.get("PATH", ""))
+        from test_platforms_20261124 import fake_openssl
+        return dict(ENV, **fake_openssl(self, os.path.join(self.d, "bin"), body, self._WINDOWS_FAKES[body]))
 
     def test_openssl_timeout_is_74(self):
         if not shutil.which("openssl"):
@@ -371,8 +377,8 @@ class TestCheckNotRunMore(_Tmp):
                 env = self._fake_openssl(body)
                 rc, out, err = self.run_py([os.path.join(HERE, "evidence_pack.py"), "verify", pack], env=env)
                 self.assertEqual(rc, expect, out + err)
-                if expect == 74:
-                    self.assertIn(b"terminated by signal", err)
+                if expect == 74:   # POSIX: a signal; Windows: an NTSTATUS exit
+                    self.assertTrue(b"terminated by signal" in err or b"ended by exception 0xC0000005" in err, err)
                     self._assert_whole_receipt_74(out, err)
                 else:
                     r = json.loads(out)
@@ -541,7 +547,7 @@ def rd():
         if not c: break
         got.append(c)
 t = threading.Thread(target=rd); t.start()
-f = open(w, "w", encoding="utf-8"); sys.stdout = f
+f = open(w, "w", encoding="utf-8", newline=""); sys.stdout = f
 print("CALLER-TEXT")
 rc = verifier.main([sys.argv[2], "--quiet"])
 sys.stdout = sys.__stdout__; f.close(); t.join()

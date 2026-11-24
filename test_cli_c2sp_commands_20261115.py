@@ -247,7 +247,8 @@ class TestAutoNamesTheCommand(unittest.TestCase):
     def test_the_named_command_verifies(self):
         for path, vkey in ((ROME, ROME_VKEY), (os.path.join(MIRROR, "checkpoint"), MIRROR_VKEY)):
             detail = self._skip(VE.verify_auto(path), "checkpoint")
-            argv = detail.split("; run: cryptovalid-verify ", 1)[1].replace("<vkey of the log>", vkey).split(" ")
+            # the command as a POSIX shell reads it (the path is quoted with shlex.quote: on Windows it has backslashes)
+            argv = shlex.split(detail.split("; run: cryptovalid-verify ", 1)[1].replace("<vkey of the log>", vkey))
             rc, out, _ = _run("verify_evidence.py", argv)
             self.assertEqual((rc, json.loads(out)["stato"]), (0, "OK"))
         detail = self._skip(VE.verify_auto(MIRROR), "tiles")

@@ -86,12 +86,16 @@ class TestEvidencePack(unittest.TestCase):
         ordinary character on POSIX: the same pack then named a file inside it on Linux (`a\\..\\b.jsonl`) and a file
         beside it on Windows. PKWARE APPNOTE 6.3.10 §4.4.17.1 sets the same rule for ZIP."""
         import shutil
-        odd = os.path.join(self.d, "a\\..\\b.jsonl")
-        shutil.copy(self.signed, odd)
-        with self.assertRaises(ValueError) as c:
-            evidence_pack.build_pack([odd], self.pack)
-        self.assertIn("backslash", str(c.exception))
-        self.assertFalse(os.path.exists(self.pack))   # nothing written
+        # the builder: a ledger whose file name has a backslash (POSIX, where it is a character) or a colon (POSIX; on
+        # Windows a file name holds neither: "a:b" there names a stream)
+        odd_names = [("a\\..\\b.jsonl", "backslash"), ("x:y.jsonl", "colon")] if os.sep == "/" else []
+        for odd_name, why in odd_names:
+            odd = os.path.join(self.d, odd_name)
+            shutil.copy(self.signed, odd)
+            with self.assertRaises(ValueError) as c:
+                evidence_pack.build_pack([odd], self.pack)
+            self.assertIn(why, str(c.exception))
+            self.assertFalse(os.path.exists(self.pack))   # nothing written
         evidence_pack.build_pack([self.signed], self.pack)
         p = os.path.join(self.pack, "MANIFEST.json")
         with open(p, encoding="utf-8") as f:

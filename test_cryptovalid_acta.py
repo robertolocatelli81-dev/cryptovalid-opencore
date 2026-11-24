@@ -991,8 +991,9 @@ class OpenPointsA3_20260926(unittest.TestCase):
                     res["r"] = "refused: " + str(e)
             th = threading.Thread(target=run, daemon=True); th.start(); th.join(3)
             self.assertIn("not a regular file", res.get("r", "blocked"))     # the reason, not any refusal (a JSON error would pass)
+        from test_platforms_20261124 import DEVICE   # Windows: NUL
         with self.assertRaises(OSError) as cm:                                  # a device is refused before any read
-            A.load_json_strict("/dev/zero")
+            A.load_json_strict(DEVICE)
         self.assertIn("not a regular file", str(cm.exception))
 
 

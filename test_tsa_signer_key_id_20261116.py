@@ -100,7 +100,8 @@ class Lab:
         j = self.j
         with open(j("in.der"), "wb") as f:
             f.write(token)
-        _run("openssl", "cms", "-verify", "-noverify", "-inform", "DER", "-in", j("in.der"), "-out", j("tst.der"))
+        _run("openssl", "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", j("in.der"), "-out",
+             j("tst.der"))   # -binary: no CRLF translation of the TSTInfo (Windows: "truncated", run 45377477990)
         _run("openssl", "cms", "-sign", "-binary", "-nodetach", "-econtent_type", OID_TSTINFO, "-keyid",
              *(["-cades"] if ess else []), "-md", "sha256", "-nosmimecap", "-signer", j(f"{signer}.crt"),
              "-inkey", j(f"{signer}.key"), "-certfile", j("ca.crt"), "-in", j("tst.der"), "-outform", "DER",

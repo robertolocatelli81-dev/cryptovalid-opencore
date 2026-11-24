@@ -193,22 +193,30 @@ class HandBuiltTokens(unittest.TestCase):
         acc = b"\x30\x80" + integer(1) + b"\x00\x00"          # accuracy, last element, BER indefinite length
         self.assertEqual(self.outcome(self.token(self.k, self.c, self.tstinfo(acc)), self.pin), ("invalid", "malformed"))
 
-    @unittest.skipUnless(os.name == "posix", "a shell wrapper")
+    def _with_fake(self, name, sh, py):
+        """PATH and the variables of test_platforms.fake_openssl set for the block; restored after"""
+        from test_platforms_20261124 import fake_openssl
+        env = fake_openssl(self, os.path.join(self.d, name), sh, py)
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+
+        def restore():
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        return restore
+
     def test_ts_verify_killed_by_a_signal_is_a_check_not_run(self):
+        """POSIX: a signal; Windows (no signals): an NTSTATUS exit, a crash there"""
         from verifier import CheckNotRun
-        b = os.path.join(self.d, "binkill")
-        os.makedirs(b, exist_ok=True)
         real = shutil.which("openssl")
-        with open(os.path.join(b, "openssl"), "w", encoding="utf-8", newline="") as f:
-            f.write('#!/bin/sh\nif [ "$1" = ts ]; then kill -9 $$; fi\nexec "%s" "$@"\n' % real)
-        os.chmod(os.path.join(b, "openssl"), 0o755)
-        old = os.environ["PATH"]
-        os.environ["PATH"] = b + os.pathsep + old
+        restore = self._with_fake("binkill", '#!/bin/sh\nif [ "$1" = ts ]; then kill -9 $$; fi\nexec "%s" "$@"\n' % real,
+                                  "import os, subprocess, sys\nif sys.argv[1:2] == ['ts']:\n    os._exit(-1073741819)\n"
+                                  "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:]))")
         try:
             with self.assertRaises(CheckNotRun):
                 T.verify_token(self.token(self.k, self.c, self.tstinfo()), DIGEST, "sha256", [self.pin])
         finally:
-            os.environ["PATH"] = old
+            restore()
 
     def test_lotl_signer_set(self):
         import cryptovalid_lotl as L
@@ -225,24 +233,18 @@ class HandBuiltTokens(unittest.TestCase):
         self.assertEqual(self.outcome(tok, None), ("invalid", "signer_certificate_absent"))
         self.assertEqual(self.outcome(tok, self.pin_rsa), ("invalid", "signer_certificate_absent"))   # another TSA pinned
 
-    @unittest.skipUnless(os.name == "posix", "a shell wrapper")
     def test_ts_verify_exit_0_without_ok_is_not_verified(self):
         other = ec.generate_private_key(ec.SECP256R1())
         tok = self.token(other, self._cert("Review TSA", other), self.tstinfo())   # same name, another key
         self.assertEqual(self.outcome(tok, self.pin), ("invalid", "not_issued_by_pinned_tsa"))
-        b = os.path.join(self.d, "bin")
-        os.makedirs(b, exist_ok=True)
         real = shutil.which("openssl")
-        with open(os.path.join(b, "openssl"), "w", encoding="utf-8", newline="") as f:
-            f.write('#!/bin/sh\nif [ "$1" = ts ]; then exit 0; fi\nexec "%s" "$@"\n' % real)
-        os.chmod(os.path.join(b, "openssl"), 0o755)
-        old = os.environ["PATH"]
-        os.environ["PATH"] = b + os.pathsep + old
+        restore = self._with_fake("bin", '#!/bin/sh\nif [ "$1" = ts ]; then exit 0; fi\nexec "%s" "$@"\n' % real,
+                                  "import os, subprocess, sys\nif sys.argv[1:2] == ['ts']:\n    sys.exit(0)\n"
+                                  "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:]))")
         try:
             self.assertEqual(self.outcome(tok, self.pin), ("invalid", "not_issued_by_pinned_tsa"))
         finally:
-            os.environ["PATH"] = old
-
+            restore()
 
 class IngestLotlNotEvaluated(unittest.TestCase):
     def test_openssl_absent_tokens_not_sent_to_the_lotl(self):

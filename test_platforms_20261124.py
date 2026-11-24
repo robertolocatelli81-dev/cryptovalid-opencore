@@ -280,8 +280,14 @@ def make_unreadable(tc, path):
         sysdir = os.path.join(os.environ.get("SystemRoot", r"C:\\Windows"), "System32")
         who = subprocess.run([os.path.join(sysdir, "whoami.exe"), "/user", "/fo", "csv", "/nh"], capture_output=True)
         sid = re.findall(rb'"(S-1-[0-9-]+)"', who.stdout)[0].decode("ascii")
-        _windows_dacl(path, "D:P")
-        restore = lambda: _windows_dacl(path, "D:P(A;OICI;FA;;;%s)" % sid)   # noqa: E731
+        # every entry below too: Windows lets anyone with "bypass traverse checking" (everyone) open an entry of a
+        # directory it may not list, so an unreadable directory alone was read through its MANIFEST.json (run
+        # 45377477990); on POSIX a directory without x keeps its entries out of reach
+        targets = [path] + ([os.path.join(r, n) for r, ds, fs in os.walk(path) for n in ds + fs]
+                            if os.path.isdir(path) else [])
+        for t in reversed(targets):
+            _windows_dacl(t, "D:P")
+        restore = lambda: [_windows_dacl(t, "D:P(A;OICI;FA;;;%s)" % sid) for t in targets]   # noqa: E731
     else:
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             tc.skipTest("root reads any file")
@@ -302,6 +308,61 @@ def make_private(path):
         verifier.owner_only(path)
     else:
         os.chmod(path, 0o600)
+
+
+_FAKE_SITE = r'''
+import os, sys
+if os.path.basename(sys.executable).lower() == "openssl.exe" and os.environ.get("CV_FAKE_OPENSSL"):
+    sys.argv = list(sys.orig_argv[1:])   # the arguments openssl was given (sys.argv is not set yet here)
+    code = 0
+    try:
+        exec(os.environ["CV_FAKE_OPENSSL"])
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else 1
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+'''
+
+
+def fake_openssl(tc, bindir, sh_body, py_body):
+    """An `openssl` that the code finds first on PATH and that behaves as the test wants: on POSIX a shell script
+    (`sh_body`); on Windows, where a script cannot stand in for openssl.exe, the venv launcher of this Python copied as
+    bindir\\openssl.exe with a pyvenv.cfg beside it: it starts this Python, and a sitecustomize runs `py_body` with
+    openssl's arguments (CV_REAL_OPENSSL names the real one). `py_body` None: a file named openssl.exe that is not a
+    program (it cannot be started, as a script with a missing interpreter). Returns the variables to add to the
+    environment (PATH with bindir first)."""
+    import sysconfig
+    real = shutil.which("openssl") or "openssl"
+    os.makedirs(bindir, exist_ok=True)
+    env = {"PATH": bindir + os.pathsep + os.environ.get("PATH", ""), "CV_REAL_OPENSSL": real}
+    if os.name != "nt":
+        p = os.path.join(bindir, "openssl")
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(sh_body)
+        os.chmod(p, 0o755)
+        return env
+    exe = os.path.join(bindir, "openssl.exe")
+    if py_body is None:
+        with open(exe, "wb") as f:
+            f.write(b"not a program\r\n")
+        return env
+    import venv
+    nt = os.path.join(os.path.dirname(venv.__file__), "scripts", "nt")
+    launcher = next((os.path.join(nt, n) for n in ("venvlauncher.exe", "python.exe") if os.path.isfile(os.path.join(nt, n))),
+                    None)
+    if launcher is None:
+        tc.skipTest("this Python has no venv launcher to stand in for openssl.exe")
+    shutil.copy(launcher, exe)
+    base = os.path.dirname(getattr(sys, "_base_executable", sys.executable))
+    with open(os.path.join(bindir, "pyvenv.cfg"), "w", encoding="utf-8", newline="") as f:
+        f.write("home = %s\ninclude-system-site-packages = true\nversion = %s\n" % (base, sysconfig.get_python_version()))
+    site = os.path.join(bindir, "site")
+    os.makedirs(site, exist_ok=True)
+    with open(os.path.join(site, "sitecustomize.py"), "w", encoding="utf-8", newline="") as f:
+        f.write(_FAKE_SITE)
+    env.update(PYTHONPATH=site, CV_FAKE_OPENSSL=py_body)
+    return env
 
 
 
@@ -863,6 +924,29 @@ class DirectoryAsInput(unittest.TestCase):
             for reader in (V.open_regular, V.open_ledger_input):
                 with self.assertRaises(V.InputNotRegular, msg=reader.__name__):
                     reader(d)
+
+
+class FakeOpensslOnWindows(unittest.TestCase):
+    """The Windows stand-in of a fake openssl: a Python started as openssl.exe runs the body with openssl's arguments.
+    Measured here through a link named openssl.exe to this Python (the launcher itself runs on Windows only)."""
+
+    @unittest.skipIf(os.name == "nt", "the launcher route is measured by the tests that use it on Windows")
+    def test_the_site_hook_runs_the_body_with_the_arguments(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        site = os.path.join(d, "site")
+        os.makedirs(site)
+        with open(os.path.join(site, "sitecustomize.py"), "w", encoding="utf-8", newline="") as f:
+            f.write(_FAKE_SITE)
+        exe = os.path.join(d, "openssl.exe")
+        os.symlink(sys.executable, exe)
+        env = dict(os.environ, PYTHONPATH=site,
+                   CV_FAKE_OPENSSL="import sys; print('|'.join(sys.argv)); sys.exit(127)")
+        r = subprocess.run([exe, "ts", "-verify", "-in", "x"], capture_output=True, env=env, timeout=60)
+        self.assertEqual((r.returncode, r.stdout.strip()), (127, b"ts|-verify|-in|x"), r.stderr[-300:])
+        r = subprocess.run([sys.executable, "-c", "print('python')"], capture_output=True, env=env, timeout=60)
+        self.assertEqual(r.stdout.strip(), b"python")   # control: any other Python is not touched
 
 
 if __name__ == "__main__":

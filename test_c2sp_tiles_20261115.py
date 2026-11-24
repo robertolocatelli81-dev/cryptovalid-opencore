@@ -209,11 +209,12 @@ class Vectors(unittest.TestCase):
         self.assertEqual((rc, json.loads(out.getvalue())["stato"]), (2, "ERRORE"))
         tmp = tempfile.mkdtemp()                                       # a checkpoint that is not a regular file of at
         try:                                                           # most 1 MiB: refused before it is read, exit 2
-            fifo = os.path.join(tmp, "fifo"); os.mkfifo(fifo)
+            from test_platforms_20261124 import DEVICE, fifo as make_fifo   # Windows: a named pipe and NUL
+            fifo = make_fifo(self, os.path.join(tmp, "fifo"))
             big = os.path.join(tmp, "big")
             with open(big, "wb") as f:
                 f.truncate(C.MAX_NOTE_FILE + 1)
-            for cp in (fifo, big, tmp, "/dev/zero"):
+            for cp in (fifo, big, tmp, DEVICE):
                 for argv in (["tiles", MIRROR, "--vkey", MIRROR_VKEY, "--profile", "tlog-tiles", "--checkpoint", cp],
                              ["verify", cp, "--vkey", MIRROR_VKEY]):
                     if cp == "/dev/zero" and not os.path.exists(cp):

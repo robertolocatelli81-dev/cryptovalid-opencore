@@ -67,7 +67,7 @@ class ClosedShapes(unittest.TestCase):
 
     def test_two_signer_infos_in_the_helper(self):
         j, o = self.lab.j, self.other.j
-        K._run("openssl", "cms", "-verify", "-noverify", "-inform", "DER", "-in", j("ski.der"), "-out", j("tst2.der"))
+        K._run("openssl", "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", j("ski.der"), "-out", j("tst2.der"))
         K._run("openssl", "cms", "-sign", "-binary", "-nodetach", "-econtent_type", K.OID_TSTINFO, "-keyid", "-cades",
                "-md", "sha256", "-nosmimecap", "-signer", j("tsa.crt"), "-inkey", j("tsa.key"), "-signer", o("tsa.crt"),
                "-inkey", o("tsa.key"), "-certfile", j("ca.crt"), "-in", j("tst2.der"), "-outform", "DER", "-out", j("two.der"))
@@ -146,26 +146,31 @@ class ClosedShapes(unittest.TestCase):
                 a[1][1][1][0][1].append([0x30, []])
         self.assertIn("not {certs, policies?}", self.anchor(K.enc(t)))
 
-    @unittest.skipIf(os.name == "nt", "a fake openssl is a POSIX shell script; on Windows the code runs openssl.exe by name and a script cannot stand in for it (an .exe shim is not built here)")
     def test_openssl_without_no_castore(self):
+        from test_platforms_20261124 import fake_openssl   # Windows: an openssl.exe that runs the same logic
         bindir = os.path.join(self.td, "bin")
-        os.makedirs(bindir, exist_ok=True)
-        fake = os.path.join(bindir, "openssl")
-        with open(fake, "w", encoding="utf-8", newline="") as f:
-            f.write("#!/bin/sh\nif [ \"$1\" = verify ]; then echo 'verify: Unknown option: -no-CAstore' >&2; exit 1; fi\n"
-                    f"exec {shutil.which('openssl')} \"$@\"\n")
-        os.chmod(fake, os.stat(fake).st_mode | stat.S_IXUSR)
-        old = os.environ["PATH"]
-        os.environ["PATH"] = bindir + os.pathsep + old
+        env = fake_openssl(self, bindir,
+                           "#!/bin/sh\nif [ \"$1\" = verify ]; then echo 'verify: Unknown option: -no-CAstore' >&2; exit 1; fi\n"
+                           f"exec {shutil.which('openssl')} \"$@\"\n",
+                           "import os, subprocess, sys\n"
+                           "if sys.argv[1:2] == ['verify']:\n    sys.stderr.write('verify: Unknown option: -no-CAstore\\n'); sys.exit(1)\n"
+                           "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:]))")
+        fake = shutil.which("openssl", path=bindir)
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+
+        def restore():
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         try:
-            self.assertEqual(shutil.which("openssl"), fake)
+            self.assertEqual(os.path.normcase(shutil.which("openssl")), os.path.normcase(fake))
             from verifier import CheckNotRun
             with self.assertRaises(CheckNotRun):
                 T.verify_token(self.ski, K.DIGEST, "sha256", [self.lab.j("ca.crt")])
             v = T.verify_token(self.tok, K.DIGEST, "sha256", [self.lab.j("ca.crt")])   # the other form: no `verify`
             self.assertEqual(v["status"], "verified", v)
         finally:
-            os.environ["PATH"] = old
+            restore()
         v = T.verify_token(self.ski, K.DIGEST, "sha256", [self.other.j("ca.crt")])   # a real refusal stays one
         self.assertEqual(v["reason"], "not_issued_by_pinned_tsa")
 
