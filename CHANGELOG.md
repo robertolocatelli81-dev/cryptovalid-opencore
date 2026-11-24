@@ -328,8 +328,9 @@ make files unreadable with an empty access list, and use named pipes for FIFOs. 
 Windows has no equivalent: a FIFO at a name inside a directory, a per-process file-size limit (`ulimit -f`), a link to
 a device. The fake openssl of the tests is, on Windows, this Python's venv launcher copied as `openssl.exe` (a crash
 there is an NTSTATUS exit). After the third run (45377477990): a directory given as an input file is "not a regular
-file" on Windows too (it was taken for an unreadable or missing file); the Go verifier waits for a FIFO with select
-on macOS (the runtime poller read a FIFO with no writer yet as empty); the JS verifier reads a fast FIFO without
+file" on Windows too (it was taken for an unreadable or missing file); the Go verifier reads a FIFO on macOS by
+polling its descriptor as the JS verifier does (the runtime poller read a FIFO with no writer yet as empty; a select
+loop tried next never saw the writer there, CI run 45460009605); the JS verifier reads a fast FIFO without
 pausing between full reads; the Java verifier writes stderr in UTF-8 and its receipt with "\n" on every system.
 The Go verifier read a FIFO in quadratic time (bufio.ScanLines searched the pending line again at each 64 KiB read:
 257 MiB without a line feed took 56.6 s against 0.4 s for verifier.py, measured 2026-11-24); its line splitter now
