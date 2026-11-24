@@ -147,6 +147,46 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: "1.27"   # the Go verifier the cross-language suites build, as in independent-verifiers
+      - name: SoftHSM2 and OpenSC (macOS, Homebrew; the current formula, the version printed)
+        if: runner.os == 'macOS'
+        run: |
+          brew install softhsm opensc
+          brew list --versions softhsm opensc
+          echo "CV_REQUIRE_SOFTHSM=1" >> "$GITHUB_ENV"
+      - name: Cache of SoftHSM2 built for Windows (key = SoftHSMv2 commit, runner image, build options)
+        if: runner.os == 'Windows'
+        id: softhsm-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/softhsm
+          key: softhsm2-13e6e86b83748fef74046dbf0c91f664b7acc1c3-windows-2025-x64-openssl-eddsa-v2
+      - name: SoftHSM2 2.7.0 from source (Windows, commit 13e6e86b, vcpkg OpenSSL; the project ships no Windows binary)
+        if: runner.os == 'Windows' && steps.softhsm-cache.outputs.cache-hit != 'true'
+        run: |
+          src="$RUNNER_TEMP/softhsm-src"; out="$RUNNER_TEMP/softhsm"; vcpkg="$VCPKG_INSTALLATION_ROOT"
+          git init -q "$src" && git -C "$src" fetch -q --depth 1 https://github.com/softhsm/SoftHSMv2 13e6e86b83748fef74046dbf0c91f664b7acc1c3
+          git -C "$src" checkout -q FETCH_HEAD
+          "$vcpkg/vcpkg" install openssl:x64-windows
+          cmake -S "$src" -B "$src/build" -A x64 -DCMAKE_TOOLCHAIN_FILE="$vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DWITH_CRYPTO_BACKEND=openssl -DENABLE_EDDSA=ON -DDISABLE_NON_PAGED_MEMORY=ON -DBUILD_TESTS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$out"
+          cmake --build "$src/build" --config Release
+          cmake --install "$src/build" --config Release
+          m=$(find "$out" -iname 'softhsm2*.dll' | head -1)
+          cp "$vcpkg"/installed/x64-windows/bin/*.dll "$(dirname "$m")/"   # a DLL's dependencies are found in its folder
+      - name: SoftHSM2 module and OpenSC 0.27.1 MSI (Windows, sha256 checked)
+        if: runner.os == 'Windows'
+        run: |
+          m=$(find "$RUNNER_TEMP/softhsm" -iname 'softhsm2*.dll' | head -1)
+          [ -n "$m" ] || { echo "softhsm2 DLL not found"; exit 1; }
+          echo "CV_SOFTHSM_MODULE=$(cygpath -w "$m")" >> "$GITHUB_ENV"
+          echo "$(cygpath -w "$(dirname "$m")")" >> "$GITHUB_PATH"
+          f="$RUNNER_TEMP/OpenSC-0.27.1_x64.msi"
+          curl -sSfL -o "$f" https://github.com/OpenSC/OpenSC/releases/download/0.27.1/OpenSC-0.27.1_x64.msi
+          echo "88ea45e848063ff5f3594a457b7f023223472eae9c9c543f8035f7689bb7b319  $f" | sha256sum -c -
+          powershell -NoProfile -Command "\$p = Start-Process msiexec -ArgumentList '/i','$(cygpath -w "$f")','/qn','/norestart' -Wait -PassThru; exit \$p.ExitCode"
+          echo 'C:\Program Files\OpenSC Project\OpenSC\tools' >> "$GITHUB_PATH"
+          echo "CV_REQUIRE_SOFTHSM=1" >> "$GITHUB_ENV"
       - name: OpenSSL 3 first on PATH (macOS ships LibreSSL as /usr/bin/openssl, without the `ts` checks the code uses)
         if: runner.os == 'macOS'
         run: |
@@ -174,7 +214,7 @@ jobs:
           "CV_FULL_DIR=Q:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: The tools the suites call (a missing one is named; its cases skip with the reason)
         run: |
-          for t in openssl node java go; do printf '%s: ' "$t"; command -v "$t" || echo "not on PATH"; done
+          for t in openssl node java go pkcs11-tool softhsm2-util; do printf '%s: ' "$t"; command -v "$t" || echo "not on PATH"; done
           openssl version; echo "CV_FULL_DIR=$CV_FULL_DIR"; ls -la "$CV_FULL_DIR"
       - name: Every suite with cryptography
         if: always()

@@ -46,7 +46,6 @@ ALLOWED = {
     ("conformance.py", "exp_path"),                      # the expected verdict of a vector of this repository
     ("cryptovalid_ingest.py", "path"),                   # os.open of a DIRECTORY, to fsync it
     ("cryptovalid_witness.py", "os.path.dirname(os.path.abspath(path)) or '.'"),   # the same
-    ("cryptovalid_kms.py", "t.name"),                    # a temporary file this module has just written
     ("cryptovalid_tsa.py", "sp"),                        # the same (the signer openssl wrote)
     ("evidence_pack.py", "tsq"),                         # the same (the time-stamp query)
     ("verifier.py", "tmp"),                              # os.open of a temporary file to WRITE (O_EXCL)

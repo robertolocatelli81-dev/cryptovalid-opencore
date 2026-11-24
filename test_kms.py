@@ -38,8 +38,13 @@ except ImportError:  # pragma: no cover
     _HAVE_CRYPTO = False
 
 import glob
-_SOFTHSM = next(iter(glob.glob("/usr/lib/softhsm/libsofthsm2.so")
-                     + glob.glob("/usr/lib/*/softhsm/libsofthsm2.so")), None)
+# the module where each system installs it; CV_SOFTHSM_MODULE overrides (the Windows CI builds it: no binary exists)
+_SOFTHSM = os.environ.get("CV_SOFTHSM_MODULE") or next(iter(
+    glob.glob("/usr/lib/softhsm/libsofthsm2.so") + glob.glob("/usr/lib/*/softhsm/libsofthsm2.so")
+    + glob.glob("/opt/homebrew/lib/softhsm/libsofthsm2.so") + glob.glob("/usr/local/lib/softhsm/libsofthsm2.so")), None)
+if os.environ.get("CV_REQUIRE_SOFTHSM") == "1" and not (_SOFTHSM and os.path.exists(_SOFTHSM)
+                                                         and shutil.which("pkcs11-tool") and shutil.which("softhsm2-util")):
+    raise RuntimeError(f"CV_REQUIRE_SOFTHSM=1 and SoftHSM2/pkcs11-tool missing ({_SOFTHSM})")
 _HAVE_SOFTHSM = (_SOFTHSM and shutil.which("pkcs11-tool")
                  and shutil.which("softhsm2-util"))
 
@@ -398,6 +403,93 @@ class TestAwsKmsContract(unittest.TestCase):
         be = kms.AwsKmsBackend(key_id="k", client=BadKms())
         with self.assertRaises(RuntimeError):
             be.sign(b"x")
+
+
+class TestPkcs11ChildAndShapes(unittest.TestCase):
+    """Fleet audit of 2026-11-24 (pq-scitt 4aff166 + 61ab771, NEMESIS): the PKCS#11 calls run in a child process
+    with an enforced time limit; the public key is read through the module (CKA_EC_POINT); the structures are packed
+    on Windows."""
+
+    def test_ec_point_forms_and_refusals(self):
+        pub = bytes(range(32))
+        oid, name = bytes.fromhex("06032b6570"), b"\x13\x0cedwards25519"
+        for p in (oid, name):
+            self.assertEqual(kms._ed25519_from_ec_point(b"\x04\x20" + pub, p), pub)
+            self.assertEqual(kms._ed25519_from_ec_point(pub, p), pub)
+        for point, p in ((b"\x04\x20" + pub, bytes.fromhex("06032b6571")), (b"\x04\x21" + pub + b"\x00", oid),
+                         (pub[:31], oid), (b"\x04\x20" + pub[:31], oid), (b"\x05\x20" + pub, oid), (pub, b""),
+                         (pub + b"\x00", oid)):
+            with self.assertRaises(ValueError, msg=(point.hex(), p.hex())):
+                kms._ed25519_from_ec_point(point, p)
+
+    def test_a_blocked_call_is_stopped(self):
+        import time
+        c = kms._Pkcs11Child(1.0)
+        c.command = [sys.executable, "-c", "import time; time.sleep(600)"]
+        t0 = time.monotonic()
+        with self.assertRaises(RuntimeError) as e:
+            c.call({"op": "pub"}, "read public key")
+        self.assertIn("timeout after 1.0 s", str(e.exception))
+        self.assertLess(time.monotonic() - t0, 15)
+        self.assertIsNone(c._proc)   # killed and dropped
+        c = kms._Pkcs11Child(30.0)   # control: an answer is read, a child that ends without one is an error
+        c.command = [sys.executable, "-c", "import sys; sys.stdin.readline(); print('{\"ok\": \"00ff\"}', flush=True)"]
+        self.assertEqual(c.call({"op": "pub"}, "x"), b"\x00\xff")
+        c.command = [sys.executable, "-c", "import sys; sys.stdin.readline(); sys.exit(3)"]
+        with self.assertRaises(RuntimeError) as e:
+            c.call({"op": "pub"}, "x")
+        self.assertIn("ended", str(e.exception))
+
+    def test_a_child_that_does_not_read_is_stopped_at_the_limit(self):
+        import time
+        c = kms._Pkcs11Child(1.0)
+        c.command = [sys.executable, "-c", "import time; time.sleep(60)"]
+        t0 = time.monotonic()
+        with self.assertRaises(RuntimeError) as e:
+            c.call({"op": "sign", "msg": "00" * (1 << 20)}, "sign")
+        self.assertIn("timeout after 1.0 s", str(e.exception))
+        self.assertLess(time.monotonic() - t0, 15)
+
+    def test_the_child_imports_nothing_from_the_current_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "json.py"), "w", encoding="utf-8", newline="") as f:
+                f.write("open(%r, 'w').close()\nraise SystemExit(3)\n" % os.path.join(d, "RAN"))
+            r = subprocess.run(kms._Pkcs11Child(5.0).command, cwd=d, input=b'{"op": "x"}\n', capture_output=True,
+                               timeout=120)
+            self.assertFalse(os.path.exists(os.path.join(d, "RAN")), "the child ran json.py of the current folder")
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, b'{"err": "unknown request"}'), r.stderr[-300:])
+
+    def test_a_module_printing_on_stdout_stays_out_of_the_protocol(self):
+        code = ("import os, sys; sys.path[:] = [p for p in sys.path if p != '']; sys.path.append(sys.argv[1]); "
+                "import cryptovalid_kms as k; "
+                "k._p11_public_key = lambda *a: (os.write(1, b'vendor debug line\\n'), b'\\x01' * 32)[1]; "
+                "k._p11_worker()")
+        r = subprocess.run([sys.executable, "-B", "-c", code, kms._Pkcs11Child(5.0).command[-1]],
+                           input=b'{"op": "pub", "module": "m", "token": "t", "key": "k"}\n', capture_output=True,
+                           timeout=120)
+        self.assertEqual(r.stdout.splitlines(), [('{"ok": "%s"}' % ("01" * 32)).encode()], r.stderr[-300:])
+
+    def test_an_answer_out_of_form_stops_the_child(self):
+        for line in ("vendor debug", "1", "[]", "{}", '{"ok": "zz"}', '{"ok": 5}', '{"err": 5}', '{"other": "00"}',
+                     '{"ok": "00", "err": "x"}'):
+            c = kms._Pkcs11Child(30.0)
+            c.command = [sys.executable, "-c", "import sys, time; sys.stdin.readline(); print(sys.argv[1], flush=True); "
+                                               "print('{\"ok\": \"aa\"}', flush=True); time.sleep(600)", line]
+            with self.assertRaises(RuntimeError, msg=line) as e:
+                c.call({"op": "pub"}, "x")
+            self.assertIn("out of form", str(e.exception), line)
+            self.assertIsNone(c._proc, line)
+
+    def test_structures_as_pkcs11_h(self):
+        import ctypes
+        a, m = kms._p11_structures()
+        u, p = ctypes.sizeof(ctypes.c_ulong), ctypes.sizeof(ctypes.c_void_p)
+        natural = ctypes.sizeof(type("N", (ctypes.Structure,), {"_fields_": [("a", ctypes.c_ulong), ("b", ctypes.c_void_p),
+                                                                             ("c", ctypes.c_ulong)]}))
+        want = 2 * u + p if os.name == "nt" else natural
+        self.assertEqual((ctypes.sizeof(a), ctypes.sizeof(m)), (want, want))
+        if os.name == "nt":
+            self.assertEqual((u, ctypes.sizeof(a), a.ulValueLen.offset), (4, 16, 12))   # Win64, pack(1)
 
 
 if __name__ == "__main__":

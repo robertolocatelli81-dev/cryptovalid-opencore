@@ -72,7 +72,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import urllib.error
 import urllib.parse
@@ -141,12 +140,65 @@ _CKR_NAMES = {0x0: "CKR_OK", 0x5: "CKR_GENERAL_ERROR", 0x6: "CKR_FUNCTION_FAILED
 _CKA_CLASS, _CKA_KEY_TYPE, _CKA_LABEL = 0x0, 0x100, 0x3
 _CKA_SENSITIVE, _CKA_SIGN, _CKA_EXTRACTABLE = 0x103, 0x108, 0x162
 _CKO_PRIVATE_KEY, _CKK_EC_EDWARDS, _CKM_EDDSA = 3, 0x40, 0x1057
-# One PKCS#11 call sequence at a time in this process: each signature runs C_Initialize ... C_Finalize with NULL init
-# args, i.e. without telling the module that several threads may call it at once. Without this lock two concurrent
-# sign() calls, or a sign() after a timed-out one whose thread is still inside the module, crashed the whole process
-# with SIGSEGV on SoftHSM2 2.6.1 (measured 08/11/2026: 5/5 runs with 8 threads, 9/12 runs with short timeouts).
-# Not covered: other code in the same process calling the same module directly.
-_P11_LOCK = threading.Lock()
+_CKO_PUBLIC_KEY, _CKA_EC_PARAMS, _CKA_EC_POINT = 2, 0x180, 0x181
+# CKA_EC_PARAMS of an Ed25519 key: the OID 1.3.101.112 or the PrintableString "edwards25519" (PKCS#11 3.0 §2.3.10)
+_ED25519_PARAMS = (bytes.fromhex("06032b6570"), b"\x13\x0cedwards25519")
+# The PKCS#11 code below is that of pq-scitt 61ab771 (same author), adapted: a child process with an enforced time
+# limit, the public key read through the module, the Windows packing of the structures (fleet audit of 2026-11-24).
+
+
+def _ed25519_from_ec_point(point: bytes, params: bytes) -> bytes:
+    """The 32 raw bytes of an Ed25519 public key from CKA_EC_POINT, closed: the parameters must name Ed25519; the
+    point is either the DER OCTET STRING of PKCS#11 2.40/3.0 (04 20 + 32 bytes) or the raw 32 bytes of PKCS#11 3.1.
+    Anything else = ValueError."""
+    if bytes(params) not in _ED25519_PARAMS:
+        raise ValueError("CKA_EC_PARAMS is not Ed25519 (%s)" % bytes(params)[:20].hex())
+    point = bytes(point)
+    if len(point) == 34 and point[:2] == b"\x04\x20":
+        return point[2:]
+    if len(point) == 32:
+        return point
+    raise ValueError("CKA_EC_POINT of %d bytes is neither 04 20 + 32 bytes nor 32 raw bytes" % len(point))
+
+
+def _p11_structures():
+    """CK_ATTRIBUTE and CK_MECHANISM for ctypes. PKCS#11 2.40 §2.1 (pkcs11.h): on Windows the structures are packed to
+    1 byte (#pragma pack(1)) and CK_ULONG is 32 bits; on LP64 Unix 64 bits, natural alignment. Until 0.29.0 the
+    structures were not packed: on Win64 the module read pValue at the wrong offset."""
+    import ctypes
+    ul = ctypes.c_ulong
+
+    class _Attr(ctypes.Structure):
+        if os.name == "nt":
+            _pack_ = 1
+        _fields_ = [("type", ul), ("pValue", ctypes.c_void_p), ("ulValueLen", ul)]
+
+    class _Mech(ctypes.Structure):
+        if os.name == "nt":
+            _pack_ = 1
+        _fields_ = [("mechanism", ul), ("pParameter", ctypes.c_void_p), ("ulParameterLen", ul)]
+    return _Attr, _Mech
+
+
+def _p11_load(module: str):
+    """ctypes.CDLL of a PKCS#11 module, a regular file opened once without blocking first (SPEC §5 step 0: dlopen of a
+    FIFO waits holding the GIL). Windows (Python >= 3.8 does not search PATH for a DLL's dependencies): they are found
+    in the module's own folder or in the folders of CV_PKCS11_DLL_DIRS (os.pathsep-separated)."""
+    import ctypes
+    if os.name == "nt":
+        for d in filter(None, os.environ.get("CV_PKCS11_DLL_DIRS", "").split(os.pathsep)):
+            os.add_dll_directory(d)
+    try:
+        try:
+            import verifier
+        except ImportError:   # python3 -m opencore.<module> from the parent directory
+            from opencore import verifier
+        os.close(verifier.open_regular(module, float("inf")))
+        return ctypes.CDLL(module)
+    except OSError as e:
+        raise RuntimeError(f"PKCS#11 module {module!r} cannot be loaded: {str(e)[:120]}") from None
+# One PKCS#11 call sequence at a time per module: each runs in the backend's own child process (_Pkcs11Child), one
+# call at a time (until 0.29.0 a process-wide lock: two threads in the module crashed SoftHSM2 2.6.1, 08/11/2026).
 
 
 def _p11_sign_direct(module: str, token: str, label: str, pin: bytes, message: bytes) -> bytes:
@@ -157,22 +209,8 @@ def _p11_sign_direct(module: str, token: str, label: str, pin: bytes, message: b
     key type EC_EDWARDS, CKA_SIGN true, CKA_SENSITIVE true and CKA_EXTRACTABLE false — anything else is refused."""
     import ctypes
     ul = ctypes.c_ulong
-
-    class _Attr(ctypes.Structure):
-        _fields_ = [("type", ul), ("pValue", ctypes.c_void_p), ("ulValueLen", ul)]
-
-    class _Mech(ctypes.Structure):
-        _fields_ = [("mechanism", ul), ("pParameter", ctypes.c_void_p), ("ulParameterLen", ul)]
-
-    try:   # SPEC §5 step 0: dlopen of a FIFO waits holding the GIL, so the caller's timeout thread never runs (18/11/2026)
-        try:
-            import verifier
-        except ImportError:   # python3 -m opencore.<module> from the parent directory
-            from opencore import verifier
-        os.close(verifier.open_regular(module, float("inf")))
-        lib = ctypes.CDLL(module)
-    except OSError as e:
-        raise RuntimeError(f"PKCS#11 module {module!r} cannot be loaded: {str(e)[:120]}") from None
+    _Attr, _Mech = _p11_structures()
+    lib = _p11_load(module)
 
     def ck(rv, what):
         if rv != 0:
@@ -245,9 +283,197 @@ def _p11_sign_direct(module: str, token: str, label: str, pin: bytes, message: b
             lib.C_Finalize(None)
 
 
+def _p11_public_key(module: str, token: str, label: str) -> bytes:
+    """The Ed25519 public key labelled `label`, read through the module (ctypes, no login: a public object). Closed:
+    exactly one token with the label, exactly one public key with the label, key type EC_EDWARDS, Ed25519 parameters
+    and point (_ed25519_from_ec_point). 0.29.0: replaces `pkcs11-tool --read-object --output-file`, which fails on
+    Windows (an open NamedTemporaryFile cannot be opened by another process) and on macOS (OpenSC of Homebrew refused
+    the EC_POINT of SoftHSM2 of Homebrew; pq-scitt CI run 45344690063)."""
+    import ctypes
+    ul = ctypes.c_ulong
+    _Attr, _ = _p11_structures()
+    lib = _p11_load(module)
+
+    def ck(rv, what):
+        if rv != 0:
+            raise RuntimeError(f"PKCS#11 {what} failed: rv=0x{rv:x} ({_CKR_NAMES.get(rv, 'see PKCS#11 spec')})")
+
+    for fn in ("C_Initialize", "C_Finalize", "C_GetSlotList", "C_GetTokenInfo", "C_OpenSession", "C_CloseSession",
+               "C_FindObjectsInit", "C_FindObjects", "C_FindObjectsFinal", "C_GetAttributeValue"):
+        getattr(lib, fn).restype = ul
+    rv = lib.C_Initialize(None)
+    if rv not in (0, 0x191):
+        ck(rv, "C_Initialize")
+    own_init = rv == 0
+    session = ul(0)
+    try:
+        n = ul(0)
+        ck(lib.C_GetSlotList(ctypes.c_ubyte(1), None, ctypes.byref(n)), "C_GetSlotList")
+        slots = (ul * max(n.value, 1))()
+        ck(lib.C_GetSlotList(ctypes.c_ubyte(1), slots, ctypes.byref(n)), "C_GetSlotList")
+        found = []
+        for i in range(n.value):
+            info = ctypes.create_string_buffer(1024)   # CK_TOKEN_INFO: label is the first 32 bytes, space-padded
+            ck(lib.C_GetTokenInfo(ul(slots[i]), info), "C_GetTokenInfo")
+            if info.raw[:32].decode("utf-8", "replace").rstrip(" ") == token:
+                found.append(slots[i])
+        if len(found) != 1:
+            raise RuntimeError(f"PKCS#11: {len(found)} tokens labelled {token!r} (exactly 1 required)")
+        ck(lib.C_OpenSession(ul(found[0]), ul(0x4), None, None, ctypes.byref(session)), "C_OpenSession")
+        cls_v, lab = ul(_CKO_PUBLIC_KEY), label.encode()
+        lab_buf = ctypes.create_string_buffer(lab, len(lab))
+        tmpl = (_Attr * 2)(_Attr(_CKA_CLASS, ctypes.cast(ctypes.byref(cls_v), ctypes.c_void_p), ctypes.sizeof(ul)),
+                           _Attr(_CKA_LABEL, ctypes.cast(lab_buf, ctypes.c_void_p), len(lab)))
+        ck(lib.C_FindObjectsInit(session, tmpl, ul(2)), "C_FindObjectsInit")
+        objs, cnt = (ul * 2)(), ul(0)
+        try:
+            ck(lib.C_FindObjects(session, objs, ul(2), ctypes.byref(cnt)), "C_FindObjects")
+        finally:
+            lib.C_FindObjectsFinal(session)
+        if cnt.value != 1:
+            raise RuntimeError(f"PKCS#11: {cnt.value} public keys labelled {label!r} on token {token!r} "
+                               "(exactly 1 required)")
+        ktype = ul(0)
+        point, params = ctypes.create_string_buffer(256), ctypes.create_string_buffer(64)
+        attrs = (_Attr * 3)(
+            _Attr(_CKA_KEY_TYPE, ctypes.cast(ctypes.byref(ktype), ctypes.c_void_p), ctypes.sizeof(ul)),
+            _Attr(_CKA_EC_POINT, ctypes.cast(point, ctypes.c_void_p), len(point)),
+            _Attr(_CKA_EC_PARAMS, ctypes.cast(params, ctypes.c_void_p), len(params)))
+        ck(lib.C_GetAttributeValue(session, ul(objs[0]), attrs, ul(3)), "C_GetAttributeValue")
+        if ktype.value != _CKK_EC_EDWARDS:
+            raise RuntimeError(f"PKCS#11: public key {label!r} is not an EC_EDWARDS key (type 0x{ktype.value:x})")
+        try:
+            return _ed25519_from_ec_point(point.raw[:attrs[1].ulValueLen], params.raw[:attrs[2].ulValueLen])
+        except ValueError as e:
+            raise RuntimeError(f"pkcs11: public key {label!r} is not Ed25519: {e}") from None
+    finally:
+        if session.value:
+            lib.C_CloseSession(session)
+        if own_init:
+            lib.C_Finalize(None)
+
+
+def _p11_worker() -> None:
+    """The child process of _Pkcs11Child: one JSON request per line on stdin, one JSON answer per line on a private
+    copy of stdout. Descriptor 1 points at stderr, so a module that prints on stdout cannot put a line into the
+    protocol. The PIN is read from this process's environment (inherited), never from the request."""
+    out = os.fdopen(os.dup(1), "w", encoding="ascii")
+    os.dup2(2, 1)
+    for line in sys.stdin.buffer:
+        try:
+            r = json_loads(line)
+            if r["op"] == "pub":
+                res = _p11_public_key(r["module"], r["token"], r["key"])
+            elif r["op"] == "sign":
+                pin = os.environ.get(r["pin_env"], "")
+                if not pin:
+                    raise RuntimeError(f"PIN environment variable {r['pin_env']!r} is empty/unset")
+                res = _p11_sign_direct(r["module"], r["token"], r["key"], pin.encode(), bytes.fromhex(r["msg"]))
+            else:
+                raise RuntimeError("unknown request")
+            answer = {"ok": res.hex()}
+        except Exception as e:  # noqa: BLE001 — carried to the parent as one readable error
+            answer = {"err": str(e)[:300] if isinstance(e, RuntimeError) else f"{type(e).__name__}: {str(e)[:200]}"}
+        out.write(json.dumps(answer) + "\n")
+        out.flush()
+
+
+class _Pkcs11Child:
+    """The PKCS#11 calls of one backend, in a child process (0.29.0). Until then they ran in a thread of this
+    process: at the time limit the caller stopped waiting, but the thread stayed inside the module for good. Now at
+    the limit the child is killed (SIGKILL on POSIX, TerminateProcess on Windows) and the next call starts a new
+    one. The request is written by a thread, inside the limit; an answer out of form stops the child."""
+
+    def __init__(self, timeout: float):
+        import weakref
+        self._timeout, self._proc, self._lines = timeout, None, None
+        self._lock = threading.Lock()
+        self._box = [None]
+        # `python -c` puts the current directory first in sys.path: the child, which holds the PIN, would import a
+        # json.py found there (NEMESIS on pq-scitt, 24/11/2026). It is removed; this module's folder goes last.
+        self.command = [sys.executable, "-B", "-c",
+                        "import sys; sys.path[:] = [p for p in sys.path if p != '']; sys.path.append(sys.argv[1]); "
+                        "from cryptovalid_kms import _p11_worker; _p11_worker()",
+                        os.path.dirname(os.path.abspath(__file__))]
+        weakref.finalize(self, _Pkcs11Child._kill, self._box)
+
+    @staticmethod
+    def _kill(box):
+        p = box[0]
+        if p is None:
+            return
+        if p.poll() is None:
+            p.kill()
+            p.wait()
+        for pipe in (p.stdin, p.stdout):
+            try:
+                pipe.close()
+            except (OSError, ValueError):
+                pass
+
+    def _start(self):
+        import queue
+        self._proc = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL)
+        self._box[0] = self._proc
+        self._lines = queue.Queue()
+        out, q = self._proc.stdout, self._lines
+
+        def read():
+            for line in out:
+                q.put(line)
+            q.put(None)
+        threading.Thread(target=read, daemon=True).start()
+
+    def call(self, request: dict, what: str) -> bytes:
+        import queue
+        import time
+        end = time.monotonic() + self._timeout
+        if not self._lock.acquire(timeout=self._timeout):
+            raise RuntimeError(f"pkcs11 {what}: another PKCS#11 call of this backend is still running (timeout "
+                               f"{self._timeout} s)")
+        try:
+            if self._proc is None or self._proc.poll() is not None:
+                self._start()
+            data, pipe = (json.dumps(request) + "\n").encode(), self._proc.stdin
+
+            def write():   # a child that does not read must not hold the caller past the limit
+                try:
+                    pipe.write(data)
+                    pipe.flush()
+                except (OSError, ValueError):
+                    pass
+            threading.Thread(target=write, daemon=True).start()
+            try:
+                line = self._lines.get(timeout=max(0.0, end - time.monotonic()))
+            except queue.Empty:
+                line = "timeout"
+            if line == "timeout" or line is None:
+                rc = self._proc.poll()
+                _Pkcs11Child._kill([self._proc])
+                self._proc = None
+                if line == "timeout":
+                    raise RuntimeError(f"pkcs11 {what}: timeout after {self._timeout} s (the call was stopped)")
+                raise RuntimeError(f"pkcs11 {what}: the PKCS#11 process ended (rc {rc})")
+            try:   # closed: one object, {"ok": hex} or {"err": text}
+                r = json_loads(line)
+                if type(r) is not dict or len(r) != 1 or type(next(iter(r.values()))) is not str:
+                    raise ValueError
+                if "err" not in r:
+                    return bytes.fromhex(r["ok"])
+            except (ValueError, KeyError):
+                _Pkcs11Child._kill([self._proc])
+                self._proc = None
+                raise RuntimeError(f"pkcs11 {what}: answer out of form from the PKCS#11 process (stopped)") from None
+            raise RuntimeError(f"pkcs11 {what}: {r['err']}")
+        finally:
+            self._lock.release()
+
+
 class Pkcs11Backend:
-    """PKCS#11 token. Key generation and public-key read via OpenSC pkcs11-tool (subprocess); signing with a
-    single-part C_Sign through the module (ctypes, see _p11_sign_direct). The private key never enters this process."""
+    """PKCS#11 token. Key generation via OpenSC pkcs11-tool (subprocess); public-key read (_p11_public_key) and signing
+    with a single-part C_Sign (_p11_sign_direct) through the module, both in a child process with an enforced time
+    limit (_Pkcs11Child, 0.29.0). The private key never enters this process."""
 
     name = "pkcs11"
 
@@ -260,6 +486,7 @@ class Pkcs11Backend:
             raise RuntimeError(f"PIN environment variable {pin[4:]!r} is empty/unset")
         self._module, self._token, self._key, self._pin = module, token, key, pin
         self._timeout = timeout
+        self._child = _Pkcs11Child(timeout)
 
     def _run(self, extra, login=False, what="call"):
         cmd = ["pkcs11-tool", "--module", self._module, "--token-label", self._token]
@@ -311,43 +538,20 @@ class Pkcs11Backend:
         return self.public_key_hex()
 
     def public_key_hex(self) -> str:
-        with tempfile.NamedTemporaryFile(suffix=".spki") as t:
-            self._run(["--read-object", "--type", "pubkey",
-                       "--label", self._key, "--output-file", t.name], what="read public key")
-            with open(t.name, "rb") as f:
-                data = f.read()
-        try:
-            return _raw_from_spki(data).hex()
-        except (ValueError, TypeError) as e:   # binascii.Error is a ValueError
-            raise RuntimeError(f"pkcs11: public key {self._key!r} is not Ed25519: {e}") from None
+        return self._child.call({"op": "pub", "module": self._module, "token": self._token, "key": self._key},
+                                "read public key").hex()
 
     def sign(self, message: bytes) -> bytes:
-        import threading
-        pin = os.environ.get(self._pin[4:], "")
-        if not pin:
+        if not os.environ.get(self._pin[4:], ""):
             raise RuntimeError(f"PIN environment variable {self._pin[4:]!r} is empty/unset")
-        box = {}
-
-        def work():
-            if not _P11_LOCK.acquire(timeout=self._timeout):
-                box["err"] = RuntimeError("another PKCS#11 signature of this process is still running (timed out?)")
-                return
-            try:
-                box["sig"] = _p11_sign_direct(self._module, self._token, self._key, pin.encode(), bytes(message))
-            except Exception as e:  # noqa: BLE001 — carried to the caller as one readable error
-                box["err"] = e
-            finally:
-                _P11_LOCK.release()
-        t = threading.Thread(target=work, daemon=True)
-        t.start()
-        t.join(self._timeout)
-        if t.is_alive():
-            raise RuntimeError(f"pkcs11 sign: timeout after {self._timeout} s (token {self._token!r})")
-        if "err" in box:
-            e = box["err"]
-            raise RuntimeError(f"pkcs11 sign with key {self._key!r}: {e}" if isinstance(e, RuntimeError)
-                               else f"pkcs11 sign with key {self._key!r}: {type(e).__name__}: {str(e)[:200]}") from None
-        return box["sig"]
+        try:
+            sig = self._child.call({"op": "sign", "module": self._module, "token": self._token, "key": self._key,
+                                    "pin_env": self._pin[4:], "msg": bytes(message).hex()}, "sign")
+        except RuntimeError as e:
+            raise RuntimeError(f"pkcs11 sign with key {self._key!r}: {e}") from None
+        if len(sig) != 64:
+            raise RuntimeError(f"expected 64-byte Ed25519 signature, got {len(sig)}")
+        return sig
 
     def describe(self) -> Dict:
         return {"backend": "pkcs11", "module": self._module, "token": self._token,
