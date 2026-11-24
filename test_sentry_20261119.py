@@ -928,10 +928,13 @@ class _Archives(unittest.TestCase):
         self.I = cryptovalid_ingest
         self.td = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.td, True)
-        self._home = os.environ.get("HOME")           # the trusted-list cache lives under ~: never the user's own
-        os.environ["HOME"] = os.path.join(self.td, "home")
-        os.makedirs(os.environ["HOME"])
-        self.addCleanup(lambda: os.environ.__setitem__("HOME", self._home) if self._home is not None else os.environ.pop("HOME"))
+        home = os.path.join(self.td, "home")          # the trusted-list cache lives under ~: never the user's own
+        os.makedirs(home)
+        for var in ("HOME", "USERPROFILE"):           # USERPROFILE: Windows reads ~ there, not HOME
+            old = os.environ.get(var)
+            os.environ[var] = home
+            self.addCleanup(lambda var=var, old=old: os.environ.__setitem__(var, old) if old is not None else os.environ.pop(var))
+        self.assertEqual(os.path.expanduser("~"), home)
 
     def build(self, name, sealed, active=0, backend=None, per_segment=3, prefix="ledger"):
         d = os.path.join(self.td, name)
@@ -1199,7 +1202,7 @@ class TestLotlMemberStates(_Archives):
 
     def test_generated(self):
         I = self.I
-        cache_dir = os.path.join(os.environ["HOME"], ".cache", "cryptovalid")
+        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "cryptovalid")
         import re
         good = bad = 0
         for ms in self._values():
@@ -1235,7 +1238,7 @@ class TestMcpServerSurvivesAnyMessage(unittest.TestCase):
         home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, home, True)
         self.p = subprocess.Popen([sys.executable, os.path.join(HERE, "cryptovalid_mcp.py")], stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", env={**os.environ, "HOME": home})
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", env={**os.environ, "HOME": home, "USERPROFILE": home})
         self.addCleanup(self._stop)
         self.n = 1000
 

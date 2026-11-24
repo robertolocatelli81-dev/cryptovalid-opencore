@@ -53,7 +53,7 @@ class Readers(unittest.TestCase):
 
     def run_cmd(self, argv):
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-        env["HOME"] = self.td
+        env["HOME"] = env["USERPROFILE"] = self.td   # USERPROFILE: Windows reads ~ there
         try:
             p = subprocess.run([sys.executable] + argv, cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=WAIT, env=env)
         except subprocess.TimeoutExpired:
@@ -91,7 +91,7 @@ class PackReaders(unittest.TestCase):
         td = tempfile.mkdtemp()
         try:
             env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-            env["HOME"] = td
+            env["HOME"] = env["USERPROFILE"] = td
             pack = os.path.join(td, "pack")
             subprocess.run([sys.executable, "evidence_pack.py", "build", pack, os.path.join("examples", "sample_ledger.jsonl"),
                             "--subject", "t"], cwd=ROOT, check=True, capture_output=True, env=env)

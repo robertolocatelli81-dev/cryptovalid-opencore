@@ -79,7 +79,7 @@ class Action(unittest.TestCase):
 
     def step(self, sid, **env):
         e = {"PATH": self.bin + os.pathsep + os.environ.get("PATH", ""), "RUNNER_TEMP": self.tmp,
-             "GITHUB_OUTPUT": self.out, "GH_CALLS": self.calls, "HOME": self.tmp}
+             "GITHUB_OUTPUT": self.out, "GH_CALLS": self.calls, "HOME": self.tmp, "USERPROFILE": self.tmp}
         e.update(env)
         return subprocess.run([BASH, "-e", "-c", self.blocks[sid]], env=e, cwd=self.tmp, capture_output=True,
                               text=True, encoding="utf-8", timeout=120)

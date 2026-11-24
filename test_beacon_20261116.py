@@ -2045,7 +2045,8 @@ class Command(unittest.TestCase):
     """cryptovalid-verify beacon: exit 0 / 1 / 2, usage errors, through the installed entry point's code"""
 
     def cli(self, *args):
-        env = dict(os.environ, HOME=tempfile.mkdtemp())
+        home = tempfile.mkdtemp()
+        env = dict(os.environ, HOME=home, USERPROFILE=home)   # USERPROFILE: Windows reads ~ there
         env.pop("PYTHONPATH", None)
         r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py"), "beacon", *args],
                            capture_output=True, text=True, encoding="utf-8", env=env, cwd=env["HOME"])

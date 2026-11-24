@@ -121,7 +121,7 @@ class TestMcpUnwritableAndUndecodable(unittest.TestCase):
         home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, home, True)
         self.p = subprocess.Popen([sys.executable, os.path.join(HERE, "cryptovalid_mcp.py")], stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env={**os.environ, "HOME": home})
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env={**os.environ, "HOME": home, "USERPROFILE": home})
         self.addCleanup(self._stop)
         self.n = 5000
 

@@ -127,7 +127,7 @@ class TestChildrenSeeTheParentsPackages(unittest.TestCase):
     def test_same_packages(self):
         code = "import importlib.util as u; print(u.find_spec('cryptography') is not None)"
         with tempfile.TemporaryDirectory() as home:
-            env = _child_env(dict(os.environ, HOME=home))
+            env = _child_env(dict(os.environ, HOME=home, USERPROFILE=home))
             r = subprocess.run([sys.executable, *_child_flags(), "-c", code], cwd=home, env=env, capture_output=True,
                                text=True, encoding="utf-8", timeout=120)
         self.assertEqual((r.returncode, r.stdout.strip()), (0, str(HAVE_CRYPTO)), r.stderr[-400:])

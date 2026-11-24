@@ -254,7 +254,7 @@ class TestLoopbackNeverThroughTheProxy(unittest.TestCase):
         env.update(HTTP_PROXY=purl, HTTPS_PROXY=purl, http_proxy=purl, https_proxy=purl, VAULT_TOKEN="t",
                    NETHSM_PASS="p", AWS_ACCESS_KEY_ID="AKIDEXAMPLE", AWS_SECRET_ACCESS_KEY="s")
         with tempfile.TemporaryDirectory() as d:
-            env["HOME"] = d
+            env["HOME"] = env["USERPROFILE"] = d   # USERPROFILE: Windows reads ~ there
             r = subprocess.run([sys.executable, "-c", CHILD, HERE, base], env=env, capture_output=True, text=True, encoding="utf-8",
                                timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr[-800:])

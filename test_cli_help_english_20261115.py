@@ -97,7 +97,7 @@ class TestCliHelpEnglish(unittest.TestCase):
     def setUpClass(cls):
         cls.home = tempfile.mkdtemp()
         cls.env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")}
-        cls.env = _child_env(dict(cls.env, HOME=cls.home, LC_ALL="C.UTF-8", PYTHONIOENCODING="utf-8"))
+        cls.env = _child_env(dict(cls.env, HOME=cls.home, USERPROFILE=cls.home, LC_ALL="C.UTF-8", PYTHONIOENCODING="utf-8"))
 
     def _help(self, argv):
         r = subprocess.run([sys.executable, *_child_flags(), *argv, "--help"], cwd=HERE, env=self.env,
