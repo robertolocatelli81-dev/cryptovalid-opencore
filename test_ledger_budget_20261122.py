@@ -125,29 +125,28 @@ class TestTheBudgetOfALedgerInTheFourVerifiers(unittest.TestCase):
                     self.assertEqual((cp.returncode, doc["verdict"], got), (1, "FAIL", [want]), (name, a[0]))
         os.remove(p)
 
-    @unittest.skipUnless(hasattr(os, "fork"), "needs a data limit (resource)")
     def test_256_mib_of_lines_under_a_data_limit_of_2_gb(self):
         """past the line bound nothing is kept or parsed: 128 Mi lines `0`, the bound of rule 8 exactly, are refused by
         the four, verifier.py and Go under a data limit of 2 GB (Node and Java bound their own heap). Before rule 9
-        16 MiB of such lines ended verifier.py in MemoryError and Go in `fatal error: out of memory`."""
-        import resource
+        16 MiB of such lines ended verifier.py in MemoryError and Go in `fatal error: out of memory`. The limit is
+        RLIMIT_DATA on Linux, a Job Object on Windows; macOS, which has none, measures the peak (run_with_memory_limit)."""
+        from test_platforms_20261124 import run_with_memory_limit
         p = os.path.join(self.tmp, "lines_256mib")
         with open(p, "wb") as f:
             for _ in range(128):
                 f.write(b"0\n" * (1 << 20))
         try:
-            # Linux enforces RLIMIT_DATA; macOS refuses to set it (the preexec_fn failed, CI of f1e95d5) and does not
-            # enforce it: there the peak resident size of each child is measured instead (ru_maxrss, bytes on macOS)
-            linux = sys.platform.startswith("linux")
             for name, argv in self.bins.items():
-                cap = (lambda: resource.setrlimit(resource.RLIMIT_DATA, (2 << 30, 2 << 30))) \
-                    if name in ("python", "go") and linux else None
-                cp = subprocess.run(argv + [p], capture_output=True, text=True, encoding="utf-8", timeout=120, stdin=subprocess.DEVNULL,
-                                    preexec_fn=cap)
-                self.assertEqual(cp.returncode, 1, (name, cp.stderr[-200:]))
-                self.assertEqual(_reason(name, json.loads(cp.stdout)), TOO_MANY_LINES, name)
-                if not linux and name in ("python", "go"):
-                    self.assertLess(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss, 2 << 30, name)
+                if name in ("python", "go"):
+                    rc, out, err, peak = run_with_memory_limit(argv + [p], 2 << 30)
+                    if peak is not None:
+                        self.assertLess(peak, 2 << 30, name)
+                else:
+                    cp = subprocess.run(argv + [p], capture_output=True, text=True, encoding="utf-8", timeout=120,
+                                        stdin=subprocess.DEVNULL)
+                    rc, out, err = cp.returncode, cp.stdout, cp.stderr
+                self.assertEqual(rc, 1, (name, err[-200:]))
+                self.assertEqual(_reason(name, json.loads(out)), TOO_MANY_LINES, name)
         finally:
             os.remove(p)
 

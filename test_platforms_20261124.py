@@ -168,6 +168,91 @@ def cpu_seconds(p):
     return sum(v * m for v, m in zip(reversed(parts), (1, 60, 3600, 86400)))
 
 
+def run_with_memory_limit(argv, limit, timeout=120):
+    """Run `argv` (stdin from the null device, stdout and stderr captured as UTF-8) with its memory bounded by `limit`
+    bytes; returns (returncode, stdout, stderr, peak bytes or None). Linux: RLIMIT_DATA. Windows, which has neither fork
+    nor setrlimit: a Job Object with JOB_OBJECT_LIMIT_PROCESS_MEMORY, the child started suspended and put in the job
+    before its first instruction (a venv's python.exe is a redirector that starts the base interpreter as its child:
+    the job covers both), peak = the job's PeakProcessMemoryUsed (the way of agent-payment-chain b37f230, same author).
+    macOS, which neither sets nor enforces RLIMIT_DATA: no limit, peak = the children's ru_maxrss."""
+    if sys.platform.startswith("linux") or sys.platform == "darwin":
+        import resource
+        cap = (lambda: resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))) if sys.platform.startswith("linux") else None
+        cp = subprocess.run(argv, capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout, preexec_fn=cap)
+        peak = None if cap else resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss   # bytes on macOS
+        return cp.returncode, cp.stdout.decode("utf-8"), cp.stderr.decode("utf-8", "replace"), peak
+    import ctypes
+    import tempfile
+    from ctypes import wintypes
+
+    class BASIC(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD), ("SchedulingClass", wintypes.DWORD)]
+
+    class IO(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_uint64) for n in ("Read", "Write", "Other", "ReadT", "WriteT", "OtherT")]
+
+    class EXTENDED(ctypes.Structure):   # JOBOBJECT_EXTENDED_LIMIT_INFORMATION, class 9
+        _fields_ = [("Basic", BASIC), ("Io", IO), ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    class THREADENTRY32(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ThreadID", wintypes.DWORD),
+                    ("th32OwnerProcessID", wintypes.DWORD), ("tpBasePri", wintypes.LONG), ("tpDeltaPri", wintypes.LONG),
+                    ("dwFlags", wintypes.DWORD)]
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    for f in ("CreateJobObjectW", "CreateToolhelp32Snapshot", "OpenThread"):
+        getattr(k32, f).restype = wintypes.HANDLE
+    k32.ResumeThread.restype = wintypes.DWORD
+
+    def check(ok, what):
+        if not ok:
+            raise OSError(ctypes.get_last_error(), what + " failed")
+        return ok
+    job = wintypes.HANDLE(check(k32.CreateJobObjectW(None, None), "CreateJobObjectW"))
+    try:
+        ext = EXTENDED()
+        ext.Basic.LimitFlags = 0x100 | 0x2000   # JOB_OBJECT_LIMIT_PROCESS_MEMORY | _KILL_ON_JOB_CLOSE (no breakaway)
+        ext.ProcessMemoryLimit = limit
+        check(k32.SetInformationJobObject(job, 9, ctypes.byref(ext), ctypes.sizeof(ext)), "SetInformationJobObject")
+        with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:
+            p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fo, stderr=fe, creationflags=0x4)   # SUSPENDED
+            try:
+                check(k32.AssignProcessToJobObject(job, wintypes.HANDLE(int(p._handle))), "AssignProcessToJobObject")
+                snap = wintypes.HANDLE(check(k32.CreateToolhelp32Snapshot(0x4, 0), "CreateToolhelp32Snapshot"))
+                resumed = 0
+                try:
+                    te = THREADENTRY32()
+                    te.dwSize = ctypes.sizeof(te)
+                    more = k32.Thread32First(snap, ctypes.byref(te))
+                    while more:
+                        if te.th32OwnerProcessID == p.pid:
+                            th = wintypes.HANDLE(check(k32.OpenThread(0x2, False, te.th32ThreadID), "OpenThread"))
+                            try:
+                                check(k32.ResumeThread(th) != 0xFFFFFFFF, "ResumeThread")
+                                resumed += 1
+                            finally:
+                                k32.CloseHandle(th)
+                        more = k32.Thread32Next(snap, ctypes.byref(te))
+                finally:
+                    k32.CloseHandle(snap)
+                check(resumed, "resuming the child")
+                p.wait(timeout=timeout)
+            except BaseException:
+                k32.TerminateJobObject(job, 1)
+                p.wait()
+                raise
+            check(k32.QueryInformationJobObject(job, 9, ctypes.byref(ext), ctypes.sizeof(ext), None), "peak memory")
+            fo.seek(0)
+            fe.seek(0)
+            return p.returncode, fo.read().decode("utf-8"), fe.read().decode("utf-8", "replace"), ext.PeakProcessMemoryUsed
+    finally:
+        k32.CloseHandle(job)
+
+
 
 def _git(*args):
     return subprocess.run(["git", "-C", _HERE] + list(args), capture_output=True)
@@ -608,6 +693,21 @@ class NonBlockingStdoutOnWindows(unittest.TestCase):
         self.assertGreater(time.monotonic() - t0, 0.5)   # it waited for the reader
         os.close(w)
         os.close(r)
+
+
+class MemoryLimit(unittest.TestCase):
+    """RLIMIT_DATA on Linux, a Job Object on Windows (until 0.29.0 the 256 MiB case was skipped there: no fork)"""
+
+    @unittest.skipIf(sys.platform == "darwin", "macOS neither sets nor enforces a data limit: its peak is measured")
+    def test_an_allocation_past_the_limit_fails_and_one_under_it_does_not(self):
+        code = "import sys; b = bytearray(int(sys.argv[1])); print(len(b))"
+        rc, out, err, _ = run_with_memory_limit([sys.executable, "-c", code, str(512 << 20)], 256 << 20)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("MemoryError", err)
+        rc, out, err, peak = run_with_memory_limit([sys.executable, "-c", code, str(64 << 20)], 256 << 20)   # control
+        self.assertEqual((rc, out.strip()), (0, str(64 << 20)), err)
+        if peak is not None:   # Windows: the job's own measure covers the allocation
+            self.assertGreater(peak, 64 << 20)
 
 
 if __name__ == "__main__":
