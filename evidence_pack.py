@@ -132,8 +132,8 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15) -
         _T._tmp_write(tsr, base64.b64decode(tsr_b64))
         r = _T._run_openssl(  # nosec B603 - exe da shutil.which('openssl'), args FISSI, no shell
             [exe, "ts", "-reply", "-in", tsr, "-text"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
-        if r.returncode < 0:   # 0.22.0 — SPEC §10, as ap2-evidence-pack 1.6.0 §6.10: a crashed tool is a check not run here
-            raise CheckNotRun(f"cannot run openssl here: terminated by signal {-r.returncode}")
+        if _T._crashed(r.returncode):   # 0.22.0 — SPEC §10, as ap2-evidence-pack 1.6.0 §6.10: a crashed tool is a check not run here
+            raise CheckNotRun(f"cannot run openssl here: {_T._crash_text(r.returncode)}")
         text = r.stdout or ""
         granted = "Status: Granted" in text or "Granted." in text
         # estrai i BYTE della sezione 'Message data' dal dump openssl:

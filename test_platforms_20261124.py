@@ -812,5 +812,35 @@ class FingerprintOnWindows(unittest.TestCase):
             self.assertNotEqual(VE.evidence_fingerprint(p), VE.evidence_fingerprint(p))   # the change time moved
 
 
+class CrashedOpenssl(unittest.TestCase):
+    """SPEC §10: openssl that crashed did not answer (a check not run here). POSIX: a signal, a negative exit. Windows
+    has no signals: a crash is an NTSTATUS error as the exit code (0xC0000005), read until 0.29.0 as an answer."""
+
+    def test_a_crash_is_known_on_each_system(self):
+        from unittest import mock
+        import cryptovalid_tsa as T
+        self.assertTrue(T._crashed(-11))
+        self.assertFalse(T._crashed(1) or T._crashed(127))
+        with mock.patch.object(os, "name", "nt"):
+            self.assertTrue(T._crashed(0xC0000005) and T._crashed(0xC0000409))
+            self.assertFalse(T._crashed(1))
+        with mock.patch.object(os, "name", "posix"):
+            self.assertFalse(T._crashed(0xC0000005))   # on POSIX an exit code is at most 255
+        self.assertEqual(T._crash_text(0xC0000005), "ended by exception 0xC0000005")
+
+    def test_the_pack_check_says_not_run(self):
+        import subprocess as sp
+        from unittest import mock
+        import cryptovalid_tsa as T
+        import evidence_pack as E
+        import verifier as V
+        crash = sp.CompletedProcess(["openssl"], 0xC0000005, "", "")
+        with mock.patch.object(os, "name", "nt"), mock.patch.object(T, "_run_openssl", lambda *a, **k: crash), \
+                mock.patch.object(E.shutil, "which", lambda n: "openssl"):
+            with self.assertRaises(V.CheckNotRun) as c:
+                E._verify_rfc3161("MAA=", "00" * 32)
+        self.assertIn("0xC0000005", str(c.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

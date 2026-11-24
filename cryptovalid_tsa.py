@@ -327,6 +327,17 @@ def _tmp_write(path: str, data: bytes) -> None:
         raise _not_run("cannot write a temporary file for openssl", e) from e
 
 
+def _crashed(rc: int) -> bool:
+    """openssl ended by a crash, not by an answer: a signal on POSIX (a negative exit), and on Windows, which has no
+    signals, an NTSTATUS error as the exit code (0xC0000005 an access violation, 0xC0000409 a stack buffer overrun...),
+    which Python returns as a large positive number: until 0.29.0 a crash there was read as openssl's answer."""
+    return rc < 0 or (os.name == "nt" and rc >= 0xC0000000)
+
+
+def _crash_text(rc: int) -> str:
+    return f"terminated by signal {-rc}" if rc < 0 else f"ended by exception 0x{rc:08X}"
+
+
 def _run_openssl(cmd, **kw):
     """subprocess.run of openssl for a check. openssl that cannot be started HERE (fork refused under `ulimit -u` or low
     memory, no descriptor left for its pipes, the binary gone since `which`) is CheckNotRun: until 0.20.2 it was a
@@ -892,8 +903,8 @@ def _key_id_anchor(token_der: bytes, signer_der: bytes, pins_pem: bytes, at: int
     _tmp_write(up, pins_pem + b"".join(pem(c) for c in token_certs if allowed is None or c in allowed))
     p = _run_openssl(["openssl", "verify", "-purpose", "timestampsign", "-partial_chain", "-attime", str(at),
                       "-CAfile", cp, "-no-CApath", "-no-CAstore", "-untrusted", up, sp], capture_output=True, timeout=30)
-    if p.returncode < 0:
-        raise _not_run("cannot run openssl here", OSError(f"terminated by signal {-p.returncode}"))
+    if _crashed(p.returncode):
+        raise _not_run("cannot run openssl here", OSError(_crash_text(p.returncode)))
     if p.returncode != 0 and b"nknown option" in (p.stderr or b"") + (p.stdout or b""):   # SPEC §11 step 7: before 3.0
         raise _not_run("this openssl does not know an option of `verify` (OpenSSL 3.0 or later is needed)",
                        OSError(_last_line(p.stderr or p.stdout, "unknown option")))
@@ -1036,8 +1047,8 @@ def verify_token(token_der: bytes, digest: bytes, hash_alg: str = None, tsa_cert
             p = _run_openssl(["openssl", "ts", "-verify", "-token_in", "-in", tp, "-digest", t["hashed_message"].hex(),
                               "-CAfile", cp, "-untrusted", cp, "-partial_chain", "-attime", str(at)],
                              capture_output=True, timeout=30)
-            if p.returncode < 0:
-                raise _not_run("cannot run openssl here", OSError(f"terminated by signal {-p.returncode}"))
+            if _crashed(p.returncode):
+                raise _not_run("cannot run openssl here", OSError(_crash_text(p.returncode)))
             if p.returncode != 0 or b"Verification: OK" not in (p.stdout or b"").splitlines():
                 out.update(reason="not_issued_by_pinned_tsa", detail=_last_line(p.stderr, "openssl ts -verify refused it"))
                 return out
@@ -1092,8 +1103,8 @@ def _token_signer(token_der: bytes, pins_pem: bytes = None):
             extra = ["-certfile", os.path.join(d, "pinned.pem")]
         p = _run_openssl(["openssl", "cms", "-verify", "-noverify", "-binary", "-inform", "DER", "-in", tp, *extra,
                           "-signer", sp, "-out", os.devnull], capture_output=True, timeout=30)
-        if p.returncode < 0:
-            raise _not_run("cannot run openssl here", OSError(f"terminated by signal {-p.returncode}"))
+        if _crashed(p.returncode):
+            raise _not_run("cannot run openssl here", OSError(_crash_text(p.returncode)))
         der = None
         if p.returncode == 0 and os.path.exists(sp):
             with open(sp, "rb") as f:
