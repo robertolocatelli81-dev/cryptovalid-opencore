@@ -336,7 +336,8 @@ class TestCheckNotRunMore(_Tmp):
         pack = self._pack()
         env = self._fake_openssl("#!/bin/sh\nsleep 25\nexec /usr/bin/env -i openssl \"$@\"\n")
         rc, out, err = self.run_py([os.path.join(HERE, "evidence_pack.py"), "verify", pack], env=env, timeout=90)
-        self.assertEqual(rc, EX_IOERR, out + err)
+        from test_platforms_20261124 import fake_calls
+        self.assertEqual(rc, EX_IOERR, out + err + fake_calls(os.path.join(self.d, "bin")).encode())
         self.assertIn(b"no answer within", err)
         self._assert_whole_receipt_74(out, err)
 
@@ -376,7 +377,8 @@ class TestCheckNotRunMore(_Tmp):
                 pack = self._pack()
                 env = self._fake_openssl(body)
                 rc, out, err = self.run_py([os.path.join(HERE, "evidence_pack.py"), "verify", pack], env=env)
-                self.assertEqual(rc, expect, out + err)
+                from test_platforms_20261124 import fake_calls
+                self.assertEqual(rc, expect, out + err + fake_calls(os.path.join(self.d, "bin")).encode())
                 if expect == 74:   # POSIX: a signal; Windows: an NTSTATUS exit
                     self.assertTrue(b"terminated by signal" in err or b"ended by exception 0xC0000005" in err, err)
                     self._assert_whole_receipt_74(out, err)

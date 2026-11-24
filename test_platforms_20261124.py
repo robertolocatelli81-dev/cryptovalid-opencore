@@ -321,6 +321,12 @@ def make_private(path):
 
 _FAKE_SITE = r'''
 import os, sys
+try:   # every start of a Python that loads this hook, whatever it is: the trace a failing test shows
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_trace.log"), "a", encoding="utf-8") as _f:
+        _f.write("%r %r %r %r\n" % (sys.executable, getattr(sys, "orig_argv", None), sys.prefix,
+                                    sorted(k for k in os.environ if k.upper().startswith(("PYTHON", "__PYVENV")))))
+except OSError:
+    pass
 _body = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "fake_body.py")
 if os.path.basename(sys.executable).lower() == "openssl.exe" and os.path.isfile(_body):
     sys.argv = list(sys.orig_argv[1:])   # the arguments openssl was given (sys.argv is not set yet here)
@@ -345,12 +351,18 @@ if os.path.basename(sys.executable).lower() == "openssl.exe" and os.path.isfile(
 
 
 def fake_calls(bindir):
-    """the argument lists the stand-in openssl was called with (Windows), or a note that it never was"""
-    try:
-        with open(os.path.join(bindir, "fake_calls.log"), encoding="utf-8") as f:
-            return "fake openssl calls: " + f.read()
-    except OSError:
-        return "the fake openssl was never called" if os.name == "nt" else "(POSIX shell stand-in)"
+    """what the stand-in openssl was called with (Windows) and every start of a Python that loaded its hook; read when
+    a test fails, not before the call"""
+    if os.name != "nt":
+        return "(POSIX shell stand-in)"
+    out = []
+    for n in ("fake_calls.log", os.path.join("Lib", "site-packages", "hook_trace.log")):
+        try:
+            with open(os.path.join(bindir, n), encoding="utf-8") as f:
+                out.append("%s: %s" % (n, f.read()))
+        except OSError:
+            out.append("%s: absent" % n)
+    return "; ".join(out)
 
 
 def _write_fake_body(d, body, real):
@@ -400,6 +412,7 @@ def fake_openssl(tc, bindir, sh_body, py_body):
     with open(os.path.join(site, "sitecustomize.py"), "w", encoding="utf-8", newline="") as f:
         f.write(_FAKE_SITE)
     _write_fake_body(bindir, py_body, real)
+    env["PYTHONPATH"] = site   # the hook also through PYTHONPATH (without it, run 45490534605: test_outcome_review red)
     probe_dir = os.path.join(bindir, "probe")
     os.makedirs(probe_dir, exist_ok=True)
     for n in os.listdir(bindir):   # a second stand-in, for the probe only, with its own body
@@ -409,12 +422,20 @@ def fake_openssl(tc, bindir, sh_body, py_body):
     # the probe also goes through to the real openssl, as the bodies do
     _write_fake_body(probe_dir, "import os, subprocess, sys\nr = subprocess.run([os.environ['CV_REAL_OPENSSL'], 'version'], "
                      "capture_output=True)\nprint('FAKE', sys.argv, r.returncode, r.stderr[-200:])", real)
-    clean = {k: v for k, v in os.environ.items() if not k.startswith(("PYTHON", "CV_FAKE"))}
-    probe = subprocess.run([os.path.join(probe_dir, "openssl.exe"), "probe-1", "probe 2"], capture_output=True,
-                           timeout=120, env=clean)
+    # the probe is started as the code starts openssl: cryptovalid_tsa._run_openssl, in this process, with the
+    # environment the tests set (PATH with the probe's folder first)
+    import cryptovalid_tsa
+    penv = dict(env, PATH=probe_dir + os.pathsep + env["PATH"], PYTHONPATH=os.path.join(probe_dir, "Lib", "site-packages"))
+    old = {k: os.environ.get(k) for k in penv}
+    os.environ.update(penv)
+    try:
+        probe = cryptovalid_tsa._run_openssl(["openssl", "probe-1", "probe 2"], capture_output=True, timeout=120)
+    finally:
+        for k, v in old.items():
+            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
     if probe.stdout.strip() != b"FAKE ['probe-1', 'probe 2'] 0 b''":
-        tc.fail("the fake openssl.exe did not run its body: rc %s, stdout %r, stderr %r"
-                % (probe.returncode, probe.stdout[-300:], probe.stderr[-300:]))
+        tc.fail("the fake openssl.exe did not run its body: rc %s, stdout %r, stderr %r, %s"
+                % (probe.returncode, probe.stdout[-300:], probe.stderr[-300:], fake_calls(probe_dir)))
     return env
 
 

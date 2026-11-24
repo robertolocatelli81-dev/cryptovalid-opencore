@@ -214,8 +214,12 @@ class HandBuiltTokens(unittest.TestCase):
                                   "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:]))")
         try:
             from test_platforms_20261124 import fake_calls
-            with self.assertRaises(CheckNotRun, msg=fake_calls(os.path.join(self.d, "binkill"))):
+            try:
                 T.verify_token(self.token(self.k, self.c, self.tstinfo()), DIGEST, "sha256", [self.pin])
+            except CheckNotRun:
+                pass
+            else:
+                self.fail("CheckNotRun not raised; " + fake_calls(os.path.join(self.d, "binkill")))
         finally:
             restore()
 

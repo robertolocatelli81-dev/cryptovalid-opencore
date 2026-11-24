@@ -166,8 +166,12 @@ class ClosedShapes(unittest.TestCase):
             self.assertEqual(os.path.normcase(shutil.which("openssl")), os.path.normcase(fake))
             from verifier import CheckNotRun
             from test_platforms_20261124 import fake_calls
-            with self.assertRaises(CheckNotRun, msg=fake_calls(bindir)):
+            try:
                 T.verify_token(self.ski, K.DIGEST, "sha256", [self.lab.j("ca.crt")])
+            except CheckNotRun:
+                pass
+            else:
+                self.fail("CheckNotRun not raised; " + fake_calls(bindir))
             v = T.verify_token(self.tok, K.DIGEST, "sha256", [self.lab.j("ca.crt")])   # the other form: no `verify`
             self.assertEqual(v["status"], "verified", v)
         finally:
