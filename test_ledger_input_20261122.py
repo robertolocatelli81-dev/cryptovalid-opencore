@@ -334,7 +334,8 @@ class TestTheGoWriterInputs(unittest.TestCase):
 
     def append(self, ledger, key=None):
         argv = [self.bin] + (["-tipkey", key] if key else []) + [ledger, "2026-11-22T00:00:00Z"]
-        cp = subprocess.run(argv, input='{"a":1}', capture_output=True, text=True, encoding="utf-8", timeout=60, preexec_fn=_cap_memory)
+        cp = subprocess.run(argv, input='{"a":1}', capture_output=True, text=True, encoding="utf-8", timeout=60,
+                            preexec_fn=_cap_memory if sys.platform.startswith("linux") else None)   # macOS sets no data limit
         return cp.returncode, cp.stderr.strip()
 
     def test_the_ledger_is_a_regular_file(self):

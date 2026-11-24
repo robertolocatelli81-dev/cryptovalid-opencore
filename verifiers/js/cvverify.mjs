@@ -316,6 +316,7 @@ export function readLedgerInput(p, done, idleMs = FIFO_IDLE_SECONDS * 1000, limi
   // descriptor: on macOS it never reported a byte nor the end (CI of f1e95d5: "FIFO idle" with a writer present).
   const parts = []; let n = 0, last = Date.now(), seen = false;
   const step = () => {
+    let got = false;
     for (;;) {
       const b = Buffer.alloc(1 << 16);
       let r;
@@ -328,12 +329,14 @@ export function readLedgerInput(p, done, idleMs = FIFO_IDLE_SECONDS * 1000, limi
         if (seen) { closeSync(fd); done(null, Buffer.concat(parts, n)); return; }
         break;   // no writer has opened it yet
       }
-      seen = true; last = Date.now(); n += r;
+      seen = true; got = true; last = Date.now(); n += r;
       if (n > limit) { closeSync(fd); done({ verdict: "FAIL", error: LEDGER_TOO_LARGE }, null); return; }
       parts.push(b.subarray(0, r));
     }
     if (Date.now() - last >= idleMs) { closeSync(fd); done({ verdict: "FAIL", error: LEDGER_FIFO_IDLE }, null); return; }
-    setTimeout(step, 10);
+    // bytes came this round: ask again at once (a fast writer refills the pipe); none: 10 ms (a 257 MiB FIFO took
+    // more than the test's minute at one 64 KiB pipe every 10 ms on macOS, CI run 45377477990)
+    if (got) setImmediate(step); else setTimeout(step, 10);
   };
   setTimeout(step, 0);
 }
