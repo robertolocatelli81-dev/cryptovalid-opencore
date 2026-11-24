@@ -181,6 +181,9 @@ jobs:
           [ -n "$m" ] || { echo "softhsm2 DLL not found"; exit 1; }
           echo "CV_SOFTHSM_MODULE=$(cygpath -w "$m")" >> "$GITHUB_ENV"
           echo "$(cygpath -w "$(dirname "$m")")" >> "$GITHUB_PATH"
+          u=$(find "$RUNNER_TEMP/softhsm" -iname 'softhsm2-util.exe' | head -1)   # run 45377477990: not on PATH
+          [ -n "$u" ] || { echo "softhsm2-util.exe not found"; exit 1; }
+          echo "$(cygpath -w "$(dirname "$u")")" >> "$GITHUB_PATH"
           f="$RUNNER_TEMP/OpenSC-0.27.1_x64.msi"
           curl -sSfL -o "$f" https://github.com/OpenSC/OpenSC/releases/download/0.27.1/OpenSC-0.27.1_x64.msi
           echo "88ea45e848063ff5f3594a457b7f023223472eae9c9c543f8035f7689bb7b319  $f" | sha256sum -c -
@@ -199,6 +202,8 @@ jobs:
           hdiutil attach "$RUNNER_TEMP/full.dmg"
           : > /Volumes/cvfull/sink
           dd if=/dev/zero of=/Volumes/cvfull/fill bs=4096 || true
+          dd if=/dev/zero of=/Volumes/cvfull/fill2 bs=1 || true   # to the last byte
+          if printf x > /Volumes/cvfull/probe; then echo "the volume is not full"; exit 1; fi
           echo "CV_FULL_DIR=/Volumes/cvfull" >> "$GITHUB_ENV"
       - name: A full volume, the equivalent of Linux's /dev/full (Windows)
         if: runner.os == 'Windows'
@@ -210,7 +215,14 @@ jobs:
           diskpart /s $s
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path Q:\)) { throw "the full volume was not made (diskpart exit $LASTEXITCODE)" }
           New-Item -ItemType File Q:\sink | Out-Null
-          try { $f = [IO.File]::OpenWrite("Q:\fill"); $b = New-Object byte[] 65536; while ($true) { $f.Write($b, 0, $b.Length); $f.Flush() } } catch { } finally { if ($f) { $f.Dispose() } }
+          # filled to the last byte: blocks of 64 KiB, then smaller down to 1 byte (run 45377477990: the 64 KiB loop left
+          # room under 64 KiB, a receipt fitted, and every "disk full" case answered 0)
+          $f = [IO.File]::OpenWrite("Q:\fill")
+          foreach ($n in 65536, 4096, 512, 1) { $b = New-Object byte[] $n; try { while ($true) { $f.Write($b, 0, $n); $f.Flush() } } catch { } }
+          $f.Dispose()
+          $full = $false
+          try { [IO.File]::WriteAllBytes("Q:\probe", [byte[]](1)) } catch [IO.IOException] { $full = $true }
+          if (-not $full) { throw "the volume is not full: a 1-byte file was written" }
           "CV_FULL_DIR=Q:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: The tools the suites call (a missing one is named; its cases skip with the reason)
         run: |
