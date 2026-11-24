@@ -54,7 +54,7 @@ def main():
     d = tempfile.mkdtemp(prefix="rfc3161-neg-")
     j = lambda n: os.path.join(d, n)  # noqa: E731
     with open(j("tsa.cnf"), "w") as f:
-        f.write(CNF.format(d=d))
+        f.write(CNF.format(d="".join("\\" + c if c in "\\$#\"'" else c for c in d)))   # OpenSSL config escapes (Windows paths)
     with open(j("serial"), "w") as f:
         f.write("01\n")
     run("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", j("tsa.key"), "-out", j("tsa.crt"),

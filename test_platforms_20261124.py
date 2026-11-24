@@ -15,12 +15,17 @@ import unittest
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
+def cnf_path(path: str) -> str:
+    """`path` as a value of an OpenSSL configuration file: there a backslash escapes the next character, `$` expands a
+    variable, `#` starts a comment and quotes are removed, so a Windows path (C:\\Users\\...) or a directory named
+    with one of them was read as another path (50 openssl failures in the CI of f1e95d5). Each is escaped."""
+    return "".join("\\" + c if c in "\\$#\"'" else c for c in path)
+
 
 def _git(*args):
     return subprocess.run(["git", "-C", _HERE] + list(args), capture_output=True)
 
 
-IN_GIT = shutil.which("git") is not None and _git("rev-parse", "--is-inside-work-tree").stdout.strip() == b"true"
 
 
 class CheckoutBytes(unittest.TestCase):
@@ -32,10 +37,11 @@ class CheckoutBytes(unittest.TestCase):
             lines = [x.strip() for x in f.read().split(b"\n")]
         self.assertIn(b"* -text", lines)
 
-    @unittest.skipUnless(IN_GIT, "not a git checkout (an sdist or a wheel has the bytes as packed)")
     def test_every_tracked_file_is_checked_out_as_stored(self):
         """the end-of-line state in the working tree is the one in the index, for every tracked file (git ls-files
         --eol); a clone with core.autocrlf=true and no .gitattributes fails this (780 files w/crlf, 24/11/2026)"""
+        if shutil.which("git") is None or _git("rev-parse", "--is-inside-work-tree").stdout.strip() != b"true":
+            self.skipTest("not a git checkout (an sdist or a wheel has the bytes as packed)")
         r = _git("ls-files", "--eol", "-z")
         self.assertEqual(r.returncode, 0, r.stderr)
         differ = []
@@ -93,6 +99,23 @@ class DirectoryFsync(unittest.TestCase):
             V._replace(os.path.join(d, "absent"), os.path.join(d, "x"))
         self.assertEqual(c.exception.winerror, 2)   # ERROR_FILE_NOT_FOUND
         self.assertIsInstance(c.exception, FileNotFoundError)
+
+
+class OpensslConfigPaths(unittest.TestCase):
+    """The TSA labs of the tests write paths into OpenSSL configuration files; on Windows each path has backslashes."""
+
+    @unittest.skipUnless(shutil.which("openssl"), "needs the openssl command")
+    def test_a_lab_in_a_directory_with_every_special_character(self):
+        import tempfile
+        from test_tsa_revocation_20261116 import Lab
+        prefix = "s$x#y'" if os.name == "nt" else "b\\s$x#y'q\"z"   # Windows: its own separators are the backslashes
+        d = tempfile.mkdtemp(prefix=prefix)
+        self.addCleanup(shutil.rmtree, d)
+        lab = Lab(d)
+        self.assertTrue(lab.token().startswith(b"\x30"))
+        lab.revoke("keyCompromise")
+        with open(lab.crl(), "rb") as f:
+            self.assertIn(b"BEGIN X509 CRL", f.read())
 
 
 if __name__ == "__main__":

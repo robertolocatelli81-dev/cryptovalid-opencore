@@ -29,6 +29,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 import cryptovalid_tsa as T  # noqa: E402
 import evidence_pack as EP  # noqa: E402
+from test_platforms_20261124 import cnf_path  # noqa: E402
 
 try:
     import cryptography  # noqa: F401
@@ -52,14 +53,15 @@ class Lab:
         self.d = os.path.join(td, name)
         os.makedirs(self.d)
         j = self.j
+        c = lambda n: cnf_path(j(n))   # noqa: E731
         with open(j("ca.cnf"), "w") as f:
-            f.write(f"[ ca ]\ndefault_ca = CA_default\n[ CA_default ]\ndatabase = {j('index.txt')}\n"
-                    f"crlnumber = {j('crlnumber')}\ncertificate = {j('ca.crt')}\nprivate_key = {j('ca.key')}\n"
+            f.write(f"[ ca ]\ndefault_ca = CA_default\n[ CA_default ]\ndatabase = {c('index.txt')}\n"
+                    f"crlnumber = {c('crlnumber')}\ncertificate = {c('ca.crt')}\nprivate_key = {c('ca.key')}\n"
                     "default_md = sha256\ndefault_crl_days = 1\n[ v3_tsa ]\nextendedKeyUsage = critical,timeStamping\n"
                     "basicConstraints = CA:FALSE\n")
         with open(j("tsa.cnf"), "w") as f:
-            f.write(f"[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {j('serial')}\ncrypto_device = builtin\n"
-                    f"signer_cert = {j('tsa.crt')}\ncerts = {j('ca.crt')}\nsigner_key = {j('tsa.key')}\n"
+            f.write(f"[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {c('serial')}\ncrypto_device = builtin\n"
+                    f"signer_cert = {c('tsa.crt')}\ncerts = {c('ca.crt')}\nsigner_key = {c('tsa.key')}\n"
                     "signer_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\naccuracy = secs:1\n"
                     "ordering = yes\ntsa_name = no\ness_cert_id_chain = no\ness_cert_id_alg = sha256\n")
         open(j("index.txt"), "w").close()

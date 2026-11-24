@@ -32,6 +32,7 @@ import unittest
 sys.dont_write_bytecode = True
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
+from test_platforms_20261124 import cnf_path  # noqa: E402
 import cryptovalid_tsa as T  # noqa: E402
 
 NEEDS = unittest.skipUnless(shutil.which("openssl"), "needs openssl")
@@ -100,8 +101,8 @@ class Pki:
         with open(j("serial"), "w") as f:
             f.write("01\n")
         with open(j("tsa.cnf"), "w") as f:
-            f.write(f"[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {j('serial')}\ncrypto_device = builtin\n"
-                    f"signer_cert = {j('S.crt')}\nsigner_key = {j('S.key')}\nsigner_digest = sha256\n"
+            f.write(f"[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {cnf_path(j('serial'))}\ncrypto_device = builtin\n"
+                    f"signer_cert = {cnf_path(j('S.crt'))}\nsigner_key = {cnf_path(j('S.key'))}\nsigner_digest = sha256\n"
                     "default_policy = 1.2.3.4.1\ndigests = sha256\ness_cert_id_alg = sha256\ness_cert_id_chain = no\n")
         run("openssl", "ts", "-query", "-digest", DIGEST.hex(), "-sha256", "-cert", "-out", j("q.tsq"))
         run("openssl", "ts", "-reply", "-queryfile", j("q.tsq"), "-config", j("tsa.cnf"), "-section", "t1",

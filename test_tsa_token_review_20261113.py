@@ -26,6 +26,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+from test_platforms_20261124 import cnf_path  # noqa: E402
 import cryptovalid_tsa as T  # noqa: E402
 
 try:
@@ -318,8 +319,8 @@ class PackReportRow(unittest.TestCase):
                 f.write("[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=TSA made here\n[ext]\n"
                         "extendedKeyUsage=critical,timeStamping\n[tsa]\ndefault_tsa=t1\n[t1]\nserial=%s\nsigner_cert=%s\n"
                         "signer_key=%s\nsigner_digest=sha256\ndefault_policy=1.2.3.4.1\ndigests=sha256\n"
-                        "ess_cert_id_alg=sha256\n" % (os.path.join(d, "serial"), os.path.join(d, "tsa.crt"),
-                                                    os.path.join(d, "tsa.key")))
+                        "ess_cert_id_alg=sha256\n" % (cnf_path(os.path.join(d, "serial")), cnf_path(os.path.join(d, "tsa.crt")),
+                                                    cnf_path(os.path.join(d, "tsa.key"))))
             with open(os.path.join(d, "serial"), "w") as f:
                 f.write("01\n")
             subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",

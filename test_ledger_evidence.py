@@ -14,6 +14,7 @@ import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
+from test_platforms_20261124 import cnf_path  # noqa: E402
 import cryptovalid_merkle as M  # noqa: E402
 import cryptovalid_receipt as R  # noqa: E402
 import cryptovalid_monitor as MON  # noqa: E402
@@ -509,7 +510,7 @@ class TestEidasCountsBoundTokensOnly(unittest.TestCase):
         with open(cnf, "w") as f:
             f.write("[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=t\n[ext]\nextendedKeyUsage=critical,timeStamping\n"
                     "[tsa]\ndefault_tsa=t1\n[t1]\nserial=%s/serial\nsigner_cert=%s/tsa.crt\nsigner_key=%s/tsa.key\n"
-                    "signer_digest=sha256\ndefault_policy=1.2.3.4.1\ndigests=sha256\ness_cert_id_alg=sha256\n" % (d, d, d))
+                    "signer_digest=sha256\ndefault_policy=1.2.3.4.1\ndigests=sha256\ness_cert_id_alg=sha256\n" % ((cnf_path(d),) * 3))
         with open(os.path.join(d, "serial"), "w") as f:
             f.write("01\n")
         run = lambda *a: subprocess.run(a, check=True, capture_output=True)   # noqa: E731

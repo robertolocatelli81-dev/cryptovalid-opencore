@@ -35,6 +35,7 @@ import unittest
 sys.dont_write_bytecode = True
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
+from test_platforms_20261124 import cnf_path  # noqa: E402
 import cryptovalid_tsa as T  # noqa: E402
 import verifier  # noqa: E402
 import verify_evidence  # noqa: E402
@@ -233,8 +234,8 @@ class SignedNonces(unittest.TestCase):
             lab = K.Lab(td, "n")
             j = lab.j
             with open(j("tsa.cnf"), "w") as f:
-                f.write(f"[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {j('serial')}\ncrypto_device = builtin\n"
-                        f"signer_cert = {j('tsa.crt')}\ncerts = {j('ca.crt')}\nsigner_key = {j('tsa.key')}\n"
+                f.write(f"[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {cnf_path(j('serial'))}\ncrypto_device = builtin\n"
+                        f"signer_cert = {cnf_path(j('tsa.crt'))}\ncerts = {cnf_path(j('ca.crt'))}\nsigner_key = {cnf_path(j('tsa.key'))}\n"
                         "signer_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\ness_cert_id_alg = sha256\n")
             alg = T._tlv(0x30, T._OID_SHA256 + T._NULL)
             imprint = T._tlv(0x30, alg + T._tlv(0x04, K.DIGEST))

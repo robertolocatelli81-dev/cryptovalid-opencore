@@ -489,12 +489,13 @@ class TestCheckThatCannotRun(_Tmp):
             raise unittest.SkipTest("openssl or cryptography absent")
         cls.td = tempfile.mkdtemp(prefix="cv0203_tsa_")
         j = lambda n: os.path.join(cls.td, n)  # noqa: E731
+        from test_platforms_20261124 import cnf_path
         cnf = ("[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {d}/serial\ncrypto_device = builtin\nsigner_cert = {d}/tsa.crt\n"
                "certs = {d}/ca.crt\nsigner_key = {d}/tsa.key\nsigner_digest = sha256\ndefault_policy = 1.2.3.4.1\n"
                "digests = sha256\naccuracy = secs:1\nordering = yes\ntsa_name = no\ness_cert_id_chain = no\n"
                "ess_cert_id_alg = sha256\n[ v3_tsa ]\nextendedKeyUsage = critical,timeStamping\nbasicConstraints = CA:FALSE\n")
         with open(j("tsa.cnf"), "w") as f:
-            f.write(cnf.format(d=cls.td))
+            f.write(cnf.format(d=cnf_path(cls.td)))
         with open(j("serial"), "w") as f:
             f.write("01\n")
         run = lambda *a: subprocess.run(list(a), check=True, capture_output=True)  # noqa: E731

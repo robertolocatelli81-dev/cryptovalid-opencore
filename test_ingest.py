@@ -15,6 +15,7 @@ import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
+from test_platforms_20261124 import cnf_path  # noqa: E402
 import cryptovalid_ingest as ing  # noqa: E402
 import cryptovalid_merkle as merkle  # noqa: E402
 import verifier  # noqa: E402
@@ -323,7 +324,7 @@ class TestAutoAnchorTSA(unittest.TestCase):
         with open(f"{d}/tsa.cnf", "w") as f:
             f.write("[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=local test TSA\n[ext]\n"
                     "extendedKeyUsage=critical,timeStamping\n[tsa]\ndefault_tsa=t1\n[t1]\n"
-                    f"serial={d}/serial\nsigner_cert={d}/tsa.crt\nsigner_key={d}/tsa.key\nsigner_digest=sha256\n"
+                    f"serial={cnf_path(d)}/serial\nsigner_cert={cnf_path(d)}/tsa.crt\nsigner_key={cnf_path(d)}/tsa.key\nsigner_digest=sha256\n"
                     "default_policy=1.2.3.4.1\ndigests=sha256\ness_cert_id_alg=sha256\n")
         with open(f"{d}/serial", "w") as f:
             f.write("01\n")

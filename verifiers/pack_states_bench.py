@@ -72,7 +72,7 @@ class LocalTsa:
                "digests = sha256\naccuracy = secs:1\nordering = yes\ntsa_name = no\ness_cert_id_chain = no\n"
                "ess_cert_id_alg = sha256\n[ v3_tsa ]\nextendedKeyUsage = critical,timeStamping\nbasicConstraints = CA:FALSE\n")
         with open(j("tsa.cnf"), "w") as f:
-            f.write(cnf.format(d=td))
+            f.write(cnf.format(d="".join("\\" + c if c in "\\$#\"'" else c for c in td)))   # OpenSSL config escapes (Windows paths)
         with open(j("serial"), "w") as f:
             f.write("01\n")
         _run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", j("ca.key"),
