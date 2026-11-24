@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 const Genesis = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -100,9 +101,13 @@ func truncRunes(s string, n int) string {
 // start of the pending line at each call, and a FIFO gives 64 KiB per read: 257 MiB with no line feed cost about 4 000
 // passes over a growing buffer, 56.6 s against 0.4 s for verifier.py (measured 2026-11-24; a test's 60 s limit failed
 // once under load). The offset searched so far is kept until a line is returned.
+// scanSearchedBytes counts the bytes scanLinesOnce has searched (its test checks it is linear, by count, not by time)
+var scanSearchedBytes int64
+
 func scanLinesOnce() bufio.SplitFunc {
 	searched := 0
 	return func(data []byte, atEOF bool) (int, []byte, error) {
+		atomic.AddInt64(&scanSearchedBytes, int64(len(data)-searched))
 		if i := bytes.IndexByte(data[searched:], '\n'); i >= 0 {
 			j := searched + i
 			searched = 0

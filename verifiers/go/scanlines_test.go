@@ -7,9 +7,9 @@ import (
 	"bytes"
 	"io"
 	"math/rand"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
-	"time"
 )
 
 func lines(r io.Reader, split bufio.SplitFunc) []string {
@@ -53,23 +53,31 @@ func equal(a, b []string) bool {
 	return true
 }
 
-// a long line arriving in small reads is searched once: linear, where bufio.ScanLines searches the pending line again at
-// every read (64 MiB of a FIFO took 3.9 s against 0.39 s for 16 MiB, 2026-11-24). Measured against ScanLines on the same
-// input (the control): at least 4 times faster on 32 MiB in 64 KiB reads.
+// a long line arriving in small reads is searched once. Counted, not timed (a shared CI runner's noise): the bytes each
+// split searches. bufio.ScanLines searches all the pending bytes at every call; scanLinesOnce only those it has not
+// searched (it is called with the same token start until it returns a line). On 32 MiB in 64 KiB reads: scanLinesOnce
+// at most twice the input, ScanLines (the control) at least 100 times it (64 MiB of a FIFO took 3.9 s against 0.39 s
+// for 16 MiB before, 2026-11-24).
 func TestScanLinesOnceIsLinear(t *testing.T) {
-	long := bytes.Repeat([]byte{'x'}, 32<<20)
-	run := func(split bufio.SplitFunc) time.Duration {
-		t0 := time.Now()
+	const size = 32 << 20
+	long := bytes.Repeat([]byte{'x'}, size)
+	scan := func(split bufio.SplitFunc) {
 		sc := bufio.NewScanner(&chunks{b: long, n: 64 << 10})
 		sc.Buffer(make([]byte, 1<<20), 64<<20)
 		sc.Split(split)
 		for sc.Scan() {
 		}
-		return time.Since(t0)
 	}
-	once, old := run(scanLinesOnce()), run(bufio.ScanLines)
-	if once*4 > old {
-		t.Fatalf("scanLinesOnce %v, bufio.ScanLines %v: not linear", once, old)
+	before := atomic.LoadInt64(&scanSearchedBytes)
+	scan(scanLinesOnce())
+	once := atomic.LoadInt64(&scanSearchedBytes) - before
+	var old int64 // the control: ScanLines searches the whole pending line at every call
+	scan(func(data []byte, atEOF bool) (int, []byte, error) {
+		old += int64(len(data))
+		return bufio.ScanLines(data, atEOF)
+	})
+	if once > 2*size || old < 100*size {
+		t.Fatalf("bytes searched: scanLinesOnce %d, bufio.ScanLines %d, input %d", once, old, size)
 	}
 }
 
