@@ -312,7 +312,7 @@ def find_java():
         if not (os.path.exists(javac) and os.path.exists(java)):
             continue
         try:
-            ver = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=30).stderr
+            ver = subprocess.run([java, "-version"], capture_output=True, text=True, encoding="utf-8", timeout=30).stderr
             major = int(ver.split('"')[1].split(".")[0]) if '"' in ver else 0
         except Exception:  # noqa: BLE001
             continue
@@ -328,19 +328,19 @@ def discover(tree, tmp, only=None, js_override=None):
          "js": (["node", js_override or os.path.join(tree, "verifiers", "js", "cvverify.mjs")], False)}
     if shutil.which("go"):
         out = os.path.join(tmp, "cvverify-go")
-        r = subprocess.run(["go", "build", "-o", out, "./cmd/cvverify"], cwd=os.path.join(tree, "verifiers", "go"), capture_output=True, text=True)
+        r = subprocess.run(["go", "build", "-o", out, "./cmd/cvverify"], cwd=os.path.join(tree, "verifiers", "go"), capture_output=True, text=True, encoding="utf-8")
         if r.returncode != 0:
             raise SystemExit("go build failed: " + r.stderr[:400])
         v["go"] = ([out], True)
     if shutil.which("cargo"):
-        r = subprocess.run(["cargo", "build", "--release", "--quiet"], cwd=os.path.join(tree, "verifiers", "rust"), capture_output=True, text=True)
+        r = subprocess.run(["cargo", "build", "--release", "--quiet"], cwd=os.path.join(tree, "verifiers", "rust"), capture_output=True, text=True, encoding="utf-8")
         if r.returncode != 0:
             raise SystemExit("cargo build failed: " + r.stderr[:400])
         v["rust"] = ([os.path.join(tree, "verifiers", "rust", "target", "release", "cvverify")], False)
     jdk = find_java()
     if jdk:
         out = os.path.join(tmp, "cvj")
-        r = subprocess.run([jdk[1], "-d", out, os.path.join(tree, "verifiers", "java", "CvVerify.java")], capture_output=True, text=True, timeout=180)
+        r = subprocess.run([jdk[1], "-d", out, os.path.join(tree, "verifiers", "java", "CvVerify.java")], capture_output=True, text=True, encoding="utf-8", timeout=180)
         if r.returncode != 0:
             raise SystemExit("javac failed: " + r.stderr[:400])
         v["java"] = ([jdk[2], "-cp", out, "CvVerify"], True)
@@ -356,7 +356,7 @@ def discover(tree, tmp, only=None, js_override=None):
 
 def run_one(kind, cmd, path):
     try:
-        out = subprocess.run(cmd + [path], capture_output=True, text=True, timeout=60)
+        out = subprocess.run(cmd + [path], capture_output=True, text=True, encoding="utf-8", timeout=60)
         r = json.loads(out.stdout)
     except Exception:  # noqa: BLE001
         return "NONJSON/CRASH", None
@@ -413,7 +413,7 @@ def main(argv=None):
         failures = []
         for name, cls, text, named in muts:
             p = os.path.join(tmp, "m.jsonl")
-            with open(p, "w", encoding="utf-8") as f:
+            with open(p, "w", encoding="utf-8", newline="") as f:
                 f.write(text)
             res = {k: run_one(k, cmd, p) for k, (cmd, _) in verifiers.items()}
             verdicts = {k: r[0] for k, r in res.items()}
@@ -448,7 +448,7 @@ def main(argv=None):
         for f_ in failures[:12]:
             print("  [BAD]", f_["mutation"], "expected", f_["expected"], f_["verdicts"], "named", f_["named"])
         if a.out:
-            with open(a.out, "w", encoding="utf-8") as f:
+            with open(a.out, "w", encoding="utf-8", newline="") as f:
                 json.dump(summary, f, indent=1, ensure_ascii=False)
         ok = disagree == 0 and not any(out_of_class.values()) and not any(unnamed.values())
         print("RESULT:", "GREEN" if ok else "RED")

@@ -33,7 +33,7 @@ def _ledger(n):
 
 
 def _write(path, entries):
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for e in entries:
             f.write(json.dumps(e) + "\n")
 
@@ -71,10 +71,10 @@ class TestHybridEntries(unittest.TestCase):
         self.assertTrue(r["ok"]); self.assertIs(r["pq_protected"], False); self.assertIn("not quantum-resistant", r["pq_note"])
 
     def test_tampered_pq_signature_fails_even_if_ed25519_holds(self):
-        lines = open(self.signed).read().splitlines(); e = json.loads(lines[2])
+        lines = open(self.signed, encoding="utf-8").read().splitlines(); e = json.loads(lines[2])
         raw = bytearray(base64.b64decode(e["signature_pq"])); raw[10] ^= 0xFF
         e["signature_pq"] = base64.b64encode(bytes(raw)).decode(); lines[2] = json.dumps(e)
-        open(self.signed, "w").write("\n".join(lines) + "\n")
+        open(self.signed, "w", encoding="utf-8", newline="").write("\n".join(lines) + "\n")
         r = signer.verify_file(self.signed, self.pk, self.pq_pk)
         self.assertFalse(r["ok"]); self.assertIs(r["pq_protected"], False)
         self.assertEqual(r["pq_failures"], [{"idx": 2, "reason": "bad_pq_signature"}])
@@ -87,7 +87,7 @@ class TestHybridEntries(unittest.TestCase):
     def test_pq_layer_stripped_is_detected(self):
         # an attacker who removes the PQ signatures from a hybrid ledger leaves a VALID Ed25519 ledger: only the
         # relying party's expectation (--require-pq / expected key) catches it — pq_protected is False, not True
-        lines = [json.loads(l) for l in open(self.signed)]
+        lines = [json.loads(l) for l in open(self.signed, encoding="utf-8")]
         for e in lines:
             e.pop("signature_pq"); e.pop("signer_pq")
         _write(self.signed, lines)
@@ -102,9 +102,9 @@ class TestHybridEntries(unittest.TestCase):
             signer.verify_file(self.signed, None, self.pq_pk)
         here = os.path.dirname(os.path.abspath(__file__))
         cp = subprocess.run([sys.executable, "signer.py", "verify", self.signed, "--pubkey", self.pk, "--pq-pubkey", self.pq_pk, "--require-pq"],
-                            capture_output=True, text=True, cwd=here)
+                            capture_output=True, text=True, encoding="utf-8", cwd=here)
         self.assertEqual(cp.returncode, 1)
-        cp = subprocess.run([sys.executable, "signer.py", "verify", self.signed, "--pubkey", self.pk, "--require-pq"], capture_output=True, text=True, cwd=here)
+        cp = subprocess.run([sys.executable, "signer.py", "verify", self.signed, "--pubkey", self.pk, "--require-pq"], capture_output=True, text=True, encoding="utf-8", cwd=here)
         self.assertEqual(cp.returncode, 2)     # --require-pq without --pq-pubkey is refused (self-declared protection)
 
     def test_foreign_pq_key_added_to_ed25519_ledger_is_never_protected(self):
@@ -118,7 +118,7 @@ class TestHybridEntries(unittest.TestCase):
 
     def test_ed25519_corrupted_with_valid_pq_is_not_protected(self):
         # council 15/09: hybrid = BOTH hold; a broken classical signature must not leave pq_protected True
-        lines = [json.loads(l) for l in open(self.signed)]
+        lines = [json.loads(l) for l in open(self.signed, encoding="utf-8")]
         raw = bytearray(base64.b64decode(lines[1]["signature"])); raw[3] ^= 1; lines[1]["signature"] = base64.b64encode(bytes(raw)).decode()
         _write(self.signed, lines)
         r = signer.verify_file(self.signed, self.pk, self.pq_pk)
@@ -129,14 +129,14 @@ class TestHybridEntries(unittest.TestCase):
         # a plain verify(sig, msg) with no context must succeed, and a context MUST NOT be needed
         from cryptography.hazmat.primitives.asymmetric import mldsa
         sk, pk_b64 = signer.load_pq_key(self.k + ".pq")
-        e = json.loads(open(self.signed).readline())
+        e = json.loads(open(self.signed, encoding="utf-8").readline())
         sig = base64.b64decode(e["signature_pq"]); msg = e["self_hash"].encode()
         sk.public_key().verify(sig, msg)
         self.assertEqual(signer.PQ_CTX_ENTRY, b"")
         with self.assertRaises(Exception):                            # a context would make it another domain: not ours
             sk.public_key().verify(sig, msg, context=b"cryptovalid/entry/1")
         self.assertEqual(len(sig), signer.PQ_SIG_LEN); self.assertEqual(len(base64.b64decode(pk_b64)), signer.PQ_PK_LEN)
-        lines = [json.loads(l) for l in open(self.signed)]
+        lines = [json.loads(l) for l in open(self.signed, encoding="utf-8")]
         lines[0]["signature_pq"] = lines[0]["signature_pq"][:10] + " " + lines[0]["signature_pq"][10:]   # Python's lenient decoder took this
         _write(self.signed, lines)
         r = signer.verify_file(self.signed, self.pk, self.pq_pk)
@@ -155,14 +155,14 @@ class TestHybridEntries(unittest.TestCase):
         self.assertTrue(u["ok"])
 
     def test_malformed_ed25519_fields_are_refused_strictly(self):
-        lines = [json.loads(l) for l in open(self.signed)]
+        lines = [json.loads(l) for l in open(self.signed, encoding="utf-8")]
         lines[0]["signer"] = lines[0]["signer"].upper(); _write(self.signed, lines)
         r = signer.verify_file(self.signed)
         self.assertFalse(r["ok"]); self.assertEqual(r["failures"][0]["reason"], "malformed_signature_field")
 
     def test_resign_without_pq_key_strips_stale_pq_fields(self):
         out = os.path.join(self.tmp, "re.jsonl"); signer.sign_ledger(self.signed, out, self.k)
-        e = json.loads(open(out).readline())
+        e = json.loads(open(out, encoding="utf-8").readline())
         self.assertNotIn("signature_pq", e); self.assertNotIn("signer_pq", e)
 
     def test_kms_mldsa_backend_with_stub_client(self):
@@ -215,7 +215,7 @@ class TestHybridEntries(unittest.TestCase):
         out = os.path.join(d, "s.jsonl")
         subprocess.check_output([sys.executable, "signer.py", "sign", self.led, out, kf, "--pq-key", kf + ".pq"], cwd=here)
         cp = subprocess.run([sys.executable, "signer.py", "verify", out, "--pubkey", kg["public_key_hex"], "--pq-pubkey", pq_pk, "--require-pq"],
-                            capture_output=True, text=True, cwd=here)
+                            capture_output=True, text=True, encoding="utf-8", cwd=here)
         self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)
         self.assertIs(json.loads(cp.stdout)["pq_protected"], True)
 
@@ -233,7 +233,7 @@ class TestGoEntrySignaturesAgreeWithPython(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _go(self, path, *flags):
-        cp = subprocess.run([GO_BIN, *flags, path], capture_output=True, text=True)
+        cp = subprocess.run([GO_BIN, *flags, path], capture_output=True, text=True, encoding="utf-8")
         return cp.returncode, json.loads(cp.stdout)
 
     def _both(self, path, ed, pq):
@@ -243,7 +243,7 @@ class TestGoEntrySignaturesAgreeWithPython(unittest.TestCase):
         g = go["signatures"]
         self.assertEqual((py["ok"], py["pq_protected"], py["pq_status"]), (g["ok"], g["pq_protected"], g["pq_status"]), (path, py, g))
         if JAVA_CMD:   # the Java verifier must say the same as Python and Go, case by case
-            cp = subprocess.run([*JAVA_CMD.split(), *flags, path], capture_output=True, text=True)
+            cp = subprocess.run([*JAVA_CMD.split(), *flags, path], capture_output=True, text=True, encoding="utf-8")
             jv = json.loads(cp.stdout)["signatures"]
             self.assertEqual((py["ok"], py["pq_protected"], py["pq_status"]), (jv["ok"], jv["pq_protected"], jv["pq_status"]), (path, "java", jv))
             self.assertEqual(cp.returncode, rc, "java exit code differs from go")
@@ -252,7 +252,7 @@ class TestGoEntrySignaturesAgreeWithPython(unittest.TestCase):
     def test_cases_agree(self):
         py, go, rc = self._both(self.signed, self.pk, self.pq_pk); self.assertEqual(rc, 0); self.assertIs(py["pq_protected"], True)
         py, go, rc = self._both(self.signed, self.pk, None); self.assertIsNone(py["pq_protected"]); self.assertEqual(rc, 0)
-        lines = [json.loads(l) for l in open(self.signed)]
+        lines = [json.loads(l) for l in open(self.signed, encoding="utf-8")]
         # stripped, key pinned → missing, FAIL in both
         s1 = os.path.join(self.tmp, "stripped.jsonl"); _write(s1, [{k: v for k, v in e.items() if k not in ("signature_pq", "signer_pq")} for e in lines])
         py, go, rc = self._both(s1, self.pk, self.pq_pk); self.assertEqual(py["pq_status"], "missing"); self.assertEqual(rc, 1)
@@ -318,8 +318,8 @@ class TestHybridTip(unittest.TestCase):
         self.assertIs(self._v()["tip"]["pq_protected"], False)
 
     def test_tampered_pq_signature_is_fail(self):
-        t = json.load(open(self.tp)); s = bytearray(bytes.fromhex(t["signature_pq_hex"])); s[5] ^= 1
-        t["signature_pq_hex"] = s.hex(); json.dump(t, open(self.tp, "w"))
+        t = json.load(open(self.tp, encoding="utf-8")); s = bytearray(bytes.fromhex(t["signature_pq_hex"])); s[5] ^= 1
+        t["signature_pq_hex"] = s.hex(); json.dump(t, open(self.tp, "w", encoding="utf-8", newline=""))
         r = self._v(trusted_pq_pubkey_b64=self.pq_pk)
         self.assertEqual(r["verdict"], "FAIL"); self.assertIn("post-quantum signature invalid", r["tip"]["error"])
         self.assertEqual(self._v()["verdict"], "PASS")   # the classical layer alone still passes: the PQ key must be REQUIRED
@@ -342,10 +342,10 @@ class TestHybridTip(unittest.TestCase):
         self.assertEqual(r["verdict"], "FAIL"); self.assertIn("tip_missing", json.dumps(r["parse_errors"]))
 
     def test_hostile_pq_fields_are_tip_invalid(self):
-        t0 = json.load(open(self.tp))
+        t0 = json.load(open(self.tp, encoding="utf-8"))
         for bad in ({"signature_pq_hex": 123}, {"signature_pq_hex": None}, {"signature_pq_hex": ""}, {"signature_pq_hex": "abcd"}, {"log_pq_pubkey_b64": "!!!!"},
                     {"signature_hex": t0["signature_hex"].upper()}, {"signature_hex": t0["signature_hex"][:2] + " " + t0["signature_hex"][3:]}):
-            json.dump(dict(t0, **bad), open(self.tp, "w"))
+            json.dump(dict(t0, **bad), open(self.tp, "w", encoding="utf-8", newline=""))
             r = self._v()
             self.assertEqual(r["verdict"], "FAIL", bad); self.assertIn("tip_invalid", r["tip"]["error"])
 
@@ -358,36 +358,36 @@ class TestHybridTip(unittest.TestCase):
     def test_cli_flag(self):
         here = os.path.dirname(os.path.abspath(__file__))
         cp = subprocess.run([sys.executable, "verifier.py", self.led, "--trusted-pubkey", self.pk, "--trusted-pq-pubkey", self.pq_pk],
-                            capture_output=True, text=True, cwd=here)
+                            capture_output=True, text=True, encoding="utf-8", cwd=here)
         out = json.loads(cp.stdout)
         self.assertEqual(out["verdict"], "PASS", cp.stderr); self.assertIs(out["tip"]["pq_protected"], True)
 
     @unittest.skipUnless(GO_BIN and os.path.exists(GO_BIN or ""), "Go verifier binary not given (CVVERIFY_GO)")
     def test_go_verifier_agrees(self):
         def go(*extra):
-            cp = subprocess.run([GO_BIN, "-tip", self.tp, "-trusted-pubkey", self.pk, *extra, self.led], capture_output=True, text=True)
+            cp = subprocess.run([GO_BIN, "-tip", self.tp, "-trusted-pubkey", self.pk, *extra, self.led], capture_output=True, text=True, encoding="utf-8")
             return cp.returncode, json.loads(cp.stdout)
         rc, out = go("-trusted-pq-pubkey", self.pq_pk)
         self.assertEqual(rc, 0, out); self.assertTrue(out["tip"]["pq_protected"])
         rc, out = go()
         self.assertEqual(rc, 0); self.assertIsNone(out["tip"]["pq_protected"]); self.assertIn("pq_unchecked", out["tip"]["pq_why"])
         # council 15/09: a trusted PQ key WITHOUT the trusted log key, or without any tip, must never PASS
-        cp = subprocess.run([GO_BIN, "-tip", self.tp, "-trusted-pq-pubkey", self.pq_pk, self.led], capture_output=True, text=True)
+        cp = subprocess.run([GO_BIN, "-tip", self.tp, "-trusted-pq-pubkey", self.pq_pk, self.led], capture_output=True, text=True, encoding="utf-8")
         self.assertNotEqual(cp.returncode, 0); self.assertIn("pq_key_without_log_key", cp.stdout)
         os.rename(self.tp, self.tp + ".away")
-        cp = subprocess.run([GO_BIN, "-trusted-pubkey", self.pk, "-trusted-pq-pubkey", self.pq_pk, self.led], capture_output=True, text=True)
+        cp = subprocess.run([GO_BIN, "-trusted-pubkey", self.pk, "-trusted-pq-pubkey", self.pq_pk, self.led], capture_output=True, text=True, encoding="utf-8")
         self.assertNotEqual(cp.returncode, 0); self.assertIn("tip_missing", cp.stdout)
         os.rename(self.tp + ".away", self.tp)
         # hostile types / formats in the optional PQ fields: tip_invalid, not silence
-        t0 = json.load(open(self.tp))
+        t0 = json.load(open(self.tp, encoding="utf-8"))
         for bad in ({"signature_pq_hex": 123}, {"signature_pq_hex": None}, {"signature_pq_hex": ""}, {"signature_pq_hex": "abcd"},
                     {"log_pq_pubkey_b64": "!!!!"}, {"signature_hex": t0["signature_hex"].upper()}):
-            json.dump(dict(t0, **bad), open(self.tp, "w"))
-            cp = subprocess.run([GO_BIN, "-tip", self.tp, "-trusted-pubkey", self.pk, self.led], capture_output=True, text=True)
+            json.dump(dict(t0, **bad), open(self.tp, "w", encoding="utf-8", newline=""))
+            cp = subprocess.run([GO_BIN, "-tip", self.tp, "-trusted-pubkey", self.pk, self.led], capture_output=True, text=True, encoding="utf-8")
             self.assertNotEqual(cp.returncode, 0, bad)
-        json.dump(t0, open(self.tp, "w"))
-        t = json.load(open(self.tp)); s = bytearray(bytes.fromhex(t["signature_pq_hex"])); s[5] ^= 1
-        t["signature_pq_hex"] = s.hex(); json.dump(t, open(self.tp, "w"))
+        json.dump(t0, open(self.tp, "w", encoding="utf-8", newline=""))
+        t = json.load(open(self.tp, encoding="utf-8")); s = bytearray(bytes.fromhex(t["signature_pq_hex"])); s[5] ^= 1
+        t["signature_pq_hex"] = s.hex(); json.dump(t, open(self.tp, "w", encoding="utf-8", newline=""))
         rc, out = go("-trusted-pq-pubkey", self.pq_pk)
         self.assertNotEqual(rc, 0); self.assertIn("post-quantum signature invalid", out["tip"]["why"])
         T.sign_tip(self.led, self.k)
@@ -411,12 +411,12 @@ class TestHybridPack(unittest.TestCase):
     def test_unpinned_build_records_null_and_pinned_build_records_true(self):
         import evidence_pack as P
         out0 = os.path.join(self.tmp, "pack0"); P.build_pack([self.signed], out0, subject="t")
-        self.assertIsNone(json.load(open(os.path.join(out0, "MANIFEST.json")))["ledgers"][0]["pq_protected"])
+        self.assertIsNone(json.load(open(os.path.join(out0, "MANIFEST.json"), encoding="utf-8"))["ledgers"][0]["pq_protected"])
         with self.assertRaises(ValueError):                                  # PQ key without the Ed25519 key
             P.build_pack([self.signed], os.path.join(self.tmp, "x"), pq_pubkey_b64=self.pq_pk)
         P.build_pack([self.signed], os.path.join(self.tmp, "y"), signer_pubkey_hex=self.pk)   # round 3: Ed25519 alone is legitimate
         out = os.path.join(self.tmp, "pack"); P.build_pack([self.signed], out, subject="t", pq_pubkey_b64=self.pq_pk, signer_pubkey_hex=self.pk, sign_key=self.mk)
-        man = json.load(open(os.path.join(out, "MANIFEST.json")))
+        man = json.load(open(os.path.join(out, "MANIFEST.json"), encoding="utf-8"))
         self.assertIs(man["ledgers"][0]["pq_protected"], True); self.assertEqual(man["ledgers"][0]["pq_signers"], [self.pq_pk])
         # verification: caller pins the keys → True; caller pins the manifest signer → True; nobody pins → null
         v = P.verify_pack(out, pq_pubkey_b64=self.pq_pk, signer_pubkey_hex=self.pk); self.assertTrue(v["valid"]); self.assertIs(v["ledgers"][0]["pq_protected"], True)
@@ -431,7 +431,7 @@ class TestHybridPack(unittest.TestCase):
         # round 2 (measured): attacker re-signs with own keys, rewrites pq_signers and digests, drops the signature
         import evidence_pack as P, hashlib
         out = os.path.join(self.tmp, "pack"); P.build_pack([self.signed], out, subject="t", pq_pubkey_b64=self.pq_pk, signer_pubkey_hex=self.pk, sign_key=self.mk)
-        man = json.load(open(os.path.join(out, "MANIFEST.json"))); name = man["ledgers"][0]["file"]
+        man = json.load(open(os.path.join(out, "MANIFEST.json"), encoding="utf-8")); name = man["ledgers"][0]["file"]
         ak = os.path.join(self.tmp, "att"); apk = signer.keygen(ak)["public_key_hex"]; apq = signer.keygen_pq(ak + ".pq")["public_key_b64"]
         signer.sign_ledger(self.led, os.path.join(out, name), ak, pq_keyfile=ak + ".pq")
         man["ledgers"][0].update({"signers": [apk], "pq_signers": [apq]})
@@ -440,7 +440,7 @@ class TestHybridPack(unittest.TestCase):
             man.pop(k, None)
         m2 = {k: v for k, v in man.items() if k != "rfc3161_timestamp"}
         man["manifest_digest_sha256"] = hashlib.sha256(json.dumps(m2, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
-        json.dump(man, open(os.path.join(out, "MANIFEST.json"), "w"), indent=1, sort_keys=True, ensure_ascii=False)
+        json.dump(man, open(os.path.join(out, "MANIFEST.json"), "w", encoding="utf-8", newline=""), indent=1, sort_keys=True, ensure_ascii=False)
         v = P.verify_pack(out)
         self.assertIsNot(v["ledgers"][0]["pq_protected"], True)                 # never true on a self-declared key
         self.assertFalse(v["manifest_authenticated"])
@@ -451,16 +451,16 @@ class TestHybridPack(unittest.TestCase):
         # round 3 (measured): keep the vendor's digest+signature, rewrite signers/pq_signers, re-sign the ledger
         import evidence_pack as P
         out = os.path.join(self.tmp, "pack"); P.build_pack([self.signed], out, subject="t", pq_pubkey_b64=self.pq_pk, signer_pubkey_hex=self.pk, sign_key=self.mk)
-        mp = os.path.join(out, "MANIFEST.json"); man = json.load(open(mp)); name = man["ledgers"][0]["file"]
+        mp = os.path.join(out, "MANIFEST.json"); man = json.load(open(mp, encoding="utf-8")); name = man["ledgers"][0]["file"]
         ak = os.path.join(self.tmp, "att"); apk = signer.keygen(ak)["public_key_hex"]; apq = signer.keygen_pq(ak + ".pq")["public_key_b64"]
         signer.sign_ledger(self.led, os.path.join(out, name), ak, pq_keyfile=ak + ".pq")
         man["ledgers"][0].update({"signers": [apk], "pq_signers": [apq]})
-        json.dump(man, open(mp, "w"), indent=1, sort_keys=True, ensure_ascii=False)
+        json.dump(man, open(mp, "w", encoding="utf-8", newline=""), indent=1, sort_keys=True, ensure_ascii=False)
         v = P.verify_pack(out, manifest_signer_hex=self.mpk)
         self.assertTrue(v["manifest_authenticated"]); self.assertFalse(v["manifest_ok"]); self.assertFalse(v["valid"])
         self.assertIsNot(v["ledgers"][0]["pq_protected"], True)               # attacker-chosen keys are never "pinned"
         man["ledgers"][0]["pq_signers"] = "junk"                               # malformed recorded key: a verdict, not an exception
-        json.dump(man, open(mp, "w"), indent=1, sort_keys=True, ensure_ascii=False)
+        json.dump(man, open(mp, "w", encoding="utf-8", newline=""), indent=1, sort_keys=True, ensure_ascii=False)
         v = P.verify_pack(out, manifest_signer_hex=self.mpk); self.assertFalse(v["valid"])
 
     def test_hybrid_build_with_broken_layer_fails_loudly(self):

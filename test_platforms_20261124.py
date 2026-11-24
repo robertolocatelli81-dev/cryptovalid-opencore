@@ -101,6 +101,35 @@ class DirectoryFsync(unittest.TestCase):
         self.assertIsInstance(c.exception, FileNotFoundError)
 
 
+class ReceiptBytes(unittest.TestCase):
+    """Windows gives a pipe or a file the ANSI code page and os.linesep "\\r\\n": a receipt with a reason outside
+    cp1252 was exit 74 there (the MCP server ended on a method named U+1F600, 298 failures) and `--quiet` wrote
+    b"PASS\\r\\n". The bytes are now UTF-8 with "\\n" on every system, unless PYTHONIOENCODING chooses another."""
+
+    def _emit(self, text, env=None):
+        import io
+        from unittest import mock
+        import verifier as V
+        raw = io.BytesIO()
+        out = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", newline="\n")
+        with mock.patch.object(os, "name", "nt"), mock.patch.object(os, "linesep", "\r\n"), \
+                mock.patch.dict(os.environ, env or {}), mock.patch.object(sys, "stdout", out):
+            if not env:
+                os.environ.pop("PYTHONIOENCODING", None)
+            V.write_all(text)
+        return raw.getvalue()
+
+    def test_windows_stdout_is_utf8_with_line_feeds(self):
+        text = 'idx_mismatch: expected 1, got "\u00e9" \u200b \U0001f600\nPASS\n'
+        self.assertEqual(self._emit(text), text.encode("utf-8"))
+
+    def test_an_encoding_the_user_chose_is_kept(self):
+        import verifier as V
+        with self.assertRaises(V.ReceiptNotWritten):   # cp1252 chosen on purpose: the receipt cannot be written whole
+            self._emit("\U0001f600\n", {"PYTHONIOENCODING": "cp1252"})
+        self.assertEqual(self._emit("\u00e9\n", {"PYTHONIOENCODING": "cp1252"}), b"\xe9\n")
+
+
 class OpensslConfigPaths(unittest.TestCase):
     """The TSA labs of the tests write paths into OpenSSL configuration files; on Windows each path has backslashes."""
 
@@ -116,6 +145,59 @@ class OpensslConfigPaths(unittest.TestCase):
         lab.revoke("keyCompromise")
         with open(lab.crl(), "rb") as f:
             self.assertIn(b"BEGIN X509 CRL", f.read())
+
+
+def _text_calls_without_encoding(path):
+    """open() in text mode without encoding= (or, writing, without newline=), and a call with text=True or
+    universal_newlines=True without encoding=: on Windows each reads or writes in the ANSI code page, a write
+    turns "\\n" into "\\r\\n", and a child's UTF-8 output undecodable there was an IndexError (CPython reads a
+    pipe in a thread on Windows; a decoding error leaves the result empty)"""
+    import ast
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    bad = []
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):
+            continue
+        kws = {k.arg: k.value for k in n.keywords}
+        if None in kws:
+            continue
+        if isinstance(n.func, ast.Name) and n.func.id == "open":
+            m = n.args[1] if len(n.args) >= 2 else kws.get("mode")
+            mode = "r" if m is None else (m.value if isinstance(m, ast.Constant) and isinstance(m.value, str) else None)
+            if mode is None or "b" in mode:
+                continue
+            if "encoding" not in kws or (any(c in mode for c in "wax") and "newline" not in kws):
+                bad.append((os.path.basename(path), n.lineno, "open"))
+        for k in ("text", "universal_newlines"):
+            v = kws.get(k)
+            if isinstance(v, ast.Constant) and v.value is True and "encoding" not in kws:
+                bad.append((os.path.basename(path), n.lineno, k))
+    return bad
+
+
+class TextModeEverywhere(unittest.TestCase):
+    """Closed by construction: every Python file of the repository names the encoding of its text I/O."""
+
+    def test_no_text_call_without_an_encoding(self):
+        files = []
+        for root, dirs, names in os.walk(_HERE):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("__pycache__", "node_modules", "target")]
+            files += [os.path.join(root, n) for n in names if n.endswith(".py")]
+        self.assertGreater(len(files), 150)
+        bad = [b for p in files for b in _text_calls_without_encoding(p)]
+        self.assertEqual(bad, [])
+
+    def test_the_check_finds_each_form(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        p = os.path.join(d, "x.py")
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write('open(a)\nopen(a, "w", encoding="utf-8")\nopen(a, "rb")\nopen(a, "a", encoding="utf-8", newline="")\n'
+                    'run(c, text=True)\nrun(c, universal_newlines=True, encoding="utf-8")\nPopen(c, text=True)\n')
+        self.assertEqual(_text_calls_without_encoding(p), [("x.py", 1, "open"), ("x.py", 2, "open"), ("x.py", 5, "text"),
+                                                           ("x.py", 7, "text")])
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ import verifier as V  # noqa: E402
 
 def ledger(path, datas):
     prev = V.GENESIS_PREV
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for i, d in enumerate(datas):
             e = {"idx": i, "ts": "2026-11-15T00:00:0%dZ" % i, "data": d, "prev_hash": prev}
             e["self_hash"] = V.hash_with("sha256", V.canonical_payload(e)); prev = e["self_hash"]
@@ -38,7 +38,7 @@ def rd(path):
         return f.read()
 
 def wr(path, text):
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(text)
 
 

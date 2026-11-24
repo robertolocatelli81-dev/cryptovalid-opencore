@@ -38,7 +38,7 @@ def _ledger(path, n, marker=lambda i: "AI-9"):
     for i in range(n):
         e = {"idx": i, "ts": f"2026-09-19T10:00:{i:02d}Z", "data": {"agent_id": marker(i), "act": "x"}, "prev_hash": prev}
         e["self_hash"] = hashlib.sha256(_canon(e)).hexdigest(); prev = e["self_hash"]; rows.append(e)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for r in rows:
             f.write(json.dumps(r) + "\n")
     return rows
@@ -53,7 +53,7 @@ class TestMonitorIdentitySearch(unittest.TestCase):
         self.assertEqual(len(v["identity"]["new_matches"]), 2); self.assertEqual(v["identity"]["scanned"], 12)
         self.assertEqual(v["identity"]["matches"][0]["self_hash"], rows[3]["self_hash"])
         prev = rows[-1]["self_hash"]
-        with open(led, "a") as f:
+        with open(led, "a", encoding="utf-8", newline="") as f:
             for i in (12, 13):
                 e = {"idx": i, "ts": f"2026-09-19T10:00:{i:02d}Z", "data": {"agent_id": "AI-123" if i == 13 else "AI-9"}, "prev_hash": prev}
                 e["self_hash"] = hashlib.sha256(_canon(e)).hexdigest(); prev = e["self_hash"]; f.write(json.dumps(e) + "\n")
@@ -209,7 +209,7 @@ class TestScitt(unittest.TestCase):
     def test_register_receipt_transparent_statement(self):
         ss, reg, rc, ts, _ = self._flow()
         self.assertEqual((reg["index"], V.verify_ledger(self.led)["verdict"]), (1, "PASS"))
-        with open(self.led) as f:
+        with open(self.led, encoding="utf-8") as f:
             entry = [json.loads(l) for l in f][1]
         self.assertEqual(entry["data"]["scitt"]["statement_sha256"], SC.statement_id(ss))
         # the identity is over the SIGNED parts: the same statement re-encoded by another encoder (pycose/cbor2 order,
@@ -253,7 +253,7 @@ class TestScitt(unittest.TestCase):
             if drop_vdp:
                 u.pop(SC.L_VDP)
             return SC.transparent_statement(ss, [SC.TAG_COSE_SIGN1 + R.cbor_encode([rp_, u, rpl_, rsig_])])
-        with open(self.led) as f:
+        with open(self.led, encoding="utf-8") as f:
             e1 = json.loads(f.readlines()[1])
         fake = dict(e1); fake["ts"] = "1999-01-01T00:00:00Z"   # same statement hash and idx, different leaf bytes
         # with a DETACHED root the walk always yields some root, so the TS signature over it is what fails
@@ -306,17 +306,17 @@ class TestScitt(unittest.TestCase):
         st = os.path.join(self.tmp, "stmt.json"); open(st, "wb").write(self.payload)
         cmd = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "cryptovalid_scitt.py")]
         r = subprocess.run(cmd + ["sign", st, "--cty", "application/json", "--iss", "vendor.example", "--sub", "p", "--key", self.ik,
-                                  "--out", st + ".cose"], capture_output=True, text=True)
+                                  "--out", st + ".cose"], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stderr)
         r = subprocess.run(cmd + ["register", st + ".cose", "--ledger", self.led, "--issuer-pubkey", self.ipk, "--ts-key", self.tk,
-                                  "--ts-iss", "ts.example/ledger", "--out", st + ".transparent"], capture_output=True, text=True)
+                                  "--ts-iss", "ts.example/ledger", "--out", st + ".transparent"], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stderr); self.assertEqual(json.loads(r.stdout)["index"], 0)
         r = subprocess.run(cmd + ["verify", st + ".transparent", "--issuer-pubkey", self.ipk, "--ts-pubkey", self.tpk, "--ts-iss", "ts.example/ledger"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout)
-        r = subprocess.run(cmd + ["verify", st + ".transparent", "--issuer-pubkey", self.ipk, "--ts-pubkey", self.opk], capture_output=True, text=True)
+        r = subprocess.run(cmd + ["verify", st + ".transparent", "--issuer-pubkey", self.ipk, "--ts-pubkey", self.opk], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 1)
-        r = subprocess.run(cmd + ["verify", "/nonexistent", "--issuer-pubkey", self.ipk, "--ts-pubkey", self.opk], capture_output=True, text=True)
+        r = subprocess.run(cmd + ["verify", "/nonexistent", "--issuer-pubkey", self.ipk, "--ts-pubkey", self.opk], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 2)
 
     @unittest.skipUnless(HAVE_PYCOSE, "pycose assente")

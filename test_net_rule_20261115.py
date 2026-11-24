@@ -255,7 +255,7 @@ class TestLoopbackNeverThroughTheProxy(unittest.TestCase):
                    NETHSM_PASS="p", AWS_ACCESS_KEY_ID="AKIDEXAMPLE", AWS_SECRET_ACCESS_KEY="s")
         with tempfile.TemporaryDirectory() as d:
             env["HOME"] = d
-            r = subprocess.run([sys.executable, "-c", CHILD, HERE, base], env=env, capture_output=True, text=True,
+            r = subprocess.run([sys.executable, "-c", CHILD, HERE, base], env=env, capture_output=True, text=True, encoding="utf-8",
                                timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr[-800:])
         out = json.loads(r.stdout)

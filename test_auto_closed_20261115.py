@@ -171,7 +171,7 @@ class TestAutoReal(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         p = subprocess.run([sys.executable, os.path.join(HERE, "verify_evidence.py"), "auto",
                             os.path.join(INTEROP, "omega-cra-evol-0.10.0-cra_pack.json")],
-                           capture_output=True, text=True, env=env, timeout=120)
+                           capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
         self.assertEqual(p.returncode, 1, p.stderr)
         self.assertEqual(json.loads(p.stdout)["kind"], "auto")
         self.assertNotIn("Traceback", p.stderr)
@@ -252,7 +252,7 @@ class TestAutoPaths(unittest.TestCase):
     def test_directory_with_glob_characters(self):
         d = os.path.join(self.d, "a[1]")
         os.mkdir(d)
-        with open(os.path.join(d, "ledger-000.jsonl"), "w") as fh:
+        with open(os.path.join(d, "ledger-000.jsonl"), "w", encoding="utf-8", newline="") as fh:
             fh.write("")
         self.assertEqual(VE.verify_auto(d)["kind"], "archive")
 
@@ -260,7 +260,7 @@ class TestAutoPaths(unittest.TestCase):
     def test_unreadable_directory(self):
         d = os.path.join(self.d, "pack")
         os.mkdir(d)
-        with open(os.path.join(d, "MANIFEST.json"), "w") as fh:
+        with open(os.path.join(d, "MANIFEST.json"), "w", encoding="utf-8", newline="") as fh:
             fh.write("{}")
         os.chmod(d, 0)
         try:
@@ -303,20 +303,20 @@ class TestAutoPaths(unittest.TestCase):
             led = os.path.join(HERE, "examples", "sample_ledger.jsonl")
             self.assertEqual(VE.verify_auto(led)["kind"], "ledger")
             p = os.path.join(self.d, "long")
-            with open(p, "w") as fh:
+            with open(p, "w", encoding="utf-8", newline="") as fh:
                 fh.write(json.dumps({"x": "y" * 1000}))
             self._refused(p, "format not recognised: the file is larger than 64 MiB and its first line longer than 64 MiB;")
-            with open(p, "w") as fh:
+            with open(p, "w", encoding="utf-8", newline="") as fh:
                 fh.write("\n" * 1000)
             self._refused(p, "no non-blank line in the first")
-            with open(p, "w") as fh:
+            with open(p, "w", encoding="utf-8", newline="") as fh:
                 fh.write(json.dumps({"evidence_format": "ap2-evidence/1"}) + "\n" + " " * 1000)   # AP2 only when read whole
             self._refused(p, "the first non-blank line is a JSON object without prev_hash and self_hash")
-            with open(p, "w") as fh:   # blank lines, then a line cut by the limit: the cut piece is not read as a line
+            with open(p, "w", encoding="utf-8", newline="") as fh:   # blank lines, then a line cut by the limit: the cut piece is not read as a line
                 fh.write("\n" * 490 + json.dumps({"prev_hash": "0" * 64, "self_hash": "a" * 64}))
             self._refused(p, "no non-blank line in the first")
             for size, kind in ((500, "ap2"), (501, "auto")):   # read whole up to the limit, not beyond
-                with open(p, "w") as fh:
+                with open(p, "w", encoding="utf-8", newline="") as fh:
                     head = '{"evidence_format": "ap2-evidence/1", "pad": "'
                     fh.write(head + "z" * (size - len(head) - 2) + '"}')
                 self.assertEqual(os.path.getsize(p), size)

@@ -61,9 +61,9 @@ class TestIngestBasic(unittest.TestCase):
         self.assertEqual(r["unsealed_segments"], 1)  # il nuovo segmento vuoto corrente
         # controllo negativo 1: manomissione di UNA entry in un segmento sigillato
         seg0 = os.path.join(self.d, "ledger-000000.jsonl")
-        rows = open(seg0).read().splitlines()
+        rows = open(seg0, encoding="utf-8").read().splitlines()
         rows[3] = rows[3].replace('"i": 3', '"i": 999').replace('"i":3', '"i":999')
-        open(seg0, "w").write("\n".join(rows) + "\n")
+        open(seg0, "w", encoding="utf-8", newline="").write("\n".join(rows) + "\n")
         r2 = ing.verify_archive(self.d)
         self.assertFalse(r2["ok"])
         self.assertIn("hash_chain_fail", [f["reason"] for f in r2["failures"]])
@@ -117,9 +117,9 @@ class TestIngestBasic(unittest.TestCase):
             w.append({"i": i})
         w.close(seal=False)
         seg = os.path.join(self.d, "ledger-000000.jsonl")
-        rows = open(seg).read().splitlines()
+        rows = open(seg, encoding="utf-8").read().splitlines()
         rows.insert(5, "")                         # riga vuota in mezzo (verifier la salta)
-        open(seg, "w").write("\n".join(rows) + "\n")
+        open(seg, "w", encoding="utf-8", newline="").write("\n".join(rows) + "\n")
         w2 = ing.Ingestor(self.d, batch_size=5)    # non deve troncare né rifiutare
         self.assertEqual(w2.recovered_bytes, 0)
         w2.append({"resumed": True})
@@ -170,7 +170,7 @@ class TestCrashRecovery(unittest.TestCase):
         w2.close()
         r = ing.verify_archive(self.d)
         self.assertTrue(r["ok"])                    # 25 entry, catena integra
-        rows = [json.loads(x) for x in open(seg)]
+        rows = [json.loads(x) for x in open(seg, encoding="utf-8")]
         self.assertEqual(len(rows), 25)
         self.assertEqual([e["idx"] for e in rows], list(range(25)))
 
@@ -180,9 +180,9 @@ class TestCrashRecovery(unittest.TestCase):
             w.append({"i": i})
         w.close(seal=False)
         seg = os.path.join(self.d, "ledger-000000.jsonl")
-        rows = open(seg).read().splitlines()
+        rows = open(seg, encoding="utf-8").read().splitlines()
         rows[4] = rows[4].replace('"i":4', '"i":666').replace('"i": 4', '"i": 666')
-        open(seg, "w").write("\n".join(rows) + "\n")
+        open(seg, "w", encoding="utf-8", newline="").write("\n".join(rows) + "\n")
         with self.assertRaises(ValueError):         # fail-closed: non riprende su storia manomessa
             ing.Ingestor(self.d, batch_size=5)
 
@@ -199,11 +199,11 @@ class TestCrashRecovery(unittest.TestCase):
                 w.append({"i": i})
             w.close(seal=False)
             seg = os.path.join(d, "ledger-000000.jsonl")
-            rows = [json.loads(x) for x in open(seg)]
+            rows = [json.loads(x) for x in open(seg, encoding="utf-8")]
             rows[1].update(extra)
             if tamper:
                 rows[1]["data"] = {"i": 666}
-            open(seg, "w").write("".join(json.dumps(r) + "\n" for r in rows))
+            open(seg, "w", encoding="utf-8", newline="").write("".join(json.dumps(r) + "\n" for r in rows))
             return d
         for extra in ({"signature_pq": "x", "signer_pq": "y"}, {"tsa_token": "AAAA"}):
             d = segment_with(extra, tamper=False)
@@ -236,13 +236,13 @@ class TestSignedSth(unittest.TestCase):
         self.assertFalse(r["ok"])
         # controllo negativo 2: firma manomessa nel sidecar
         sc = os.path.join(self.d, sth["segment"] + ".sth.json")
-        doc = json.load(open(sc))
+        doc = json.load(open(sc, encoding="utf-8"))
         # flip the first hex NIBBLE to a DIFFERENT digit: "A"+sig[1:] was a no-op whenever sig started
         # with "a" (hex is case-insensitive) -> the tamper vanished 1/16 of the runs (found 2026-09-13,
         # 1 failure in 10 full runs of the suite)
         first = doc["signature"][0].lower()
         doc["signature"] = ("0" if first != "0" else "1") + doc["signature"][1:]
-        json.dump(doc, open(sc, "w"))
+        json.dump(doc, open(sc, "w", encoding="utf-8", newline=""))
         r2 = ing.verify_archive(self.d, expected_pubkey_hex=self.pub)
         self.assertIn("sth_signature_invalid", [f["reason"] for f in r2["failures"]])
 
@@ -321,19 +321,19 @@ class TestAutoAnchorTSA(unittest.TestCase):
                         "-keyout", f"{d}/k.pem", "-out", f"{d}/c.pem",
                         "-days", "1", "-subj", "/CN=FakeTestTSA"],
                        check=True, capture_output=True)
-        with open(f"{d}/tsa.cnf", "w") as f:
+        with open(f"{d}/tsa.cnf", "w", encoding="utf-8", newline="") as f:
             f.write("[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=local test TSA\n[ext]\n"
                     "extendedKeyUsage=critical,timeStamping\n[tsa]\ndefault_tsa=t1\n[t1]\n"
                     f"serial={cnf_path(d)}/serial\nsigner_cert={cnf_path(d)}/tsa.crt\nsigner_key={cnf_path(d)}/tsa.key\nsigner_digest=sha256\n"
                     "default_policy=1.2.3.4.1\ndigests=sha256\ness_cert_id_alg=sha256\n")
-        with open(f"{d}/serial", "w") as f:
+        with open(f"{d}/serial", "w", encoding="utf-8", newline="") as f:
             f.write("01\n")
         subprocess.run([_OPENSSL, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
                         "-keyout", f"{d}/tsa.key", "-out", f"{d}/tsa.crt", "-days", "2", "-config", f"{d}/tsa.cnf",
                         "-extensions", "ext"], check=True, capture_output=True)
         cls.tsa_crt = f"{d}/tsa.crt"
         import base64
-        with open(cls.tsa_crt) as f:
+        with open(cls.tsa_crt, encoding="utf-8") as f:
             der = base64.b64decode("".join(ln for ln in f.read().splitlines() if "-----" not in ln))
         cls.tsa_sha256 = hashlib.sha256(der).hexdigest()
         cls._lock = threading.Lock()
@@ -392,7 +392,7 @@ class TestAutoAnchorTSA(unittest.TestCase):
         sth = w.seal(); w.close(seal=False)
         seg = os.path.join(self.d, sth["segment"])
         self.assertTrue(os.path.exists(seg + ".sth.tsr"))
-        meta = json.load(open(seg + ".sth.tsr.json"))
+        meta = json.load(open(seg + ".sth.tsr.json", encoding="utf-8"))
         self.assertTrue(meta["granted"] and meta["digest_bound"])
         self.assertEqual(meta["token_status"], "signature_only")      # the seal pins nothing
         self.assertRegex(meta["gen_time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
@@ -422,7 +422,7 @@ class TestAutoAnchorTSA(unittest.TestCase):
         for i in range(10):
             w.append({"i": i})
         sth = w.seal(); w.close(seal=False)
-        meta = json.load(open(os.path.join(self.d, sth["segment"] + ".sth.tsr.json")))
+        meta = json.load(open(os.path.join(self.d, sth["segment"] + ".sth.tsr.json"), encoding="utf-8"))
         self.assertFalse(meta["digest_bound"])
         for pins in (None, [self.tsa_crt], [f"{self.cms_dir}/c.pem"]):
             r = ing.verify_archive(self.d, tsa_certs=pins)
@@ -589,7 +589,7 @@ class TestAutoAnchorTSA(unittest.TestCase):
         self.assertIn("TSA irraggiungibile", w.last_anchor_error)
         seg = os.path.join(self.d, sth["segment"])
         self.assertFalse(os.path.exists(seg + ".sth.tsr"))
-        meta = json.load(open(seg + ".sth.tsr.json"))
+        meta = json.load(open(seg + ".sth.tsr.json", encoding="utf-8"))
         self.assertIn("error", meta)                # l'onestà sta nel receipt
         r = ing.verify_archive(self.d)
         self.assertTrue(r["ok"])                    # integrità intatta…
@@ -643,7 +643,7 @@ class TestAutoAnchorTSA(unittest.TestCase):
         for i in range(20):
             w.append({"i": i})
         sth = w.seal(); w.close(seal=False)
-        meta = json.load(open(os.path.join(self.d, sth["segment"] + ".sth.tsr.json")))
+        meta = json.load(open(os.path.join(self.d, sth["segment"] + ".sth.tsr.json"), encoding="utf-8"))
         self.assertTrue(meta["granted"] and meta["digest_bound"])
         self.assertTrue(meta["eidas_qualified"])    # validato 2026-08-16: Izenpe in TL ES
         r = ing.verify_archive(self.d, lotl_check=True, lotl_member_states=["ES"])
@@ -709,7 +709,7 @@ class TestIngestSignedTip(unittest.TestCase):
         seg = w._seg_path(w._seq)
         r = verifier.verify_ledger(seg, trusted_pubkey_hex=self.pk, require_tip=True)
         self.assertEqual(r["verdict"], "PASS", r.get("parse_errors")); self.assertEqual(r["tip"]["entries"], 37)
-        with open(seg) as f:
+        with open(seg, encoding="utf-8") as f:
             first_id = json.loads(f.readline())["self_hash"]
         self.assertEqual(r["tip"]["ledger_id"], first_id)
         w.close(seal=False)

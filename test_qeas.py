@@ -62,10 +62,10 @@ class TestQeasAdapter(unittest.TestCase):
         # il banco sa fallire: se il pack cambia DOPO il deposito, il digest non combacia
         Q.archive_pack(self.pack, self._backend(), now=1000.0)
         p = os.path.join(self.pack, "MANIFEST.json")
-        man = json.load(open(p))
+        man = json.load(open(p, encoding="utf-8"))
         man["subject"] = "riscritto dopo l'archiviazione"
         man["manifest_digest_sha256"] = "0" * 64      # forza un digest diverso
-        json.dump(man, open(p, "w"))
+        json.dump(man, open(p, "w", encoding="utf-8", newline=""))
         v = Q.verify_pack_archive(self.pack, self._backend())
         self.assertFalse(v["local_digest_match"])
         self.assertFalse(v["legal_value"])

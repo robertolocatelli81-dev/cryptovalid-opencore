@@ -32,7 +32,7 @@ def child(code: str, *args, timeout: int = 60):
     """run `code` with the repository on sys.path; (returncode, stdout, stderr); returncode 124 when it did not finish"""
     pre = "import sys, json, os\nsys.dont_write_bytecode = True\nsys.path.insert(0, %r)\n" % ROOT
     try:
-        p = subprocess.run([sys.executable, "-c", pre + textwrap.dedent(code), *args], capture_output=True, text=True,
+        p = subprocess.run([sys.executable, "-c", pre + textwrap.dedent(code), *args], capture_output=True, text=True, encoding="utf-8",
                            timeout=timeout, env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
         return p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired:
@@ -60,10 +60,10 @@ class Bounded(unittest.TestCase):
         with open(p, "wb") as f:
             f.truncate(size)
         m = os.path.join(self.pack, "MANIFEST.json")
-        with open(m) as f:
+        with open(m, encoding="utf-8") as f:
             man = json.load(f)
         man["file_digests_sha256"][name] = digest
-        with open(m, "w") as f:
+        with open(m, "w", encoding="utf-8", newline="") as f:
             json.dump(man, f)
 
     VERIFY_RSS = """
@@ -166,16 +166,16 @@ class Fifos(unittest.TestCase):
     def test_a_pipe_is_read_as_in_the_other_verifiers(self):
         """`verifier.py <(cat ledger)`: the bytes of the pipe, the verdict of the same bytes in a file (0.20.2 contract,
         the oracle case input-fifo); a writer slower than one block, and a tampered ledger, read whole"""
-        with open(os.path.join(ROOT, "examples", "sample_ledger.jsonl")) as f:
+        with open(os.path.join(ROOT, "examples", "sample_ledger.jsonl"), encoding="utf-8") as f:
             lines = f.read().splitlines(True)
         rc, out, err = self.run_fed(lines, 0.3)
         self.assertEqual((rc, json.loads(out)), (0, ["PASS", len(lines), []]), err[-300:])
-        with open(os.path.join(ROOT, "examples", "sample_ledger_tampered.jsonl")) as f:
+        with open(os.path.join(ROOT, "examples", "sample_ledger_tampered.jsonl"), encoding="utf-8") as f:
             rc, out, err = self.run_fed([f.read()], 0)
         self.assertEqual(json.loads(out)[0], "FAIL")
 
     def test_a_pipe_over_the_bound(self):
-        with open(os.path.join(ROOT, "examples", "sample_ledger.jsonl")) as f:
+        with open(os.path.join(ROOT, "examples", "sample_ledger.jsonl"), encoding="utf-8") as f:
             text = f.read()
         rc, out, err = self.run_fed([text], 0, limit=len(text) - 1)
         self.assertEqual(json.loads(out)[0], "FAIL", err[-300:])

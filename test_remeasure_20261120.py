@@ -36,7 +36,7 @@ SEED = 20261120
 
 def _ledger(path, n=3, tag="e"):
     prev = "0" * 64
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for i in range(n):
             e = {"idx": i, "ts": "2026-11-20T10:%02d:00Z" % i, "data": {"event": "%s%d" % (tag, i)}, "prev_hash": prev}
             e["self_hash"] = hashlib.sha256(json.dumps(e, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -139,7 +139,7 @@ class Rule2DuplicateKeys(unittest.TestCase):
         self.pub = signer.keygen(self.key)["public_key_hex"]
         self.signed = os.path.join(self.d, "s.jsonl")
         signer.sign_ledger(led, self.signed, self.key)
-        self.lines = open(self.signed).read().splitlines()
+        self.lines = open(self.signed, encoding="utf-8").read().splitlines()
 
     def test_signed_ledger_control(self):
         self.assertTrue(self.signer.verify_file(self.signed, self.pub)["ok"])
@@ -150,7 +150,7 @@ class Rule2DuplicateKeys(unittest.TestCase):
         for i, ln in enumerate(self.lines):
             for text in _dup_variants(json.loads(ln), rnd):
                 p = os.path.join(self.d, "dup%d.jsonl" % n)
-                with open(p, "w") as f:
+                with open(p, "w", encoding="utf-8", newline="") as f:
                     f.write("\n".join(self.lines[:i] + [text] + self.lines[i + 1:]) + "\n")
                 r = self.signer.verify_file(p, self.pub)
                 self.assertFalse(r["ok"], text)
@@ -161,7 +161,7 @@ class Rule2DuplicateKeys(unittest.TestCase):
 
     def _jws(self, header_text, payload_bytes):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(open(self.key).read().strip()))
+        sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(open(self.key, encoding="utf-8").read().strip()))
         b = lambda x: base64.urlsafe_b64encode(x).rstrip(b"=").decode()  # noqa: E731
         h, p = b(header_text.encode()), b(payload_bytes)
         return "%s.%s.%s" % (h, p, b(sk.sign(("%s.%s" % (h, p)).encode())))
@@ -541,13 +541,13 @@ class Rule7PackReadsALedgerOnce(unittest.TestCase):
         d = tempfile.mkdtemp()
         pack, _lp, _g, _b = self.build(d, False)
         mp = os.path.join(pack, "MANIFEST.json")
-        with open(mp) as f:
+        with open(mp, encoding="utf-8") as f:
             man = json.load(f)
         man["file_digests_sha256"] = {}
         body = {k: v for k, v in man.items() if k not in ("manifest_digest_sha256", "rfc3161_timestamp",
                                                          "manifest_signature", "manifest_signer")}
         man["manifest_digest_sha256"] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        with open(mp, "w") as f:
+        with open(mp, "w", encoding="utf-8", newline="") as f:
             json.dump(man, f)
         r = E.verify_pack(pack)
         self.assertFalse(r["valid"])                                   # no file listed: digest_mismatch, as before
@@ -572,10 +572,10 @@ class Rule8SignerSignsEntriesOnly(unittest.TestCase):
         w.append({"x": 1})
         w.seal()
         w.close(seal=False)
-        with open(glob.glob(os.path.join(arc, "*.sth.json"))[0]) as f:
+        with open(glob.glob(os.path.join(arc, "*.sth.json"))[0], encoding="utf-8") as f:
             h = I._sth_canonical_hash(json.load(f))
         led = os.path.join(self.d, "forged.jsonl")
-        with open(led, "w") as f:
+        with open(led, "w", encoding="utf-8", newline="") as f:
             f.write(json.dumps({"idx": 0, "ts": "2026-11-20T00:00:00Z", "data": {}, "prev_hash": "0" * 64, "self_hash": h}) + "\n")
         with self.assertRaises(ValueError) as cm:
             self.signer.sign_ledger(led, os.path.join(self.d, "out.jsonl"), self.key)
@@ -586,7 +586,7 @@ class Rule8SignerSignsEntriesOnly(unittest.TestCase):
         for i in range(120):
             led = os.path.join(self.d, "g%d.jsonl" % i)
             _ledger(led, rnd.randrange(1, 5), tag="t%d-" % i)
-            with open(led) as f:
+            with open(led, encoding="utf-8") as f:
                 lines = f.read().splitlines()
             j = rnd.randrange(len(lines))
             e = json.loads(lines[j])
@@ -609,7 +609,7 @@ class Rule8SignerSignsEntriesOnly(unittest.TestCase):
             else:             # a key written twice, or a line that is not an object
                 lines[j] = rnd.choice(['{"idx": 0, "idx": 0}', "[1]", "7"])
                 want = "not a JSON object with distinct keys"
-            with open(led, "w") as f:
+            with open(led, "w", encoding="utf-8", newline="") as f:
                 f.write("\n".join(lines) + "\n")
             out = os.path.join(self.d, "o%d.jsonl" % i)
             with self.assertRaises(ValueError) as cm:
@@ -626,7 +626,7 @@ def _redigest(manifest_path, man):
     body = {k: v for k, v in man.items() if k not in ("manifest_digest_sha256", "rfc3161_timestamp",
                                                       "manifest_signature", "manifest_signer")}
     man["manifest_digest_sha256"] = hashlib.sha256(_canon(body)).hexdigest()
-    with open(manifest_path, "w") as f:
+    with open(manifest_path, "w", encoding="utf-8", newline="") as f:
         json.dump(man, f)
 
 
@@ -639,7 +639,7 @@ class Rule7OneReadHoweverTheNameIsSpelled(unittest.TestCase):
         d = tempfile.mkdtemp()
         pack, lp, good, bad = Rule7PackReadsALedgerOnce.build(self, d, broken)
         mp = os.path.join(pack, "MANIFEST.json")
-        with open(mp) as f:
+        with open(mp, encoding="utf-8") as f:
             man = json.load(f)
         if spelling == "dot":        # file_digests_sha256 names "./l.jsonl", ledgers names "l.jsonl"
             man["file_digests_sha256"] = {("./" + k if k == "l.jsonl" else k): v
@@ -687,7 +687,7 @@ class Rule7OneReadHoweverTheNameIsSpelled(unittest.TestCase):
             for where in ("ledgers", "digests"):
                 E, pack, _lp, _good, _bad = self.pack(False, "same")
                 mp = os.path.join(pack, "MANIFEST.json")
-                with open(mp) as f:
+                with open(mp, encoding="utf-8") as f:
                     man = json.load(f)
                 if where == "ledgers":
                     man["ledgers"][0]["file"] = name
@@ -744,7 +744,7 @@ class Rule7OneReadHoweverTheNameIsSpelled(unittest.TestCase):
             with open(lp, "rb") as f:
                 data = f.read()
             _write(lp, data + b" " * pad + b"\xff\xfe\n")
-            with open(mp) as f:
+            with open(mp, encoding="utf-8") as f:
                 man = json.load(f)
             with open(lp, "rb") as f:
                 man["file_digests_sha256"]["l.jsonl"] = hashlib.sha256(f.read()).hexdigest()
@@ -777,10 +777,10 @@ class Rule8OtherSignedDocumentsAreNotEntries(unittest.TestCase):
         pack = os.path.join(self.d, "pack")
         E.build_pack([self.led], pack, subject="made by someone else")
         mp = os.path.join(pack, "MANIFEST.json")
-        with open(mp) as f:
+        with open(mp, encoding="utf-8") as f:
             man = json.load(f)
         forged = os.path.join(self.d, "forged.jsonl")
-        with open(forged, "w") as f:
+        with open(forged, "w", encoding="utf-8", newline="") as f:
             f.write(json.dumps({"idx": 0, "ts": "2026-11-20T00:00:00Z", "data": {}, "prev_hash": "0" * 64,
                                 "self_hash": man["manifest_digest_sha256"]}) + "\n")
         out = os.path.join(self.d, "out.jsonl")
@@ -805,10 +805,10 @@ class Rule8OtherSignedDocumentsAreNotEntries(unittest.TestCase):
         E.build_pack([self.led], pack, sign_key=self.key)
         docs = []
         for p in (glob.glob(os.path.join(arc, "*.sth.json"))[0], os.path.join(arc, "ledger.head.json")):
-            with open(p) as f:
+            with open(p, encoding="utf-8") as f:
                 doc = json.load(f)
             docs.append((dict(doc, self_hash=I._sth_canonical_hash(doc)), doc["signature"]))
-        with open(os.path.join(pack, "MANIFEST.json")) as f:
+        with open(os.path.join(pack, "MANIFEST.json"), encoding="utf-8") as f:
             man = json.load(f)
         body = {k: v for k, v in man.items() if k not in ("manifest_digest_sha256", "rfc3161_timestamp",
                                                           "manifest_signature", "manifest_signer")}
@@ -816,7 +816,7 @@ class Rule8OtherSignedDocumentsAreNotEntries(unittest.TestCase):
         for i, (line, sig) in enumerate(docs):
             line["signature"] = sig
             p = os.path.join(self.d, "as_entry%d.jsonl" % i)
-            with open(p, "w") as f:
+            with open(p, "w", encoding="utf-8", newline="") as f:
                 f.write(json.dumps(line) + "\n")
             r = self.signer.verify_file(p, self.pub)   # until this rule: ok, verified 1, under the pinned key
             self.assertFalse(r["ok"], (i, r))
@@ -939,17 +939,17 @@ class Rule2TreeHeadsAndReceipts(unittest.TestCase):
         self.assertTrue(I.verify_archive(arc, expected_pubkey_hex=[self.pub])["ok"])     # control
         for p, member, reason in ((glob.glob(os.path.join(arc, "*.sth.json"))[0], "tree_size", "sth_unreadable: duplicate_key"),
                                   (os.path.join(arc, "ledger.head.json"), "segments_sealed", "head_unreadable: duplicate_key")):
-            with open(p) as f:
+            with open(p, encoding="utf-8") as f:
                 text = f.read()
             for first in (True, False):   # the other value first (the signed one is read last) or last
                 body = json.dumps(json.loads(text))[1:-1]
                 dup = '"%s": 999999' % member
-                with open(p, "w") as f:
+                with open(p, "w", encoding="utf-8", newline="") as f:
                     f.write("{" + (dup + ", " + body if first else body + ", " + dup) + "}")
                 r = I.verify_archive(arc, expected_pubkey_hex=[self.pub])
                 self.assertFalse(r["ok"], (member, first))
                 self.assertIn(reason, [x["reason"] for x in r["failures"]])
-            with open(p, "w") as f:
+            with open(p, "w", encoding="utf-8", newline="") as f:
                 f.write(text)
         self.assertTrue(I.verify_archive(arc, expected_pubkey_hex=[self.pub])["ok"])     # control: restored
 
@@ -959,14 +959,14 @@ class Rule2TreeHeadsAndReceipts(unittest.TestCase):
         led = os.path.join(self.d, "l.jsonl")
         _ledger(led, 3)
         rc = R.inclusion_receipt(led, 1, self.key)
-        with open(led) as f:
+        with open(led, encoding="utf-8") as f:
             entry = json.loads(f.read().splitlines()[1])
         rp, ep = os.path.join(self.d, "r.json"), os.path.join(self.d, "e.json")
 
         def run(receipt_text, entry_text):
-            with open(rp, "w") as f:
+            with open(rp, "w", encoding="utf-8", newline="") as f:
                 f.write(receipt_text)
-            with open(ep, "w") as f:
+            with open(ep, "w", encoding="utf-8", newline="") as f:
                 f.write(entry_text)
             cp = subprocess.run([sys.executable, os.path.join(_HERE, "cryptovalid_receipt.py"), "verify", rp, self.pub,
                                  "--entry-json", ep], stdout=subprocess.PIPE, stderr=subprocess.PIPE)

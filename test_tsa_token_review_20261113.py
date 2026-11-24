@@ -199,7 +199,7 @@ class HandBuiltTokens(unittest.TestCase):
         b = os.path.join(self.d, "binkill")
         os.makedirs(b, exist_ok=True)
         real = shutil.which("openssl")
-        with open(os.path.join(b, "openssl"), "w") as f:
+        with open(os.path.join(b, "openssl"), "w", encoding="utf-8", newline="") as f:
             f.write('#!/bin/sh\nif [ "$1" = ts ]; then kill -9 $$; fi\nexec "%s" "$@"\n' % real)
         os.chmod(os.path.join(b, "openssl"), 0o755)
         old = os.environ["PATH"]
@@ -233,7 +233,7 @@ class HandBuiltTokens(unittest.TestCase):
         b = os.path.join(self.d, "bin")
         os.makedirs(b, exist_ok=True)
         real = shutil.which("openssl")
-        with open(os.path.join(b, "openssl"), "w") as f:
+        with open(os.path.join(b, "openssl"), "w", encoding="utf-8", newline="") as f:
             f.write('#!/bin/sh\nif [ "$1" = ts ]; then exit 0; fi\nexec "%s" "$@"\n' % real)
         os.chmod(os.path.join(b, "openssl"), 0o755)
         old = os.environ["PATH"]
@@ -280,11 +280,11 @@ class TsaCertOption(unittest.TestCase):
         d = tempfile.mkdtemp(prefix="cv-review-cli-")
         try:
             led = os.path.join(d, "l.jsonl")
-            with open(led, "w") as f:
+            with open(led, "w", encoding="utf-8", newline="") as f:
                 f.write("")
             empty, notcert, fifo = os.path.join(d, "e.pem"), os.path.join(d, "n.pem"), os.path.join(d, "fifo")
-            open(empty, "w").close()
-            with open(notcert, "w") as f:
+            open(empty, "w", encoding="utf-8", newline="").close()
+            with open(notcert, "w", encoding="utf-8", newline="") as f:
                 f.write("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
             bad = [os.path.join(d, "missing.pem"), d, empty, notcert]
             if hasattr(os, "mkfifo"):
@@ -296,7 +296,7 @@ class TsaCertOption(unittest.TestCase):
             for cmd in cmds:
                 for pin in bad:
                     with self.subTest(cmd=os.path.basename(cmd[2]), pin=os.path.basename(pin)):
-                        p = subprocess.run(cmd + ["--tsa-cert", pin], capture_output=True, text=True, timeout=60)
+                        p = subprocess.run(cmd + ["--tsa-cert", pin], capture_output=True, text=True, encoding="utf-8", timeout=60)
                         self.assertEqual(p.returncode, 2, p.stderr[-300:])
                         self.assertNotIn("Traceback", p.stderr)
                         self.assertIn("tsa_certs", p.stderr)
@@ -315,13 +315,13 @@ class PackReportRow(unittest.TestCase):
         orig = EP._rfc3161_stamp
         try:
             cnf = os.path.join(d, "tsa.cnf")
-            with open(cnf, "w") as f:
+            with open(cnf, "w", encoding="utf-8", newline="") as f:
                 f.write("[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=TSA made here\n[ext]\n"
                         "extendedKeyUsage=critical,timeStamping\n[tsa]\ndefault_tsa=t1\n[t1]\nserial=%s\nsigner_cert=%s\n"
                         "signer_key=%s\nsigner_digest=sha256\ndefault_policy=1.2.3.4.1\ndigests=sha256\n"
                         "ess_cert_id_alg=sha256\n" % (cnf_path(os.path.join(d, "serial")), cnf_path(os.path.join(d, "tsa.crt")),
                                                     cnf_path(os.path.join(d, "tsa.key"))))
-            with open(os.path.join(d, "serial"), "w") as f:
+            with open(os.path.join(d, "serial"), "w", encoding="utf-8", newline="") as f:
                 f.write("01\n")
             subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
                             "-keyout", os.path.join(d, "tsa.key"), "-out", os.path.join(d, "tsa.crt"), "-days", "2",
@@ -342,7 +342,7 @@ class PackReportRow(unittest.TestCase):
             led = os.path.join(d, "l.jsonl")
             e = {"idx": 0, "ts": "2026-11-13T00:00:00Z", "data": {"a": 1}, "prev_hash": "0" * 64}
             e["self_hash"] = hashlib.sha256(json.dumps(e, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            with open(led, "w") as f:
+            with open(led, "w", encoding="utf-8", newline="") as f:
                 f.write(json.dumps(e) + "\n")
             for alter, badge in ((False, "IMPRINT BOUND, TSA NOT PINNED"), (True, "TOKEN INVALID")):
                 with self.subTest(alter=alter):

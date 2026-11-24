@@ -35,7 +35,7 @@ def _rechain(entries):
 
 class TestBareLedgerScope(unittest.TestCase):
     def setUp(self):
-        self.src = [json.loads(ln) for ln in open(SAMPLE) if ln.strip()]
+        self.src = [json.loads(ln) for ln in open(SAMPLE, encoding="utf-8") if ln.strip()]
         self.tmp = tempfile.TemporaryDirectory()
 
     def tearDown(self):
@@ -43,7 +43,7 @@ class TestBareLedgerScope(unittest.TestCase):
 
     def _verify(self, entries):
         p = os.path.join(self.tmp.name, "l.jsonl")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write("".join(json.dumps(e) + "\n" for e in entries))
         return V.verify_ledger(p)
 
@@ -61,7 +61,7 @@ class TestBareLedgerScope(unittest.TestCase):
 
     def test_empty_ledger_exit_code_is_nonzero(self):
         p = os.path.join(self.tmp.name, "empty.jsonl")
-        open(p, "w").close()
+        open(p, "w", encoding="utf-8", newline="").close()
         self.assertEqual(V.main([p, "--quiet"]), 1)
 
     def test_truncation_passes_but_scope_says_so(self):
@@ -115,11 +115,11 @@ class TestNonObjectLines(unittest.TestCase):
         for extra in ("[]", "1", '"x"', "null", "[1,2]"):
             for lines in (rows + [extra], [extra] + rows):
                 p = os.path.join(d, "l.jsonl")
-                open(p, "w").write("\n".join(lines) + "\n")
+                open(p, "w", encoding="utf-8", newline="").write("\n".join(lines) + "\n")
                 r = V.verify_ledger(p)
                 self.assertEqual(r["verdict"], "FAIL", extra)
                 self.assertIn("not_a_json_object", json.dumps(r), extra)
-                cp = subprocess.run([sys.executable, "-B", os.path.join(os.path.dirname(os.path.abspath(__file__)), "verifier.py"), p], capture_output=True, text=True, timeout=60)
+                cp = subprocess.run([sys.executable, "-B", os.path.join(os.path.dirname(os.path.abspath(__file__)), "verifier.py"), p], capture_output=True, text=True, encoding="utf-8", timeout=60)
                 self.assertEqual((cp.returncode, "Traceback" in cp.stderr), (1, False), extra)
 
 

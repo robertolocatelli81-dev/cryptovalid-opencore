@@ -48,9 +48,9 @@ class _Base(unittest.TestCase):
 
     def _tamper(self):
         p = os.path.join(self.pack, "signed.jsonl")
-        rows = [json.loads(x) for x in open(p)]
+        rows = [json.loads(x) for x in open(p, encoding="utf-8")]
         rows[1]["data"]["d"] = "reject"
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             for x in rows:
                 f.write(json.dumps(x) + "\n")
 
@@ -83,7 +83,7 @@ class TestReportPositive(_Base):
         # dettaglio ledger: file, conteggio entry e testa presenti
         self.assertIn("signed.jsonl", doc)
         self.assertIn("<td>2</td>", doc)                      # entry count dal manifest
-        man = json.load(open(os.path.join(self.pack, "MANIFEST.json")))
+        man = json.load(open(os.path.join(self.pack, "MANIFEST.json"), encoding="utf-8"))
         self.assertIn(man["manifest_digest_sha256"], doc)     # report ID = digest manifest
         self.assertIn(man["signer_pubkeys"][0], doc)          # chiave firmataria mostrata
         self.assertIn("NOT ANCHORED", doc)                    # niente TSA -> dichiarato, non nascosto
@@ -123,9 +123,9 @@ class TestReportPositive(_Base):
     @NEEDS_CRYPTO
     def test_html_injection_escaped(self):
         mp = os.path.join(self.pack, "MANIFEST.json")
-        man = json.load(open(mp))
+        man = json.load(open(mp, encoding="utf-8"))
         man["subject"] = "<script>alert(1)</script>"
-        json.dump(man, open(mp, "w"))                          # rompe anche il digest: doppio uso
+        json.dump(man, open(mp, "w", encoding="utf-8", newline=""))                          # rompe anche il digest: doppio uso
         r = report.generate_report(self.pack, html_only=True)
         doc = open(r["html"], encoding="utf-8").read()
         self.assertNotIn("<script>alert(1)</script>", doc)     # escapato SEMPRE
@@ -142,14 +142,14 @@ class TestReviewFollowups(_Base):
         # l'escaping deve tenere lo stesso (attacco più forte della review)
         import hashlib
         mp = os.path.join(self.pack, "MANIFEST.json")
-        man = json.load(open(mp))
+        man = json.load(open(mp, encoding="utf-8"))
         man["subject"] = '"><script>alert(1)</script>'
         m2 = {k: v for k, v in man.items()
               if k not in ("manifest_digest_sha256", "rfc3161_timestamp",
                            "manifest_signature", "manifest_signer")}
         man["manifest_digest_sha256"] = hashlib.sha256(
             json.dumps(m2, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        json.dump(man, open(mp, "w"))
+        json.dump(man, open(mp, "w", encoding="utf-8", newline=""))
         r = report.generate_report(self.pack, html_only=True)
         self.assertTrue(r["valid"])                            # verde davvero
         doc = open(r["html"], encoding="utf-8").read()
@@ -163,7 +163,7 @@ class TestReviewFollowups(_Base):
         self.assertIn("MANIFEST.json unreadable", r.get("error", ""))
 
     def test_corrupt_manifest_clean_error(self):
-        with open(os.path.join(self.pack, "MANIFEST.json"), "w") as f:
+        with open(os.path.join(self.pack, "MANIFEST.json"), "w", encoding="utf-8", newline="") as f:
             f.write("{not json")
         r = report.generate_report(self.pack, html_only=True)
         self.assertFalse(r["valid"])
@@ -175,7 +175,7 @@ class TestNoRendererVerdict(_Base):
     """Invariante: il renderer non possiede un verdetto suo — riflette verify_pack()."""
 
     def test_render_reflects_forced_failure(self):
-        man = json.load(open(os.path.join(self.pack, "MANIFEST.json")))
+        man = json.load(open(os.path.join(self.pack, "MANIFEST.json"), encoding="utf-8"))
         verification = evidence_pack.verify_pack(self.pack)
         verification["valid"] = False                          # il checker dice NO
         doc = report.render_html(man, verification, {"checked": False, "qualified": None})
@@ -192,7 +192,7 @@ class TestSolanaAnchor(_Base):
             return json.load(f)
 
     def _write_anchor(self, digest):
-        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8", newline="") as f:
             json.dump({"tx_signature": "5" * 64, "digest_sha3_hex": digest}, f)
 
     def test_absent_anchor_is_honest_na(self):
@@ -265,7 +265,7 @@ class TestSolanaAnchor(_Base):
 
     def test_verifier_error_is_inconclusive_and_signer_is_passed(self):
         d = report.solana_anchor_digest(self._manifest())
-        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8", newline="") as f:
             json.dump({"tx_signature": "5" * 64, "digest_sha3_hex": " " + d.upper() + "\n", "expected_signer": "S1"}, f)
         seen = {}
 
@@ -303,7 +303,7 @@ class TestSolanaAnchor(_Base):
                   '{"tx_signature":NaN,"digest_sha3_hex":"%s"}' % d]
         for body in bodies:
             with self.subTest(body=body[:40]):
-                with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+                with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8", newline="") as f:
                     f.write(body)
                 r = self._with_verifier(never)
                 self.assertEqual((r["solana"]["present"], r["solana"]["checked"], r["solana"]["verified"]),
@@ -315,7 +315,7 @@ class TestSolanaAnchor(_Base):
     def test_manifest_that_is_not_an_object_clean_error(self):
         for body in ("[]", '"x"', "null", "1", "[" * 100000):
             with self.subTest(body=body[:10]):
-                with open(os.path.join(self.pack, "MANIFEST.json"), "w", encoding="utf-8") as f:
+                with open(os.path.join(self.pack, "MANIFEST.json"), "w", encoding="utf-8", newline="") as f:
                     f.write(body)
                 r = report.generate_report(self.pack, html_only=True)
                 self.assertIs(r["valid"], False)
@@ -328,9 +328,9 @@ class TestDuplicateKeys(_Base):
     read (2026-11-23)."""
 
     def test_anchor_with_a_key_twice_is_a_failed_anchor(self):
-        man = json.load(open(os.path.join(self.pack, "MANIFEST.json")))
+        man = json.load(open(os.path.join(self.pack, "MANIFEST.json"), encoding="utf-8"))
         good = report.solana_anchor_digest(man)
-        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w") as f:
+        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8", newline="") as f:
             f.write('{"tx_signature": "s", "digest_sha3_hex": "00", "digest_sha3_hex": "%s"}' % good)
         s = report.solana_status(self.pack, man)
         self.assertIs(s["verified"], False)
@@ -338,9 +338,9 @@ class TestDuplicateKeys(_Base):
 
     def test_manifest_with_a_key_twice_is_unreadable(self):
         p = os.path.join(self.pack, "MANIFEST.json")
-        raw = open(p).read().rstrip()
+        raw = open(p, encoding="utf-8").read().rstrip()
         self.assertTrue(raw.endswith("}"))
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write(raw[:-1] + ', "manifest_digest_sha256": "' + "a" * 64 + '"}')
         r = report.generate_report(self.pack, html_only=True)
         self.assertFalse(r["valid"])
@@ -358,7 +358,7 @@ class SolanaDigestCli(unittest.TestCase):
                 with open(os.path.join(d, "MANIFEST.json"), "wb") as f:
                     f.write(manifest_bytes)
             return subprocess.run([sys.executable, report.__file__, d, "--solana-digest"],
-                                  capture_output=True, text=True, timeout=60)
+                                  capture_output=True, text=True, encoding="utf-8", timeout=60)
 
     def test_bad_manifests_are_usage_errors(self):
         def digest(v):
@@ -384,7 +384,7 @@ class SolanaDigestCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             os.mkfifo(os.path.join(d, "MANIFEST.json"))
             r = subprocess.run([sys.executable, report.__file__, d, "--solana-digest"],
-                               capture_output=True, text=True, timeout=60)
+                               capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(r.returncode, 2, r.stderr[-200:])
         self.assertIn("InputNotRegular", r.stderr)
 
@@ -408,7 +408,7 @@ class ManifestMembersOfAnotherType(_Base):
         with open(p, encoding="utf-8") as f:
             m = json.load(f)
         m.update(kw)
-        with open(p, "w", encoding="utf-8") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             json.dump(m, f)
 
     def test_signer_pubkeys_not_a_list(self):
@@ -420,7 +420,7 @@ class ManifestMembersOfAnotherType(_Base):
                 self.assertTrue(r["html"])
 
     def test_manifest_digest_not_a_string_with_an_anchor(self):
-        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8", newline="") as f:
             json.dump({"tx_signature": "s", "digest_sha3_hex": "00"}, f)
         for v in (5, None, ["a"], {"x": 1}):
             with self.subTest(v=v):
@@ -443,13 +443,13 @@ class ManifestMembersOfAnotherType(_Base):
         for v in ("", "\ud800", "AB" * 32, "ab" * 31, "ab" * 33, "ab" * 32 + "\n"):
             with self.subTest(v=v):
                 self._manifest(manifest_digest_sha256=v)
-                with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+                with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8", newline="") as f:
                     json.dump({"tx_signature": "s", "digest_sha3_hex": hashlib.sha3_256(
                         v.encode("utf-8", "surrogatepass")).hexdigest()}, f)
                 r = report.generate_report(self.pack, html_only=True)
                 self.assertEqual((r["valid"], r["solana"]["present"], r["solana"]["verified"]), (False, True, False))
         self._manifest(manifest_digest_sha256="ab" * 32)                                  # control: 64 hex binds
-        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(self.pack, "SOLANA_ANCHOR.json"), "w", encoding="utf-8", newline="") as f:
             json.dump({"tx_signature": "s", "digest_sha3_hex": hashlib.sha3_256(("ab" * 32).encode()).hexdigest()}, f)
         self.assertIsNone(report.generate_report(self.pack, html_only=True)["solana"]["verified"])
 

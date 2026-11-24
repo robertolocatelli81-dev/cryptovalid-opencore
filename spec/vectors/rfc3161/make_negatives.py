@@ -53,9 +53,9 @@ def main():
     digest = hashlib.sha256(open(data, "rb").read()).digest()
     d = tempfile.mkdtemp(prefix="rfc3161-neg-")
     j = lambda n: os.path.join(d, n)  # noqa: E731
-    with open(j("tsa.cnf"), "w") as f:
+    with open(j("tsa.cnf"), "w", encoding="utf-8", newline="") as f:
         f.write(CNF.format(d="".join("\\" + c if c in "\\$#\"'" else c for c in d)))   # OpenSSL config escapes (Windows paths)
-    with open(j("serial"), "w") as f:
+    with open(j("serial"), "w", encoding="utf-8", newline="") as f:
         f.write("01\n")
     run("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", j("tsa.key"), "-out", j("tsa.crt"),
         "-days", "2", "-config", j("tsa.cnf"), "-extensions", "ext")

@@ -66,7 +66,7 @@ class TestStubMatchesRuntime(unittest.TestCase):
 
     def test_command_exit_codes(self):
         cmd = [sys.executable, os.path.join(HERE, "tools", "check_stub.py"), HERE, "cryptovalid"]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("0 difference(s)", r.stdout)
         self.assertEqual(subprocess.run(cmd[:2], capture_output=True).returncode, 2)
@@ -117,11 +117,11 @@ class TestDeclaredNames(unittest.TestCase):
                 "import cryptovalid\n"
                 "print(cryptovalid.verify_ledger(sys.argv[2])['verdict'])\n")
         r = subprocess.run([sys.executable, "-B", "-c", code, HERE, os.path.join(HERE, "examples", "sample_ledger.jsonl")],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8")
         self.assertEqual((r.returncode, r.stdout.strip()), (0, "PASS"), r.stderr)
         # positive control: the block is real -- a module that needs cryptography at import time fails under it
         r = subprocess.run([sys.executable, "-B", "-c", code.replace("import cryptovalid\n", "import cryptography\nimport cryptovalid\n"),
-                            HERE, "x"], capture_output=True, text=True)
+                            HERE, "x"], capture_output=True, text=True, encoding="utf-8")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("blocked: cryptography", r.stderr)
 
@@ -236,7 +236,7 @@ class TestLedgerReceiptType(unittest.TestCase):
 def build_wheel(tree, out):
     """Build the wheel of `tree` with the installed setuptools (no network, no isolation). -> path of the wheel."""
     code = "import sys, setuptools.build_meta as b; print(b.build_wheel(sys.argv[1]))"
-    r = subprocess.run([sys.executable, "-c", code, out], cwd=tree, capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-c", code, out], cwd=tree, capture_output=True, text=True, encoding="utf-8")
     if r.returncode != 0:
         raise RuntimeError(r.stderr[-2000:])
     return os.path.join(out, r.stdout.strip().split("\n")[-1])
@@ -300,7 +300,7 @@ class TestWheelCarriesTheTypes(unittest.TestCase):
                 "assert os.path.dirname(verifier.__file__) == sys.argv[1], verifier.__file__\n"
                 "print(cryptovalid.__version__, cryptovalid.verify_ledger(sys.argv[2])['verdict'])\n")
         r = subprocess.run([sys.executable, "-B", "-c", code, site, os.path.join(HERE, "examples", "sample_ledger.jsonl")],
-                           capture_output=True, text=True, cwd=self.tmp.name)
+                           capture_output=True, text=True, encoding="utf-8", cwd=self.tmp.name)
         self.assertEqual(r.stdout.strip(), version + " PASS", r.stderr)
 
     def test_positive_controls_a_wheel_without_the_package_or_the_marker_is_seen(self):
@@ -313,7 +313,7 @@ class TestWheelCarriesTheTypes(unittest.TestCase):
             text = f.read()
         cut = re.sub(r"^packages\s*=.*\n", "", text[:text.index("\n[tool.setuptools.package-data]")] + "\n", flags=re.M)
         self.assertNotIn("packages", cut.split("[tool.setuptools]")[1].replace("no `packages`", ""))
-        with open(p, "w", encoding="utf-8") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write(cut)
         out = os.path.join(self.tmp.name, "out_nopkg")
         os.mkdir(out)

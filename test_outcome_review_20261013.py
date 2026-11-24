@@ -71,7 +71,7 @@ ssize_t write(int fd, const void *b, size_t n) {
 
 def big_unsigned(d):
     p = os.path.join(d, "big.jsonl")
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8", newline="") as f:
         for i in range(3000):
             f.write('{"ts":%d,"v":%d,"self_hash":"%s"}\n' % (i, i, "0" * 64))
     return p
@@ -114,7 +114,7 @@ class _Tmp(unittest.TestCase):
                 self.fail("no C compiler for the LD_PRELOAD shim")
             self.skipTest("no C compiler")
         src = os.path.join(self.d, "shim.c")
-        with open(src, "w") as f:
+        with open(src, "w", encoding="utf-8", newline="") as f:
             f.write(SHIM_C)
         so = os.path.join(self.d, "shim.so")
         subprocess.run([cc, "-shared", "-fPIC", "-o", so, src, "-ldl"], check=True, capture_output=True)
@@ -144,7 +144,7 @@ class TestPromisedFileOverExisting(_Tmp):
                 self.assertEqual(f.read(), before, "an existing private key was replaced")
             self.assertEqual(stat.S_IMODE(os.stat(key).st_mode), mode)
         fresh = os.path.join(self.d, "f.key")   # --pq: an existing .pq refuses BEFORE the Ed25519 key is written
-        with open(fresh + ".pq", "w") as f:
+        with open(fresh + ".pq", "w", encoding="utf-8", newline="") as f:
             f.write("PQ")
         rc, out, err = self.run_py([sg, "keygen", fresh, "--pq"])
         self.assertEqual((rc, out), (2, b""), err)
@@ -171,36 +171,36 @@ class TestPromisedFileOverExisting(_Tmp):
         if not _crypto():
             self.skipTest("cryptography not installed")
         key = os.path.join(self.d, "k.key")
-        with open(key + ".pq", "w") as f:
+        with open(key + ".pq", "w", encoding="utf-8", newline="") as f:
             f.write("EXISTING")
         rc, _, _ = self.run_py([os.path.join(HERE, "signer.py"), "keygen", key, "--pq"])
         self.assertNotEqual(rc, 0)
-        with open(key + ".pq") as f:
+        with open(key + ".pq", encoding="utf-8") as f:
             self.assertEqual(f.read(), "EXISTING")
 
     def test_out_read_only_symlink_mode(self):
         v = os.path.join(HERE, "verifier.py")
         ro = os.path.join(self.d, "ro.json")
-        with open(ro, "w") as f:
+        with open(ro, "w", encoding="utf-8", newline="") as f:
             f.write("KEEP")
         os.chmod(ro, 0o444)
         rc, _, err = self.run_py([v, SAMPLE, "--out", ro])
         self.assertEqual(rc, EX_IOERR, err)
-        with open(ro) as f:
+        with open(ro, encoding="utf-8") as f:
             self.assertEqual(f.read(), "KEEP")
         os.mkdir(os.path.join(self.d, "real"))
         target = os.path.join(self.d, "real", "r.json")
-        with open(target, "w") as f:
+        with open(target, "w", encoding="utf-8", newline="") as f:
             f.write("x")
         link = os.path.join(self.d, "link.json")
         os.symlink(os.path.join("real", "r.json"), link)
         rc, _, err = self.run_py([v, SAMPLE, "--out", link])
         self.assertEqual(rc, 0, err)
         self.assertTrue(os.path.islink(link), "the symlink at --out was replaced by a file")
-        with open(target) as f:
+        with open(target, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["verdict"], "PASS")
         priv = os.path.join(self.d, "priv.json")
-        with open(priv, "w") as f:
+        with open(priv, "w", encoding="utf-8", newline="") as f:
             f.write("x")
         os.chmod(priv, 0o600)
         p = subprocess.run(["bash", "-c", 'umask 022; exec "$@"', "_", PY, v, SAMPLE, "--out", priv], capture_output=True, env=ENV)
@@ -212,7 +212,7 @@ class TestPromisedFileOverExisting(_Tmp):
         src = os.path.join(self.d, "src.jsonl")
         shutil.copy(SAMPLE, src)
         dst = os.path.join(self.d, "dst.jsonl")
-        with open(dst, "w") as f:
+        with open(dst, "w", encoding="utf-8", newline="") as f:
             f.write("old")
         os.chmod(dst, 0o600)
         old = os.umask(0o022)
@@ -258,11 +258,11 @@ class TestCheckNotRunMore(_Tmp):
         rc, _, err = self.run_py([os.path.join(HERE, "evidence_pack.py"), "build", out, led])
         self.assertEqual(rc, 0, err)
         man = os.path.join(out, "MANIFEST.json")
-        with open(man) as f:
+        with open(man, encoding="utf-8") as f:
             m = json.load(f)
         # a claimed token: the bytes do not matter, openssl never answers in these cases
         m["rfc3161_timestamp"] = {"anchored": True, "tsa": "http://127.0.0.1:9/", "tsr_b64": "MAA="}
-        with open(man, "w") as f:
+        with open(man, "w", encoding="utf-8", newline="") as f:
             json.dump(m, f, ensure_ascii=False, indent=1, sort_keys=True)
         return out
 
@@ -270,7 +270,7 @@ class TestCheckNotRunMore(_Tmp):
         b = os.path.join(self.d, "bin")
         os.mkdir(b)
         p = os.path.join(b, "openssl")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write(body)
         os.chmod(p, 0o755)
         return dict(ENV, PATH=b + os.pathsep + ENV.get("PATH", ""))
@@ -357,7 +357,7 @@ class TestScittOut(_Tmp):
         rc, out, err = self.run_py([os.path.join(HERE, "signer.py"), "keygen", key])
         pub = json.loads(out)["public_key_hex"]
         st = os.path.join(self.d, "st.json")
-        with open(st, "w") as f:
+        with open(st, "w", encoding="utf-8", newline="") as f:
             f.write('{"x":1}')
         sc = os.path.join(HERE, "cryptovalid_scitt.py")
         signed = os.path.join(self.d, "s.cose")
@@ -382,7 +382,7 @@ class TestScittOut(_Tmp):
         rc, out, err = self.run_py(reg + [os.path.join(ro, "t.cose")])
         self.assertEqual(rc, EX_IOERR, err)
         self.assertIn(b"the statement is registered in the ledger", err)
-        with open(led) as f:
+        with open(led, encoding="utf-8") as f:
             self.assertEqual(len(f.read().splitlines()), 1)
 
     def test_ledger_fsync_failure_is_74_and_whole(self):
@@ -432,7 +432,7 @@ class TestWriter(_Tmp):
         r, p = self._nonblocking([os.path.join(HERE, "signer.py"), "verify", big])
 
         def cpu():
-            with open(f"/proc/{p.pid}/stat") as f:
+            with open(f"/proc/{p.pid}/stat", encoding="utf-8") as f:
                 fields = f.read().rsplit(")", 1)[1].split()
             return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
         import array
@@ -504,7 +504,7 @@ rc = verifier.main([sys.argv[2], "--quiet"])
 sys.stdout = sys.__stdout__; f.close(); t.join()
 print(rc, b"".join(got).lstrip(b"P").decode())
 '''
-        p = subprocess.run([PY, "-c", script, HERE, SAMPLE], capture_output=True, text=True, env=ENV, timeout=60)
+        p = subprocess.run([PY, "-c", script, HERE, SAMPLE], capture_output=True, text=True, encoding="utf-8", env=ENV, timeout=60)
         self.assertEqual(p.stdout, "0 CALLER-TEXT\nPASS\n\n", p.stderr[-400:])
 
     def test_one_byte_order_mark_per_stream(self):
@@ -590,7 +590,7 @@ ing.flush(); ing.close()
 print(sum(1 for l in open(seg) if l.strip()), verifier.verify_ledger(seg)["verdict"])
 '''
         try:
-            p = subprocess.run([PY, "-c", script, HERE, d], capture_output=True, text=True, env=ENV, timeout=120)
+            p = subprocess.run([PY, "-c", script, HERE, d], capture_output=True, text=True, encoding="utf-8", env=ENV, timeout=120)
             self.assertEqual(p.stdout.split(), ["43", "PASS"], p.stdout + p.stderr[-400:])
         finally:
             shutil.rmtree(d, ignore_errors=True)

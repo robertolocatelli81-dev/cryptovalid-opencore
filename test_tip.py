@@ -29,7 +29,7 @@ def _ledger(n):
 
 
 def _write(path, entries):
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for e in entries:
             f.write(json.dumps(e) + "\n")
 
@@ -102,14 +102,14 @@ class TestTip(unittest.TestCase):
         self.assertEqual(T.main(["check", self.led, "--trusted-pubkey", self.pk]), 1)
 
     def test_tampered_tip_document_is_refused(self):
-        p = self.led + ".tip.json"; d = json.load(open(p))
+        p = self.led + ".tip.json"; d = json.load(open(p, encoding="utf-8"))
         for field, val in (("entries", 19), ("tip_sha256", "11" * 32), ("ts", "2030-01-01T00:00:00+00:00"),
                            ("signature_hex", "00" * 64)):
             bad = dict(d); bad[field] = val
-            json.dump(bad, open(p, "w"))
+            json.dump(bad, open(p, "w", encoding="utf-8", newline=""))
             r = self._v(); self.assertEqual(r["verdict"], "FAIL", field); self.assertIn("tip_invalid", self._errors(r))
         for garbage in ("[1]", "{broken", ""):
-            open(p, "w").write(garbage)
+            open(p, "w", encoding="utf-8", newline="").write(garbage)
             r = self._v(); self.assertEqual(r["verdict"], "FAIL"); self.assertIn("tip_", self._errors(r))
 
     def test_log_pubkey_null_is_absent_and_a_non_string_is_refused(self):
@@ -124,9 +124,9 @@ class TestTip(unittest.TestCase):
         # declared limit; --tip-not-before refuses it; strict types: "10" / 10.0 are not the profile (Go agrees)
         # explicit instants only: signing "now" made this test depend on the clock (CI after 09:00 UTC went red)
         T.sign_tip(self.led, self.k, ts="2026-09-15T08:00:00+00:00")
-        old_tip = open(self.led + ".tip.json").read()
+        old_tip = open(self.led + ".tip.json", encoding="utf-8").read()
         _write(self.led, _ledger(25)); T.sign_tip(self.led, self.k, ts="2026-09-15T09:00:00+00:00")
-        _write(self.led, self.base); open(self.led + ".tip.json", "w").write(old_tip)
+        _write(self.led, self.base); open(self.led + ".tip.json", "w", encoding="utf-8", newline="").write(old_tip)
         r = self._v(); self.assertEqual(r["verdict"], "PASS")
         self.assertTrue(any("ROLLBACK" in x for x in r["scope"]["does_not_prove"]))
         r = self._v(tip_not_before="2026-09-15T09:00:00+00:00")
@@ -165,9 +165,9 @@ class TestTip(unittest.TestCase):
                                ("0050-06-15T12:00:00Z", "0050-06-15T12:00:00Z", "PASS")):
             T.sign_tip(self.led, self.k, ts=ts)
             self.assertEqual(self._v(tip_not_before=nb)["verdict"], expect, (ts, nb))
-        d = json.load(open(self.led + ".tip.json"))
+        d = json.load(open(self.led + ".tip.json", encoding="utf-8"))
         for bad in ("20", 20.0, True):
-            json.dump(dict(d, entries=bad), open(self.led + ".tip.json", "w"))
+            json.dump(dict(d, entries=bad), open(self.led + ".tip.json", "w", encoding="utf-8", newline=""))
             r = self._v(); self.assertEqual(r["verdict"], "FAIL", repr(bad))
             # 16/09 (r5): the tip is parsed with the strict profile, so a float `entries` is refused by the parser before
             # the "non-negative integer" check sees it; both are named FAILs (SPEC §22 rule 2, rows 2 and 7)

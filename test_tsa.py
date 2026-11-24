@@ -27,7 +27,7 @@ class TestTSA(unittest.TestCase):
         import tempfile
         f = tempfile.NamedTemporaryFile(delete=False); f.write(req); f.close()
         p = subprocess.run(["openssl", "ts", "-query", "-in", f.name, "-text"],
-                           capture_output=True, text=True); os.unlink(f.name)
+                           capture_output=True, text=True, encoding="utf-8"); os.unlink(f.name)
         self.assertEqual(p.returncode, 0)
         self.assertIn("sha256", p.stdout.lower())
     @unittest.skipUnless(os.environ.get("CRYPTOVALID_LIVE_TSA"), "set CRYPTOVALID_LIVE_TSA=1 for live TSA test")

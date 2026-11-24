@@ -81,7 +81,7 @@ class TestNoPathSharedWithAp2EvidencePack(unittest.TestCase):
     def test_positive_control_the_0_17_2_layout_fails(self):
         import tempfile
         d = tempfile.mkdtemp()
-        with open(os.path.join(d, "pyproject.toml"), "w") as f:
+        with open(os.path.join(d, "pyproject.toml"), "w", encoding="utf-8", newline="") as f:
             f.write('[project]\nname="x"\n[project.optional-dependencies]\nsign=["cryptography>=50"]\n'
                     '[tool.setuptools]\npackages=["pqcrypto"]\npy-modules=["ap2_evidence","verifier"]\n')
         st = self._st(os.path.join(d, "pyproject.toml"))["tool"]["setuptools"]

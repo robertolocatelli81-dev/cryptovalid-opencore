@@ -17,7 +17,7 @@ def _ledger(text_data_json: str) -> str:
     e = {"idx": 0, "ts": "2026-09-14T00:00:00Z", "prev_hash": "0" * 64, "data": data}
     e["self_hash"] = hashlib.sha256(_canon(e)).hexdigest()
     p = os.path.join(tempfile.mkdtemp(), "l.jsonl")
-    with open(p, "w", encoding="utf-8") as f:
+    with open(p, "w", encoding="utf-8", newline="") as f:
         f.write(json.dumps(e) + "\n")   # ensure_ascii: a lone surrogate is written back as \\udXXX
     return p
 
@@ -36,7 +36,7 @@ class TestLoneSurrogate(unittest.TestCase):
 
     def test_malformed_escape_is_a_decode_error_not_a_profile_label(self):
         p = os.path.join(tempfile.mkdtemp(), "m.jsonl")
-        with open(p, "w", encoding="utf-8") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write('{"idx":0,"ts":"t","prev_hash":"' + "0" * 64 + '","data":{"k":"\\uzzzz"},"self_hash":"' + "0" * 64 + '"}\n')
         r = V.verify_ledger(p)
         self.assertEqual(r["verdict"], "FAIL")

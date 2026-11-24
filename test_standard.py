@@ -31,7 +31,7 @@ class TestConformance(unittest.TestCase):
 
 class TestRegulatoryProfiles(unittest.TestCase):
     def test_profiles_shape(self):
-        prof = json.load(open(os.path.join(_HERE, "spec", "regulatory_profiles.json")))
+        prof = json.load(open(os.path.join(_HERE, "spec", "regulatory_profiles.json"), encoding="utf-8"))
         ids = {r["id"] for r in prof["regulations"]}
         self.assertTrue({"MiCA", "AI-Act-AnnexIII", "DORA", "GDPR"} <= ids)
         for r in prof["regulations"]:
@@ -39,16 +39,16 @@ class TestRegulatoryProfiles(unittest.TestCase):
             self.assertTrue(r["source_url"].startswith("https://"))
 
     def test_refresh_flags_stale(self):
-        prof = json.load(open(os.path.join(_HERE, "spec", "regulatory_profiles.json")))
+        prof = json.load(open(os.path.join(_HERE, "spec", "regulatory_profiles.json"), encoding="utf-8"))
         prof["regulations"][0]["as_of"] = "2020-01-01"        # forza uno stantìo
         p = os.path.join(tempfile.mkdtemp(), "p.json")
-        json.dump(prof, open(p, "w"))
+        json.dump(prof, open(p, "w", encoding="utf-8", newline=""))
         r = refresh_regulatory.refresh(p, check_urls=False)   # niente rete
         self.assertIn(prof["regulations"][0]["id"], r["needs_review"])
 
     def _copy(self, prof):
         p = os.path.join(tempfile.mkdtemp(), "p.json")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             json.dump(prof, f)
         return p
 
@@ -56,7 +56,7 @@ class TestRegulatoryProfiles(unittest.TestCase):
         # The verdict must not depend on the calendar: "now" is fixed to the oldest as_of + STALE_DAYS, the last
         # day on which every entry is still inside the window. Staleness of the shipped file today is reported by
         # the CI step `refresh_regulatory.py --check-urls`, which reads the system clock.
-        prof = json.load(open(os.path.join(_HERE, "spec", "regulatory_profiles.json")))
+        prof = json.load(open(os.path.join(_HERE, "spec", "regulatory_profiles.json"), encoding="utf-8"))
         oldest = min(datetime.date.fromisoformat(r["as_of"]) for r in prof["regulations"])
         now = datetime.datetime.combine(oldest, datetime.time(), datetime.timezone.utc) \
             + datetime.timedelta(days=refresh_regulatory.STALE_DAYS)
@@ -65,7 +65,7 @@ class TestRegulatoryProfiles(unittest.TestCase):
 
     def test_refresh_window_boundary(self):
         # positive control for the fixed clock: one day past the window the oldest entry is flagged
-        prof = json.load(open(os.path.join(_HERE, "spec", "regulatory_profiles.json")))
+        prof = json.load(open(os.path.join(_HERE, "spec", "regulatory_profiles.json"), encoding="utf-8"))
         oldest = min(datetime.date.fromisoformat(r["as_of"]) for r in prof["regulations"])
         base = datetime.datetime.combine(oldest, datetime.time(), datetime.timezone.utc)
         first_stale = sorted(r["id"] for r in prof["regulations"] if r["as_of"] == oldest.isoformat())

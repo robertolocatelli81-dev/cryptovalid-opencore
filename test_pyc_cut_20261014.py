@@ -33,7 +33,7 @@ class TestCutBytecodeCache(unittest.TestCase):
         shutil.copy(os.path.join(HERE, "examples", "sample_ledger.jsonl"), self.d)
 
     def run_cmd(self, *args):
-        p = subprocess.run([sys.executable] + list(args), cwd=self.d, capture_output=True, text=True, env=ENV)
+        p = subprocess.run([sys.executable] + list(args), cwd=self.d, capture_output=True, text=True, encoding="utf-8", env=ENV)
         # the eIDAS report carries the time of its run: the instant, not the content, is masked
         return p.returncode, re.sub(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?\+00:00", "<t>", p.stdout), p.stderr
 

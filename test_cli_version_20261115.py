@@ -24,7 +24,7 @@ def _pyproject_version():
 def _run(args, stdout=subprocess.PIPE, cwd=HERE):
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")}
     return subprocess.run([sys.executable, *args], cwd=cwd, env=env, stdout=stdout, stderr=subprocess.PIPE,
-                          text=True, timeout=120)
+                          text=True, encoding="utf-8", timeout=120)
 
 
 class TestVersion(unittest.TestCase):
@@ -45,7 +45,7 @@ class TestVersion(unittest.TestCase):
     @unittest.skipUnless(os.path.exists("/dev/full"), "needs /dev/full")
     def test_a_version_not_written_is_exit_74(self):
         for script in ("verify_evidence.py", "verifier.py"):
-            with open("/dev/full", "w") as full:
+            with open("/dev/full", "w", encoding="utf-8", newline="") as full:
                 r = _run([os.path.join(HERE, script), "--version"], stdout=full)
             self.assertEqual(r.returncode, 74, (script, r.stderr))
             self.assertIn("receipt not written", r.stderr)
@@ -57,7 +57,7 @@ class TestVersion(unittest.TestCase):
             with tempfile.TemporaryDirectory() as d:
                 shutil.copy(os.path.join(HERE, "verifier.py"), d)
                 if other:
-                    with open(os.path.join(d, "pyproject.toml"), "w") as f:
+                    with open(os.path.join(d, "pyproject.toml"), "w", encoding="utf-8", newline="") as f:
                         f.write(other)
                 # the installed version is read in the same child (an egg-info next to the parent's files, as in an
                 # unpacked sdist, is a distribution for the parent and not for the child)

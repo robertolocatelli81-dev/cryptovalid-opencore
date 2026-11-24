@@ -140,7 +140,7 @@ def run_mutation(target_path: str, test_cmd: List[str], limit: int = 0) -> Dict:
             result["truncated"] = True                 # troncamento DICHIARATO, mai silenzioso
         result["total"] = len(mutants)
         for desc, msrc in mutants:
-            with open(target_path, "w", encoding="utf-8") as f:
+            with open(target_path, "w", encoding="utf-8", newline="") as f:
                 f.write(msrc)
             killed = not _suite_green()
             if killed:

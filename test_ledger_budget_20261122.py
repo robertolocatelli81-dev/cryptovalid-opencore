@@ -116,7 +116,7 @@ class TestTheBudgetOfALedgerInTheFourVerifiers(unittest.TestCase):
                 dash = "--" if name in ("python", "js") else "-"
                 for a in asked:
                     flags = [dash + a[0]] + list(a[1:])
-                    cp = subprocess.run(argv + (flags + [p] if name == "go" else [p] + flags), capture_output=True, text=True,
+                    cp = subprocess.run(argv + (flags + [p] if name == "go" else [p] + flags), capture_output=True, text=True, encoding="utf-8",
                                         timeout=60, stdin=subprocess.DEVNULL)
                     doc = json.loads(cp.stdout)
                     got = ([e["error"] for e in doc["parse_errors"]] if name == "python" else [doc["error"]] if name == "js"
@@ -137,7 +137,7 @@ class TestTheBudgetOfALedgerInTheFourVerifiers(unittest.TestCase):
         try:
             for name, argv in self.bins.items():
                 cap = (lambda: resource.setrlimit(resource.RLIMIT_DATA, (2 << 30, 2 << 30))) if name in ("python", "go") else None
-                cp = subprocess.run(argv + [p], capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL,
+                cp = subprocess.run(argv + [p], capture_output=True, text=True, encoding="utf-8", timeout=120, stdin=subprocess.DEVNULL,
                                     preexec_fn=cap)
                 self.assertEqual(cp.returncode, 1, (name, cp.stderr[-200:]))
                 self.assertEqual(_reason(name, json.loads(cp.stdout)), TOO_MANY_LINES, name)
@@ -163,7 +163,7 @@ class TestATipOfTooManyTokens(unittest.TestCase):
             base = sum(json.dumps(dict(tip, zz="")).count(c) for c in "{[,:")
             for n, want in ((TOKENS, None), (TOKENS + 1, _ROW[2])):
                 # an extra member: at the bound the closed object names it (a later row), one token more is row 2
-                with open(led + ".tip.json", "w") as f:
+                with open(led + ".tip.json", "w", encoding="utf-8", newline="") as f:
                     json.dump(dict(tip, zz="," * (n - base)), f)
                 for name in bins:
                     rc, out, rawout = _run(bins, name, led, [bins[name][2] + "trusted-pubkey", pk])

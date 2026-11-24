@@ -28,7 +28,7 @@ class TestClosedSchemaMutants(unittest.TestCase):
 
     def _run(self, *extra):
         out = os.path.join(self.d, "out.json")
-        r = subprocess.run([sys.executable, BENCH, "--quick", "--seed", "20261011", "--out", out, *extra], capture_output=True, text=True, timeout=1800)
+        r = subprocess.run([sys.executable, BENCH, "--quick", "--seed", "20261011", "--out", out, *extra], capture_output=True, text=True, encoding="utf-8", timeout=1800)
         with open(out, encoding="utf-8") as f:
             return r.returncode, json.load(f), r.stdout[-2000:]
 
@@ -48,7 +48,7 @@ class TestClosedSchemaMutants(unittest.TestCase):
         self.assertNotEqual(lax, src, "the schema rule to switch off was not found: the control is void")
         # the lax copy must sit next to the original so its relative imports (none today) and node resolution behave the same
         lax_path = os.path.join(HERE, "verifiers", "js", "cvverify_lax_control_tmp.mjs")
-        with open(lax_path, "w", encoding="utf-8") as f:
+        with open(lax_path, "w", encoding="utf-8", newline="") as f:
             f.write(lax)
         self.addCleanup(lambda: os.path.exists(lax_path) and os.remove(lax_path))
         rc, s, tail = self._run("--only", "python,js", "--js", lax_path)
@@ -81,15 +81,15 @@ class TestStaleBinary(unittest.TestCase):
         b, src = os.path.join(d, "cvverify"), os.path.join(d, "src", "lib.rs")
         os.makedirs(os.path.dirname(src))
         for f in (b, src):
-            open(f, "w").close()
+            open(f, "w", encoding="utf-8", newline="").close()
         os.utime(b, (1000, 1000)); os.utime(src, (2000, 2000))
         self.assertEqual(stale_binary(b, d, (".rs",)), src)          # positive control: the stale case is caught
         os.utime(b, (3000, 3000))
         self.assertIsNone(stale_binary(b, d, (".rs",)))
         self.assertIsNone(stale_binary(os.path.join(d, "absent"), d, (".rs",)))
-        os.makedirs(os.path.join(d, "target")); t = os.path.join(d, "target", "x.rs"); open(t, "w").close(); os.utime(t, (9000, 9000))
+        os.makedirs(os.path.join(d, "target")); t = os.path.join(d, "target", "x.rs"); open(t, "w", encoding="utf-8", newline="").close(); os.utime(t, (9000, 9000))
         self.assertIsNone(stale_binary(b, d, (".rs",)))              # build output is not a source
-        os.makedirs(os.path.join(d, ".build")); t = os.path.join(d, ".build", "x.rs"); open(t, "w").close(); os.utime(t, (9000, 9000))
+        os.makedirs(os.path.join(d, ".build")); t = os.path.join(d, ".build", "x.rs"); open(t, "w", encoding="utf-8", newline="").close(); os.utime(t, (9000, 9000))
         self.assertIsNone(stale_binary(b, d, (".rs",)))              # nor the Swift build directory
 
     def test_refusal_and_what_counts_as_a_source(self):
@@ -103,7 +103,7 @@ class TestStaleBinary(unittest.TestCase):
         d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, ignore_errors=True)
         b, src = os.path.join(d, "cvverify"), os.path.join(d, "a.swift")
         for f in (b, src):
-            open(f, "w").close()
+            open(f, "w", encoding="utf-8", newline="").close()
         os.utime(b, (1000, 1000)); os.utime(src, (2000, 2000))
         with self.assertRaises(SystemExit) as cm:
             O.check_fresh("swift", b, d, (".swift",), built=False)

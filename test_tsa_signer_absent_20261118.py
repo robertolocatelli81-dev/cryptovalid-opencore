@@ -84,7 +84,7 @@ def expected(kept, pin, intact):
 class SignerAbsentVectors(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(V, "manifest.json")) as f:
+        with open(os.path.join(V, "manifest.json"), encoding="utf-8") as f:
             cls.digest = bytes.fromhex(json.load(f)["digest_sha256"])
 
     def tok(self, name):
@@ -246,7 +246,7 @@ class AbsentOnlyWhenOpensslLookedUp(unittest.TestCase):
         shutil.rmtree(self.td)
 
     def test_token_openssl_cannot_parse_is_not_absent(self):
-        with open(os.path.join(V, "manifest.json")) as f:
+        with open(os.path.join(V, "manifest.json"), encoding="utf-8") as f:
             digest = bytes.fromhex(json.load(f)["digest_sha256"])
         with open(os.path.join(V, "freetsa.tsr"), "rb") as f:
             tok = strip_certs(T.parse_token(f.read())["token_der"])
@@ -266,7 +266,7 @@ class AbsentOnlyWhenOpensslLookedUp(unittest.TestCase):
 
     def test_issuer_name_not_read_is_not_another_issuer(self):
         j = lambda n: os.path.join(self.td, n)  # noqa: E731
-        with open(j("req.cnf"), "w") as f:      # BMPString names (B_ASN1_BMPSTRING = 0x800)
+        with open(j("req.cnf"), "w", encoding="utf-8", newline="") as f:      # BMPString names (B_ASN1_BMPSTRING = 0x800)
             f.write("[ req ]\ndistinguished_name = dn\nstring_mask = MASK:0x800\n[ dn ]\n[ ca ]\n"
                     "basicConstraints = critical,CA:TRUE\nkeyUsage = critical,keyCertSign\nsubjectKeyIdentifier = hash\n"
                     "[ tsa ]\nextendedKeyUsage = critical,timeStamping\nbasicConstraints = CA:FALSE\n")
@@ -277,9 +277,9 @@ class AbsentOnlyWhenOpensslLookedUp(unittest.TestCase):
         run("openssl", "req", *ec, "-keyout", j("tsa.key"), "-out", j("tsa.csr"), "-subj", "/CN=tsa", "-config", j("req.cnf"))
         run("openssl", "x509", "-req", "-in", j("tsa.csr"), "-CA", j("ca.crt"), "-CAkey", j("ca.key"), "-CAcreateserial",
             "-out", j("tsa.crt"), "-days", "2", "-extfile", j("req.cnf"), "-extensions", "tsa")
-        with open(j("serial"), "w") as f:
+        with open(j("serial"), "w", encoding="utf-8", newline="") as f:
             f.write("01\n")
-        with open(j("tsa.cnf"), "w") as f:
+        with open(j("tsa.cnf"), "w", encoding="utf-8", newline="") as f:
             f.write(f"[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {cnf_path(j('serial'))}\ncrypto_device = builtin\n"
                     f"signer_cert = {cnf_path(j('tsa.crt'))}\nsigner_key = {cnf_path(j('tsa.key'))}\nsigner_digest = sha256\n"
                     "default_policy = 1.2.3.4.1\ndigests = sha256\ness_cert_id_alg = sha256\ness_cert_id_chain = no\n")
@@ -301,7 +301,7 @@ class AbsentOnlyWhenOpensslLookedUp(unittest.TestCase):
         """the callers named in CHANGELOG 0.27.0: the report's badge and the ingest's failure reason"""
         import cryptovalid_ingest as I
         import cryptovalid_report as R
-        with open(os.path.join(V, "manifest.json")) as f:
+        with open(os.path.join(V, "manifest.json"), encoding="utf-8") as f:
             digest = bytes.fromhex(json.load(f)["digest_sha256"])
         with open(os.path.join(V, "freetsa.tsr"), "rb") as f:
             tok = T.parse_token(f.read())["token_der"]

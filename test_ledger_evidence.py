@@ -41,7 +41,7 @@ def _entries(path):
 
 
 def _write(path, entries):
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for e in entries:
             f.write(json.dumps(e) + "\n")
 
@@ -101,10 +101,10 @@ class TestReceipts(unittest.TestCase):
         for bad in ([], 1, None, "x", dict(r, sth=[1])):
             self.assertFalse(R.verify_receipt(bad, self.pk, leaf_canonical=self.leaves[1])["ok"], bad)
         tool = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cryptovalid_receipt.py")
-        good = os.path.join(self.tmp, "r.json"); json.dump(r, open(good, "w"))
-        entry = os.path.join(self.tmp, "e.json"); json.dump(self.entries[1], open(entry, "w"))
+        good = os.path.join(self.tmp, "r.json"); json.dump(r, open(good, "w", encoding="utf-8", newline=""))
+        entry = os.path.join(self.tmp, "e.json"); json.dump(self.entries[1], open(entry, "w", encoding="utf-8", newline=""))
         cp = subprocess.run([sys.executable, "-B", tool, "verify", good, self.pk, "--entry-json", entry],
-                            capture_output=True, text=True, timeout=60)
+                            capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(cp.returncode, 0, cp.stdout + cp.stderr)                        # control: the good pair passes
         for raw_r, raw_e in ((b"{x", None), (b"[]", None), (b"\xff", None), (None, b"[]"), (None, b"{x")):
             rp, ep = good, entry
@@ -113,7 +113,7 @@ class TestReceipts(unittest.TestCase):
             if raw_e is not None:
                 ep = os.path.join(self.tmp, "bad_e.json"); open(ep, "wb").write(raw_e)
             cp = subprocess.run([sys.executable, "-B", tool, "verify", rp, self.pk, "--entry-json", ep],
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True, encoding="utf-8", timeout=60)
             self.assertEqual((cp.returncode, "Traceback" in cp.stderr), (1, False), (raw_r, raw_e))
 
     def test_inclusion_every_index_and_tampers(self):
@@ -252,7 +252,7 @@ class TestMonitor(unittest.TestCase):
         k1 = os.path.join(self.tmp, "k1"); signer.keygen(k1)
         k2 = os.path.join(self.tmp, "k2"); signer.keygen(k2)
         self.assertTrue(MON.run(self.ledger, self.state, keyfile=k1)["ok"])
-        with open(self.state) as f:
+        with open(self.state, encoding="utf-8") as f:
             st = json.load(f)
         self.assertTrue(R.verify_sth(st["sth"], st["log_pubkey_hex"])["ok"])
         v = MON.run(self.ledger, self.state, keyfile=k2)
@@ -263,10 +263,10 @@ class TestMonitor(unittest.TestCase):
         # council 14/09: riscrivere il file di stato azzerava la baseline su un ledger riscritto
         k = os.path.join(self.tmp, "k"); pk = signer.keygen(k)["public_key_hex"]
         self.assertTrue(MON.run(self.ledger, self.state, keyfile=k)["ok"])
-        with open(self.state) as f:
+        with open(self.state, encoding="utf-8") as f:
             st = json.load(f)
         st["root_sha256"] = "00" * 32; st["tree_size"] = 1               # baseline falsa
-        with open(self.state, "w") as f:
+        with open(self.state, "w", encoding="utf-8", newline="") as f:
             json.dump(st, f)
         v = MON.run(self.ledger, self.state, keyfile=k)
         self.assertFalse(v["ok"]); self.assertTrue(any("STATE TAMPERED" in a for a in v["alerts"])); self.assertIsNone(v["state_written"])
@@ -288,23 +288,23 @@ class TestMonitor(unittest.TestCase):
         # il writer pubblica lo STH firmato → l'auditor avanza la baseline con QUELLO, verificato
         vw = MON.run(self.ledger, self.state + ".writer", keyfile=k)
         sth_file = os.path.join(self.tmp, "sth.json")
-        with open(self.state + ".writer") as f, open(sth_file, "w") as g:
+        with open(self.state + ".writer", encoding="utf-8") as f, open(sth_file, "w", encoding="utf-8", newline="") as g:
             json.dump({"sth": json.load(f)["sth"]}, g)
         # file STH malformato (lista / JSON rotto): nessun crash, baseline non avanzata
         for bad in ("[1,2]", "{broken"):
-            with open(sth_file + ".bad", "w") as g:
+            with open(sth_file + ".bad", "w", encoding="utf-8", newline="") as g:
                 g.write(bad)
             vb = MON.run(self.ledger, self.state + ".x", trusted_pubkey_hex=pk, sth_path=sth_file + ".bad")
             self.assertTrue(vb["ok"]); self.assertIsNone(vb["state_written"])
         va = MON.run(self.ledger, self.state, trusted_pubkey_hex=pk, sth_path=sth_file)
         self.assertTrue(va["ok"]); self.assertEqual(va["state_written"], self.state)
-        with open(self.state) as f:
+        with open(self.state, encoding="utf-8") as f:
             self.assertIn("sth", json.load(f))
         # e ora l'attacco del round 3: stato senza sth con la root di un ledger riscritto → l'auditor lo RIFIUTA
-        with open(self.state) as f:
+        with open(self.state, encoding="utf-8") as f:
             st = json.load(f)
         st.pop("sth"); st["root_sha256"] = "11" * 32
-        with open(self.state, "w") as f:
+        with open(self.state, "w", encoding="utf-8", newline="") as f:
             json.dump(st, f)
         va = MON.run(self.ledger, self.state, trusted_pubkey_hex=pk)
         self.assertFalse(va["ok"]); self.assertTrue(any("STATE" in a for a in va["alerts"]))
@@ -438,7 +438,7 @@ class TestJWS(unittest.TestCase):
     def _signed_with_header(self, header):
         """A JWS over the same record with a chosen protected header, signed by self.k (valid signature)."""
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(open(self.k).read().strip()))
+        sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(open(self.k, encoding="utf-8").read().strip()))
         h = J._b64u(json.dumps(header, sort_keys=True, separators=(",", ":")).encode())
         p = J._b64u(M.canonical(self.e))
         return f"{h}.{p}." + J._b64u(sk.sign(f"{h}.{p}".encode("ascii")))
@@ -474,10 +474,10 @@ class TestJWS(unittest.TestCase):
         long = self._signed_with_header({"alg": "EdDSA", "kid": self.pk, "crit": ["x" * 300]})
         self.assertEqual(J.verify(long, self.pk)["why"], "crit_unsupported:" + "x" * 120)     # the name is bounded
         p = os.path.join(self.tmp, "t.jws")
-        with open(p, "w", encoding="utf-8") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write(tok)
         cp = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "cryptovalid_jws.py"), "verify", p, self.pk],
-                            capture_output=True, text=True, timeout=120)
+                            capture_output=True, text=True, encoding="utf-8", timeout=120)
         self.assertEqual(cp.returncode, 1, cp.stderr)
         self.assertEqual(json.loads(cp.stdout)["why"], "crit_unsupported:\\ud800")
         good = self._signed_with_header({"alg": "EdDSA", "typ": "JOSE", "kid": self.pk, "crit": ["zz"], "zz": 1})
@@ -507,11 +507,11 @@ class TestEidasCountsBoundTokensOnly(unittest.TestCase):
         import subprocess
         self.d = d = tempfile.mkdtemp(); self.addCleanup(__import__("shutil").rmtree, d, True)
         cnf = os.path.join(d, "t.cnf")
-        with open(cnf, "w") as f:
+        with open(cnf, "w", encoding="utf-8", newline="") as f:
             f.write("[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=t\n[ext]\nextendedKeyUsage=critical,timeStamping\n"
                     "[tsa]\ndefault_tsa=t1\n[t1]\nserial=%s/serial\nsigner_cert=%s/tsa.crt\nsigner_key=%s/tsa.key\n"
                     "signer_digest=sha256\ndefault_policy=1.2.3.4.1\ndigests=sha256\ness_cert_id_alg=sha256\n" % ((cnf_path(d),) * 3))
-        with open(os.path.join(d, "serial"), "w") as f:
+        with open(os.path.join(d, "serial"), "w", encoding="utf-8", newline="") as f:
             f.write("01\n")
         run = lambda *a: subprocess.run(a, check=True, capture_output=True)   # noqa: E731
         run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout",
@@ -542,7 +542,7 @@ class TestEidasCountsBoundTokensOnly(unittest.TestCase):
                 e["tsa_token"] = tok
             out.append(e)
         p = os.path.join(self.d, "l.jsonl")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write("\n".join(json.dumps(e) for e in out) + "\n")
         return p
 
@@ -598,7 +598,7 @@ class TestEidasCountsBoundTokensOnly(unittest.TestCase):
         with open(os.path.join(d, "f.der"), "rb") as f:
             e["tsa_token"] = base64.b64encode(f.read()).decode()
         lp = os.path.join(d, "forged.jsonl")
-        with open(lp, "w") as f:
+        with open(lp, "w", encoding="utf-8", newline="") as f:
             f.write(json.dumps(e) + "\n")
         for pins in (None, [os.path.join(d, "tsa.crt")], [os.path.join(d, "c.pem")]):
             r = [x for x in E.assess(lp, None, pins)["requisiti"] if x["req"] == "REQ-7.5-04-bis"][0]

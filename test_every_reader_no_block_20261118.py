@@ -34,7 +34,7 @@ KINDS = ("fifo", "devzero", "dir")
 def run(argv, timeout=40):
     """(returncode, stdout + stderr); returncode 124 when it did not finish"""
     try:
-        p = subprocess.run([sys.executable] + argv, capture_output=True, text=True, timeout=timeout, env=ENV,
+        p = subprocess.run([sys.executable] + argv, capture_output=True, text=True, encoding="utf-8", timeout=timeout, env=ENV,
                            stdin=subprocess.DEVNULL)
         return p.returncode, p.stdout + p.stderr
     except subprocess.TimeoutExpired:

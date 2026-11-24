@@ -261,7 +261,7 @@ def main(argv=None) -> int:
     for v in violations[:3]:
         print(v["target"], v["property"], v["detail"][-200:], file=sys.stderr)
     if a.json:
-        with open(a.json, "w") as f:
+        with open(a.json, "w", encoding="utf-8", newline="") as f:
             json.dump(summary, f, indent=1, default=list)
     print(json.dumps(summary, default=list))
     if a.ablate:

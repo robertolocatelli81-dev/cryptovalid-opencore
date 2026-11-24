@@ -62,7 +62,7 @@ class PinShape(unittest.TestCase):
         with self.assertRaises(ValueError):
             EP.verify_pack(os.path.join(self.td, "no-such-pack"), tsa_certs=[os.path.join(V, "digicert.signer.pem"), p])
         r = subprocess.run([sys.executable, os.path.join(ROOT, "evidence_pack.py"), "verify", self.td, "--tsa-cert", p],
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertEqual(r.stdout, "")
 

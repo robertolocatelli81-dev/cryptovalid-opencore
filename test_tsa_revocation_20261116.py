@@ -54,19 +54,19 @@ class Lab:
         os.makedirs(self.d)
         j = self.j
         c = lambda n: cnf_path(j(n))   # noqa: E731
-        with open(j("ca.cnf"), "w") as f:
+        with open(j("ca.cnf"), "w", encoding="utf-8", newline="") as f:
             f.write(f"[ ca ]\ndefault_ca = CA_default\n[ CA_default ]\ndatabase = {c('index.txt')}\n"
                     f"crlnumber = {c('crlnumber')}\ncertificate = {c('ca.crt')}\nprivate_key = {c('ca.key')}\n"
                     "default_md = sha256\ndefault_crl_days = 1\n[ v3_tsa ]\nextendedKeyUsage = critical,timeStamping\n"
                     "basicConstraints = CA:FALSE\n")
-        with open(j("tsa.cnf"), "w") as f:
+        with open(j("tsa.cnf"), "w", encoding="utf-8", newline="") as f:
             f.write(f"[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {c('serial')}\ncrypto_device = builtin\n"
                     f"signer_cert = {c('tsa.crt')}\ncerts = {c('ca.crt')}\nsigner_key = {c('tsa.key')}\n"
                     "signer_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\naccuracy = secs:1\n"
                     "ordering = yes\ntsa_name = no\ness_cert_id_chain = no\ness_cert_id_alg = sha256\n")
-        open(j("index.txt"), "w").close()
+        open(j("index.txt"), "w", encoding="utf-8", newline="").close()
         for n in ("crlnumber", "serial"):
-            with open(j(n), "w") as f:
+            with open(j(n), "w", encoding="utf-8", newline="") as f:
                 f.write("01\n")
         _run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
              "-keyout", j("ca.key"), "-out", j("ca.crt"), "-subj", f"/CN={name}-ca", "-days", "2")
@@ -168,7 +168,7 @@ class Revocation(unittest.TestCase):
                 g = r + timedelta(seconds=sec, microseconds=us)
                 self.assertEqual(g < r, g.replace(microsecond=0) < r, g)
         lab = Lab(self.td)
-        with open(lab.j("tsa.cnf"), "a") as f:
+        with open(lab.j("tsa.cnf"), "a", encoding="utf-8", newline="") as f:
             f.write("clock_precision_digits = 3\n")
         tok = lab.token()
         v = self.check(lab, tok)
@@ -304,7 +304,7 @@ class Revocation(unittest.TestCase):
         os.mkfifo(fifo)
         code = ("import sys; sys.path.insert(0, %r); import cryptovalid_tsa as T\n"
                 "try:\n    T._load_crls([%r])\nexcept ValueError as e:\n    print('ValueError', e)" % (ROOT, fifo))
-        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertIn("is not a regular file", r.stdout, r.stderr)
 
     def test_remove_from_crl_is_unknown(self):
@@ -399,11 +399,11 @@ class Revocation(unittest.TestCase):
         pack = os.path.join(self.td, "pack")
         with contextlib.redirect_stdout(io.StringIO()):
             EP.build_pack([os.path.join(ROOT, "examples", "sample_ledger.jsonl")], pack, subject="revocation")
-        with open(os.path.join(pack, "MANIFEST.json")) as f:
+        with open(os.path.join(pack, "MANIFEST.json"), encoding="utf-8") as f:
             m = json.load(f)
         tok = lab.token(bytes.fromhex(m["manifest_digest_sha256"]))
         m["rfc3161_timestamp"] = {"anchored": True, "tsa": "local", "tsr_b64": base64.b64encode(tok).decode()}
-        with open(os.path.join(pack, "MANIFEST.json"), "w") as f:
+        with open(os.path.join(pack, "MANIFEST.json"), "w", encoding="utf-8", newline="") as f:
             json.dump(m, f)
         pins = [lab.j("ca.crt")]
         r0 = EP.verify_pack(pack, tsa_certs=pins)

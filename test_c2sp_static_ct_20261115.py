@@ -332,7 +332,7 @@ class GoOracle(unittest.TestCase):
                 raise AssertionError("CV_REQUIRE_GO_ORACLE=1 but no Go toolchain on PATH")
             raise unittest.SkipTest("no Go toolchain")
         cls.tmp = tempfile.mkdtemp(); cls.bin = os.path.join(cls.tmp, "cvnote-oracle")
-        r = subprocess.run(["go", "build", "-o", cls.bin, "."], cwd=ORACLE_SRC, capture_output=True, text=True, timeout=600)
+        r = subprocess.run(["go", "build", "-o", cls.bin, "."], cwd=ORACLE_SRC, capture_output=True, text=True, encoding="utf-8", timeout=600)
         if r.returncode != 0:
             raise AssertionError("note_oracle build failed: " + r.stderr[-800:])
 
@@ -344,7 +344,7 @@ class GoOracle(unittest.TestCase):
         p = os.path.join(self.tmp, "n")
         with open(p, "wb") as f:
             f.write(note)
-        r = subprocess.run([self.bin, p, *vkeys], capture_output=True, text=True, timeout=60)
+        r = subprocess.run([self.bin, p, *vkeys], capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertIn(r.returncode, (0, 1), r.stdout + r.stderr)
         return r.returncode
 

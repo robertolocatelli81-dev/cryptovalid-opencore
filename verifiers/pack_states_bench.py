@@ -71,9 +71,9 @@ class LocalTsa:
                "certs = {d}/ca.crt\nsigner_key = {d}/tsa.key\nsigner_digest = sha256\ndefault_policy = 1.2.3.4.1\n"
                "digests = sha256\naccuracy = secs:1\nordering = yes\ntsa_name = no\ness_cert_id_chain = no\n"
                "ess_cert_id_alg = sha256\n[ v3_tsa ]\nextendedKeyUsage = critical,timeStamping\nbasicConstraints = CA:FALSE\n")
-        with open(j("tsa.cnf"), "w") as f:
+        with open(j("tsa.cnf"), "w", encoding="utf-8", newline="") as f:
             f.write(cnf.format(d="".join("\\" + c if c in "\\$#\"'" else c for c in td)))   # OpenSSL config escapes (Windows paths)
-        with open(j("serial"), "w") as f:
+        with open(j("serial"), "w", encoding="utf-8", newline="") as f:
             f.write("01\n")
         _run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", j("ca.key"),
              "-out", j("ca.crt"), "-subj", "/CN=bench-ca", "-days", "2")
@@ -136,7 +136,7 @@ def base_packs(td):
     rows = [json.loads(x) for x in open(sample, encoding="utf-8") if x.strip()]
     rows[1]["signature"], rows[1]["signer"] = base64.b64encode(bytes(64)).decode(), pub
     part = os.path.join(td, "partial.jsonl")
-    with open(part, "w", encoding="utf-8") as f:
+    with open(part, "w", encoding="utf-8", newline="") as f:
         f.write("".join(json.dumps(x) + "\n" for x in rows))
     p = os.path.join(td, "partial_layer")
     EP.build_pack([part], p, subject="bench")
@@ -160,7 +160,7 @@ def _load(p):
 
 
 def _store(p, m, text=None):
-    with open(os.path.join(p, "MANIFEST.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(p, "MANIFEST.json"), "w", encoding="utf-8", newline="") as f:
         f.write(text if text is not None else json.dumps(m, ensure_ascii=False, indent=1, sort_keys=True))
 
 
@@ -282,7 +282,7 @@ def _token_binds(tsr_b64, digest_hex):
     with tempfile.NamedTemporaryFile(suffix=".tsr") as f:
         f.write(raw)
         f.flush()
-        r = subprocess.run(["openssl", "ts", "-reply", "-in", f.name, "-text"], capture_output=True, text=True)
+        r = subprocess.run(["openssl", "ts", "-reply", "-in", f.name, "-text"], capture_output=True, text=True, encoding="utf-8")
     t = r.stdout
     if "Granted" not in t or "Message data:" not in t:
         return False
@@ -390,7 +390,7 @@ for line in sys.stdin:
 
 def old_valids(old, jobs):
     r = subprocess.run([sys.executable, "-B", "-c", _OLD_DRIVER, os.path.abspath(old)], input="".join(json.dumps(j) + "\n" for j in jobs),
-                       capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=""))
+                       capture_output=True, text=True, encoding="utf-8", env=dict(os.environ, PYTHONPATH=""))
     if r.returncode != 0:
         raise SystemExit(f"old driver failed: {r.stderr[-500:]}")
     return [json.loads(x) for x in r.stdout.splitlines()]
@@ -485,7 +485,7 @@ def main(argv=None):
         for x in v[:5]:
             print(f"[{k}] {x}", file=sys.stderr)
     if a.json:
-        with open(a.json, "w") as f:
+        with open(a.json, "w", encoding="utf-8", newline="") as f:
             json.dump(out, f, sort_keys=True, indent=1)
     return 1 if any(violations.values()) else 0
 

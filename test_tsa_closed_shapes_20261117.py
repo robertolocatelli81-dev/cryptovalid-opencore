@@ -150,7 +150,7 @@ class ClosedShapes(unittest.TestCase):
         bindir = os.path.join(self.td, "bin")
         os.makedirs(bindir, exist_ok=True)
         fake = os.path.join(bindir, "openssl")
-        with open(fake, "w") as f:
+        with open(fake, "w", encoding="utf-8", newline="") as f:
             f.write("#!/bin/sh\nif [ \"$1\" = verify ]; then echo 'verify: Unknown option: -no-CAstore' >&2; exit 1; fi\n"
                     f"exec {shutil.which('openssl')} \"$@\"\n")
         os.chmod(fake, os.stat(fake).st_mode | stat.S_IXUSR)

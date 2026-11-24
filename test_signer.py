@@ -39,7 +39,7 @@ def _make_ledger(path):
         e["prev_hash"] = prev
         e["self_hash"] = sh(e)
         prev = e["self_hash"]
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for e in entries:
             f.write(json.dumps(e) + "\n")
 
@@ -57,17 +57,17 @@ class TestSigner(unittest.TestCase):
         # audit V1 #4 (30/09/2026): a line [] / null / not JSON made signer.py verify raise a traceback
         signer.keygen(self.key)
         signer.sign_ledger(self.ledger, self.signed, self.key)
-        rows = open(self.signed).read().splitlines()
+        rows = open(self.signed, encoding="utf-8").read().splitlines()
         for extra, reason in (("[]", "not_a_json_object"), ("null", "not_a_json_object"), ("1", "not_a_json_object"),
                               ("{x", "json_decode")):
             for lines in (rows + [extra], [extra] + rows):
                 p = os.path.join(self.d, "bad.jsonl")
-                open(p, "w").write("\n".join(lines) + "\n")
+                open(p, "w", encoding="utf-8", newline="").write("\n".join(lines) + "\n")
                 r = signer.verify_file(p)
                 self.assertFalse(r["ok"], extra)
                 self.assertIn(reason, [f["reason"] for f in r["failures"]], extra)
                 cp = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "signer.py"), "verify", p],
-                                    capture_output=True, text=True, timeout=60)
+                                    capture_output=True, text=True, encoding="utf-8", timeout=60)
                 self.assertEqual((cp.returncode, "Traceback" in cp.stderr), (1, False), extra)
 
     def test_keygen_0600(self):
@@ -92,10 +92,10 @@ class TestSigner(unittest.TestCase):
     def test_tamper_fails_both(self):
         signer.keygen(self.key)
         signer.sign_ledger(self.ledger, self.signed, self.key)
-        rows = [json.loads(x) for x in open(self.signed)]
+        rows = [json.loads(x) for x in open(self.signed, encoding="utf-8")]
         rows[1]["data"]["d"] = "reject"             # manomissione del contenuto (senza rifirmare)
         tampered = os.path.join(self.d, "tampered.jsonl")
-        with open(tampered, "w") as f:
+        with open(tampered, "w", encoding="utf-8", newline="") as f:
             for r in rows:
                 f.write(json.dumps(r) + "\n")
         self.assertEqual(verifier.verify_ledger(tampered)["verdict"], "FAIL")   # hash
@@ -133,10 +133,10 @@ class TestSigner(unittest.TestCase):
         self.assertEqual(r["classical_status"], "unpinned")
         for flag in ("--pubkey=", "--pq-pubkey="):              # and the command refuses it, as JS and Java do
             cp = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "signer.py"), "verify", self.signed, flag],
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True, encoding="utf-8", timeout=60)
             self.assertEqual((cp.returncode, cp.stdout), (2, ""), flag)
         cp = subprocess.run([sys.executable, "-B", os.path.join(_HERE, "signer.py"), "verify", self.signed],
-                            capture_output=True, text=True, timeout=60)
+                            capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(json.loads(cp.stdout)["classical_status"], "unpinned")
 
     def test_cli_roundtrip(self):

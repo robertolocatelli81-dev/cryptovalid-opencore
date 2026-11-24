@@ -65,7 +65,7 @@ class TestUnknownMembersOfATreeHeadAndAHeadAreCut(unittest.TestCase):
                 with open(path, encoding="utf-8") as f:
                     doc = json.load(f)
                 doc.update(extra)
-                with open(path, "w", encoding="utf-8") as f:
+                with open(path, "w", encoding="utf-8", newline="") as f:
                     json.dump(doc, f)
             reasons = [f["reason"] for f in I.verify_archive(tmp)["failures"]]
             self.assertIn("sth_unknown_member:" + want, reasons)
@@ -446,7 +446,7 @@ class TestSentencesOfSection22(unittest.TestCase):
                 d = json.load(f)
             for bad in ({"k": "v"}, {"k": -5}, {"k": 0}, {"k": True}, {"k": 1.5}, ["k"]):
                 d["sequences"] = bad
-                with open(cache, "w", encoding="utf-8") as f:
+                with open(cache, "w", encoding="utf-8", newline="") as f:
                     json.dump(d, f)
                 out = {"kept": 1}
                 L.load_qualified_status(cache_path=cache, trusted_lotl_signers={lfp}, sequences_out=out)
@@ -497,7 +497,7 @@ class TestSentencesOfSection22(unittest.TestCase):
             cmd = [sys.executable, os.path.join(HERE, "cryptovalid_ingest.py"), "verify", arch, "--pubkey", pk]
 
             def run(*more):
-                cp = subprocess.run(cmd + list(more), capture_output=True, text=True, env=env)
+                cp = subprocess.run(cmd + list(more), capture_output=True, text=True, encoding="utf-8", env=env)
                 return cp.returncode, json.loads(cp.stdout)
             self.assertEqual(run("--require-signature-domain")[0], 0)   # written now: tagged
             with open(key, encoding="utf-8") as f:   # the same archive as 0.27.0 signed it: no sig_domain, the bare hex
@@ -512,7 +512,7 @@ class TestSentencesOfSection22(unittest.TestCase):
                     doc["last_sth_sha256"] = last
                 doc["signature"] = base64.b64encode(sk.sign(I._sth_canonical_hash(doc).encode())).decode()
                 last = I._sth_canonical_hash(doc)
-                with open(path, "w", encoding="utf-8") as f:
+                with open(path, "w", encoding="utf-8", newline="") as f:
                     json.dump(doc, f)
             rc, r = run()
             self.assertEqual((rc, r["ok"]), (0, True), r["failures"])
@@ -538,7 +538,7 @@ class TestSentencesOfSection22(unittest.TestCase):
             with open(signed, encoding="utf-8") as f:
                 lines = f.read().splitlines()
             cut = os.path.join(tmp, "cut.jsonl")
-            with open(cut, "w", encoding="utf-8") as f:   # an entry of the middle removed: each remaining entry is signed
+            with open(cut, "w", encoding="utf-8", newline="") as f:   # an entry of the middle removed: each remaining entry is signed
                 f.write("\n".join(lines[:1] + lines[2:]) + "\n")
 
             def call(path):
@@ -659,7 +659,7 @@ class TestATipOfAnotherKindIsNamedAlikeInTheFourVerifiers(unittest.TestCase):
             docs = [dict(tip, kind=k) for k in (1, True, [], {}, ["cryptovalid_tip/1"], None, "cryptovalid_tip/2", "")]
             docs += [{k: v for k, v in tip.items() if k != "kind"}, dict(tip, kind=1, entries="3"), dict(tip, kind="x", ts=5)]
             for doc in docs:
-                with open(led + ".tip.json", "w", encoding="utf-8") as f:
+                with open(led + ".tip.json", "w", encoding="utf-8", newline="") as f:
                     json.dump(doc, f)
                 for name in bins:
                     rc, out, raw = _run(bins, name, led, [bins[name][2] + "trusted-pubkey", pk])
@@ -667,7 +667,7 @@ class TestATipOfAnotherKindIsNamedAlikeInTheFourVerifiers(unittest.TestCase):
                     self.assertIn("tip_invalid: not a cryptovalid_tip/1 document",
                                   [s.replace("ValueError: ", "") for s in _strings(out)] if out is not None else [],
                                   (name, doc.get("kind"), raw[-400:]))
-            with open(led + ".tip.json", "w", encoding="utf-8") as f:
+            with open(led + ".tip.json", "w", encoding="utf-8", newline="") as f:
                 json.dump(tip, f)
             for name in bins:   # control: the tip as signed passes in each
                 self.assertEqual(_run(bins, name, led, [bins[name][2] + "trusted-pubkey", pk])[0], 0, name)
@@ -850,14 +850,14 @@ class TestTheReasonsOfATipAreTheSameInTheFourVerifiers(unittest.TestCase):
             short = os.path.join(tmp, "short.jsonl")
             with open(led, encoding="utf-8") as f:
                 lines = f.readlines()
-            with open(short, "w", encoding="utf-8") as f:
+            with open(short, "w", encoding="utf-8", newline="") as f:
                 f.writelines(lines[:2])
             T.sign_tip(short, key, tip_path=led + ".tip.json")
             for name in bins:
                 rc, out, rawout = _run(bins, name, led, [bins[name][2] + "trusted-pubkey", pk])
                 self.assertEqual((rc, _reason(name, out)), (1, "unsealed_tail: file has 3 entries, the signed tip commits to 2 "
                                                               "(appended after the last signed head)"), name)
-            with open(led + ".tip.json", "w", encoding="utf-8") as f:
+            with open(led + ".tip.json", "w", encoding="utf-8", newline="") as f:
                 json.dump(tip, f)
             for name in bins:
                 d = bins[name][2]
@@ -893,7 +893,7 @@ class TestRowOneOfTheTableInTheFourVerifiers(unittest.TestCase):
             def run(name, extra=()):
                 argv, first, d = bins[name]
                 flags = [d + "trusted-pubkey", pk] + [d + x if i % 2 == 0 else x for i, x in enumerate(extra)]
-                cp = subprocess.run(argv + (flags + [led] if first else [led] + flags), capture_output=True, text=True,
+                cp = subprocess.run(argv + (flags + [led] if first else [led] + flags), capture_output=True, text=True, encoding="utf-8",
                                     timeout=60, stdin=subprocess.DEVNULL)
                 tip = (json.loads(cp.stdout).get("tip") or {}) if cp.stdout.strip().startswith("{") else {}
                 return cp.returncode, tip.get("error") if name in ("python", "js") else tip.get("why")
@@ -922,7 +922,7 @@ class TestRowOneOfTheTableInTheFourVerifiers(unittest.TestCase):
                     with open(tipf, "wb") as f:
                         f.write(body)
                 cp = subprocess.run([sys.executable, os.path.join(HERE, "cryptovalid_tip.py"), "check", led, "--trusted-pubkey", pk],
-                                    capture_output=True, text=True, timeout=60)
+                                    capture_output=True, text=True, encoding="utf-8", timeout=60)
                 self.assertEqual((cp.returncode, json.loads(cp.stdout).get("error")), (1, row), "cryptovalid_tip.py check")
                 os.rmdir(tipf) if body is None else os.remove(tipf)
         finally:
@@ -952,13 +952,13 @@ class TestTheUnknownMembersOfATipAreSortedAndCutInCodePoints(unittest.TestCase):
             cases = [["x" * 119 + "\U0001F600\U0001F600"], ["\U0001F600" * 130], ["\uffff", "\U0001F600"],
                      ["\ue000", "\U00010000", "a"]]
             for keys in cases:
-                with open(led + ".tip.json", "w", encoding="utf-8") as f:
+                with open(led + ".tip.json", "w", encoding="utf-8", newline="") as f:
                     json.dump(dict(tip, **{k: 1 for k in keys}), f, ensure_ascii=False)
                 want = "tip_invalid: unknown_member:" + ",".join(sorted(keys))[:120]   # str: code points
                 for name in bins:
                     argv, first, d = bins[name]
                     flags = [d + "trusted-pubkey", pk]
-                    cp = subprocess.run(argv + (flags + [led] if first else [led] + flags), capture_output=True, text=True,
+                    cp = subprocess.run(argv + (flags + [led] if first else [led] + flags), capture_output=True, text=True, encoding="utf-8",
                                         timeout=60)
                     t = json.loads(cp.stdout).get("tip") or {}
                     self.assertEqual((cp.returncode, t.get("error") if name in ("python", "js") else t.get("why")), (1, want),
@@ -992,7 +992,7 @@ class TestTheTextsAfterTheTableInTheFourVerifiers(unittest.TestCase):
             def run(name, extra):
                 argv, first, d = bins[name]
                 flags = [d + "trusted-pubkey", pk] + [d + x if i % 2 == 0 else x for i, x in enumerate(extra)]
-                cp = subprocess.run(argv + (flags + [led] if first else [led] + flags), capture_output=True, text=True, timeout=60)
+                cp = subprocess.run(argv + (flags + [led] if first else [led] + flags), capture_output=True, text=True, encoding="utf-8", timeout=60)
                 t = json.loads(cp.stdout).get("tip") or {}
                 return cp.returncode, t.get("error") if name in ("python", "js") else t.get("why")
             T.sign_tip(led, key)

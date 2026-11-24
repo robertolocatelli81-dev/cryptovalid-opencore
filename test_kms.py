@@ -79,7 +79,7 @@ class TestSpkiAndFileBackend(unittest.TestCase):
         s1, s2 = os.path.join(d, "s1.jsonl"), os.path.join(d, "s2.jsonl")
         signer.sign_ledger(ledger, s1, keyfile)                       # legacy path
         signer.sign_ledger(ledger, s2, backend=kms.FileKeyBackend(keyfile))  # backend path
-        self.assertEqual(open(s1).read(), open(s2).read())            # Ed25519 = deterministico
+        self.assertEqual(open(s1, encoding="utf-8").read(), open(s2, encoding="utf-8").read())            # Ed25519 = deterministico
         self.assertTrue(signer.verify_file(s2)["ok"])
 
     def test_unknown_scheme_and_missing_key(self):
@@ -116,7 +116,7 @@ class TestSpkiAndFileBackend(unittest.TestCase):
 
     def test_cli_sign_without_keyfile_or_backend_clean_error(self):
         r = subprocess.run([sys.executable, "signer.py", "sign", "a.jsonl", "b.jsonl"],
-                           cwd=_HERE, capture_output=True, text=True)
+                           cwd=_HERE, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 2)                     # errore argparse, non traceback
         self.assertNotIn("Traceback", r.stderr)
         self.assertIn("--backend", r.stderr)
@@ -220,7 +220,7 @@ class TestPkcs11SoftHsm(unittest.TestCase):
         cls.d = tempfile.mkdtemp()
         tokens = os.path.join(cls.d, "tokens"); os.makedirs(tokens)
         cls.conf = os.path.join(cls.d, "softhsm2.conf")
-        with open(cls.conf, "w") as f:
+        with open(cls.conf, "w", encoding="utf-8", newline="") as f:
             f.write(f"directories.tokendir = {tokens}\n")
         cls.env = {**os.environ, "SOFTHSM2_CONF": cls.conf, "CRYPTOVALID_PIN": "1234"}
         subprocess.run(["softhsm2-util", "--init-token", "--free", "--label", "cvtest",
@@ -251,10 +251,10 @@ class TestPkcs11SoftHsm(unittest.TestCase):
         self.assertEqual(r["signer"], self.pub)
         self.assertTrue(signer.verify_file(signed, pubkey_hex=self.pub)["ok"])
         self.assertEqual(verifier.verify_ledger(signed)["verdict"], "PASS")
-        rows = [json.loads(x) for x in open(signed)]
+        rows = [json.loads(x) for x in open(signed, encoding="utf-8")]
         rows[0]["data"]["result"] = "fail"                 # manomissione
         tampered = os.path.join(self.d, "tampered.jsonl")
-        with open(tampered, "w") as f:
+        with open(tampered, "w", encoding="utf-8", newline="") as f:
             for row in rows:
                 f.write(json.dumps(row) + "\n")
         self.assertFalse(signer.verify_file(tampered)["ok"])

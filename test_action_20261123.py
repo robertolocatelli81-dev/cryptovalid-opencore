@@ -71,7 +71,7 @@ class Action(unittest.TestCase):
 
     def gh(self, attest_rc=0):
         p = os.path.join(self.bin, "gh")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write('#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n'
                     'if [ "$1" = attestation ]; then exit ' + str(attest_rc) + '; fi\n'
                     'if [ "$1" = release ]; then : > "$9/$7"; fi\nexit 0\n')
@@ -82,7 +82,7 @@ class Action(unittest.TestCase):
              "GITHUB_OUTPUT": self.out, "GH_CALLS": self.calls, "HOME": self.tmp}
         e.update(env)
         return subprocess.run([BASH, "-e", "-c", self.blocks[sid]], env=e, cwd=self.tmp, capture_output=True,
-                              text=True, timeout=120)
+                              text=True, encoding="utf-8", timeout=120)
 
     def calls_made(self):
         return slurp(self.calls).splitlines() if os.path.exists(self.calls) else []
@@ -132,11 +132,11 @@ class Action(unittest.TestCase):
         rec = os.path.join(self.tmp, "argv")
         os.mkdir(os.path.join(self.tmp, "a dir"))
         stub = os.path.join(self.tmp, "a dir", "cv")   # a path with a space: BIN is quoted
-        with open(stub, "w") as f:
+        with open(stub, "w", encoding="utf-8", newline="") as f:
             f.write('#!/bin/sh\nfor a in "$@"; do printf "[%s]\\n" "$a"; done > "$REC"\nexit "$RC"\n')
         os.chmod(stub, 0o755)
         for rc in (0, 1, 2, 74):
-            with open(self.out, "w"):
+            with open(self.out, "w", encoding="utf-8", newline=""):
                 pass
             r = self.step("run", BIN=stub, CV_ARGS="  auto  evidence/*  $(id) ;x `id` \"a b\"\n--k\tv ", REC=rec,
                           RC=str(rc))

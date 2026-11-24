@@ -1178,10 +1178,10 @@ class Window(unittest.TestCase):
         import io
         with contextlib.redirect_stdout(io.StringIO()):
             EP.build_pack([ledger], pack, subject="beacon test")
-        with open(os.path.join(pack, "MANIFEST.json")) as f:
+        with open(os.path.join(pack, "MANIFEST.json"), encoding="utf-8") as f:
             m = json.load(f)
         m["rfc3161_timestamp"] = {"anchored": True, "tsa": "local", "tsr_b64": cls.tsa.token(m["manifest_digest_sha256"])}
-        with open(os.path.join(pack, "MANIFEST.json"), "w") as f:
+        with open(os.path.join(pack, "MANIFEST.json"), "w", encoding="utf-8", newline="") as f:
             json.dump(m, f, indent=1, sort_keys=True)
 
     @classmethod
@@ -1253,22 +1253,22 @@ class Window(unittest.TestCase):
             self.assertEqual((r["status"], r["reason"]), ("invalid", "pack_not_valid"), r)   # content first, then the token
             pk3 = os.path.join(td, "p3")                            # a broken manifest signature: content and token
             shutil.copytree(self.pack, pk3)                         # still verified, the pack not valid
-            with open(os.path.join(pk3, "MANIFEST.json")) as f:
+            with open(os.path.join(pk3, "MANIFEST.json"), encoding="utf-8") as f:
                 m3 = json.load(f)
             m3["manifest_signature"], m3["manifest_signer"] = base64.b64encode(b"\x01" * 64).decode(), "ab" * 32
-            with open(os.path.join(pk3, "MANIFEST.json"), "w") as f:
+            with open(os.path.join(pk3, "MANIFEST.json"), "w", encoding="utf-8", newline="") as f:
                 json.dump(m3, f)
             v3 = EP.verify_pack(pk3, tsa_certs=self.pins())
             self.assertEqual((v3["valid"], v3["states"]["sealed_content"]["state"], v3["states"]["time_anchor"]["state"]),
                              (False, "verified", "verified"))
             r = run(self.ledger, pack_dir=pk3, tsa_certs=self.pins(), max_window_s=WIDE)
             self.assertEqual((r["status"], r["reason"]), ("invalid", "pack_not_valid"), r)
-            with open(os.path.join(self.pack, "MANIFEST.json")) as f:
+            with open(os.path.join(self.pack, "MANIFEST.json"), encoding="utf-8") as f:
                 m = json.load(f)
             m["rfc3161_timestamp"] = {"anchored": False, "note": "no TSA provided"}
             pk2 = os.path.join(td, "p2")
             shutil.copytree(self.pack, pk2)
-            with open(os.path.join(pk2, "MANIFEST.json"), "w") as f:
+            with open(os.path.join(pk2, "MANIFEST.json"), "w", encoding="utf-8", newline="") as f:
                 json.dump(m, f)
             r = run(self.ledger, pack_dir=pk2, tsa_certs=self.pins(), max_window_s=WIDE)
             self.assertEqual((r["status"], r["reason"]), ("invalid", "time_anchor_not_verified"), r)
@@ -1276,7 +1276,7 @@ class Window(unittest.TestCase):
     def test_window_inverted_with_a_real_token(self):
         """the real freetsa.org token of spec/vectors/rfc3161 (requested on 2026-11-13) is before the pulse of 16/11"""
         V = os.path.join(ROOT, "spec", "vectors", "rfc3161")
-        with open(os.path.join(V, "manifest.json")) as f:
+        with open(os.path.join(V, "manifest.json"), encoding="utf-8") as f:
             man = json.load(f)
         with open(os.path.join(V, "freetsa.tsr"), "rb") as f:
             v = T.verify_token(f.read(), bytes.fromhex(man["digest_sha256"]), "sha256",
@@ -1423,7 +1423,7 @@ def make_pack(td, name, ledger_bytes, lab, extra=None):
     led = write(src, "payments.jsonl", ledger_bytes)
     with contextlib.redirect_stdout(io.StringIO()):
         EP.build_pack([led], d, subject="beacon test")
-    with open(os.path.join(d, "MANIFEST.json")) as f:
+    with open(os.path.join(d, "MANIFEST.json"), encoding="utf-8") as f:
         m = json.load(f)
     for n, b in (extra or {}).items():
         write(d, n, b)
@@ -1433,7 +1433,7 @@ def make_pack(td, name, ledger_bytes, lab, extra=None):
     m["manifest_digest_sha256"] = hashlib.sha256(EP._canon(m2)).hexdigest()
     tok = lab.token(bytes.fromhex(m["manifest_digest_sha256"]))
     m["rfc3161_timestamp"] = {"anchored": True, "tsa": "local", "tsr_b64": base64.b64encode(tok).decode()}
-    with open(os.path.join(d, "MANIFEST.json"), "w") as f:
+    with open(os.path.join(d, "MANIFEST.json"), "w", encoding="utf-8", newline="") as f:
         json.dump(m, f, indent=1, sort_keys=True)
     return d
 
@@ -1945,17 +1945,17 @@ class EntryProof(unittest.TestCase):
              write(self.td, "cp.note", self.note), "--log-vkey", self.keys["example.org/payments"][1],
              "--witness-vkey", self.keys["witness.example/a"][1]]
         r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py")] + a, capture_output=True,
-                           text=True, timeout=300)
+                           text=True, encoding="utf-8", timeout=300)
         self.assertEqual(r.returncode, 0, r.stdout[-400:] + r.stderr[-400:])
         r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py")] + a + ["--require-disclosure",
-                           "payer_iban_commitment"], capture_output=True, text=True, timeout=300)
+                           "payer_iban_commitment"], capture_output=True, text=True, encoding="utf-8", timeout=300)
         self.assertEqual((r.returncode, json.loads(r.stdout)["reason"]), (1, "required_disclosure_missing"))
         for extra in ([LEDGER], ["--entry", "1"]):
             r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py")] + a + extra,
-                               capture_output=True, text=True, timeout=300)
+                               capture_output=True, text=True, encoding="utf-8", timeout=300)
             self.assertEqual(r.returncode, 2, extra)
         r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py")] + a + ["--require-disclosure",
-                           "payer_iban"], capture_output=True, text=True, timeout=300)
+                           "payer_iban"], capture_output=True, text=True, encoding="utf-8", timeout=300)
         self.assertEqual(r.returncode, 2)
 
 
@@ -2048,7 +2048,7 @@ class Command(unittest.TestCase):
         env = dict(os.environ, HOME=tempfile.mkdtemp())
         env.pop("PYTHONPATH", None)
         r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py"), "beacon", *args],
-                           capture_output=True, text=True, env=env, cwd=env["HOME"])
+                           capture_output=True, text=True, encoding="utf-8", env=env, cwd=env["HOME"])
         shutil.rmtree(env["HOME"])
         return r
 
@@ -2134,10 +2134,10 @@ class Command(unittest.TestCase):
         env = dict(os.environ)
         env.pop("PYTHONPATH", None)
         r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py"), "--help"],
-                           capture_output=True, text=True, env=env)
+                           capture_output=True, text=True, encoding="utf-8", env=env)
         self.assertIn("beacon", r.stdout)
         r = subprocess.run([sys.executable, os.path.join(ROOT, "verify_evidence.py"), "--", "beacon", LEDGER],
-                           capture_output=True, text=True, env=env)
+                           capture_output=True, text=True, encoding="utf-8", env=env)
         self.assertEqual(r.returncode, 2)
 
     def test_library_arguments(self):

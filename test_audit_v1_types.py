@@ -57,7 +57,7 @@ class TestCoseAndScittProofIntegers(unittest.TestCase):
         led = os.path.join(self.d, "one.jsonl")
         e = {"idx": 0, "ts": "t", "data": {"a": 1}, "prev_hash": "0" * 64}
         e["self_hash"] = hashlib.sha256(json.dumps(e, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        open(led, "w").write(json.dumps(e) + "\n")
+        open(led, "w", encoding="utf-8", newline="").write(json.dumps(e) + "\n")
         r1 = R.inclusion_receipt(led, 0, self.key)
         c = R.to_cose(r1, self.key)
         leaf = r1["leaf_sha256"]
@@ -114,7 +114,7 @@ class TestStrictBase64url(unittest.TestCase):
         out = os.path.join(d, "ev.json")
         ap2_evidence.build_evidence([{"name": "intent", "sd_jwt": sd}], out)
         self.assertTrue(ap2_evidence.verify_evidence(out)["valid"])                    # control
-        ev0 = json.load(open(out))
+        ev0 = json.load(open(out, encoding="utf-8"))
 
         def with_sig(fn):
             ev = copy.deepcopy(ev0)
@@ -124,7 +124,7 @@ class TestStrictBase64url(unittest.TestCase):
             ev["artifacts"][0]["sd_jwt_compact"] = f"{h}.{p}.{fn(s)}~{rest}"
             body = {k: v for k, v in ev.items() if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
             ev["evidence_digest_sha256"] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            json.dump(ev, open(out, "w"))
+            json.dump(ev, open(out, "w", encoding="utf-8", newline=""))
             return ap2_evidence.verify_evidence(out)
 
         self.assertTrue(with_sig(lambda s: s)["valid"])                                 # control: re-digest alone keeps it valid

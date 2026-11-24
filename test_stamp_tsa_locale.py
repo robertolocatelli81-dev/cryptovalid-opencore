@@ -54,9 +54,9 @@ class TestStampOnlyGrantedTokenForThisDigest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.d = d = tempfile.mkdtemp(prefix="tsa_")
-        with open(os.path.join(d, "tsa.cnf"), "w") as f:
+        with open(os.path.join(d, "tsa.cnf"), "w", encoding="utf-8", newline="") as f:
             f.write(CNF.format(d=cnf_path(d)))
-        with open(os.path.join(d, "serial"), "w") as f:
+        with open(os.path.join(d, "serial"), "w", encoding="utf-8", newline="") as f:
             f.write("01\n")
         j = lambda n: os.path.join(d, n)  # noqa: E731
         _run(EXE, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", j("ca.key"),
@@ -65,7 +65,7 @@ class TestStampOnlyGrantedTokenForThisDigest(unittest.TestCase):
              "-out", j("tsa.csr"), "-subj", "/CN=test-tsa")
         _run(EXE, "x509", "-req", "-in", j("tsa.csr"), "-CA", j("ca.crt"), "-CAkey", j("ca.key"), "-CAcreateserial",
              "-out", j("tsa.crt"), "-days", "2", "-extfile", j("tsa.cnf"), "-extensions", "v3_tsa")
-        with open(j("chain.pem"), "w") as f:
+        with open(j("chain.pem"), "w", encoding="utf-8", newline="") as f:
             f.write((_read(j("ca.crt")) + _read(j("tsa.crt"))).decode("ascii"))
         cls.mode = "honest"
 

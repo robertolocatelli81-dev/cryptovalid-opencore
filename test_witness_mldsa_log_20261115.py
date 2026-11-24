@@ -189,7 +189,7 @@ class MLDSALogRelyingParty(unittest.TestCase):
             env = dict(os.environ); env.pop("PYTHONPATH", None)
             r = subprocess.run([sys.executable, os.path.join(HERE, "cryptovalid_witness.py"), "verify", p, "--log-vkey", self.lv]
                                + sum([["--witness-vkey", w] for w in self.wv], []) + ["--min-witnesses", "3"],
-                               capture_output=True, text=True, cwd=d, env=env, timeout=120)
+                               capture_output=True, text=True, encoding="utf-8", cwd=d, env=env, timeout=120)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertEqual(json.loads(r.stdout)["stato"], "OK")
         finally:
@@ -210,7 +210,7 @@ class MLDSALogWitnessSide(unittest.TestCase):
         shutil.rmtree(self.d)
 
     def test_torchwood_litewitness_vector_is_cosigned(self):
-        with open(os.path.join(D, "torchwood_mldsa44_log.vkey")) as f:
+        with open(os.path.join(D, "torchwood_mldsa44_log.vkey"), encoding="utf-8") as f:
             vk = f.read().strip()
         with open(os.path.join(D, "torchwood_mldsa44_log.note"), "rb") as f:
             note = f.read()
@@ -316,7 +316,7 @@ class SigstoreStaging(unittest.TestCase):
         d = os.environ["CV_SIGSTAGE_DIR"]
         with open(os.path.join(d, "checkpoint"), "rb") as f:
             note = f.read()
-        with open(os.path.join(d, "vkeys.json")) as f:
+        with open(os.path.join(d, "vkeys.json"), encoding="utf-8") as f:
             k = json.load(f)
         r = W.verify_witnessed(note, k["log"], k["witnesses"], min_witnesses=3)
         self.assertEqual((r["stato"], len(r["witnesses"])), ("OK", 3), r)

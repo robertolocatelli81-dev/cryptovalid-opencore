@@ -61,17 +61,17 @@ class TestProfileEdges(unittest.TestCase):
     @unittest.skipUnless(HAVE_CRYPTO, "cryptography assente")
     def test_tip_is_parsed_strictly_and_trusted_key_validated(self):
         ch = _chain(3)
-        with open(self.p, "w") as f:
+        with open(self.p, "w", encoding="utf-8", newline="") as f:
             f.write("".join(json.dumps(e) + "\n" for e in ch))
         k = os.path.join(self.tmp, "k"); pk = signer.keygen(k)["public_key_hex"]
         tip = T.sign_tip(self.p, k); tp = self.p + ".tip.json"
         self.assertEqual(V.verify_ledger(self.p, trusted_pubkey_hex=pk)["verdict"], "PASS")
-        raw = open(tp).read()
+        raw = open(tp, encoding="utf-8").read()
         for bad in (raw[:-1] + ',"ts":"' + tip["ts"] + '"}', json.dumps(dict(tip, note=1.5)), json.dumps(dict(tip, log_pubkey_hex=123))):
-            open(tp, "w").write(bad)
+            open(tp, "w", encoding="utf-8", newline="").write(bad)
             r = V.verify_ledger(self.p, trusted_pubkey_hex=pk)
             self.assertEqual(r["verdict"], "FAIL", bad[:60]); self.assertRegex(r["tip"]["error"], "tip_unreadable|tip_invalid")
-        open(tp, "w").write(raw)
+        open(tp, "w", encoding="utf-8", newline="").write(raw)
         r = V.verify_ledger(self.p, trusted_pubkey_hex=pk.upper())
         self.assertEqual(r["verdict"], "FAIL"); self.assertIn("bad_trusted_key", r["tip"]["error"])
 

@@ -43,7 +43,7 @@ class DeepNesting(unittest.TestCase):
         line = json.dumps(e, separators=(",", ":"))
         self.assertEqual(V.json_nesting_depth(line), depth)   # the fixture measures what it claims
         p = os.path.join(self._tmp("cv_depth_valid_"), "l.jsonl")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write(line + "\n")
         return p
 
@@ -65,7 +65,7 @@ class DeepNesting(unittest.TestCase):
         if not node:
             self.skipTest("node not installed: JS parity not measurable here")
         out = subprocess.run([node, os.path.join(HERE, "verifiers", "js", "cvverify.mjs"), path],
-                             capture_output=True, text=True, timeout=60)
+                             capture_output=True, text=True, encoding="utf-8", timeout=60)
         return json.loads(out.stdout)
 
     def test_js_agrees_at_the_bound_and_beyond_it(self):
@@ -99,7 +99,7 @@ class DeepNesting(unittest.TestCase):
     def _write(self, depth):
         d = self._tmp("cv_depth_")
         p = os.path.join(d, "l.jsonl")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write(_deep_line(depth))
         return p
 
@@ -112,7 +112,7 @@ class DeepNesting(unittest.TestCase):
     def test_cli_exit_1_with_receipt_and_no_traceback(self):
         p = self._write(5000)
         out = subprocess.run([sys.executable, os.path.join(HERE, "verifier.py"), p],
-                             capture_output=True, text=True, timeout=60)
+                             capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(out.returncode, 1)
         self.assertNotIn("Traceback", out.stderr)
         self.assertEqual(json.loads(out.stdout)["verdict"], "FAIL")
@@ -121,10 +121,10 @@ class DeepNesting(unittest.TestCase):
         # same defect class through the AP2 front-end of this repository (`cryptovalid-verify ap2`): the reference verifier
         # is ap2-evidence-pack since 0.18.0 (its own depth test lives there); with or without it, exit 1 and no traceback
         d = self._tmp("cv_depth_ap2_"); p = os.path.join(d, "pack.json")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write('{"x":' + "[" * 5000 + "]" * 5000 + "}")
         out = subprocess.run([sys.executable, os.path.join(HERE, "verify_evidence.py"), "ap2", p],
-                             capture_output=True, text=True, timeout=60)
+                             capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(out.returncode, 1)
         self.assertNotIn("Traceback", out.stderr)
         r = json.loads(out.stdout); self.assertFalse(r["valid"])
@@ -137,10 +137,10 @@ class DeepNesting(unittest.TestCase):
 
     def test_evidence_pack_verify_cli_fail_closed_on_deep_manifest(self):
         d = self._tmp("cv_depth_pack_")
-        with open(os.path.join(d, "MANIFEST.json"), "w") as f:
+        with open(os.path.join(d, "MANIFEST.json"), "w", encoding="utf-8", newline="") as f:
             f.write('{"x":' + "[" * 5000 + "]" * 5000 + "}")
         out = subprocess.run([sys.executable, os.path.join(HERE, "evidence_pack.py"), "verify", d],
-                             capture_output=True, text=True, timeout=60)
+                             capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(out.returncode, 1)
         self.assertNotIn("Traceback", out.stderr)
         r = json.loads(out.stdout); self.assertFalse(r["valid"]); self.assertIn("json_too_deep", r["error"])

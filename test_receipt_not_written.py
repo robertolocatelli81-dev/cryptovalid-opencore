@@ -141,7 +141,7 @@ class TestVerifierPy(_Base):
         self.addCleanup(shutil.rmtree, d, True)
         big = os.path.join(d, "big.jsonl")
         z = "0" * 64
-        with open(big, "w") as fh:
+        with open(big, "w", encoding="utf-8", newline="") as fh:
             for i in range(3000):
                 fh.write('{"ts":%d,"v":%d,"self_hash":"%s"}\n' % (i, i, z))
         p = subprocess.run(["bash", "-c", '"$0" "$1" verify "$2" | { sleep 0.5; cat; }; exit "${PIPESTATUS[0]}"',
@@ -158,7 +158,7 @@ class TestVerifyEvidence(_Base):
         self.empty_dir = os.path.join(self.d, "empty")
         os.mkdir(self.empty_dir)
         self.obj = os.path.join(self.d, "x.json")
-        with open(self.obj, "w") as fh:
+        with open(self.obj, "w", encoding="utf-8", newline="") as fh:
             fh.write("{}")
 
     def ve(self, *a):

@@ -25,7 +25,7 @@ ENV = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
 
 
 def _run(argv):
-    cp = subprocess.run(argv, capture_output=True, text=True, env=ENV, cwd=HERE)
+    cp = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", env=ENV, cwd=HERE)
     return cp.returncode, cp.stdout
 
 
@@ -101,7 +101,7 @@ class TestMismatchNamedFirst(unittest.TestCase):
             with open(f.a, encoding="utf-8") as src:
                 first = src.readline()
             p = os.path.join(f.tmp, "many.jsonl")
-            with open(p, "w", encoding="utf-8") as out:
+            with open(p, "w", encoding="utf-8", newline="") as out:
                 out.write(first + "[]\n" * 12)
             r = V.verify_ledger(p, expect_ledger_id=f.b_id)
             self.assertEqual(r["verdict"], "FAIL")

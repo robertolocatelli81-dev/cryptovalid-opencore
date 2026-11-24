@@ -295,9 +295,9 @@ class TestCurrentStatusAndHistory(unittest.TestCase):
         import tempfile
         d = tempfile.mkdtemp(); self.addCleanup(__import__("shutil").rmtree, d, True)
         cache = os.path.join(d, "c.json")
-        json.dump({"fingerprints": ["ab" * 32], "coverage": ["x"]}, open(cache, "w"))   # 0.20.1 format, no rule
+        json.dump({"fingerprints": ["ab" * 32], "coverage": ["x"]}, open(cache, "w", encoding="utf-8", newline=""))   # 0.20.1 format, no rule
         other = os.path.join(d, "o.json")   # fresh, but another rule
-        with open(other, "w") as f:
+        with open(other, "w", encoding="utf-8", newline="") as f:
             json.dump({"rule": "x/0", "built_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
                        .strftime("%Y-%m-%dT%H:%M:%SZ"), "fingerprints": ["cd" * 32], "coverage": ["x"]}, f)
         calls = []
@@ -329,7 +329,7 @@ class TestCurrentStatusAndHistory(unittest.TestCase):
                 rec = {"rule": L.RULE, "fingerprints": ["ab" * 32], "coverage": ["x"]}
                 if built is not None:
                     rec["built_at"] = (datetime.now(timezone.utc) - built).strftime("%Y-%m-%dT%H:%M:%SZ")
-                with open(cache, "w") as f:
+                with open(cache, "w", encoding="utf-8", newline="") as f:
                     json.dump(rec, f)
                 calls = []
                 L._get = lambda url, timeout=45: (calls.append(url), empty)[1]
@@ -337,11 +337,11 @@ class TestCurrentStatusAndHistory(unittest.TestCase):
                 self.assertEqual(fprs == {"ab" * 32}, used, built)
                 self.assertEqual(calls == [], used, built)
                 if not used:
-                    with open(cache) as f:
+                    with open(cache, encoding="utf-8") as f:
                         self.assertEqual(json.load(f)["fingerprints"], [])   # rebuilt and rewritten, with its built_at
         finally:
             L._get = orig
-        self.assertEqual(json.load(open(cache))["rule"], L.RULE)
+        self.assertEqual(json.load(open(cache, encoding="utf-8"))["rule"], L.RULE)
         self.assertEqual(L.load_qualified_fingerprints(cache_path=cache)[0], set())   # now read from the cache
 
 
@@ -450,7 +450,7 @@ class TestHistoryOrder(unittest.TestCase):
             L._get = orig
         self.assertEqual(fprs, {_fp(b"SERVICE-2-CERT")}); self.assertEqual(cov, ["https://tl.example/x.xml"])
         self.assertEqual(errs, {self.F1: "history_duplicate_start https://tl.example/x.xml"})
-        rec = json.load(open(cache))
+        rec = json.load(open(cache, encoding="utf-8"))
         self.assertEqual(rec["rule"], L.RULE); self.assertEqual(rec["history_errors"], errs)
         self.assertEqual(L.load_qualified_status(cache_path=cache), (fprs, cov, errs))   # read back from the cache
         self.assertEqual(L.load_qualified_fingerprints(cache_path=cache), (fprs, cov))

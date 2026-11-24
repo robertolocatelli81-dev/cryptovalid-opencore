@@ -112,7 +112,7 @@ def uses_in_source(src, modules, filename="<src>"):
 
 
 def tracked_python(root=HERE):
-    r = subprocess.run(["git", "-C", root, "ls-files", "*.py"], capture_output=True, text=True, check=True)
+    r = subprocess.run(["git", "-C", root, "ls-files", "*.py"], capture_output=True, text=True, encoding="utf-8", check=True)
     return [f for f in r.stdout.split() if not f.startswith("proposte_governo/")]
 
 

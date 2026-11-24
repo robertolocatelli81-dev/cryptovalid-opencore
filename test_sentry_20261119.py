@@ -1055,7 +1055,7 @@ class TestUnsealedSegmentsAreRead(_Archives):
     def test_the_review_case(self):
         b = _Signer()
         d = self.build("review", 2, backend=b, per_segment=2)
-        with open(os.path.join(d, "ledger-000099.jsonl"), "w") as f:
+        with open(os.path.join(d, "ledger-000099.jsonl"), "w", encoding="utf-8", newline="") as f:
             f.write('{"not":"a chain","forged":true}\n')
         r = self.I.verify_archive(d, expected_pubkey_hex=b.public_key_hex())
         self.assertFalse(r["ok"])
@@ -1188,7 +1188,7 @@ class TestMcpServerSurvivesAnyMessage(unittest.TestCase):
         home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, home, True)
         self.p = subprocess.Popen([sys.executable, os.path.join(HERE, "cryptovalid_mcp.py")], stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env={**os.environ, "HOME": home})
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8", env={**os.environ, "HOME": home})
         self.addCleanup(self._stop)
         self.n = 1000
 

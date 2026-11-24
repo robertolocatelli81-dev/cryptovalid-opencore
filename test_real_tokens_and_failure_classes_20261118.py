@@ -121,7 +121,7 @@ def sint(n):
 
 
 def manifest():
-    with open(os.path.join(TP, "manifest.json")) as f:
+    with open(os.path.join(TP, "manifest.json"), encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -233,7 +233,7 @@ class SignedNonces(unittest.TestCase):
         try:
             lab = K.Lab(td, "n")
             j = lab.j
-            with open(j("tsa.cnf"), "w") as f:
+            with open(j("tsa.cnf"), "w", encoding="utf-8", newline="") as f:
                 f.write(f"[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {cnf_path(j('serial'))}\ncrypto_device = builtin\n"
                         f"signer_cert = {cnf_path(j('tsa.crt'))}\ncerts = {cnf_path(j('ca.crt'))}\nsigner_key = {cnf_path(j('tsa.key'))}\n"
                         "signer_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\ness_cert_id_alg = sha256\n")
@@ -270,7 +270,7 @@ class SignedNonces(unittest.TestCase):
                                 j("ca.crt"), "-in", j("tst.der"), "-outform", "DER", "-out", j("x.der")],
                                check=True, capture_output=True)
                 v = subprocess.run(["openssl", "ts", "-verify", "-token_in", "-in", j("x.der"), "-digest", K.DIGEST.hex(),
-                                    "-CAfile", j("ca.crt")], capture_output=True, text=True)
+                                    "-CAfile", j("ca.crt")], capture_output=True, text=True, encoding="utf-8")
                 self.assertIn("Verification: OK", v.stdout, (n, v.stderr))
                 r = T.verify_token(_read(j("x.der")), K.DIGEST, "sha256", [j("ca.crt")])
                 self.assertEqual((r["status"], r["tst_info"]["serial_number"]), ("verified", str(n)), (n, r))
@@ -298,7 +298,7 @@ class FailureClasses(unittest.TestCase):
 
     def run_ledger(self, entries, name="l.jsonl"):
         p = os.path.join(self.td, name)
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries))
         return p, verifier.verify_ledger(p)
 

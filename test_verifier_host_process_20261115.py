@@ -23,7 +23,7 @@ TAMPERED = os.path.join(HERE, "examples", "sample_ledger_tampered.jsonl")
 
 def _ledger(path, datas):
     prev = V.GENESIS_PREV
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for i, d in enumerate(datas):
             e = {"idx": i, "ts": "2026-11-15T00:00:00Z", "data": d, "prev_hash": prev}
             e["self_hash"] = V.hash_with("sha256", V.canonical_payload(e))
@@ -52,7 +52,7 @@ class TestHostProcess(unittest.TestCase):
 
     def test_limit_restored_after_a_refusal_inside_the_decoder(self):
         p = os.path.join(self.d, "dup.jsonl")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write('{"a":1,"a":2}\n')
         self.assertEqual(V.verify_ledger(p)["verdict"], "FAIL")
         self.assertEqual(sys.getrecursionlimit(), self.base)

@@ -319,7 +319,7 @@ def main():
                                         ("2026-11-16T14:04:00Z", 3600, 0, None))]
         doc = {"format": "cryptovalid-beacon-conformance/4", "spec": "SPEC_EVIDENCE_FORMAT.md v0.10 §18-§19",
                "paths": "relative to spec/vectors/beacon/", "cases": cases, "window_cases": windows}
-        with open(os.path.join(HERE, "conformance.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(HERE, "conformance.json"), "w", encoding="utf-8", newline="") as f:
             f.write(json.dumps(doc, ensure_ascii=False, indent=1) + "\n")
         print(len(cases), "cases,", len(windows), "window cases")
     finally:

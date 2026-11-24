@@ -36,7 +36,7 @@ def _make_ledger(path):
         e["prev_hash"] = prev
         e["self_hash"] = sh(e)
         prev = e["self_hash"]
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for e in entries:
             f.write(json.dumps(e) + "\n")
 
@@ -57,7 +57,7 @@ class TestEvidencePack(unittest.TestCase):
         # audit V1 #5 (30/09/2026): these MANIFEST shapes raised tracebacks; a file name outside the pack was read
         import shutil
         evidence_pack.build_pack([self.signed], self.pack, sign_key=None)
-        man = json.load(open(os.path.join(self.pack, "MANIFEST.json")))
+        man = json.load(open(os.path.join(self.pack, "MANIFEST.json"), encoding="utf-8"))
         cases = {"notjson": b"{x", "list": b"[]", "notutf8": b"\xff\xfe",
                  "digests_list": json.dumps(dict(man, file_digests_sha256=[1])).encode(),
                  "ledger_nofile": json.dumps(dict(man, ledgers=[{"x": 1}])).encode(),
@@ -94,11 +94,11 @@ class TestEvidencePack(unittest.TestCase):
         # NEMESIS V1 P3 (01/10/2026): a symlink inside the pack pointing outside counted as a matching file
         import hashlib
         evidence_pack.build_pack([self.signed], self.pack)
-        outside = os.path.join(self.d, "outside.txt"); open(outside, "w").write("secret")
+        outside = os.path.join(self.d, "outside.txt"); open(outside, "w", encoding="utf-8", newline="").write("secret")
         os.symlink(outside, os.path.join(self.pack, "link.txt"))
-        p = os.path.join(self.pack, "MANIFEST.json"); man = json.load(open(p))
+        p = os.path.join(self.pack, "MANIFEST.json"); man = json.load(open(p, encoding="utf-8"))
         man["file_digests_sha256"]["link.txt"] = hashlib.sha256(b"secret").hexdigest()
-        json.dump(man, open(p, "w"))
+        json.dump(man, open(p, "w", encoding="utf-8", newline=""))
         self.assertFalse(evidence_pack.verify_pack(self.pack)["file_ok"]["link.txt"])
 
     def test_build_produces_files(self):
@@ -116,9 +116,9 @@ class TestEvidencePack(unittest.TestCase):
     def test_tamper_ledger_in_pack_fails(self):
         evidence_pack.build_pack([self.signed], self.pack)
         p = os.path.join(self.pack, "signed.jsonl")
-        rows = [json.loads(x) for x in open(p)]
+        rows = [json.loads(x) for x in open(p, encoding="utf-8")]
         rows[1]["data"]["d"] = "reject"
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             for x in rows:
                 f.write(json.dumps(x) + "\n")
         r = evidence_pack.verify_pack(self.pack)
@@ -128,9 +128,9 @@ class TestEvidencePack(unittest.TestCase):
     def test_tamper_manifest_fails(self):
         evidence_pack.build_pack([self.signed], self.pack)
         mp = os.path.join(self.pack, "MANIFEST.json")
-        man = json.load(open(mp))
+        man = json.load(open(mp, encoding="utf-8"))
         man["subject"] = "FALSIFICATO"
-        json.dump(man, open(mp, "w"))
+        json.dump(man, open(mp, "w", encoding="utf-8", newline=""))
         self.assertFalse(evidence_pack.verify_pack(self.pack)["manifest_ok"])
 
     def test_rfc3161_optional_honest(self):
@@ -143,8 +143,8 @@ class TestEvidencePack(unittest.TestCase):
     def test_attack_truncation_caught(self):
         evidence_pack.build_pack([self.signed], self.pack)
         p = os.path.join(self.pack, "signed.jsonl")
-        rows = [x for x in open(p) if x.strip()][:1]               # tronco: 2 -> 1 entry
-        with open(p, "w") as f:
+        rows = [x for x in open(p, encoding="utf-8") if x.strip()][:1]               # tronco: 2 -> 1 entry
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.writelines(rows)
         r = evidence_pack.verify_pack(self.pack)
         self.assertFalse(r["valid"])                               # troncamento rilevato
@@ -154,14 +154,14 @@ class TestEvidencePack(unittest.TestCase):
         import hashlib
         evidence_pack.build_pack([self.signed], self.pack, sign_key=self.key)  # manifest FIRMATO
         mp = os.path.join(self.pack, "MANIFEST.json")
-        m = json.load(open(mp))
+        m = json.load(open(mp, encoding="utf-8"))
         self.assertTrue(evidence_pack.verify_pack(self.pack)["manifest_authenticated"])
         m["subject"] = "FALSIFICATO"                               # attaccante cambia + ricalcola digest
         core = {k: v for k, v in m.items() if k not in
                 ("manifest_digest_sha256", "rfc3161_timestamp", "manifest_signature", "manifest_signer")}
         m["manifest_digest_sha256"] = hashlib.sha256(
             json.dumps(core, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        json.dump(m, open(mp, "w"))
+        json.dump(m, open(mp, "w", encoding="utf-8", newline=""))
         r = evidence_pack.verify_pack(self.pack)
         self.assertFalse(r["manifest_authenticated"])              # firma non combacia col nuovo digest
         self.assertFalse(r["valid"])                               # re-forge su pack firmato = invalido
@@ -169,9 +169,9 @@ class TestEvidencePack(unittest.TestCase):
     def test_attack_bogus_rfc3161_not_verified(self):
         evidence_pack.build_pack([self.signed], self.pack)
         mp = os.path.join(self.pack, "MANIFEST.json")
-        m = json.load(open(mp))
+        m = json.load(open(mp, encoding="utf-8"))
         m["rfc3161_timestamp"] = {"anchored": True, "tsa": "http://fake", "tsr_b64": "AAAA"}
-        json.dump(m, open(mp, "w"))
+        json.dump(m, open(mp, "w", encoding="utf-8", newline=""))
         r = evidence_pack.verify_pack(self.pack)
         self.assertFalse(r["rfc3161"]["verified"])                 # token spazzatura NON verificato
 

@@ -38,7 +38,7 @@ def read(p):
 def fuzz(*args):
     with tempfile.TemporaryDirectory() as d:
         r = subprocess.run([sys.executable, FUZZ, "--findings-dir", os.path.join(d, "f")] + list(args),
-                           capture_output=True, text=True, timeout=60, cwd=d)
+                           capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=d)
     return r.returncode, json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else None, r.stderr
 
 
@@ -117,7 +117,7 @@ class Oracle(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             for _ in range(2):
                 r = subprocess.run([sys.executable, FUZZ, "--ablate", "ledger", "--iterations", "300",
-                                    "--findings-dir", d], capture_output=True, text=True, timeout=60)
+                                    "--findings-dir", d], capture_output=True, text=True, encoding="utf-8", timeout=60)
                 self.assertEqual(r.returncode, 0, r.stderr[-400:])
 
 

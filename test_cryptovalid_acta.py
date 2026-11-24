@@ -239,9 +239,9 @@ class TestDriverAndCLI(unittest.TestCase):
         if not HAVE_CRYPTO:
             self.skipTest("cryptography assente")
         with tempfile.TemporaryDirectory() as tmp:
-            with open(os.path.join(tmp, "seed"), "w") as f:
+            with open(os.path.join(tmp, "seed"), "w", encoding="utf-8", newline="") as f:
                 f.write(SEED + "\n")
-            run = lambda *a: subprocess.run([sys.executable, os.path.join(HERE, "cryptovalid_acta.py"), *a], capture_output=True, text=True, cwd=HERE)
+            run = lambda *a: subprocess.run([sys.executable, os.path.join(HERE, "cryptovalid_acta.py"), *a], capture_output=True, text=True, encoding="utf-8", cwd=HERE)
             r = run("policy-digest", POLICY_DIR); self.assertEqual(r.stdout.strip(), POLICY_DIGEST)
             r = run("sign", "--key", os.path.join(tmp, "seed"), "--tool", "Read", "--decision", "allow", "--policy-dir", POLICY_DIR, "--issued-at", "2026-09-20T09:00:00Z", "--out", os.path.join(tmp, "r1.json"))
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -251,12 +251,12 @@ class TestDriverAndCLI(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout); self.assertTrue(json.loads(r.stdout)["ok"])
             r = run("verify", os.path.join(tmp, "r2.json"), os.path.join(tmp, "r1.json"), "--key", f"{KID}={PUB_HEX}"); self.assertEqual(r.returncode, 1)
             r = run("verify", os.path.join(tmp, "nope.json")); self.assertEqual(r.returncode, 2); self.assertIn('"ok": false', r.stdout)
-            with open(os.path.join(tmp, "deep.json"), "w") as f:
+            with open(os.path.join(tmp, "deep.json"), "w", encoding="utf-8", newline="") as f:
                 f.write("[" * 100000)
             # -04 §5.4: input that is not JSON this verifier reads is undecidable (exit 77), its cause named
             r = run("verify", os.path.join(tmp, "deep.json")); self.assertEqual(r.returncode, 77); self.assertNotIn("Traceback", r.stderr)
             self.assertEqual(json.loads(r.stdout)["code"], "input_not_json")
-            with open(os.path.join(tmp, "dup.json"), "w") as f:
+            with open(os.path.join(tmp, "dup.json"), "w", encoding="utf-8", newline="") as f:
                 f.write('{"payload": {"a": 1, "a": 2}, "signature": {"alg": "EdDSA", "kid": "k", "sig": "00"}}')
             r = run("verify", os.path.join(tmp, "dup.json")); self.assertEqual(r.returncode, 77); self.assertIn("duplicate", r.stdout)
             os.makedirs(os.path.join(tmp, "nopolicy"))
@@ -264,10 +264,10 @@ class TestDriverAndCLI(unittest.TestCase):
             r = run("verify", os.path.join(tmp, "r1.json"), "--key", f"{KID}={os.path.join(tmp, 'seed')}")            # a hex keyfile: not a public key → refused
             # 25/09: 32 seed bytes that are not even a curve point are unusable key material, refused at load (exit 2);
             # seed bytes that happen to decode stay a failed signature check (exit 1)
-            with open(os.path.join(tmp, "seed")) as sf:
+            with open(os.path.join(tmp, "seed"), encoding="utf-8") as sf:
                 seed_bytes = bytes.fromhex(sf.read().strip())
             self.assertEqual(r.returncode, 2 if A._ed25519_problem(seed_bytes) else 1, r.stdout)
-            with open(os.path.join(tmp, "pub.hex"), "w") as f:
+            with open(os.path.join(tmp, "pub.hex"), "w", encoding="utf-8", newline="") as f:
                 f.write(PUB_HEX + "\n")
             r = run("verify", os.path.join(tmp, "r1.json"), "--key", f"{KID}={os.path.join(tmp, 'pub.hex')}"); self.assertEqual(r.returncode, 0, r.stdout)
             try:
@@ -279,7 +279,7 @@ class TestDriverAndCLI(unittest.TestCase):
             root = os.path.join(tmp, "vectors"); os.makedirs(os.path.join(root, "fixtures", "inputs")); os.makedirs(os.path.join(root, "fixtures", "policy"))
             open(os.path.join(root, "fixtures", "policy", "autoresearch-safe.cedar"), "wb").write(_policy_files()["autoresearch-safe.cedar"])
             for i, (tool, ctx, exp) in enumerate((("Read", {}, "allow"), ("Bash", {"command_pattern": "git"}, "allow"), ("Bash", {"command_pattern": "rm -rf"}, "deny"), ("Write", {"path_starts_with": "./"}, "allow")), 1):
-                with open(os.path.join(root, "fixtures", "inputs", f"{i:03d}.json"), "w") as f:
+                with open(os.path.join(root, "fixtures", "inputs", f"{i:03d}.json"), "w", encoding="utf-8", newline="") as f:
                     json.dump({"sequence": i, "tool_name": tool, "tool_input": {"x": i}, "session_id": "s", "context": ctx, "expected_decision": "WRONG"}, f)
             with self.assertRaises(ValueError):
                 A.run_vectors(root, os.path.join(tmp, "o2"), SEED, "2026-09-20T09:00:00+02:00")
@@ -625,7 +625,7 @@ class AbsenceSideOfTheVerdict(unittest.TestCase):
         here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "examples", "acta", "key-window")
         for name, want in (("inside.json", 0), ("after-valid-until.json", 1)):
             r = subprocess.run([sys.executable, A.__file__, "verify", os.path.join(here, name),
-                                "--jwks", os.path.join(here, "jwks.json")], capture_output=True, text=True)
+                                "--jwks", os.path.join(here, "jwks.json")], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(r.returncode, want, r.stdout[:200])
             out = json.loads(r.stdout)
             self.assertIn(out["key_status"], ("inside", "outside"))
@@ -636,25 +636,25 @@ class AbsenceSideOfTheVerdict(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             gp, fp = os.path.join(d, "g.json"), os.path.join(d, "f.json")
             for path, obj in ((gp, good), (fp, forged)):
-                with open(path, "w") as fh:
+                with open(path, "w", encoding="utf-8", newline="") as fh:
                     fh.write(json.dumps(obj))
             key = f"{kid}={pk.hex()}"
             env = dict(os.environ)
             # A host without the signing library: exit 77 (not assessed), never 1 (invalid).
             stub = os.path.join(d, "stub")
             os.makedirs(stub)
-            with open(os.path.join(stub, "cryptography.py"), "w") as fh:
+            with open(os.path.join(stub, "cryptography.py"), "w", encoding="utf-8", newline="") as fh:
                 fh.write("raise ImportError('cryptography not installed')\n")
             env["PYTHONPATH"] = stub + os.pathsep + os.path.dirname(os.path.abspath(A.__file__))
             for path in (gp, fp):
                 r = subprocess.run([sys.executable, A.__file__, "verify", "--key", key, path],
-                                   capture_output=True, text=True, env=env)
+                                   capture_output=True, text=True, encoding="utf-8", env=env)
                 self.assertEqual(r.returncode, 77, f"{path}: {r.stdout[:200]}")
             # With the library present the verdicts stand apart: 0 for the valid one, 1 for the forged one.
             self.assertEqual(subprocess.run([sys.executable, A.__file__, "verify", "--key", key, gp],
-                                            capture_output=True, text=True).returncode, 0)
+                                            capture_output=True, text=True, encoding="utf-8").returncode, 0)
             self.assertEqual(subprocess.run([sys.executable, A.__file__, "verify", "--key", key, fp],
-                                            capture_output=True, text=True).returncode, 1)
+                                            capture_output=True, text=True, encoding="utf-8").returncode, 1)
 
 
 B64U = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -683,12 +683,12 @@ class MalformedInputsFound20260925(unittest.TestCase):
 
     def _write(self, name, text):
         path = os.path.join(self.d, name)
-        with open(path, "w", encoding="utf-8") as fh:
+        with open(path, "w", encoding="utf-8", newline="") as fh:
             fh.write(text if isinstance(text, str) else json.dumps(text))
         return path
 
     def _cli(self, *args):
-        r = subprocess.run([sys.executable, A.__file__, "verify", *args], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, A.__file__, "verify", *args], capture_output=True, text=True, encoding="utf-8")
         return r.returncode, r.stdout, r.stderr
 
     def _jwk(self, **over):
@@ -1084,7 +1084,7 @@ class Draft04_20261123(unittest.TestCase):
     VEC = os.path.join(HERE, "examples", "acta")
 
     def _cli(self, *args):
-        r = subprocess.run([sys.executable, A.__file__, "verify", *args], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, A.__file__, "verify", *args], capture_output=True, text=True, encoding="utf-8")
         try:
             return r.returncode, json.loads(r.stdout), r.stderr
         except ValueError:
@@ -1112,7 +1112,7 @@ class Draft04_20261123(unittest.TestCase):
                     with open(os.path.join(d, c["file"]), encoding="utf-8") as fh:
                         for i, line in enumerate(row for row in fh if row.strip()):
                             p = os.path.join(tmp, f"{n}-{i}.json")
-                            with open(p, "w", encoding="utf-8") as out:
+                            with open(p, "w", encoding="utf-8", newline="") as out:
                                 out.write(line)
                             args.append(p)
                     args.append("--sequence")
@@ -1320,18 +1320,18 @@ class Draft04_20261123(unittest.TestCase):
             paths = []
             for i, r in enumerate((a, b, c, d, e)):
                 paths.append(os.path.join(tmp, f"{i}.json"))
-                with open(paths[-1], "w", encoding="utf-8") as fh:
+                with open(paths[-1], "w", encoding="utf-8", newline="") as fh:
                     json.dump(r, fh)
             self.assertEqual(self._cli(*paths, "--key", f"k04={pk.hex()}", "--sequence")[0], 0)
             self.assertEqual(self._cli(*paths, "--key", f"k04={pk.hex()}")[0], 1)
             # §5.4 over a run: an input that is not JSON is undecidable, but a receipt that ran and failed wins
             bad = os.path.join(tmp, "bad.json")
-            with open(bad, "w", encoding="utf-8") as fh:
+            with open(bad, "w", encoding="utf-8", newline="") as fh:
                 fh.write("{not json")
             rc, out, _ = self._cli(bad, "--key", f"k04={pk.hex()}")
             self.assertEqual((rc, out["code"]), (77, "input_not_json"))
             forged = json.loads(json.dumps(c)); forged["payload"]["tool_name"] = "x"
-            with open(os.path.join(tmp, "f.json"), "w", encoding="utf-8") as fh:
+            with open(os.path.join(tmp, "f.json"), "w", encoding="utf-8", newline="") as fh:
                 json.dump(forged, fh)
             self.assertEqual(self._cli(bad, os.path.join(tmp, "f.json"), "--key", f"k04={pk.hex()}", "--sequence")[0], 1)
         # an input whose shape is not read, between two receipts: in a sequence it stands where a chain begins and its

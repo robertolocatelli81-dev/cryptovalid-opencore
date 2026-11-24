@@ -39,7 +39,7 @@ def _crypto():
 
 
 def _run(*args):
-    p = subprocess.run(CLI + [str(a) for a in args], capture_output=True, text=True, timeout=120)
+    p = subprocess.run(CLI + [str(a) for a in args], capture_output=True, text=True, encoding="utf-8", timeout=120)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -710,7 +710,7 @@ class TestReviewOutcomes(unittest.TestCase):
         m = json.loads(_bytes(mf))
         tok = lab.token(bytes.fromhex(m["manifest_digest_sha256"]))
         m["rfc3161_timestamp"] = {"anchored": True, "tsa": "local", "tsr_b64": base64.b64encode(tok).decode()}
-        with open(mf, "w") as f:
+        with open(mf, "w", encoding="utf-8", newline="") as f:
             json.dump(m, f)
         self.assertTrue(json.loads(_run("pack", p)[1])["valid"])
         pin, crl = os.path.join(self.tmp, "pin.pem"), os.path.join(self.tmp, "pin.crl")
@@ -862,7 +862,7 @@ class TestEvidenceUnchanged(Tmp):
             "    return r\n"
             "VE.verify_ledger = once\n"
             "sys.exit(VE._main(['ledger', %r, '--profile', %r]))\n" % (HERE, p, prof))
-        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", timeout=120)
         out = json.loads(r.stdout)
         self.assertEqual((r.returncode, out["valid"], out["profile"]["evidence_unchanged"], out["profile"]["outcome"],
                           [x["state"] for x in out["profile"]["requirements"]]),
@@ -889,7 +889,7 @@ class TestEvidenceUnchanged(Tmp):
         os.mkdir(d)
         os.mkfifo(os.path.join(d, "pipe"))                           # no writer: an open() would wait without end
         code = "import sys; sys.path.insert(0, %r); import verify_evidence as VE; print(VE.evidence_fingerprint(%r) is not None)" % (HERE, d)
-        p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+        p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual((p.returncode, p.stdout.strip()), (0, "True"), p.stderr)
 
     def _apply(self, path, change, target=None):

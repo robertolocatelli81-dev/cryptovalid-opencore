@@ -41,7 +41,7 @@ class Detail(unittest.TestCase):
 
     def write(self, lines, name="l.jsonl"):
         p = os.path.join(self.td, name)
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write("".join(x + "\n" for x in lines))
         return p
 

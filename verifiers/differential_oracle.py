@@ -44,7 +44,7 @@ def build_swift(swift_dir):
     for Rust); True when it built, False without a toolchain. A failing build is an error, never a silent old binary."""
     if not shutil.which("swift"):
         return False
-    r = subprocess.run(["swift", "build", "--product", "cvverify"], cwd=swift_dir, capture_output=True, text=True)
+    r = subprocess.run(["swift", "build", "--product", "cvverify"], cwd=swift_dir, capture_output=True, text=True, encoding="utf-8")
     if r.returncode != 0:
         raise SystemExit("swift build failed — the Swift verifier is broken: " + (r.stderr or r.stdout).strip()[:400])
     return True
@@ -66,7 +66,7 @@ def build_go(tmp):
     if not shutil.which("go"):
         return None
     out = os.path.join(tmp, "cvverify-go")
-    r = subprocess.run(["go", "build", "-o", out, "./cmd/cvverify"], cwd=GO_SRC, capture_output=True, text=True)
+    r = subprocess.run(["go", "build", "-o", out, "./cmd/cvverify"], cwd=GO_SRC, capture_output=True, text=True, encoding="utf-8")
     if r.returncode != 0:
         # a Go toolchain is present but the verifier does not build: that IS a regression of a reference,
         # never a silent "measured without Go" (council round 4)
@@ -92,7 +92,7 @@ def valid_entry(data):
 def verdict(cmd, path, extra=(), flags_first=False):
     args = cmd + (list(extra) + [path] if flags_first else [path] + list(extra))   # Go's flag package: flags first
     try:
-        out = subprocess.run(args, capture_output=True, text=True, timeout=30)
+        out = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", timeout=30)
         return json.loads(out.stdout)["verdict"]
     except Exception:
         return "NONJSON/CRASH"
@@ -102,7 +102,7 @@ def tip_pq(cmd, path, extra=(), flags_first=False):
     """The tri-state `pq_protected` of the tip check (True/False/None), or 'ABSENT' when no tip object is reported."""
     args = cmd + (list(extra) + [path] if flags_first else [path] + list(extra))
     try:
-        out = subprocess.run(args, capture_output=True, text=True, timeout=30)
+        out = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", timeout=30)
         t = json.loads(out.stdout).get("tip")
         return "ABSENT" if not isinstance(t, dict) or "pq_protected" not in t else t["pq_protected"]
     except Exception:
@@ -318,7 +318,7 @@ def closed_details(kind, cmd, path, extra=(), flags_first=False):
     text after `entry N: ` of their unknown_field failures (their N is the position, not compared); Rust/Swift only idxs."""
     args = cmd + (list(extra) + [path] if flags_first else [path] + list(extra))
     try:
-        r = json.loads(subprocess.run(args, capture_output=True, text=True, timeout=30).stdout)
+        r = json.loads(subprocess.run(args, capture_output=True, text=True, encoding="utf-8", timeout=30).stdout)
     except Exception:
         return None, None
     if kind in ("python", "js"):
@@ -333,7 +333,7 @@ def names_unknown(kind, cmd, path, key, extra=(), flags_first=False):
     """True when the receipt NAMES the closed-schema failure (SPEC §2.1) — never only a bare FAIL."""
     args = cmd + (list(extra) + [path] if flags_first else [path] + list(extra))
     try:
-        r = json.loads(subprocess.run(args, capture_output=True, text=True, timeout=30).stdout)
+        r = json.loads(subprocess.run(args, capture_output=True, text=True, encoding="utf-8", timeout=30).stdout)
     except Exception:
         return False
     if kind in ("rust", "swift"):
@@ -367,11 +367,11 @@ def _tip_case():
     for i in range(3):
         e = {"idx": i, "ts": "t", "data": {"i": i}, "prev_hash": prev}
         e["self_hash"] = hashlib.sha256(canon(e)).hexdigest(); prev = e["self_hash"]; chain.append(e)
-    with open(led, "w") as f:
+    with open(led, "w", encoding="utf-8", newline="") as f:
         f.write("".join(json.dumps(e) + "\n" for e in chain))
     pk = signer.keygen(os.path.join(d, "k"))["public_key_hex"]
     T.sign_tip(led, os.path.join(d, "k"))
-    with open(led + ".tip.json") as f:
+    with open(led + ".tip.json", encoding="utf-8") as f:
         tip = f.read()
     # council R3: a SIGNED tip with a garbage ts / uppercase hex was ok in Python, tip_invalid in Go — measured now
     sk, _ = T._load_sk(os.path.join(d, "k"))
@@ -388,7 +388,7 @@ def _tip_case():
         pq = signer.keygen_pq(os.path.join(d, "k.pq"))["public_key_b64"]
         hs = os.path.join(d, "h.jsonl")
         signer.sign_ledger(led, hs, os.path.join(d, "k"), pq_keyfile=os.path.join(d, "k.pq"))
-        with open(hs) as f:
+        with open(hs, encoding="utf-8") as f:
             hybrid["hybrid_full"] = f.read()
         tip_h = T.write_tip(os.path.join(d, "t.json"), os.path.join(d, "k"), 3, chain[0]["self_hash"], chain[2]["self_hash"],
                             "2026-09-15T07:00:00+00:00", pq_keyfile=os.path.join(d, "k.pq"))
@@ -543,7 +543,7 @@ def build_java(tmp):
         if not (os.path.exists(javac) and os.path.exists(java)):
             continue
         try:
-            ver = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=30).stderr
+            ver = subprocess.run([java, "-version"], capture_output=True, text=True, encoding="utf-8", timeout=30).stderr
             major = int((ver.split('"')[1].split(".")[0]) if '"' in ver else 0)
         except Exception:  # noqa: BLE001
             continue
@@ -551,7 +551,7 @@ def build_java(tmp):
             print(f"  java verifier NOT measured: JDK {major} at {b} has no ML-DSA (needs 24+)")
             continue
         out = os.path.join(tmp, "cvj")
-        r = subprocess.run([javac, "-d", out, os.path.join(HERE, "java", "CvVerify.java")], capture_output=True, text=True, timeout=120)
+        r = subprocess.run([javac, "-d", out, os.path.join(HERE, "java", "CvVerify.java")], capture_output=True, text=True, encoding="utf-8", timeout=120)
         if r.returncode != 0:
             print("  java verifier NOT measured: javac failed:", r.stderr[:200])
             return None
@@ -573,7 +573,7 @@ def main():
     }
     built = {"rust": False, "swift": False}
     if shutil.which("cargo"):   # as the closed-schema bench: measure the Rust of THIS tree, not a binary left from an older one
-        r = subprocess.run(["cargo", "build", "--release", "--quiet"], cwd=os.path.join(HERE, "rust"), capture_output=True, text=True)
+        r = subprocess.run(["cargo", "build", "--release", "--quiet"], cwd=os.path.join(HERE, "rust"), capture_output=True, text=True, encoding="utf-8")
         if r.returncode != 0:
             raise SystemExit("cargo build failed — the Rust reference verifier is broken: " + r.stderr.strip()[:400])
         built["rust"] = True
@@ -602,7 +602,7 @@ def main():
             if os.path.exists(p + ".tip.json"):
                 os.remove(p + ".tip.json")
             if name in TIP_CASES:
-                with open(p + ".tip.json", "w") as f:
+                with open(p + ".tip.json", "w", encoding="utf-8", newline="") as f:
                     f.write(TIP_CASES[name][1])
             # the tip cases need the TRUSTED log key (without it the tip is, by contract, not checked)
             extra = {}
@@ -665,12 +665,12 @@ def main():
             pk, pq = TIP_CASE["pubkey"], TIP_CASE["pq_pubkey"]
             for name, ents in SIG_CASES.items():
                 p = os.path.join(tmp, "s.jsonl")
-                with open(p, "w") as f:
+                with open(p, "w", encoding="utf-8", newline="") as f:
                     f.write("".join(json.dumps(e) + "\n" for e in ents))
                 if os.path.exists(p + ".tip.json"):
                     os.remove(p + ".tip.json")
                 py = _signer.verify_file(p, pk, pq)
-                out = subprocess.run(available["go"] + ["-pubkey", pk, "-pq-pubkey", pq, p], capture_output=True, text=True, timeout=30)
+                out = subprocess.run(available["go"] + ["-pubkey", pk, "-pq-pubkey", pq, p], capture_output=True, text=True, encoding="utf-8", timeout=30)
                 try:
                     g = json.loads(out.stdout)["signatures"]
                     go_t = (g["ok"], g["pq_protected"], g["pq_status"])
@@ -679,7 +679,7 @@ def main():
                 py_t = (py["ok"], py["pq_protected"], py["pq_status"])
                 java_t = go_t
                 if "java" in available:
-                    o3 = subprocess.run(available["java"] + ["-pubkey", pk, "-pq-pubkey", pq, p], capture_output=True, text=True, timeout=60)
+                    o3 = subprocess.run(available["java"] + ["-pubkey", pk, "-pq-pubkey", pq, p], capture_output=True, text=True, encoding="utf-8", timeout=60)
                     try:
                         gj = json.loads(o3.stdout)["signatures"]
                         java_t = (gj["ok"], gj["pq_protected"], gj["pq_status"])
@@ -687,7 +687,7 @@ def main():
                         java_t = ("NONJSON/CRASH",)
                 js_ok = None
                 if "js" in available:
-                    o2 = subprocess.run(available["js"] + [p, "--pubkey", pk], capture_output=True, text=True, timeout=30)
+                    o2 = subprocess.run(available["js"] + [p, "--pubkey", pk], capture_output=True, text=True, encoding="utf-8", timeout=30)
                     try:
                         js_ok = json.loads(o2.stdout)["signatures"]["all_verified"]
                     except Exception:  # noqa: BLE001
@@ -701,10 +701,10 @@ def main():
         if TIP_CASE:
             pk = TIP_CASE["pubkey"]
             p = os.path.join(tmp, "o.jsonl")
-            with open(p, "w") as f:
+            with open(p, "w", encoding="utf-8", newline="") as f:
                 f.write(TIP_CASE["full"])
             for i, (tipdoc, nb, expect) in enumerate(TIP_CASE["ordering"]):
-                with open(p + ".tip.json", "w") as f:
+                with open(p + ".tip.json", "w", encoding="utf-8", newline="") as f:
                     f.write(tipdoc)
                 vs = {}
                 for k in ("python", "js", "go", "java"):
@@ -720,7 +720,7 @@ def main():
         # CLI grammar (21/09/2026, found on cra-evidence): an unknown flag, a value flag without a value or with "", a second
         # positional must be a usage error (exit 2, no verdict) in EVERY CLI — never a verdict with the constraint dropped
         valid = os.path.join(tmp, "v.jsonl")
-        with open(valid, "w") as f:
+        with open(valid, "w", encoding="utf-8", newline="") as f:
             f.write(valid_entry({"a": 1}) + "\n")
         cli_cases = {"cli-unknown-flag": ["--no-such-flag"], "cli-trusted-pubkey-empty": ["--trusted-pubkey", ""],
                      "cli-trusted-pubkey-missing-value": ["--trusted-pubkey"], "cli-two-positionals": [valid],
@@ -742,7 +742,7 @@ def main():
                     ex = ["-tip"] + extra[1:]     # the Java CLI has no -algo: same grammar, its own value flag
                 args = cmd + (ex + [valid] if k in ("go", "java") else [valid] + ex)
                 try:
-                    out = subprocess.run(args, capture_output=True, text=True, timeout=30)
+                    out = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", timeout=30)
                     try:
                         v = json.loads(out.stdout).get("verdict"); row[k] = f"verdict:{v}"
                     except Exception:

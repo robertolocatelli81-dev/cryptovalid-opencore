@@ -44,7 +44,7 @@ sys.path.insert(0, sys.argv[1])
 
 def without_backend(code: str, arg: str = "") -> dict:
     """run `code` in a child where cryptography cannot be imported; it prints one JSON object"""
-    p = subprocess.run([sys.executable, "-I", "-c", BLOCK + code, ROOT, arg], capture_output=True, text=True, timeout=120,
+    p = subprocess.run([sys.executable, "-I", "-c", BLOCK + code, ROOT, arg], capture_output=True, text=True, encoding="utf-8", timeout=120,
                        env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
     if p.returncode != 0:
         raise AssertionError(p.stderr[-800:])
@@ -112,13 +112,13 @@ class CedulonAndVaaraWithoutBackend(unittest.TestCase):
         cls.td = tempfile.mkdtemp()
         L = TC.Ledger()
         cls.cedulon = os.path.join(cls.td, "cedulon.json")
-        with open(cls.cedulon, "w") as f:
+        with open(cls.cedulon, "w", encoding="utf-8", newline="") as f:
             json.dump([*L.render(), *(TC._pem(k).decode() if isinstance(TC._pem(k), bytes) else TC._pem(k)
                                       for k in (L.rk, L.xk, L.ck))], f)
         sign, key = TVR.keys()
         cls.vaara = os.path.join(cls.td, "vaara.json")
         k = key["ES256"]
-        with open(cls.vaara, "w") as f:
+        with open(cls.vaara, "w", encoding="utf-8", newline="") as f:
             json.dump({"r": TVR.execution(sign, "ES256"), "key": k.decode() if isinstance(k, bytes) else k}, f)
 
     @classmethod
@@ -128,7 +128,7 @@ class CedulonAndVaaraWithoutBackend(unittest.TestCase):
 
     def test_cedulon(self):
         import cryptovalid_cedulon as CE
-        with open(self.cedulon) as f:
+        with open(self.cedulon, encoding="utf-8") as f:
             a = json.load(f)
         self.assertEqual(CE.verify_ledger(*a)["result"], "VALID")                      # control
         r = without_backend("import cryptovalid_cedulon as CE\na = json.load(open(sys.argv[2]))\n"
@@ -137,7 +137,7 @@ class CedulonAndVaaraWithoutBackend(unittest.TestCase):
 
     def test_vaara(self):
         import cryptovalid_vaara_receipt as VA
-        with open(self.vaara) as f:
+        with open(self.vaara, encoding="utf-8") as f:
             a = json.load(f)
         self.assertTrue(VA.verify_receipt(a["r"], a["key"], alg="ES256")["ok"])         # control
         r = without_backend("import cryptovalid_vaara_receipt as VA\na = json.load(open(sys.argv[2]))\n"

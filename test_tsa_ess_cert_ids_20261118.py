@@ -82,7 +82,7 @@ class Pki:
     def __init__(self, d):
         self.d = d
         j = self.j
-        with open(j("ext.cnf"), "w") as f:
+        with open(j("ext.cnf"), "w", encoding="utf-8", newline="") as f:
             f.write(EXT)
         ec = ("-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes")
         run = lambda *c: subprocess.run(c, check=True, capture_output=True)  # noqa: E731
@@ -98,9 +98,9 @@ class Pki:
         for n in ("R", "X", "I", "S"):
             with open(j(n + ".crt"), "rb") as f:
                 self.cert[n] = T._first_pem_der(f.read())
-        with open(j("serial"), "w") as f:
+        with open(j("serial"), "w", encoding="utf-8", newline="") as f:
             f.write("01\n")
-        with open(j("tsa.cnf"), "w") as f:
+        with open(j("tsa.cnf"), "w", encoding="utf-8", newline="") as f:
             f.write(f"[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {cnf_path(j('serial'))}\ncrypto_device = builtin\n"
                     f"signer_cert = {cnf_path(j('S.crt'))}\nsigner_key = {cnf_path(j('S.key'))}\nsigner_digest = sha256\n"
                     "default_policy = 1.2.3.4.1\ndigests = sha256\ness_cert_id_alg = sha256\ness_cert_id_chain = no\n")
@@ -288,7 +288,7 @@ class SectigoVector(unittest.TestCase):
     """the measured case: sectigo.tsr with its CA R41 pinned"""
 
     def test_each_pin_of_the_chain(self):
-        with open(os.path.join(V, "manifest.json")) as f:
+        with open(os.path.join(V, "manifest.json"), encoding="utf-8") as f:
             digest = bytes.fromhex(json.load(f)["digest_sha256"])
         with open(os.path.join(V, "sectigo.tsr"), "rb") as f:
             tok = T.parse_token(f.read())["token_der"]

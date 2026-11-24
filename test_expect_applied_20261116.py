@@ -53,7 +53,7 @@ def _ledger(path, n, tag):
         e["self_hash"] = hashlib.sha256(_canon(e)).hexdigest()
         prev = e["self_hash"]
         out.append(e)
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for e in out:
             f.write(json.dumps(e) + "\n")
     return out[0]["self_hash"]
@@ -123,7 +123,7 @@ class Fixture:
             return None
         src = self.tip_b if tip_state == "trusted_other" else (self.tip_a if HAVE_CRYPTO else None)
         if src is None:   # an untrusted tip is never read: any document will do without cryptography
-            with open(dst, "w") as f:
+            with open(dst, "w", encoding="utf-8", newline="") as f:
                 f.write('{"kind":"cryptovalid_tip/1"}')
         else:
             shutil.copyfile(src, dst)
@@ -142,7 +142,7 @@ class TestReproduced(unittest.TestCase):
 
     def _cli(self, *args):
         cp = subprocess.run([sys.executable, os.path.join(HERE, "verifier.py"), os.path.join(HERE, "examples", "sample_ledger.jsonl"), *args],
-                            capture_output=True, text=True, cwd=HERE, env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
+                            capture_output=True, text=True, encoding="utf-8", cwd=HERE, env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
         return cp.returncode, cp.stdout, cp.stderr
 
     def test_another_ledgers_id_without_tip_is_fail(self):
@@ -236,7 +236,7 @@ class TestGeneratedApi(unittest.TestCase):
 
     def test_empty_ledger_with_an_expected_id(self):
         p = os.path.join(self.f.tmp, "empty.jsonl")
-        open(p, "w").close()
+        open(p, "w", encoding="utf-8", newline="").close()
         r = V.verify_ledger(p, expect_ledger_id=self.f.a_id)
         self.assertEqual(r["verdict"], "FAIL")
         self.assertEqual(_names(r), {"empty_ledger", "ledger_id_mismatch"})
@@ -277,15 +277,15 @@ class TestTipModule(unittest.TestCase):
         base = [sys.executable, os.path.join(HERE, "cryptovalid_tip.py"), "check", f.a, "--tip", f.tip_a, "--trusted-pubkey", f.pk]
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         for bad in _malformed(f.a_id):
-            cp = subprocess.run(base + ["--expect-ledger-id", bad], capture_output=True, text=True, env=env, cwd=HERE)
+            cp = subprocess.run(base + ["--expect-ledger-id", bad], capture_output=True, text=True, encoding="utf-8", env=env, cwd=HERE)
             self.assertEqual((cp.returncode, cp.stdout), (2, ""), repr(bad))
-        cp = subprocess.run(base + ["--not-before", ""], capture_output=True, text=True, env=env, cwd=HERE)
+        cp = subprocess.run(base + ["--not-before", ""], capture_output=True, text=True, encoding="utf-8", env=env, cwd=HERE)
         self.assertEqual(cp.returncode, 1)
         self.assertIn("bad_not_before", cp.stdout)
-        cp = subprocess.run(base + ["--expect-ledger-id", f.b_id], capture_output=True, text=True, env=env, cwd=HERE)
+        cp = subprocess.run(base + ["--expect-ledger-id", f.b_id], capture_output=True, text=True, encoding="utf-8", env=env, cwd=HERE)
         self.assertEqual(cp.returncode, 1)
         self.assertIn("ledger_id_mismatch", cp.stdout)
-        cp = subprocess.run(base + ["--expect-ledger-id", f.a_id], capture_output=True, text=True, env=env, cwd=HERE)
+        cp = subprocess.run(base + ["--expect-ledger-id", f.a_id], capture_output=True, text=True, encoding="utf-8", env=env, cwd=HERE)
         self.assertEqual(cp.returncode, 0, cp.stdout[-400:])
 
 
@@ -330,7 +330,7 @@ class TestIngestPin(unittest.TestCase):
             self.assertIn("ok", I.verify_archive(d, "ledger", None))           # control: no pin is still allowed
             self.assertIn("ok", I.verify_archive(d, "ledger", ["ab" * 32]))    # and a real pin goes through
             cp = subprocess.run([sys.executable, os.path.join(HERE, "cryptovalid_ingest.py"), "verify", d, "--pubkey", ""],
-                                capture_output=True, text=True, cwd=HERE, env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
+                                capture_output=True, text=True, encoding="utf-8", cwd=HERE, env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
             self.assertEqual((cp.returncode, cp.stdout), (2, ""), cp.stderr[-300:])
         finally:
             shutil.rmtree(d, ignore_errors=True)
@@ -371,7 +371,7 @@ class TestCrossLanguage(unittest.TestCase):
 
     def _run(self, name, flags):
         argv, first, _ = self.bins[name]
-        cp = subprocess.run(argv + (flags + [self.f.a] if first else [self.f.a] + flags), capture_output=True, text=True,
+        cp = subprocess.run(argv + (flags + [self.f.a] if first else [self.f.a] + flags), capture_output=True, text=True, encoding="utf-8",
                             env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"})
         return cp.returncode, cp.stdout
 

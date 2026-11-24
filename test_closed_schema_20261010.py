@@ -50,7 +50,7 @@ class TestClosedSchema(unittest.TestCase):
 
     def _write(self, name, entries):
         p = os.path.join(self.d, name)
-        with open(p, "w", encoding="utf-8") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             for e in entries:
                 f.write(json.dumps(e, ensure_ascii=False) + "\n")
         return p
@@ -108,11 +108,11 @@ class TestClosedSchema(unittest.TestCase):
                 m2 = {k: v for k, v in m.items() if k not in ("manifest_digest_sha256", "rfc3161_timestamp", "manifest_signer", "manifest_signature")}
                 import hashlib
                 m["manifest_digest_sha256"] = hashlib.sha256(EP._canon(m2)).hexdigest()
-            with open(mp, "w", encoding="utf-8") as f:
+            with open(mp, "w", encoding="utf-8", newline="") as f:
                 json.dump(m, f)
             r = EP.verify_pack(out)
             self.assertFalse(r["valid"], where); self.assertIn("manifest_unknown_field", r.get("error", ""), where); self.assertIn(where, r["error"], where)
-        with open(mp, "w", encoding="utf-8") as f:
+        with open(mp, "w", encoding="utf-8", newline="") as f:
             json.dump(man, f)
         self.assertTrue(EP.verify_pack(out)["valid"])
 
@@ -129,7 +129,7 @@ class TestClosedSchema(unittest.TestCase):
             man = json.load(f)
         self.assertTrue(EP.verify_pack(out)["valid"])          # positive control
         man["ledgers"][1][KEY] = "x"; self._pack_digest(man)
-        with open(mp, "w", encoding="utf-8") as f:
+        with open(mp, "w", encoding="utf-8", newline="") as f:
             json.dump(man, f)
         r = EP.verify_pack(out)
         self.assertFalse(r["valid"]); self.assertIn("ledgers[1]." + KEY, r.get("error", ""))
@@ -142,7 +142,7 @@ class TestClosedSchema(unittest.TestCase):
         with open(mp, encoding="utf-8") as f:
             man = json.load(f)
         man["rfc3161_timestamp"]["tsa_url"] = "https://tsa.example"   # never written by any build_pack
-        with open(mp, "w", encoding="utf-8") as f:
+        with open(mp, "w", encoding="utf-8", newline="") as f:
             json.dump(man, f)
         r = EP.verify_pack(out)
         self.assertFalse(r["valid"]); self.assertIn("rfc3161_timestamp.tsa_url", r.get("error", ""))

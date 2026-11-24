@@ -230,7 +230,7 @@ class PackWithPinnedTsa(unittest.TestCase):
         p = self.pack("cli")
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         run = lambda *a: subprocess.run([sys.executable, os.path.join(ROOT, "evidence_pack.py"), "verify", p, *a],  # noqa: E731
-                                        capture_output=True, text=True, env=env, timeout=120)
+                                        capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
         r = run("--tsa-cert", self.tsa.j("ca.crt"))
         self.assertEqual(r.returncode, 0, r.stderr)
         out = json.loads(r.stdout)

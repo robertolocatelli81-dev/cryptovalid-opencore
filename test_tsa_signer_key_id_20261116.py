@@ -59,9 +59,9 @@ class Lab:
         self.d = os.path.join(td, name)
         os.makedirs(self.d)
         j = self.j
-        with open(j("ext.cnf"), "w") as f:
+        with open(j("ext.cnf"), "w", encoding="utf-8", newline="") as f:
             f.write(EXT)
-        with open(j("req.cnf"), "w") as f:
+        with open(j("req.cnf"), "w", encoding="utf-8", newline="") as f:
             f.write("[ req ]\ndistinguished_name = dn\n[ dn ]\n" + EXT)
         _run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
              "-keyout", j("ca.key"), "-out", j("ca.crt"), "-subj", f"/CN={name}-ca", "-days", "2",
@@ -72,7 +72,7 @@ class Lab:
                  "-config", j("req.cnf"))
             _run("openssl", "x509", "-req", "-in", j(f"{cert}.csr"), "-CA", j("ca.crt"), "-CAkey", j("ca.key"),
                  "-CAcreateserial", "-out", j(f"{cert}.crt"), "-days", "2", "-extfile", j("ext.cnf"), "-extensions", ext)
-        with open(j("serial"), "w") as f:
+        with open(j("serial"), "w", encoding="utf-8", newline="") as f:
             f.write("01\n")
 
     ess_alg = "sha256"
@@ -83,7 +83,7 @@ class Lab:
     def token(self, tsa_name=False, chain=False):
         """a token of `openssl ts -reply` (sid = issuerAndSerialNumber); `tsa_name`: the TSTInfo carries the tsa field"""
         j = self.j
-        with open(j("tsa.cnf"), "w") as f:
+        with open(j("tsa.cnf"), "w", encoding="utf-8", newline="") as f:
             f.write(f"[ tsa ]\ndefault_tsa = t1\n[ t1 ]\nserial = {cnf_path(j('serial'))}\ncrypto_device = builtin\n"
                     f"signer_cert = {cnf_path(j('tsa.crt'))}\ncerts = {cnf_path(j('ca.crt'))}\nsigner_key = {cnf_path(j('tsa.key'))}\n"
                     "signer_digest = sha256\ndefault_policy = 1.2.3.4.1\ndigests = sha256\naccuracy = secs:1\n"

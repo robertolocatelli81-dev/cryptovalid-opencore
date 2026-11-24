@@ -71,7 +71,7 @@ class _Pack(unittest.TestCase):
     def man(self, p, fn=None, redigest=False, text=None):
         mp = os.path.join(p, "MANIFEST.json")
         if text is not None:
-            with open(mp, "w", encoding="utf-8") as f:
+            with open(mp, "w", encoding="utf-8", newline="") as f:
                 f.write(text)
             return None
         with open(mp, encoding="utf-8") as f:
@@ -83,7 +83,7 @@ class _Pack(unittest.TestCase):
                 m2 = {k: v for k, v in m.items() if k not in ("manifest_digest_sha256", "rfc3161_timestamp", "manifest_signature",
                                                              "manifest_signer")}
                 m["manifest_digest_sha256"] = hashlib.sha256(json.dumps(m2, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            with open(mp, "w", encoding="utf-8") as f:
+            with open(mp, "w", encoding="utf-8", newline="") as f:
                 json.dump(m, f, ensure_ascii=False, indent=1, sort_keys=True)
         return m
 
@@ -181,7 +181,7 @@ class TestAdmission(_Pack):
     def test_cli_refusal_exit_1_one_receipt(self):
         p = self.build()
         self.man(p, lambda m: m.update(rfc3161_timestamp=[]))
-        r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "evidence_pack.py"), "verify", p], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "evidence_pack.py"), "verify", p], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 1, r.stderr)
         self.assertNotIn("Traceback", r.stderr)
         self.assertEqual(json.loads(r.stdout)["refusal_class"], "malformed")
@@ -190,7 +190,7 @@ class TestAdmission(_Pack):
 class TestSealedContent(_Pack):
     def test_file_changed_is_digest_mismatch(self):
         p = self.build()
-        with open(os.path.join(p, "sample_ledger.jsonl"), "a") as f:
+        with open(os.path.join(p, "sample_ledger.jsonl"), "a", encoding="utf-8", newline="") as f:
             f.write("\n")
         r = EP.verify_pack(p)
         self.assertEqual(self.st(r, "sealed_content"), ("contradicted", ["digest_mismatch"]))
@@ -216,10 +216,10 @@ class TestSealedContent(_Pack):
         self.assertEqual(self.st(r, "sealed_content"), ("contradicted", ["digest_mismatch", "artifact_invalid"]))
 
     def test_chain_broken_is_artifact_invalid(self):
-        rows = [json.loads(x) for x in open(SAMPLE) if x.strip()]
+        rows = [json.loads(x) for x in open(SAMPLE, encoding="utf-8") if x.strip()]
         rows[1]["data"] = {"changed": True}
         led = os.path.join(self.d, "broken.jsonl")
-        with open(led, "w") as f:
+        with open(led, "w", encoding="utf-8", newline="") as f:
             f.write("".join(json.dumps(x) + "\n" for x in rows))
         r = EP.verify_pack(self.build(led))
         self.assertEqual(self.st(r, "sealed_content"), ("contradicted", ["artifact_invalid"]))
@@ -282,10 +282,10 @@ class TestProducerSignature(_Pack):
 
     def test_layer_opened_by_any_entry(self):
         # SPEC §5 step 5; 0.21.0 opened the layer only when entry 0 carried `signature`: valid true here
-        rows = [json.loads(x) for x in open(SAMPLE) if x.strip()]
+        rows = [json.loads(x) for x in open(SAMPLE, encoding="utf-8") if x.strip()]
         rows[1]["signature"], rows[1]["signer"] = base64.b64encode(bytes(64)).decode(), "11" * 32
         led = os.path.join(self.d, "partial.jsonl")
-        with open(led, "w") as f:
+        with open(led, "w", encoding="utf-8", newline="") as f:
             f.write("".join(json.dumps(x) + "\n" for x in rows))
         r = EP.verify_pack(self.build(led))
         self.assertEqual(self.st(r, "producer_signature"), ("contradicted", ["signature_invalid"]))
@@ -296,13 +296,13 @@ class TestProducerSignature(_Pack):
         # NEMESIS 19/10/2026: each of the four fields of SPEC §5 step 5 opens the layer on its own (a mutant that read only
         # `signature` survived the suite): an entry that carries only `signer`, `signature_pq` or `signer_pq` is a signed
         # ledger whose Ed25519 signature is missing — signature_invalid, not valid
-        rows = [json.loads(x) for x in open(SAMPLE) if x.strip()]
+        rows = [json.loads(x) for x in open(SAMPLE, encoding="utf-8") if x.strip()]
         for field, val in (("signer", "11" * 32), ("signature_pq", "AAAA"), ("signer_pq", "AAAA"), ("signature", "AAAA")):
             with self.subTest(field=field):
                 rr = [dict(x) for x in rows]
                 rr[1][field] = val
                 led = os.path.join(self.d, f"only_{field}.jsonl")
-                with open(led, "w") as f:
+                with open(led, "w", encoding="utf-8", newline="") as f:
                     f.write("".join(json.dumps(x) + "\n" for x in rr))
                 r = EP.verify_pack(self.build(led))
                 self.assertEqual(self.st(r, "producer_signature")[0], "contradicted", r["states"])
@@ -362,7 +362,7 @@ class TestTimeAnchor(_Pack):
         # the limit 0.21.0 declared for this release: `valid: true`, exit 0 on a claimed token that is not a TimeStampResp
         p = self.build()
         self.man(p, lambda m: m.update(rfc3161_timestamp={"anchored": True, "tsa": "x", "tsr_b64": "AAAA"}))
-        r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "evidence_pack.py"), "verify", p], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "evidence_pack.py"), "verify", p], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 1, r.stderr)
         out = json.loads(r.stdout)
         self.assertEqual((out["valid"], out["rfc3161"]["claimed"], out["rfc3161"]["verified"]), (False, True, False))
@@ -430,10 +430,10 @@ class TestIngestSmallOrder(unittest.TestCase):
             w.seal()
             w.close(seal=False)
             for p in sorted(glob.glob(os.path.join(d, "*.sth.json"))) + [os.path.join(d, "ledger.head.json")]:
-                with open(p) as f:
+                with open(p, encoding="utf-8") as f:
                     doc = json.load(f)
                 doc["signer"], doc["signature"] = IDENT.hex(), FORGED
-                with open(p, "w") as f:
+                with open(p, "w", encoding="utf-8", newline="") as f:
                     json.dump(doc, f)
             for pin in (None, IDENT.hex()):
                 r = ing.verify_archive(d, expected_pubkey_hex=pin)
@@ -464,10 +464,10 @@ class TestIngestTreeHeadTypes(unittest.TestCase):
                     sths = sorted(glob.glob(os.path.join(d, "*.sth.json")))
                     self.assertGreaterEqual(len(sths), len(vals))
                     for p, v in zip(sths, vals):
-                        with open(p) as f:
+                        with open(p, encoding="utf-8") as f:
                             doc = json.load(f)
                         doc["signer"], doc["signature"] = v, "AAAA"
-                        with open(p, "w") as f:
+                        with open(p, "w", encoding="utf-8", newline="") as f:
                             json.dump(doc, f)
                     r = ing.verify_archive(d)
                     self.assertFalse(r["ok"])
@@ -572,14 +572,14 @@ class TestIngestSignatureRead(unittest.TestCase):
                     w.seal()
                     w.close(seal=False)
                     p = sorted(glob.glob(os.path.join(d, "*.sth.json")))[0]
-                    with open(p) as f:
+                    with open(p, encoding="utf-8") as f:
                         doc = json.load(f)
                     sig = bytearray(sk.sign(ing._sth_canonical_hash(doc).encode()))
                     if case == "s_changed":
                         sig[40] ^= 1
                     doc["signer"] = pub.upper() if case == "upper" else pub
                     doc["signature"] = base64.b64encode(bytes(sig)).decode()
-                    with open(p, "w") as f:
+                    with open(p, "w", encoding="utf-8", newline="") as f:
                         json.dump(doc, f)
                     r = ing.verify_archive(d)
                     reasons = [x["reason"] for x in r["failures"]]
@@ -641,7 +641,7 @@ class TestFrontEnd(_Pack):
             self.assertEqual(r[k], r0[k], k)
         self.assertTrue(r["layers"][-1]["detail"].startswith(r0["refusal_class"] + ": "))
         # a check the reference could not run here: its COMPLETE receipt becomes this front-end's, exit 74
-        with open(ev, "w") as f:
+        with open(ev, "w", encoding="utf-8", newline="") as f:
             json.dump({"x": 1}, f)
         err = ap2_evidence.Ap2WriteError("cannot run openssl here: test", receipt=r0)
         with mock.patch.object(ap2_evidence, "verify_evidence", side_effect=err):
@@ -688,7 +688,7 @@ class TestGenerativeBench(unittest.TestCase):
 
     def run_bench(self, *args):
         r = subprocess.run([sys.executable, "-B", os.path.join(HERE, "verifiers", "pack_states_bench.py"), *args],
-                           capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=""), timeout=1800)
+                           capture_output=True, text=True, encoding="utf-8", env=dict(os.environ, PYTHONPATH=""), timeout=1800)
         return r.returncode, json.loads(r.stdout.splitlines()[-1]), r.stderr
 
     def test_bench_clean_and_a_sabotage_turns_it_red(self):

@@ -32,7 +32,7 @@ def git(repo, *args, **env):
              GIT_AUTHOR_NAME="Ada Example", GIT_AUTHOR_EMAIL="ada@example.org",
              GIT_COMMITTER_NAME="Ada Example", GIT_COMMITTER_EMAIL="ada@example.org")
     e.update(env)
-    r = subprocess.run(["git", "-C", repo, "-c", "commit.gpgsign=false"] + list(args), capture_output=True, text=True, env=e)
+    r = subprocess.run(["git", "-C", repo, "-c", "commit.gpgsign=false"] + list(args), capture_output=True, text=True, encoding="utf-8", env=e)
     if r.returncode != 0:
         raise RuntimeError(r.stderr)
     return r.stdout.strip()
@@ -51,7 +51,7 @@ class TestDco(unittest.TestCase):
 
     def commit(self, message, **env):
         self.n += 1
-        with open(os.path.join(self.repo, "f.txt"), "a") as f:
+        with open(os.path.join(self.repo, "f.txt"), "a", encoding="utf-8", newline="") as f:
             f.write("%d\n" % self.n)
         git(self.repo, "add", "f.txt")
         git(self.repo, "commit", "-q", "-m", message, **env)
@@ -59,7 +59,7 @@ class TestDco(unittest.TestCase):
 
     def run_tool(self, *args):
         r = subprocess.run([sys.executable, os.path.join(TOOLS, "check_dco.py"), "-C", self.repo] + list(args),
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8")
         return r.returncode, r.stdout + r.stderr
 
     def test_signed_commits_pass(self):
@@ -71,7 +71,7 @@ class TestDco(unittest.TestCase):
 
     def test_git_commit_s_is_what_passes(self):
         self.n += 1
-        with open(os.path.join(self.repo, "f.txt"), "a") as f:
+        with open(os.path.join(self.repo, "f.txt"), "a", encoding="utf-8", newline="") as f:
             f.write("s\n")
         git(self.repo, "add", "f.txt")
         git(self.repo, "commit", "-q", "-s", "-m", "with -s")

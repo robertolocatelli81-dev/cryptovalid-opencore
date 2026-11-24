@@ -131,7 +131,7 @@ class RealTokens(unittest.TestCase):
         self.assertEqual((v["status"], v["reason"]), ("invalid", "malformed"), v)
 
     def test_manifest_lists_them(self):
-        with open(os.path.join(VEC, "manifest.json")) as f:
+        with open(os.path.join(VEC, "manifest.json"), encoding="utf-8") as f:
             files = {v["file"] for v in json.load(f)["vectors"]}
         for name in REAL_QUALIFIED + (REAL_NOT_DER,):
             self.assertIn(f"{name}.tsr", files)

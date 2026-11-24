@@ -132,7 +132,7 @@ def child(code: str, *args, timeout: int = 25):
     """(returncode, stdout + stderr) of `code` run with the repository on sys.path; 124 when it did not finish"""
     pre = "import sys, json, os\nsys.dont_write_bytecode = True\nsys.path.insert(0, %r)\n" % ROOT
     try:
-        p = subprocess.run([sys.executable, "-c", pre + textwrap.dedent(code), *args], capture_output=True, text=True,
+        p = subprocess.run([sys.executable, "-c", pre + textwrap.dedent(code), *args], capture_output=True, text=True, encoding="utf-8",
                            timeout=timeout, env=ENV, stdin=subprocess.DEVNULL)
         return p.returncode, p.stdout + p.stderr
     except subprocess.TimeoutExpired:
@@ -156,14 +156,14 @@ class ClosedList(unittest.TestCase):
         """the scan reports a plain open() of a path in a module made here (it is not blind)"""
         td = tempfile.mkdtemp()
         try:
-            with open(os.path.join(td, "m.py"), "w") as f:
+            with open(os.path.join(td, "m.py"), "w", encoding="utf-8", newline="") as f:
                 f.write("import os\ndef r(p):\n    with open(p, 'rb') as f:\n        return f.read()\n"
                         "def w(p):\n    open(p, 'w').close()\n    os.open(p, os.O_RDONLY | os.O_NONBLOCK)\n")
             global ROOT
             keep, ROOT = ROOT, td
             try:
                 self.assertEqual(plain_opens(), [("m.py", "p")])
-                with open(os.path.join(td, "m.py"), "a") as f:
+                with open(os.path.join(td, "m.py"), "a", encoding="utf-8", newline="") as f:
                     f.write("import ctypes, zipfile, shutil\ndef l(p):\n    ctypes.CDLL(p)\n    zipfile.ZipFile(p)\n"
                             "    shutil.copy(p, p + '.b')\n    {}.copy()\n")
                 self.assertEqual(other_loads(), [("m.py", "CDLL", "p"), ("m.py", "ZipFile", "p"), ("m.py", "copy", "p")])
@@ -298,7 +298,7 @@ class WhatAWriterReads(unittest.TestCase):
         feeder = subprocess.Popen([sys.executable, "-c", "import sys; d = open(sys.argv[1], 'rb').read(); "
                                    "f = open(sys.argv[2], 'wb'); f.write(d); f.close()", key, self.fifo])
         out2 = os.path.join(self.td, "o2.jsonl")
-        p = subprocess.run([sys.executable, signer, "sign", led, out2, self.fifo], capture_output=True, text=True, env=ENV,
+        p = subprocess.run([sys.executable, signer, "sign", led, out2, self.fifo], capture_output=True, text=True, encoding="utf-8", env=ENV,
                            timeout=30)
         feeder.wait()
         self.assertEqual(p.returncode, 0, p.stderr[-300:])
@@ -309,7 +309,7 @@ class WhatAWriterReads(unittest.TestCase):
             t = time.monotonic()
             try:
                 p = subprocess.run([sys.executable, signer, "sign", led, os.path.join(self.td, "o3.jsonl"), bad],
-                                   capture_output=True, text=True, env=ENV, timeout=25)
+                                   capture_output=True, text=True, encoding="utf-8", env=ENV, timeout=25)
             except subprocess.TimeoutExpired:
                 self.fail(f"signer.py sign did not return on the key {bad}")
             self.assertNotEqual(p.returncode, 0, bad)

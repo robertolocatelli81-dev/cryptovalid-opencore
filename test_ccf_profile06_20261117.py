@@ -95,7 +95,7 @@ class Ccf06(unittest.TestCase):
     def test_statement_digest_of_the_public_vector(self):
         with open(os.path.join(VEC, "statement.cose"), "rb") as f:
             st = f.read()
-        with open(os.path.join(VEC, "expected.json")) as f:
+        with open(os.path.join(VEC, "expected.json"), encoding="utf-8") as f:
             want = json.load(f)["leaf_entry"]
         self.assertEqual(C.ccf_statement_digest(st).hex(), want)
 

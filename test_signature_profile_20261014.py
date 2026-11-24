@@ -60,7 +60,7 @@ def _vectors():
 
 
 def _run(cmd):
-    p = subprocess.run(cmd, capture_output=True, text=True, env=ENV, timeout=300)
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=ENV, timeout=300)
     try:
         return p.returncode, json.loads(p.stdout)
     except ValueError:
@@ -217,7 +217,7 @@ class TestCrossLanguage(unittest.TestCase):
         tip = {"kind": TIP.KIND, "entries": 3, "ledger_id": entries[0]["self_hash"], "tip_sha256": entries[2]["self_hash"],
                "ts": ts, "log_pubkey_hex": A_enc.hex(), "signature_hex": (R_enc + b"\0" * 32).hex()}
         tp = os.path.join(self.tmp, "small.tip.json")
-        with open(tp, "w") as f:
+        with open(tp, "w", encoding="utf-8", newline="") as f:
             json.dump(tip, f)
         r = TIP.verify_tip_signature(tip, A_enc.hex())
         self.assertFalse(r["ok"]); self.assertIn("small_order_key", r["why"])
@@ -258,7 +258,7 @@ class TestCrossLanguage(unittest.TestCase):
             cases[field + "_only"] = (pq, "missing signature/signer/self_hash")
         for name, (entries, why) in cases.items():
             path = os.path.join(self.tmp, name + ".jsonl")
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write("".join(json.dumps(e) + "\n" for e in entries))
             if _crypto():
                 rc, o = _run([sys.executable, os.path.join(HERE, "signer.py"), "verify", path])
@@ -287,7 +287,7 @@ class TestCrossLanguage(unittest.TestCase):
         raw = bytearray(base64.b64decode(lines[1]["signature_pq"])); raw[9] ^= 1
         lines[1]["signature_pq"] = base64.b64encode(bytes(raw)).decode()
         bad = os.path.join(d, "hy_bad.jsonl")
-        with open(bad, "w", encoding="utf-8") as f:
+        with open(bad, "w", encoding="utf-8", newline="") as f:
             f.write("".join(json.dumps(e) + "\n" for e in lines))
         want = {"go": "FAIL", "java": "FAIL", "js": "PASS", "swift": "PASS"}   # Go/Java verify ML-DSA; JS/Swift count it
         for name in self.bins:

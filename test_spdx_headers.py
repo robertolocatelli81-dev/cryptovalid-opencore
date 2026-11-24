@@ -14,7 +14,7 @@ def _tracked_py() -> list:
     metadata), every .py it holds, since the sdist is the released file list (15/11/2026: the sdist carries the suite).
     Anywhere else: a failure that says so, never an empty list."""
     try:
-        r = subprocess.run(["git", "-C", HERE, "ls-files", "*.py"], capture_output=True, text=True)
+        r = subprocess.run(["git", "-C", HERE, "ls-files", "*.py"], capture_output=True, text=True, encoding="utf-8")
         if r.returncode == 0:
             return r.stdout.split()
         why = r.stderr.strip()

@@ -35,7 +35,7 @@ def build(rows):
         e["self_hash"] = canon_hash(e); prev = e["self_hash"]; out.append(e)
     return out
 def write(path, entries):
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for e in entries: f.write(json.dumps(e, ensure_ascii=False) + "\n")
 def passes(entries, path):
     write(path, entries); return V.verify_ledger(path).get("verdict") == "PASS"
@@ -87,7 +87,7 @@ print(json.dumps({"ricevuta_riga_123_verifica_offline": ok_r, "ricevuta_su_riga_
 js = os.path.join(ROOT, "verifiers", "js", "cvverify.mjs")
 if os.path.exists(js) and subprocess.run(["which", "node"], capture_output=True).returncode == 0:
     def jsv(entries):
-        write(work, entries); r = subprocess.run(["node", js, work], capture_output=True, text=True); return r.returncode
+        write(work, entries); r = subprocess.run(["node", js, work], capture_output=True, text=True, encoding="utf-8"); return r.returncode
     e1 = copy.deepcopy(base); e1[50]["data"]["status_code"] += 1
     e2 = copy.deepcopy(base); del e2[100]
     e3 = copy.deepcopy(base); e3[10], e3[11] = e3[11], e3[10]
@@ -116,7 +116,7 @@ gobin = os.path.join(tmp, "cvverify-go")
 env = dict(os.environ)
 if subprocess.run(["go", "build", "-o", gobin, "./cmd/cvverify"], cwd=gosrc, env=env, capture_output=True).returncode == 0:
     def gov(entries):
-        write(work, entries); return subprocess.run([gobin, work], capture_output=True, text=True).returncode
+        write(work, entries); return subprocess.run([gobin, work], capture_output=True, text=True, encoding="utf-8").returncode
     gt = gd = 0; gmiss = []
     def gcount(name, entries):
         global gt, gd

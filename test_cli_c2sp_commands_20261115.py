@@ -64,7 +64,7 @@ def _run(script, args, cwd=HERE):
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")}
     env.update(LC_ALL="C.UTF-8", PYTHONIOENCODING="utf-8")
     r = subprocess.run([sys.executable, *_child_flags(), os.path.join(HERE, script), *args], cwd=cwd, env=_child_env(env),
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, encoding="utf-8", timeout=300)
     return r.returncode, r.stdout, r.stderr
 
 
@@ -129,7 +129,7 @@ class TestChildrenSeeTheParentsPackages(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home:
             env = _child_env(dict(os.environ, HOME=home))
             r = subprocess.run([sys.executable, *_child_flags(), "-c", code], cwd=home, env=env, capture_output=True,
-                               text=True, timeout=120)
+                               text=True, encoding="utf-8", timeout=120)
         self.assertEqual((r.returncode, r.stdout.strip()), (0, str(HAVE_CRYPTO)), r.stderr[-400:])
 
 
@@ -316,7 +316,7 @@ class TestAutoNamesTheCommand(unittest.TestCase):
         code = ("from opencore import verify_evidence as V; r = V.verify_auto(%r); print(r['kind'], r['layers'][0]['status'])"
                 % ROME)
         r = subprocess.run([sys.executable, *_child_flags(), "-c", code], cwd=self.d, env=_child_env(dict(os.environ)),
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, encoding="utf-8", timeout=120)
         self.assertEqual((r.returncode, r.stdout), (0, "checkpoint SKIP\n"), r.stderr[-400:])
 
     def test_tile_directories(self):
@@ -330,11 +330,11 @@ class TestAutoNamesTheCommand(unittest.TestCase):
         os.rmdir(os.path.join(t, "checkpoint"))
         shutil.copy(ROME, os.path.join(t, "checkpoint"))
         self.assertTrue(self._skip(VE.verify_auto(t), "tiles").endswith("<static-ct-api or tlog-tiles>"))
-        with open(os.path.join(t, "MANIFEST.json"), "w") as fh:   # the rows of a directory in the order of the table
+        with open(os.path.join(t, "MANIFEST.json"), "w", encoding="utf-8", newline="") as fh:   # the rows of a directory in the order of the table
             fh.write("{}")
         self.assertEqual(VE.verify_auto(t)["kind"], "pack")
         os.remove(os.path.join(t, "MANIFEST.json"))
-        with open(os.path.join(t, "ledger-000.jsonl"), "w") as fh:
+        with open(os.path.join(t, "ledger-000.jsonl"), "w", encoding="utf-8", newline="") as fh:
             fh.write("")
         self.assertEqual(VE.verify_auto(t)["kind"], "archive")
 
@@ -343,7 +343,7 @@ class TestAutoNamesTheCommand(unittest.TestCase):
             t = os.path.join(self.d, make)
             os.mkdir(t)
             if make == "file":
-                open(os.path.join(t, "tile"), "w").close()
+                open(os.path.join(t, "tile"), "w", encoding="utf-8", newline="").close()
             elif make == "link":
                 os.symlink(os.path.join(NAVIGLI, "tile"), os.path.join(t, "tile"))
             elif make == "link_to_file":

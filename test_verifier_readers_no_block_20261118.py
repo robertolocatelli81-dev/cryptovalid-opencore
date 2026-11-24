@@ -45,7 +45,7 @@ class Readers(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.mkdtemp()
         self.good = os.path.join(self.td, "good.json")
-        with open(self.good, "w") as f:
+        with open(self.good, "w", encoding="utf-8", newline="") as f:
             json.dump([], f)
 
     def tearDown(self):
@@ -55,7 +55,7 @@ class Readers(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         env["HOME"] = self.td
         try:
-            p = subprocess.run([sys.executable] + argv, cwd=ROOT, capture_output=True, text=True, timeout=WAIT, env=env)
+            p = subprocess.run([sys.executable] + argv, cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=WAIT, env=env)
         except subprocess.TimeoutExpired:
             return None
         return p
@@ -97,16 +97,16 @@ class PackReaders(unittest.TestCase):
                             "--subject", "t"], cwd=ROOT, check=True, capture_output=True, env=env)
             os.mkfifo(os.path.join(pack, "SOLANA_ANCHOR.json"))
             p = subprocess.run([sys.executable, "cryptovalid_report.py", "--html-only", "--out", os.path.join(td, "r.html"),
-                                pack], cwd=ROOT, capture_output=True, text=True, timeout=WAIT, env=env)
+                                pack], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=WAIT, env=env)
             self.assertIn("SOLANA_ANCHOR.json unreadable: InputNotRegular", p.stdout)
             os.remove(os.path.join(pack, "MANIFEST.json"))
             os.mkfifo(os.path.join(pack, "MANIFEST.json"))
             code = ("import json, sys, cryptovalid_mcp as M; r = M.t_verify_pack({'pack_dir': sys.argv[1]}); "
                     "print(json.dumps([r['result']['valid'], r['provenance']['sha256']]))")
-            p = subprocess.run([sys.executable, "-c", code, pack], cwd=ROOT, capture_output=True, text=True, timeout=WAIT, env=env)
+            p = subprocess.run([sys.executable, "-c", code, pack], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=WAIT, env=env)
             self.assertEqual(json.loads(p.stdout), [False, None], p.stderr[-300:])
             p = subprocess.run([sys.executable, "cryptovalid_report.py", "--html-only", "--out", os.path.join(td, "r.html"),
-                                pack], cwd=ROOT, capture_output=True, text=True, timeout=WAIT, env=env)
+                                pack], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=WAIT, env=env)
             self.assertIn("MANIFEST.json unreadable: InputNotRegular", p.stdout)
         finally:
             shutil.rmtree(td)

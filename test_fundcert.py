@@ -216,7 +216,7 @@ class TestFundcert(unittest.TestCase):
         # cambiano e questo test FALLISCE → obbliga a un bump esplicito di CANON_VERSION (metodo stabile, non "il codice").
         import json
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "spec", "vectors", "fundcert_conformance.json")
-        vec = json.load(open(path))
+        vec = json.load(open(path, encoding="utf-8"))
         self.assertEqual(vec["canon_version"], F.CANON_VERSION)      # i vettori valgono per QUESTA versione
         for c in vec["cases"]:
             pos = [F.Position(p[0], p[1], p[2], cash_component=(p[3] if len(p) > 3 else "")) for p in c["positions"]]

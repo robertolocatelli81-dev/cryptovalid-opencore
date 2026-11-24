@@ -63,7 +63,7 @@ def _verify(name, argv, path, timeout=60):
     """(exit code, verdict, first reason, seconds)"""
     t0 = time.monotonic()
     try:
-        cp = subprocess.run(argv + [path], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        cp = subprocess.run(argv + [path], capture_output=True, text=True, encoding="utf-8", timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:   # it waited: the defect of 2026-11-22 itself
         return "timeout", None, None, time.monotonic() - t0
     dt = time.monotonic() - t0
@@ -127,7 +127,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
         e = {"idx": 0, "ts": "2026-11-22T15:00:00Z", "data": "x" * (65 << 20), "prev_hash": "0" * 64}
         e["self_hash"] = verifier.hash_with("sha256", verifier.canonical_payload(e))
         p = self.path("line65.jsonl")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write(json.dumps(e, separators=(",", ":")) + "\n")
         del e
         self.assertAll(_all(self.bins, p), (0, "PASS", None), "one valid line of 65 MiB")
@@ -147,7 +147,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
         e["self_hash"] = verifier.hash_with("sha256", verifier.canonical_payload(e))
         p = self.path("ascii.jsonl")
         for ensure_ascii in (True, False):
-            with open(p, "w", encoding="utf-8") as f:
+            with open(p, "w", encoding="utf-8", newline="") as f:
                 f.write(json.dumps(e, ensure_ascii=ensure_ascii) + "\n")
             self.assertAll(_all(self.bins, p), (0, "PASS", None), "every character below 0x80")
 
@@ -291,7 +291,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             flag = "--trusted-pubkey" if name in ("python", "js") else "-trusted-pubkey"
             args = argv + ([led, flag, key] if name in ("python", "js") else [flag, key, led])
             t0 = time.monotonic()
-            cp = subprocess.run(args, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+            cp = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", timeout=60, stdin=subprocess.DEVNULL)
             doc = json.loads(cp.stdout).get("tip") or {}
             self.assertEqual((cp.returncode, doc.get("error") if name in ("python", "js") else doc.get("why")),
                              (1, "tip_unreadable: the tip file cannot be read"), name)
@@ -300,7 +300,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
     @unittest.skipUnless(shutil.which("bash"), "needs bash for <(...)")
     def test_process_substitution_is_read_control(self):
         for name, argv in self.bins.items():
-            cp = subprocess.run(["bash", "-c", '"$@" <(cat "$0")', SAMPLE] + argv, capture_output=True, text=True,
+            cp = subprocess.run(["bash", "-c", '"$@" <(cat "$0")', SAMPLE] + argv, capture_output=True, text=True, encoding="utf-8",
                                 timeout=60)
             self.assertEqual((cp.returncode, json.loads(cp.stdout)["verdict"]), (0, "PASS"), name)
 
@@ -325,7 +325,7 @@ class TestTheGoWriterInputs(unittest.TestCase):
         subprocess.run(["go", "build", "-o", cls.bin, "./cmd/cvappend"], cwd=os.path.join(HERE, "verifiers", "go"),
                        check=True, capture_output=True)
         cls.key = os.path.join(cls.tmp, "seed.hex")
-        with open(cls.key, "w") as f:
+        with open(cls.key, "w", encoding="utf-8", newline="") as f:
             f.write("11" * 32 + "\n")
 
     @classmethod
@@ -334,7 +334,7 @@ class TestTheGoWriterInputs(unittest.TestCase):
 
     def append(self, ledger, key=None):
         argv = [self.bin] + (["-tipkey", key] if key else []) + [ledger, "2026-11-22T00:00:00Z"]
-        cp = subprocess.run(argv, input='{"a":1}', capture_output=True, text=True, timeout=60, preexec_fn=_cap_memory)
+        cp = subprocess.run(argv, input='{"a":1}', capture_output=True, text=True, encoding="utf-8", timeout=60, preexec_fn=_cap_memory)
         return cp.returncode, cp.stderr.strip()
 
     def test_the_ledger_is_a_regular_file(self):
@@ -370,13 +370,13 @@ class TestTheGoWriterInputs(unittest.TestCase):
         self.assertFalse(os.path.exists(led), "nothing appended when the key cannot be read")
         # control: the same seed through a FIFO with a writer, and as a regular file
         def give_key():
-            with open(f, "w") as w:
+            with open(f, "w", encoding="utf-8", newline="") as w:
                 w.write("11" * 32 + "\n")
         threading.Thread(target=give_key, daemon=True).start()
         rc, _ = self.append(led, f)
         self.assertEqual(rc, 0)
         self.assertEqual(self.append(led, self.key)[0], 0)
-        with open(led) as fh:
+        with open(led, encoding="utf-8") as fh:
             self.assertEqual(len(fh.readlines()), 2)
 
 

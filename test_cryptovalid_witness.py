@@ -60,7 +60,7 @@ def _wb(path, data):
 
 
 def _write(path, entries):
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for e in entries:
             f.write(json.dumps(e) + "\n")
 
@@ -345,20 +345,20 @@ class TestSignCosign(unittest.TestCase):
         led = os.path.join(self.tmp, "l.jsonl"); _write(led, _ledger(4))
         out = os.path.join(self.tmp, "cp.note")
         r = subprocess.run([sys.executable, os.path.join(HERE, "cryptovalid_checkpoint.py"), "sign", led, "--origin", LOG,
-                            "--key", self.lk, "--out", out], capture_output=True, text=True)
+                            "--key", self.lk, "--out", out], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stderr)
         v = subprocess.run([sys.executable, os.path.join(HERE, "cryptovalid_checkpoint.py"), "verify", out, "--vkey", self.LV],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(v.returncode, 0, v.stdout + v.stderr); self.assertEqual(json.loads(v.stdout)["stato"], "OK")
         with open(out, "rb") as f:
             note = f.read()
         with open(out, "wb") as f:
             f.write(note.replace(b"\n4\n", b"\n5\n"))
         v = subprocess.run([sys.executable, os.path.join(HERE, "cryptovalid_checkpoint.py"), "verify", out, "--vkey", self.LV],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(v.returncode, 1); self.assertEqual(json.loads(v.stdout)["stato"], "NON_VALIDA")
         k = subprocess.run([sys.executable, os.path.join(HERE, "cryptovalid_checkpoint.py"), "vkey", "--key", self.wk,
-                            "--name", "witness.example/w1", "--cosigner"], capture_output=True, text=True)
+                            "--name", "witness.example/w1", "--cosigner"], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(k.stdout.strip(), self.WV)
 
 
@@ -443,7 +443,7 @@ class TestWitness(unittest.TestCase):
         self.assertEqual((r["stato"], r["origin"], r["size"], r["evidenza"]), ("COSIGNED", LOG, 5, None))
         v = C.verify_note(r["note"], [self.LV, self.W1V])
         self.assertEqual(v["stato"], "OK"); self.assertEqual(v["verified"][1]["timestamp"], T0)
-        with open(self.st1) as f:
+        with open(self.st1, encoding="utf-8") as f:
             st = json.load(f)
         self.assertEqual(st["origins"][LOG]["size"], 5)
         self.assertFalse(os.path.exists(self.st1 + ".tmp"))
@@ -469,7 +469,7 @@ class TestWitness(unittest.TestCase):
             self._w1(self.n8, proof=C.consistency_proof_b64(self.leaves8, 5), ts=T0 + 10)
         self.assertFalse(os.path.exists(self.st1 + ".evidence.jsonl"))
         r = self._w1(self.n8, proof=C.consistency_proof_b64(self.leaves8, 5), ts=T0 + 40); self.assertEqual(r["stato"], "COSIGNED")
-        with open(self.st1 + ".evidence.jsonl") as f:
+        with open(self.st1 + ".evidence.jsonl", encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), 1)
         os.remove(self.st1 + ".evidence.jsonl"); os.remove(self.st1); os.remove(self.st1 + ".cosigned.jsonl")
         r = self._w1(self.n5); self.assertEqual(r["stato"], "COSIGNED")
@@ -482,12 +482,12 @@ class TestWitness(unittest.TestCase):
         # a wrong (but well-formed) proof for 5→8: the same, 422
         r = self._w1(self.n8, proof=C.consistency_proof_b64(self.leaves8, 5)[:-1])
         self.assertEqual((r["http_status"], r["evidenza"]["tipo"]), (422, "unproven-extension"))
-        with open(self.st1) as f:
+        with open(self.st1, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["origins"][LOG]["size"], 5)
         # with the proof: cosigned, state 8
         r = self._w1(self.n8, proof=C.consistency_proof_b64(self.leaves8, 5), ts=T0 + 60)
         self.assertEqual(r["stato"], "COSIGNED", r["motivo"])
-        with open(self.st1) as f:
+        with open(self.st1, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["origins"][LOG]["size"], 8)
 
     def test_split_view_and_rollback_produce_evidence(self):
@@ -511,7 +511,7 @@ class TestWitness(unittest.TestCase):
         pad = self.n5 + "".join(f"— pad{i} AAAAAAAAAA==\n" for i in range(50)).encode()
         for i in range(5):
             r = self._w1(pad, ts=T0 + i); self.assertEqual(r["evidenza"]["tipo"], "rollback"); self.assertNotIn("pad0", r["evidenza"]["presentato"])
-        with open(self.st1) as f:
+        with open(self.st1, encoding="utf-8") as f:
             ring = json.load(f)["refusals"][LOG]
         self.assertEqual((ring["count"], len(ring["last"])), (1, 1)); self.assertNotIn("note", ring["last"][0])   # one distinct rollback
         # a SECOND log-signed root for size 5: this witness never cosigned size 5 (it started at 8) but it remembers
@@ -530,14 +530,14 @@ class TestWitness(unittest.TestCase):
         self.assertEqual(len(C.split_note(r["evidenza"]["precedente"].encode())[1]), 2)
         self.assertEqual(C.verify_note(r["evidenza"]["precedente"].encode(), [self.LV, self.W1V])["stato"], "OK")
         # the evidence file: the fork at 8 (proof, two log-signed notes) and the half record at 5 (root only, once)
-        with open(self.st1 + ".evidence.jsonl") as f:
+        with open(self.st1 + ".evidence.jsonl", encoding="utf-8") as f:
             evs = [json.loads(l) for l in f]
         self.assertEqual([(e["tipo"], e["prova"], e["size_presentato"]) for e in evs], [("split-view", True, 8), ("split-view-unkept", False, 5)])
         evs = evs[:1]
         for e in evs:
             self.assertEqual({C.verify_note(e[k].encode(), [self.LV])["stato"] for k in ("precedente", "presentato")}, {"OK"})
         # the state is untouched by refusals
-        with open(self.st1) as f:
+        with open(self.st1, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["origins"][LOG]["size"], 8)
         # a second, independent witness that saw the fork first refuses the HONEST tree: witnesses are parties
         r2 = W.witness_cosign(self.st2, self.nf, self.LV, "witness.example/w2", self.w2, None, T0)
@@ -554,12 +554,12 @@ class TestWitness(unittest.TestCase):
         # E1: fork-8 without proof (refused, indexed) → honest 8 with proof (COSIGNED): the pair must be recorded now
         self.assertEqual(W_(self.nf)["evidenza"]["tipo"], "unproven-extension")
         self.assertEqual(W_(self.n8, C.consistency_proof_b64(self.leaves8, 5), T0 + 1)["stato"], "COSIGNED")
-        with open(st + ".evidence.jsonl") as f:
+        with open(st + ".evidence.jsonl", encoding="utf-8") as f:
             evs = [json.loads(l) for l in f]
         self.assertEqual([(e["tipo"], e["prova"], e["size_presentato"]) for e in evs], [("split-view", True, 8)])
         self.assertEqual({C.parse_checkpoint(C.verify_note(evs[0][k].encode(), [self.LV])["text"])["root"] for k in ("precedente", "presentato")},
                          {C.parse_checkpoint(self.tf)["root"], C.parse_checkpoint(self.t8)["root"]})
-        with open(st) as f:
+        with open(st, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["pending"].get(LOG, {}), {})     # the pending root at 8 was consumed
         # a future root presented with the WRONG old size (the discovery request "old 0"): 409 for the client, but the
         # root enters `pending` and a second root at that size with "old 0" is proof (round 6: the 409 gate came first)
@@ -573,18 +573,18 @@ class TestWitness(unittest.TestCase):
         for i in range(5):
             W.witness_cosign(st, C.sign_note(C.checkpoint_text(LOG, 70, hashlib.sha256(b"x%d" % i).digest()), LOG, self.ls),
                              self.LV, "witness.example/w1", self.w1, None, T0 + 2, old_size=0)
-        with open(st + ".evidence.jsonl") as f:
+        with open(st + ".evidence.jsonl", encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), 2 + 5)
         # E9: the fork replayed against the cosigned 8: returned as proof, not recorded twice (7 records so far: the
         # size-8 pair and the size-70 pairs)
         r = W_(self.nf, None, T0 + 2); self.assertEqual((r["evidenza"]["tipo"], r["evidenza"]["prova"]), ("split-view", True))
-        with open(st + ".evidence.jsonl") as f:
+        with open(st + ".evidence.jsonl", encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), 7)
         # E2: a second log-signed root at size 5 — a size this witness COSIGNED and moved past: the protocol answer is
         # a rollback, the evidence returned AND recorded is the split-view proof from the cosigned history
         alt5 = C.sign_note(C.checkpoint_text(LOG, 5, hashlib.sha256(b"alt5").digest()), LOG, self.ls)
         r = W_(alt5, None, T0 + 3); self.assertEqual((r["evidenza"]["tipo"], r["evidenza"]["prova"], r["motivo"][:8]), ("split-view", True, "rollback"))
-        with open(st + ".evidence.jsonl") as f:
+        with open(st + ".evidence.jsonl", encoding="utf-8") as f:
             evs = [json.loads(l) for l in f]
         self.assertEqual([(e["tipo"], e["prova"], e["size_presentato"]) for e in evs][7:], [("split-view", True, 5)])
         self.assertEqual(C.parse_checkpoint(C.verify_note(evs[7]["precedente"].encode(), [self.LV])["text"])["root"], C.parse_checkpoint(self.t5)["root"])
@@ -597,36 +597,36 @@ class TestWitness(unittest.TestCase):
         # a fresh root at a size this witness never cosigned nor holds (7): rollback, no proof — declared limit
         alt7 = C.sign_note(C.checkpoint_text(LOG, 7, hashlib.sha256(b"alt7").digest()), LOG, self.ls)
         self.assertEqual(W_(alt7, None, T0 + 3)["evidenza"]["prova"], False)
-        with open(st + ".evidence.jsonl") as f:
+        with open(st + ".evidence.jsonl", encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), 9)
         # the history file has exactly the two checkpoints cosigned (a re-cosign of the same one adds nothing)
         self.assertEqual(W_(self.n8, None, T0 + 4)["stato"], "COSIGNED")
-        with open(st + ".cosigned.jsonl") as f:
+        with open(st + ".cosigned.jsonl", encoding="utf-8") as f:
             self.assertEqual([json.loads(l)["size"] for l in f], [5, 8])
         # two log-signed roots at one FUTURE size, both refused without proof: the second one IS the proof (round 5)
         a60 = C.sign_note(C.checkpoint_text(LOG, 60, hashlib.sha256(b"a60").digest()), LOG, self.ls)
         b60 = C.sign_note(C.checkpoint_text(LOG, 60, hashlib.sha256(b"b60").digest()), LOG, self.ls)
         self.assertEqual(W_(a60, None, T0 + 5)["evidenza"]["prova"], False)
         r = W_(b60, None, T0 + 6); self.assertEqual((r["evidenza"]["tipo"], r["evidenza"]["prova"]), ("split-view", True))
-        with open(st + ".evidence.jsonl") as f:
+        with open(st + ".evidence.jsonl", encoding="utf-8") as f:
             self.assertEqual([json.loads(l)["size_presentato"] for l in f][-1], 60)
         # replaying the log's public FUTURE (sizes 9..300 without proof): the pending ring stays at 100 notes, the
         # state file stops growing (round 5: the first version kept every note)
-        with open(st + ".evidence.jsonl") as f:
+        with open(st + ".evidence.jsonl", encoding="utf-8") as f:
             before = len(f.readlines())
         sizes = []
         for sz in range(9, 300):
             W_(C.sign_note(C.checkpoint_text(LOG, sz, hashlib.sha256(str(sz).encode()).digest()), LOG, self.ls), None, T0 + 10)
             if sz in (108, 200, 299):
-                with open(st) as f:
+                with open(st, encoding="utf-8") as f:
                     stt = json.load(f)
                 sizes.append((sum(len(r) for r in stt["pending"][LOG].values()), os.path.getsize(st)))
         self.assertEqual([n for n, _ in sizes], [100, 100, 100]); self.assertLess(abs(sizes[2][1] - sizes[1][1]), 2000)
-        with open(st) as f:
+        with open(st, encoding="utf-8") as f:
             self.assertNotIn("9", json.load(f)["pending"][LOG])
         # the evidence file: exactly 2 more records — the third root at size 60 (against one of a60/b60) and at size 70
         # (one pair per request); every other size was fresh → nothing (the README says exactly this)
-        with open(st + ".evidence.jsonl") as f:
+        with open(st + ".evidence.jsonl", encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), before + 2)
         # the byte bound: 20 log-signed notes with 115 extension lines of 8 KiB each — none is kept (above 16 KiB); then
         # 60 notes with 5000 four-byte characters (5 000 chars = 20 000 BYTES > 16 KiB: the bound counts bytes, round 7) — none
@@ -637,26 +637,26 @@ class TestWitness(unittest.TestCase):
         for sz in range(500, 560):
             W_(C.sign_note(C.checkpoint_text(LOG, sz, hashlib.sha256(str(sz).encode()).digest(), ["\U0001F600" * 5000]), LOG, self.ls), None, T0 + 12)
         self.assertLess(os.path.getsize(st), 200_000)
-        with open(st) as f:
+        with open(st, encoding="utf-8") as f:
             self.assertLessEqual(sum(len(n.encode()) for r in json.load(f)["pending"][LOG].values() for n in r.values() if n), 256 * 1024)
         # an oversized first root at a size, then a small conflicting one: not silently lost — a `split-view-unkept`
         # record with the earlier ROOT (the note was not kept), prova False, stated (round 7)
         small559 = C.sign_note(C.checkpoint_text(LOG, 559, hashlib.sha256(b"small").digest()), LOG, self.ls)
         r = W_(small559, None, T0 + 13)
         self.assertEqual((r["evidenza"]["tipo"], r["evidenza"]["prova"], r["evidenza"]["precedente"]), ("split-view-unkept", False, None))
-        with open(st + ".evidence.jsonl") as f:
+        with open(st + ".evidence.jsonl", encoding="utf-8") as f:
             last = json.loads(f.readlines()[-1])
         self.assertEqual((last["tipo"], last["precedente_root_b64"]), ("split-view-unkept", base64.b64encode(hashlib.sha256(b"559").digest()).decode()))
         # a malformed pending index in the state is a NoteError, not an AttributeError
-        with open(st) as f:
+        with open(st, encoding="utf-8") as f:
             bad = json.load(f)
         bad["pending"] = {LOG: []}
-        with open(st, "w") as f:
+        with open(st, "w", encoding="utf-8", newline="") as f:
             json.dump(bad, f)
         with self.assertRaises(C.NoteError):
             W_(self.nf)
         bad["pending"] = []
-        with open(st, "w") as f:
+        with open(st, "w", encoding="utf-8", newline="") as f:
             json.dump(bad, f)
         with self.assertRaises(C.NoteError):
             W_(self.nf)
@@ -708,7 +708,7 @@ class TestWitness(unittest.TestCase):
         r = W.witness_cosign(std, a3, self.LV, "witness.example/w1", self.w1, None, T0 + 3)
         self.assertEqual((r["evidenza"]["tipo"], r["evidenza"]["precedente_root_b64"]), ("split-view-unkept", base64.b64encode(hashlib.sha256(b"b3").digest()).decode()))
         # a non-object line in the cosigned history is skipped, not a crash
-        with open(std + ".cosigned.jsonl", "a") as f:
+        with open(std + ".cosigned.jsonl", "a", encoding="utf-8", newline="") as f:
             f.write("[]\n")
         self.assertEqual(W.witness_cosign(std, a3, self.LV, "witness.example/w1", self.w1, None, T0 + 3)["stato"], "REFUSED")
         # pending roots at sizes a cosign jumps over are KEPT: root A at 10 refused, honest cosign at 12, then root B
@@ -734,7 +734,7 @@ class TestWitness(unittest.TestCase):
         y9 = C.sign_note(C.checkpoint_text(LOG, 9, hashlib.sha256(b"y9").digest()), LOG, self.ls)
         w3(bigx); self.assertEqual(w3(y9, T0 + 1)["evidenza"]["tipo"], "split-view-unkept")
         self.assertEqual(w3(smallx, T0 + 2)["evidenza"]["tipo"], "split-view")
-        with open(st3 + ".evidence.jsonl") as f:
+        with open(st3 + ".evidence.jsonl", encoding="utf-8") as f:
             self.assertEqual([json.loads(l)["tipo"] for l in f], ["split-view-unkept", "split-view"])
 
     def test_fresh_origin_pending_and_malformed_size0(self):
@@ -750,7 +750,7 @@ class TestWitness(unittest.TestCase):
         # then a TOFU at 9 with a third root: one more proof (one pair per request), pending consumed
         c9 = C.sign_note(C.checkpoint_text(LOG, 9, hashlib.sha256(b"c9").digest()), LOG, self.ls)
         self.assertEqual(W.witness_cosign(st, c9, self.LV, "witness.example/w1", self.w1, None, T0)["stato"], "COSIGNED")
-        with open(st + ".evidence.jsonl") as f:
+        with open(st + ".evidence.jsonl", encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), 2)
         # the same with an OVERSIZED first root (kept as root only) and a small second: the TOFU that follows records
         # exactly one pair, not one full and one half (round 13)
@@ -758,12 +758,12 @@ class TestWitness(unittest.TestCase):
         big9 = C.sign_note(C.checkpoint_text(LOG, 9, hashlib.sha256(b"big").digest(), ["y" * 8000] * 3), LOG, self.ls)
         W.witness_cosign(st_o, big9, self.LV, "witness.example/w1", self.w1, None, T0, old_size=3)
         W.witness_cosign(st_o, b9, self.LV, "witness.example/w1", self.w1, None, T0, old_size=3)
-        with open(st_o + ".evidence.jsonl") as f:
+        with open(st_o + ".evidence.jsonl", encoding="utf-8") as f:
             before_o = len(f.readlines())
         W.witness_cosign(st_o, c9, self.LV, "witness.example/w1", self.w1, None, T0)
-        with open(st_o + ".evidence.jsonl") as f:
+        with open(st_o + ".evidence.jsonl", encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), before_o + 1)
-        with open(st) as f:
+        with open(st, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["pending"].get(LOG, {}), {})
         # a malformed size-0 checkpoint against a stored size 0: 422, no evidence (the fields must not contradict)
         st0 = os.path.join(self.tmp, "w0.json")
@@ -841,7 +841,7 @@ class TestWitness(unittest.TestCase):
         # malformed state file → error, never silent TOFU
         for bad in ("[]", '{"origins": {"o": {"size": "5"}}}', '{"origins": {"o": {"size": 5, "root_b64": "AAAA", "note": "x"}}}',
                     '{"origins": {"o": {"size": true, "root_b64": "%s", "note": "x"}}}' % base64.b64encode(bytes(32)).decode()):
-            with open(self.st1, "w") as f:
+            with open(self.st1, "w", encoding="utf-8", newline="") as f:
                 f.write(bad)
             with self.assertRaises(C.NoteError, msg=bad):
                 self._w1(self.n5)
@@ -856,7 +856,7 @@ class TestWitness(unittest.TestCase):
         W.witness_cosign(st9, self.n8, self.LV, "witness.example/w1", self.w1, None, T0)
         with self.assertRaises(C.NoteError):
             W.witness_cosign(st9, self.n5, self.LV, "witness.example/w1", self.w1, None, 1.5)
-        with open(st9) as f:
+        with open(st9, encoding="utf-8") as f:
             self.assertNotIn("refusals", json.load(f))
 
     def test_verify_witnessed_quorum_and_freshness(self):
@@ -949,11 +949,11 @@ class TestWitness(unittest.TestCase):
         n5 = os.path.join(self.tmp, "cp5.note"); _wb(n5, self.n5)
         cmd = [sys.executable, os.path.join(HERE, "cryptovalid_witness.py"), "cosign", n5, "--state", self.st1, "--log-vkey",
                self.LV, "--name", "witness.example/w1", "--key", self.w1k, "--out"]
-        r = subprocess.run(cmd + [self.tmp + os.sep], capture_output=True, text=True)
+        r = subprocess.run(cmd + [self.tmp + os.sep], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 74, r.stderr)
         self.assertFalse(os.path.exists(self.st1), "the state recorded a cosignature before --out was refused")
         r = subprocess.run(["bash", "-c", 'ulimit -f 0; exec "$@"', "_"] + cmd + [os.path.join(self.tmp, "o.note")],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 74, r.stdout + r.stderr)
         self.assertEqual(r.stdout, "")
 
@@ -962,19 +962,19 @@ class TestWitness(unittest.TestCase):
         out = os.path.join(self.tmp, "cp5.c.note")
         cmd = [sys.executable, os.path.join(HERE, "cryptovalid_witness.py")]
         r = subprocess.run(cmd + ["cosign", n5, "--state", self.st1, "--log-vkey", self.LV, "--name", "witness.example/w1",
-                                  "--key", self.w1k, "--out", out], capture_output=True, text=True)
+                                  "--key", self.w1k, "--out", out], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stderr); self.assertEqual(json.loads(r.stdout)["stato"], "COSIGNED")
-        v = subprocess.run(cmd + ["verify", out, "--log-vkey", self.LV, "--witness-vkey", self.W1V], capture_output=True, text=True)
+        v = subprocess.run(cmd + ["verify", out, "--log-vkey", self.LV, "--witness-vkey", self.W1V], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(v.returncode, 0, v.stdout); self.assertEqual(json.loads(v.stdout)["stato"], "OK")
-        v = subprocess.run(cmd + ["verify", out, "--log-vkey", self.LV, "--witness-vkey", self.W2V], capture_output=True, text=True)
+        v = subprocess.run(cmd + ["verify", out, "--log-vkey", self.LV, "--witness-vkey", self.W2V], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(v.returncode, 1)
         n8 = os.path.join(self.tmp, "cp8.note"); _wb(n8, self.n8)
         r = subprocess.run(cmd + ["cosign", n8, "--state", self.st1, "--log-vkey", self.LV, "--name", "witness.example/w1",
-                                  "--key", self.w1k, "--out", out + "8"], capture_output=True, text=True)
+                                  "--key", self.w1k, "--out", out + "8"], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 1); self.assertEqual(json.loads(r.stdout)["evidenza"]["tipo"], "unproven-extension")
         r = subprocess.run(cmd + ["cosign", n8, "--state", self.st1, "--log-vkey", self.LV, "--name", "witness.example/w1",
                                   "--key", self.w1k, "--out", out + "8", "--proof", json.dumps(C.consistency_proof_b64(self.leaves8, 5))],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 0, r.stdout)
 
 
@@ -1048,11 +1048,11 @@ class TestTlogWitnessHTTP(unittest.TestCase):
         self.assertEqual(st, 403)
         nf5 = C.sign_note(C.checkpoint_text(LOG, 5, hashlib.sha256(b"fork5").digest()), LOG, self.ls)
         self.assertEqual(W.add_checkpoint(self.url, nf5, 0, [])[0], 409)
-        with open(self.svc.state_path + ".evidence.jsonl") as f:
+        with open(self.svc.state_path + ".evidence.jsonl", encoding="utf-8") as f:
             first = [json.loads(l) for l in f]
         self.assertEqual([(e["tipo"], e["prova"], e["size_presentato"]) for e in first], [("split-view", True, 5)])
         self.assertEqual(W.add_checkpoint(self.url, nf5, 0, [])[0], 409)   # replay: nothing new in the file
-        with open(self.svc.state_path + ".evidence.jsonl") as f:
+        with open(self.svc.state_path + ".evidence.jsonl", encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), 1)
         # 409 with the stored size (text/x.tlog.size body), 422 without proof, 200 with it
         st, body = W.add_checkpoint(self.url, n8, 0, [])
@@ -1066,11 +1066,11 @@ class TestTlogWitnessHTTP(unittest.TestCase):
         # status; the evidence file has the proofs only: the size-5 fork (against the stored 5, then) and the size-8 fork
         self.assertEqual(W.add_checkpoint(self.url, n5, 8, [])[0], 400)
         self.assertEqual(W.add_checkpoint(self.url, n5, 5, [])[0], 409)
-        with open(self.svc.state_path + ".evidence.jsonl") as f:
+        with open(self.svc.state_path + ".evidence.jsonl", encoding="utf-8") as f:
             evs = [json.loads(l) for l in f]
         self.assertEqual([(e["tipo"], e["prova"], e["size_presentato"]) for e in evs], [("split-view", True, 5), ("split-view", True, 8)])
         self.assertEqual(C.verify_note(evs[1]["presentato"].encode(), [self.LV])["text"], C.split_note(nf)[0])
-        with open(self.svc.state_path) as f:
+        with open(self.svc.state_path, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["refusals"][LOG]["count"], 2)   # 5→8 without proof, and the rollback (twice = once)
         # re-cosign over HTTP of a note that already carries our line: 200 with exactly ONE fresh line (round 3: the
         # first implementation sliced by length and answered an empty body), and the state moves to the new timestamp
@@ -1081,7 +1081,7 @@ class TestTlogWitnessHTTP(unittest.TestCase):
         # (within one wall-clock second Ed25519 is deterministic, so the line may be byte-identical: the property is
         # ONE line, verifying, not a different one)
         self.assertEqual(W.verify_witnessed(n8 + body2, self.LV, [self.WV], 1)["stato"], "OK")
-        with open(self.svc.state_path) as f:
+        with open(self.svc.state_path, encoding="utf-8") as f:
             self.assertEqual(C.split_note(json.load(f)["origins"][LOG]["note"].encode())[1][1][0], "witness.example/w1")
         # a note with 100 signature lines has no room for ours: 400, not an unopenable 101-line note
         full = n8 + "".join(f"— pad{i} AAAAAAAAAA==\n" for i in range(99)).encode()
@@ -1147,7 +1147,7 @@ class TestTlogWitnessHTTP(unittest.TestCase):
         # an empty proof line is 400, not 404 (round 2)
         self.assertEqual(W.add_checkpoint(self.url, b"\n" + n8, 0, [])[0], 400)
         # a corrupted state file: 500 with a reason on stderr, never a dropped connection (round 2)
-        with open(self.svc.state_path, "w") as f:
+        with open(self.svc.state_path, "w", encoding="utf-8", newline="") as f:
             f.write("{")
         self.assertEqual(W.add_checkpoint(self.url, n8, 8, [])[0], 500)
         os.remove(self.svc.state_path)
@@ -1183,11 +1183,11 @@ class TestTlogWitnessHTTP(unittest.TestCase):
         c.request("POST", "/w/add-checkpoint", body=W.format_add_checkpoint_body(5, [], n8)); r2 = c.getresponse(); r2.read()
         self.assertEqual((r1.status, r2.status), (409, 409)); c.close()
         # a log key given as a witness key: refused BEFORE any network round trip (nothing cosigned on the server)
-        with open(self.svc.state_path + ".cosigned.jsonl") as f:
+        with open(self.svc.state_path + ".cosigned.jsonl", encoding="utf-8") as f:
             n_before = len(f.readlines())
         with self.assertRaises(C.NoteError):
             W.submit_checkpoint(self.url, n8, l8, [self.LV], self.LV)
-        with open(self.svc.state_path + ".cosigned.jsonl") as f:
+        with open(self.svc.state_path + ".cosigned.jsonl", encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), n_before)
         # a static CT log key (0x05, accepted by parse_vkey since 2026-11-15) as the log key: no witness verifies it here,
         # so it is refused before the round trip too, alone or in a list (until this check it reached the witness first)
@@ -1200,7 +1200,7 @@ class TestTlogWitnessHTTP(unittest.TestCase):
             for lv in (ct, [self.LV, ct]):
                 with self.assertRaisesRegex(C.NoteError, "a log key must be an Ed25519"):
                     W.submit_checkpoint(self.url, n8, l8, [self.WV], lv)
-        with open(self.svc.state_path + ".cosigned.jsonl") as f:
+        with open(self.svc.state_path + ".cosigned.jsonl", encoding="utf-8") as f:
             self.assertEqual(len(f.readlines()), n_before)
         # wrong path → 404
         import urllib.request, urllib.error
@@ -1223,7 +1223,7 @@ class TestRealCheckpoints(unittest.TestCase):
 
     def test_rekor_v1_checkpoints_verify(self):
         d = os.path.join(HERE, "examples", "checkpoints")
-        vk = open(os.path.join(d, "rekor_v1.vkey")).read().strip()
+        vk = open(os.path.join(d, "rekor_v1.vkey"), encoding="utf-8").read().strip()
         notes = sorted(f for f in os.listdir(d) if f.startswith("rekor_v1_") and f.endswith(".note"))
         self.assertEqual(len(notes), 3)
         for f in notes:
@@ -1304,7 +1304,7 @@ class TestGoOracle(unittest.TestCase):
                 raise AssertionError("CV_REQUIRE_GO_ORACLE=1 but no Go toolchain on PATH")
             raise unittest.SkipTest("no Go toolchain")
         cls.tmp = tempfile.mkdtemp(); cls.bin = os.path.join(cls.tmp, "cvnote-oracle")
-        r = subprocess.run(["go", "build", "-o", cls.bin, "."], cwd=ORACLE_SRC, capture_output=True, text=True, timeout=600)
+        r = subprocess.run(["go", "build", "-o", cls.bin, "."], cwd=ORACLE_SRC, capture_output=True, text=True, encoding="utf-8", timeout=600)
         if r.returncode != 0:   # Go present but the oracle does not build: a regression, never a silent skip
             raise AssertionError("note_oracle build failed: " + r.stderr[-800:])
 
@@ -1314,7 +1314,7 @@ class TestGoOracle(unittest.TestCase):
 
     def _oracle(self, note, *vkeys):
         p = os.path.join(self.tmp, "n.note"); _wb(p, note)
-        r = subprocess.run([self.bin, p] + list(vkeys), capture_output=True, text=True, timeout=60)
+        r = subprocess.run([self.bin, p] + list(vkeys), capture_output=True, text=True, encoding="utf-8", timeout=60)
         return r.returncode, r.stdout
 
     def test_spec_vector_and_our_notes(self):
@@ -1397,7 +1397,7 @@ class TestGoOracle(unittest.TestCase):
         rc, out = self._oracle(ext.replace(b"ext two", b"ext tw0"), LV, W1V); self.assertEqual(rc, 1, out)
         self.assertEqual(C.verify_note(ext.replace(b"ext two", b"ext tw0"), [LV, W1V])["stato"], "NON_VALIDA")
         # REAL Rekor v1 checkpoints (ECDSA log key): opened by formats' NewECDSAVerifier, refused when tampered
-        d = os.path.join(HERE, "examples", "checkpoints"); rvk = open(os.path.join(d, "rekor_v1.vkey")).read().strip()
+        d = os.path.join(HERE, "examples", "checkpoints"); rvk = open(os.path.join(d, "rekor_v1.vkey"), encoding="utf-8").read().strip()
         for f in sorted(x for x in os.listdir(d) if x.endswith(".note")):
             with open(os.path.join(d, f), "rb") as fh:
                 rn = fh.read()

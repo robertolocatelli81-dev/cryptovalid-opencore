@@ -24,7 +24,7 @@ SEP = "\x1e"
 def commits(rev_range, repo="."):
     fmt = "%H%x00%ae%x00%ce%x00%s%x00%(trailers:key=Signed-off-by,valueonly,unfold)" + "%x1e"
     r = subprocess.run(["git", "-C", repo, "log", "--no-merges", "--format=" + fmt, rev_range],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8")
     if r.returncode != 0:
         raise ValueError(r.stderr.strip() or "git log failed")
     out = []

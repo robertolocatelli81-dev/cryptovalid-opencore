@@ -44,7 +44,7 @@ def _ledger(path, n, tag="d"):
         e["self_hash"] = hashlib.sha256(_canon(e)).hexdigest()
         prev = e["self_hash"]
         out.append(e)
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         for e in out:
             f.write(json.dumps(e) + "\n")
     return out
@@ -88,7 +88,7 @@ def _strings(v):
 
 def _run(bins, name, ledger, flags):
     argv, first, _ = bins[name]
-    cp = subprocess.run(argv + (flags + [ledger] if first else [ledger] + flags), capture_output=True, text=True, env=ENV)
+    cp = subprocess.run(argv + (flags + [ledger] if first else [ledger] + flags), capture_output=True, text=True, encoding="utf-8", env=ENV)
     try:
         doc = json.loads(cp.stdout)
     except ValueError:
@@ -180,7 +180,7 @@ class TestTipIsClosed(unittest.TestCase):
     def _place(self, extra):
         doc = dict(self.tip)
         doc.update(extra)
-        with open(self.led + ".tip.json", "w", encoding="utf-8") as f:
+        with open(self.led + ".tip.json", "w", encoding="utf-8", newline="") as f:
             f.write(json.dumps(doc))
         return doc
 
@@ -251,7 +251,7 @@ class TestTreeHeadAndHeadAreClosed(unittest.TestCase):
         with open(path, encoding="utf-8") as f:
             doc = json.load(f)
         fn(doc)
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8", newline="") as f:
             json.dump(doc, f)
 
     def test_intact_archive_control(self):
@@ -342,7 +342,7 @@ class TestSignatureDomains(unittest.TestCase):
             return json.load(f)
 
     def _dump(self, p, doc):
-        with open(p, "w", encoding="utf-8") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             json.dump(doc, f)
 
     def test_written_tagged_and_verified(self):
@@ -522,7 +522,7 @@ class TestMcpVerifyLedgerSignatures(unittest.TestCase):
         e = json.loads(lines[2])
         e["signature"] = e["signature"][:10] + ("A" if e["signature"][10] != "A" else "B") + e["signature"][11:]
         lines[2] = json.dumps(e)
-        with open(self.signed, "w", encoding="utf-8") as f:
+        with open(self.signed, "w", encoding="utf-8", newline="") as f:
             f.write("\n".join(lines) + "\n")
         out = self.call({"path": self.signed, "expected_pubkey_hex": self.pk})
         self.assertFalse(out["valid"])
@@ -926,7 +926,7 @@ class TestTsaPinDecides(unittest.TestCase):
                 with open(mp, encoding="utf-8") as f:
                     m = json.load(f)
                 m["rfc3161_timestamp"] = {"anchored": True, "tsa": "local", "tsr_b64": cls.tsa[name].token(m["manifest_digest_sha256"])}
-                with open(mp, "w", encoding="utf-8") as f:
+                with open(mp, "w", encoding="utf-8", newline="") as f:
                     json.dump(m, f)
             cls.packs[name] = p
         cls.arch = {}

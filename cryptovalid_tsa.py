@@ -1151,7 +1151,7 @@ def verify_with_openssl(token_der: bytes, digest_data: bytes):
         _tmp_write(tp, token_der)
         _tmp_write(dp, digest_data)
         p = _run_openssl(["openssl", "ts", "-verify", "-in", tp, "-data", dp, "-CApath", "/etc/ssl/certs"],
-                         capture_output=True, text=True, timeout=30)   # 0.20.3: it had no limit (a hang)
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)   # 0.20.3: it had no limit (a hang)
         return p.returncode == 0
     finally:
         shutil.rmtree(d, ignore_errors=True)

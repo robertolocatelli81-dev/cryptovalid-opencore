@@ -58,7 +58,7 @@ def sh(script, argv, env=None, timeout=120):
 def big_unsigned(d):
     """3 000 entries without a signature: `signer.py verify` names each one, a receipt of about 300 KB"""
     p = os.path.join(d, "big.jsonl")
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8", newline="") as f:
         for i in range(3000):
             f.write('{"ts":%d,"v":%d,"self_hash":"%s"}\n' % (i, i, "0" * 64))
     return p
@@ -151,7 +151,7 @@ class TestJavaNonBlocking(_Tmp):
         cp = os.path.join(self.d, "cls")
         subprocess.run([javac, "-d", cp, os.path.join(HERE, "verifiers", "java", "CvVerify.java")], check=True, capture_output=True)
         big = os.path.join(self.d, "big_bad.jsonl")
-        with open(big, "w") as f:
+        with open(big, "w", encoding="utf-8", newline="") as f:
             for i in range(20000):
                 f.write(json.dumps({"idx": i, "ts": "2026-08-13T10:00:00Z", "data": {"e": i}, "prev_hash": "%064x" % (i + 1),
                                     "self_hash": "%064x" % (i + 7)}) + "\n")
@@ -167,7 +167,7 @@ class TestJavaNonBlocking(_Tmp):
         self.assertGreater(len(data), 65536)
         self.assertEqual(json.loads(data)["verdict"], "FAIL")
         ro = os.path.join(self.d, "ro")
-        open(ro, "w").close()
+        open(ro, "w", encoding="utf-8", newline="").close()
         rc, _, err = sh('exec "$@" 1<"$RO"', [java, "-cp", cp, "CvVerify", SAMPLE], env=dict(ENV, RO=ro))
         self.assertOneLine74(rc, err, "java stdout read-only")
 
@@ -192,7 +192,7 @@ class TestJavaWaitShape(_Tmp):
         small = subprocess.run([java, "-cp", cp, "CvVerify", SAMPLE], capture_output=True, env=ENV)
         self.assertTrue(small.stdout.endswith(os.linesep.encode()), small.stdout[-4:])
         big = os.path.join(self.d, "big_bad.jsonl")
-        with open(big, "w") as f:
+        with open(big, "w", encoding="utf-8", newline="") as f:
             for i in range(20000):
                 f.write(json.dumps({"idx": i, "ts": "2026-08-13T10:00:00Z", "data": {"e": i}, "prev_hash": "%064x" % (i + 1),
                                     "self_hash": "%064x" % (i + 7)}) + "\n")
@@ -217,7 +217,7 @@ class TestJavaWaitShape(_Tmp):
         time.sleep(2.0)
 
         def cpu():
-            f = open("/proc/%d/stat" % p.pid).read().rsplit(")", 1)[1].split()
+            f = open("/proc/%d/stat" % p.pid, encoding="utf-8").read().rsplit(")", 1)[1].split()
             return (int(f[11]) + int(f[12])) / os.sysconf("SC_CLK_TCK")
         c1 = cpu()
         time.sleep(3)
@@ -361,7 +361,7 @@ class TestLedgerWholeLine(_Tmp):
         pub = json.loads(subprocess.run([PY, os.path.join(HERE, "signer.py"), "keygen", key], check=True, capture_output=True,
                                         env=ENV).stdout)["public_key_hex"]
         st = os.path.join(self.d, "st.json")
-        with open(st, "w") as f:
+        with open(st, "w", encoding="utf-8", newline="") as f:
             f.write('{"x":1}')
         sc = os.path.join(HERE, "cryptovalid_scitt.py")
         signed = os.path.join(self.d, "s.cose")
@@ -408,7 +408,7 @@ ing.flush(); ing.close()
 import verifier
 print(verifier.verify_ledger(seg)["verdict"])
 '''
-        p = subprocess.run([PY, "-c", script, HERE, os.path.join(self.d, "a")], capture_output=True, text=True, env=ENV, timeout=120)
+        p = subprocess.run([PY, "-c", script, HERE, os.path.join(self.d, "a")], capture_output=True, text=True, encoding="utf-8", env=ENV, timeout=120)
         self.assertEqual(p.stdout.split(), ["ERR", "OutputNotWritten", "SAME", "PASS"], p.stdout + p.stderr[-600:])
 
 
@@ -494,9 +494,9 @@ class TestCheckThatCannotRun(_Tmp):
                "certs = {d}/ca.crt\nsigner_key = {d}/tsa.key\nsigner_digest = sha256\ndefault_policy = 1.2.3.4.1\n"
                "digests = sha256\naccuracy = secs:1\nordering = yes\ntsa_name = no\ness_cert_id_chain = no\n"
                "ess_cert_id_alg = sha256\n[ v3_tsa ]\nextendedKeyUsage = critical,timeStamping\nbasicConstraints = CA:FALSE\n")
-        with open(j("tsa.cnf"), "w") as f:
+        with open(j("tsa.cnf"), "w", encoding="utf-8", newline="") as f:
             f.write(cnf.format(d=cnf_path(cls.td)))
-        with open(j("serial"), "w") as f:
+        with open(j("serial"), "w", encoding="utf-8", newline="") as f:
             f.write("01\n")
         run = lambda *a: subprocess.run(list(a), check=True, capture_output=True)  # noqa: E731
         run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", j("ca.key"),
@@ -517,7 +517,7 @@ class TestCheckThatCannotRun(_Tmp):
         run("openssl", "ts", "-reply", "-queryfile", j("q.tsq"), "-config", j("tsa.cnf"), "-section", "t1", "-out", j("r.tsr"))
         with open(j("r.tsr"), "rb") as f:
             man["rfc3161_timestamp"] = {"anchored": True, "tsa": "local", "tsr_b64": base64.b64encode(f.read()).decode()}
-        with open(man_p, "w", encoding="utf-8") as f:   # the stamp is outside manifest_digest_sha256, as build_pack writes it
+        with open(man_p, "w", encoding="utf-8", newline="") as f:   # the stamp is outside manifest_digest_sha256, as build_pack writes it
             json.dump(man, f, ensure_ascii=False, indent=1, sort_keys=True)
         cls.pack = pack
 

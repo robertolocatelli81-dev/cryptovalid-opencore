@@ -35,7 +35,7 @@ class _Client:
     def __init__(self, env=None):
         self.p = subprocess.Popen([sys.executable, _SERVER],
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  text=True, env={**os.environ, **(env or {})})
+                                  text=True, encoding="utf-8", env={**os.environ, **(env or {})})
         self._id = 0
         r = self.request("initialize", {"protocolVersion": "2024-11-05",
                                         "clientInfo": {"name": "bench", "version": "0"}})
@@ -80,9 +80,9 @@ class TestMcpBenchFailsFirst(unittest.TestCase):
 
     def test_tampered_ledger_fails(self):
         bad = os.path.join(self.d, "bad.jsonl")
-        rows = [json.loads(x) for x in open(self.ledger)]
+        rows = [json.loads(x) for x in open(self.ledger, encoding="utf-8")]
         rows[1]["data"]["r"] = "FORGED"
-        with open(bad, "w") as f:
+        with open(bad, "w", encoding="utf-8", newline="") as f:
             for x in rows:
                 f.write(json.dumps(x) + "\n")
         body, _ = self.c.call("verify_ledger", {"path": bad})
@@ -156,9 +156,9 @@ class TestMcpPositive(unittest.TestCase):
         self.assertTrue(body["result"]["valid"], body)
         self.assertEqual(body["result"]["provenance_classes"], ["jwk_header"])
         self.assertEqual(len(body["provenance"]["sha256"]), 64)
-        ev = json.load(open(out))
+        ev = json.load(open(out, encoding="utf-8"))
         ev["subject"] = "tampered"
-        json.dump(ev, open(out, "w"))
+        json.dump(ev, open(out, "w", encoding="utf-8", newline=""))
         body2, _ = self.c.call("verify_ap2_evidence", {"path": out})
         self.assertFalse(body2["result"]["valid"])
 

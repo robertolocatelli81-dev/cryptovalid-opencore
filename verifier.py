@@ -95,14 +95,18 @@ class CheckNotRun(OutputNotWritten):
 
 
 def _text_layer_bytes(out, buf, text: str) -> bytes:
-    """The bytes Python's own stdout text layer writes for `text`: its encoding and error handler, "\\n" as os.linesep
-    where the platform translates it (not Linux; not measured here), and a byte order mark only where that layer puts
-    one — utf-16 / utf-32 only on a stdout seekable at offset 0, utf-8-sig on a pipe too, none on a seekable stdout
-    past offset 0 (str.encode would put one on a pipe too)."""
+    """The bytes Python's own stdout text layer writes for `text`: its encoding and error handler, and a byte order
+    mark only where that layer puts one — utf-16 / utf-32 only on a stdout seekable at offset 0, utf-8-sig on a pipe
+    too, none on a seekable stdout past offset 0 (str.encode would put one on a pipe too). Lines end in "\\n" on every
+    system: until 0.29.0 Windows got "\\r\\n" (os.linesep; `--quiet` wrote b"PASS\\r\\n", CI of f1e95d5) and a receipt
+    of the same verdict had other bytes there."""
     import codecs
-    if os.linesep != "\n":
-        text = text.replace("\n", os.linesep)
     encoding = out.encoding or "utf-8"
+    if os.name == "nt" and not os.environ.get("PYTHONIOENCODING"):
+        # Windows gives a pipe or a file the ANSI code page (cp1252): a reason with a character outside it was a
+        # UnicodeEncodeError, exit 74, where Linux and macOS wrote the receipt. UTF-8 there too, as on a Windows
+        # console (Python writes UTF-8 to it), as RFC 8259 §8.1 asks of JSON and as PEP 686 makes the default
+        encoding = "utf-8"
     enc = codecs.getincrementalencoder(encoding)(out.errors or "strict")
     try:
         seekable = buf.seekable()

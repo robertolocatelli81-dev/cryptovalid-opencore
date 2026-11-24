@@ -48,9 +48,9 @@ class TestPackLayer(unittest.TestCase):
     def test_pack_manomesso_invalido(self):
         # il banco DEVE fallire: cambia un byte in un file del pack
         p = os.path.join(self.pack, "l.signed.jsonl")
-        rows = [json.loads(x) for x in open(p)]
+        rows = [json.loads(x) for x in open(p, encoding="utf-8")]
         rows[1]["data"]["d"] = "reject"
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             for x in rows:
                 f.write(json.dumps(x) + "\n")
         r = VE.verify_pack(self.pack)
@@ -60,11 +60,11 @@ class TestPackLayer(unittest.TestCase):
         # audit V1 #1 (30/09/2026): one byte of manifest_signature changed -> evidence_pack says invalid; so must this front-end
         import base64
         p = os.path.join(self.pack, "MANIFEST.json")
-        man = json.load(open(p))
+        man = json.load(open(p, encoding="utf-8"))
         sig = bytearray(base64.b64decode(man["manifest_signature"]))
         sig[0] ^= 1
         man["manifest_signature"] = base64.b64encode(bytes(sig)).decode()
-        json.dump(man, open(p, "w"), indent=2, sort_keys=True)
+        json.dump(man, open(p, "w", encoding="utf-8", newline=""), indent=2, sort_keys=True)
         r = VE.verify_pack(self.pack)
         self.assertFalse(r["valid"], r)
         self.assertIn("FAIL", [x["status"] for x in r["layers"] if x["layer"].startswith("manifest autenticato")])
@@ -126,9 +126,9 @@ class TestAp2Layer(unittest.TestCase):
     def test_ap2_refusal_reason_reaches_the_receipt(self):
         # a pack whose honest_scope is not the canonical one is refused by the reference (SPEC §1); the front-end must say why.
         # Before 0.18.0 the detail was empty (the front-end read `error`; the receipt says `refused` since ap2-evidence-pack 1.1.0).
-        ev = json.load(open(self.out))
+        ev = json.load(open(self.out, encoding="utf-8"))
         ev["honest_scope"] = "not the canonical scope"
-        json.dump(ev, open(self.out, "w"))
+        json.dump(ev, open(self.out, "w", encoding="utf-8", newline=""))
         r = VE.verify_ap2(self.out)
         self.assertFalse(r["valid"])
         last = r["layers"][-1]
@@ -140,9 +140,9 @@ class TestAp2Layer(unittest.TestCase):
         self.assertTrue(r["valid"], r)
 
     def test_ap2_manomesso_invalido(self):
-        ev = json.load(open(self.out))
+        ev = json.load(open(self.out, encoding="utf-8"))
         ev["subject"] = "tampered"
-        json.dump(ev, open(self.out, "w"))
+        json.dump(ev, open(self.out, "w", encoding="utf-8", newline=""))
         r = VE.verify_ap2(self.out)
         self.assertFalse(r["valid"], "manomissione ap2 non rilevata!")
 
@@ -151,11 +151,11 @@ class TestAp2Layer(unittest.TestCase):
         import ap2_evidence
         ap2_evidence.sign_evidence(self.out)
         self.assertTrue(VE.verify_ap2(self.out)["valid"])          # control: the signed pack passes
-        ev = json.load(open(self.out))
+        ev = json.load(open(self.out, encoding="utf-8"))
         s0 = ev["producer_signatures"]["signatures"][0]
         v = s0["signature_b64"]
         s0["signature_b64"] = v[:-2] + ("A" if v[-2] != "A" else "B") + v[-1:]   # the digest stays valid: only the signature breaks
-        json.dump(ev, open(self.out, "w"), ensure_ascii=False, indent=1, sort_keys=True)
+        json.dump(ev, open(self.out, "w", encoding="utf-8", newline=""), ensure_ascii=False, indent=1, sort_keys=True)
         r = VE.verify_ap2(self.out)
         self.assertFalse(r["valid"], r)
 
@@ -164,11 +164,11 @@ class TestAp2Layer(unittest.TestCase):
         # layer catches it here (the per-artifact layer is vacuously true on an empty list)
         import hashlib
         import ap2_evidence
-        ev = json.load(open(self.out))
+        ev = json.load(open(self.out, encoding="utf-8"))
         ev["artifacts"] = []
         body = {k: v for k, v in ev.items() if k not in ("evidence_digest_sha256", "rfc3161_timestamp", "producer_signatures")}
         ev["evidence_digest_sha256"] = hashlib.sha256(ap2_evidence._canon(body)).hexdigest()
-        json.dump(ev, open(self.out, "w"))
+        json.dump(ev, open(self.out, "w", encoding="utf-8", newline=""))
         self.assertTrue(ap2_evidence.verify_evidence(self.out)["digest_ok"])        # control: the digest itself is right
         self.assertFalse(VE.verify_ap2(self.out)["valid"])
 
@@ -203,7 +203,7 @@ class TestCldmaLayer(unittest.TestCase):
                 "days_overdue": "40", "status": "active"}]
         c = C.commit_ledger(led, "s", C.SPEC_PAR30, "2026-08-20")
         self.att = os.path.join(self.d, "att.json")
-        json.dump(C.attestation(c), open(self.att, "w"))
+        json.dump(C.attestation(c), open(self.att, "w", encoding="utf-8", newline=""))
 
     def test_cldma_sano_valido(self):
         r = VE.verify_cldma(self.att)
@@ -211,10 +211,10 @@ class TestCldmaLayer(unittest.TestCase):
 
     def test_cldma_totali_falsi_invalido(self):
         # il buco A chiuso ieri: totali falsi con radice reale -> DEVE fallire
-        att = json.load(open(self.att))
+        att = json.load(open(self.att, encoding="utf-8"))
         att["numerator_minor"] = 0
         att["ratio"] = "0.000000"
-        json.dump(att, open(self.att, "w"))
+        json.dump(att, open(self.att, "w", encoding="utf-8", newline=""))
         r = VE.verify_cldma(self.att)
         self.assertFalse(r["valid"], "totali falsi non rilevati!")
 
@@ -249,7 +249,7 @@ class TestLedgerReasons(unittest.TestCase):
         if post:
             post(es)
         p = os.path.join(d, "l.jsonl")
-        with open(p, "w", encoding="utf-8") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write("".join(json.dumps(e) + "\n" for e in es))
         return VE.verify_ledger(p)["layers"][0]
 
@@ -301,10 +301,10 @@ class TestLedgerReasons(unittest.TestCase):
             es = self._chain(lambda i, e, v=v: (e.pop("idx") if v == "absent" else e.update(idx=v)) if i == 1 else None)
             d = tempfile.mkdtemp(); self.addCleanup(lambda d=d: __import__("shutil").rmtree(d, ignore_errors=True))
             p = os.path.join(d, "l.jsonl")
-            with open(p, "w", encoding="utf-8") as f:
+            with open(p, "w", encoding="utf-8", newline="") as f:
                 f.write("".join(json.dumps(e) + "\n" for e in es))
             py = [x["error"] for x in V.verify_ledger(p)["parse_errors"]]
-            out = json.loads(subprocess.run(["node", js, p], capture_output=True, text=True).stdout)
+            out = json.loads(subprocess.run(["node", js, p], capture_output=True, text=True, encoding="utf-8").stdout)
             self.assertEqual([x["error"] for x in out["errors"]], py, v)
 
     def test_missing_file_is_named(self):
@@ -320,11 +320,11 @@ class DeepManifestIsNotATraceback(unittest.TestCase):
         import subprocess
         d = tempfile.mkdtemp(prefix="ve_deep_")
         self.addCleanup(shutil.rmtree, d, True)
-        with open(os.path.join(d, "MANIFEST.json"), "w", encoding="ascii") as f:
+        with open(os.path.join(d, "MANIFEST.json"), "w", encoding="ascii", newline="") as f:
             f.write("[" * 100000)
         for cmd in ("pack", "auto"):
             p = subprocess.run([sys.executable, os.path.join(_HERE, "verify_evidence.py"), cmd, d], capture_output=True,
-                               text=True, timeout=120)
+                               text=True, encoding="utf-8", timeout=120)
             self.assertNotIn("Traceback", p.stderr, cmd)
             self.assertEqual(p.returncode, 1, (cmd, p.stderr[-300:]))
             self.assertIs(json.loads(p.stdout)["valid"], False)
