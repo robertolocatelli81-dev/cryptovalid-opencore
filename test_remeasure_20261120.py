@@ -682,7 +682,8 @@ class Rule7OneReadHoweverTheNameIsSpelled(unittest.TestCase):
                 self.assertEqual(got["valid"], want, (spelling, broken, got["ledgers"]))
 
     def test_a_name_the_system_does_not_open_is_not_another_spelling_control(self):
-        # "l.jsonl/" and "l.jsonl/." resolve to the file and are not opened as it: refused under their own name, as before
+        # "l.jsonl/" and "l.jsonl/." resolve to the file and are not opened as it. Since 0.29.0 (SPEC §31) both are refused
+        # as names by every system (Windows opened "l.jsonl/." as the file; CI run 45356889667): malformed, with the reason
         for name in ("l.jsonl/", "l.jsonl/."):
             for where in ("ledgers", "digests"):
                 E, pack, _lp, _good, _bad = self.pack(False, "same")
@@ -696,10 +697,8 @@ class Rule7OneReadHoweverTheNameIsSpelled(unittest.TestCase):
                 _redigest(mp, man)
                 r = E.verify_pack(pack)
                 self.assertFalse(r["valid"], (name, where))
-                if where == "ledgers":
-                    self.assertEqual(r["ledgers"][0].get("pq_reason"), "not_a_file_inside_the_pack", r["ledgers"])
-                else:
-                    self.assertIs(r["file_ok"][name], False, r["file_ok"])
+                self.assertEqual(r.get("refusal_class"), "malformed", r)
+                self.assertIn("a trailing '/' or '/.'", r["error"])
 
     def test_a_link_out_of_the_pack_is_not_read_control(self):
         E, pack, lp, good, _bad = self.pack(False, "same")

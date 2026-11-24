@@ -545,6 +545,8 @@ def _manifest_name_problem(name) -> Optional[str]:
         return "an absolute path"
     if ".." in name.split("/"):
         return "a '..' component"
+    if name.split("/")[-1] in ("", "."):   # "l.jsonl/" fails on POSIX, "l.jsonl/." opens the file on Windows
+        return "a trailing '/' or '/.' (it names no file the same way on every system)"
     return None
 
 

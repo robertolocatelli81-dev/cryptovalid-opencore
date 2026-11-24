@@ -276,8 +276,8 @@ release, did the same until this change. It is now the refusal of the manifest, 
 
 ### A file name of a pack names one file on every system (SPEC §31): verdict change
 
-A name in `MANIFEST.json` (`file_digests_sha256`, `ledgers[i].file`) with a backslash, a colon, a leading `/` or a `..`
-component is refused on every system (`malformed`, with the name and the reason), and `evidence_pack.py build` refuses
+A name in `MANIFEST.json` (`file_digests_sha256`, `ledgers[i].file`) with a backslash, a colon, a leading `/`, a `..`
+component, or a trailing `/` or `/.` (Windows opened `l.jsonl/.` as the file) is refused on every system (`malformed`, with the name and the reason), and `evidence_pack.py build` refuses
 such a ledger file name before writing anything. Until 0.29.0, on POSIX, a name with `\` was admitted (the choice of
 the review of 2026-10-01, NEMESIS P2), while on Windows the same name was a path that could leave the pack
 (`a\..\b.jsonl`): the same pack had two answers. A name with a lone surrogate is now refused on every system as well

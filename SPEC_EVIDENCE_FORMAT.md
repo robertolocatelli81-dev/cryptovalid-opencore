@@ -2741,8 +2741,9 @@ of its own (Cedulon: 500) keeps it.
 A name in `file_digests_sha256` or in `ledgers[i].file` of `MANIFEST.json` is a relative path whose components are
 separated by `/` only. It is refused (`malformed`, the reason naming the first such name and why) when it is empty or
 not a string, contains NUL, is not encodable as UTF-8 (a lone surrogate), contains a backslash `\`, contains a colon `:`
-(a drive or a device, and on Windows an alternate data stream), starts with `/` or is absolute on the system, or has a
-`..` component. `evidence_pack.py build` refuses a ledger whose file name would break the rule, before writing anything.
+(a drive or a device, and on Windows an alternate data stream), starts with `/` or is absolute on the system, has a
+`..` component, or ends with `/` or `/.` (`l.jsonl/` fails on POSIX, `l.jsonl/.` opens the file on Windows; `./l.jsonl`
+is admitted: it names the same file everywhere). `evidence_pack.py build` refuses a ledger whose file name would break the rule, before writing anything.
 The same rule is PKWARE's for ZIP (APPNOTE 6.3.10, 2022-11-01, §4.4.17.1, read on 2026-11-24 at
 https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT: "The path stored MUST NOT contain a drive or device
 letter, or a leading slash. All slashes MUST be forward slashes '/' as opposed to backwards slashes '\'").
