@@ -96,6 +96,34 @@ func truncRunes(s string, n int) string {
 	return s
 }
 
+// scanLinesOnce is bufio.ScanLines that does not search the same bytes twice. bufio.ScanLines looks for "\n" from the
+// start of the pending line at each call, and a FIFO gives 64 KiB per read: 257 MiB with no line feed cost about 4 000
+// passes over a growing buffer, 56.6 s against 0.4 s for verifier.py (measured 2026-11-24; a test's 60 s limit failed
+// once under load). The offset searched so far is kept until a line is returned.
+func scanLinesOnce() bufio.SplitFunc {
+	searched := 0
+	return func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data[searched:], '\n'); i >= 0 {
+			j := searched + i
+			searched = 0
+			return j + 1, dropCR(data[:j]), nil
+		}
+		searched = len(data)
+		if atEOF && len(data) > 0 {
+			searched = 0
+			return len(data), dropCR(data), nil
+		}
+		return 0, nil, nil
+	}
+}
+
+func dropCR(b []byte) []byte {
+	if len(b) > 0 && b[len(b)-1] == '\r' {
+		return b[:len(b)-1]
+	}
+	return b
+}
+
 // VerifyLedger reads JSONL in STREAMING (one entry in memory at a time — council 14/09: a multi-GB ledger must
 // not be loaded whole) and recomputes the chain. Fail-closed: any unparsable line is a failure; a scanner
 // error (line too long, I/O) is a failure, not a silent stop.
@@ -103,6 +131,7 @@ func VerifyLedger(r io.Reader) Verdict {
 	v := Verdict{Failures: []string{}, Scope: scope}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), maxInputBytes+1) // +1: bufio refuses a token as long as its whole buffer
+	sc.Split(scanLinesOnce())
 	hashOK, linkOK := true, true
 	prev := Genesis
 	line, i := 0, 0

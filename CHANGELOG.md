@@ -330,7 +330,10 @@ a device. The fake openssl of the tests is, on Windows, this Python's venv launc
 there is an NTSTATUS exit). After the third run (45377477990): a directory given as an input file is "not a regular
 file" on Windows too (it was taken for an unreadable or missing file); the Go verifier waits for a FIFO with select
 on macOS (the runtime poller read a FIFO with no writer yet as empty); the JS verifier reads a fast FIFO without
-pausing between full reads; the Java verifier writes stderr in UTF-8 and its receipt with "\n" on every system. Not fixed here: ap2-evidence-pack writes its evidence file in text mode (`os.fdopen(fd, "w")`), so on Windows
+pausing between full reads; the Java verifier writes stderr in UTF-8 and its receipt with "\n" on every system.
+The Go verifier read a FIFO in quadratic time (bufio.ScanLines searched the pending line again at each 64 KiB read:
+257 MiB without a line feed took 56.6 s against 0.4 s for verifier.py, measured 2026-11-24); its line splitter now
+searches each byte once: 2.9 s. The Java verifier's source is ASCII (javac before JDK 18 read it in the code page). Not fixed here: ap2-evidence-pack writes its evidence file in text mode (`os.fdopen(fd, "w")`), so on Windows
 it gets CRLF and its own digest no longer matches; the fix belongs to that package.
 Whether the other-os job is green with these changes is measured by the CI of the release branch, not here.
 
