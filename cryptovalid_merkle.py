@@ -330,7 +330,7 @@ def _read_file(path: str, limit: int = MAX_TILE_FILE):
     except FileNotFoundError:
         return None
     except OSError as e:
-        raise TileError(f"{path}: {e.strerror}") from None
+        raise TileError(f"{path}: {os.strerror(e.errno) if isinstance(e.errno, int) else e.strerror}") from None
     if not stat.S_ISREG(st.st_mode):
         raise TileError(f"{path}: not a regular file (links are not followed)")
     if st.st_size > limit:
@@ -339,14 +339,14 @@ def _read_file(path: str, limit: int = MAX_TILE_FILE):
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0)
                      | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
     except OSError as e:
-        raise TileError(f"{path}: {e.strerror}") from None
+        raise TileError(f"{path}: {os.strerror(e.errno) if isinstance(e.errno, int) else e.strerror}") from None
     try:
         with os.fdopen(fd, "rb") as f:
             if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
                 raise TileError(f"{path}: not a regular file (links are not followed)")
             return f.read(limit + 1)
     except OSError as e:
-        raise TileError(f"{path}: {e.strerror}") from None
+        raise TileError(f"{path}: {os.strerror(e.errno) if isinstance(e.errno, int) else e.strerror}") from None
 
 
 def _decode(b: bytes, encoding: str, path: str) -> bytes:
@@ -426,7 +426,7 @@ def verify_tiles(directory: str, size: int, root=None, profile: str = "tlog-tile
                     except FileNotFoundError:
                         return None
                     except OSError as e:
-                        raise TileError(f"{'/'.join(parts)}: {cur}: {e.strerror}") from None
+                        raise TileError(f"{'/'.join(parts)}: {cur}: {os.strerror(e.errno) if isinstance(e.errno, int) else e.strerror}") from None
                     if not stat.S_ISDIR(st.st_mode):
                         raise TileError(f"{'/'.join(parts)}: {cur} is not a directory (links are not followed)")
                 return _read_file(os.path.join(cur, parts[-1]))

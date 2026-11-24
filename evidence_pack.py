@@ -663,7 +663,7 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
         except (verifier.InputNotRegular, FileNotFoundError, NotADirectoryError):
             file_ok[name] = False              # absent or not a regular file: digest_mismatch, as before
         except OSError as e:
-            return _refused(f"input_unreadable: file {name}: {e.strerror or type(e).__name__}", "malformed")
+            return _refused(f"input_unreadable: file {name}: {os.strerror(e.errno) if isinstance(e.errno, int) else type(e).__name__}", "malformed")
         sealed.append(("verified", None) if file_ok[name] else ("contradicted", "digest_mismatch", f"file {name}"))
     if not file_ok:
         sealed.append(("contradicted", "digest_mismatch", "no file listed in file_digests_sha256"))
@@ -690,7 +690,7 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
             except (verifier.InputNotRegular, FileNotFoundError, NotADirectoryError):
                 pass   # not a regular file: refused just below, as before
             except OSError as e:
-                return _refused(f"input_unreadable: file {lm['file']}: {e.strerror or type(e).__name__}", "malformed")
+                return _refused(f"input_unreadable: file {lm['file']}: {os.strerror(e.errno) if isinstance(e.errno, int) else type(e).__name__}", "malformed")
         if not (_real_inside(p) and _file_key(lm["file"]) in snap_of):
             ledger_results.append({"file": lm["file"], "hash_pass": False, "sig_pass": False, "untruncated": False,
                                    "pq_protected": False, "pq_reason": "not_a_file_inside_the_pack"})

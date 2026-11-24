@@ -579,9 +579,9 @@ def verify_consistency_b64(old_size: int, old_root: bytes, new_size: int, new_ro
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import emit, KEY_MAX_BYTES, OutputNotWritten, Parser, read_input_text, receipt_cli, say, write_output
+    from verifier import os_error_text, emit, KEY_MAX_BYTES, OutputNotWritten, Parser, read_input_text, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import emit, KEY_MAX_BYTES, OutputNotWritten, Parser, read_input_text, receipt_cli, say, write_output
+    from opencore.verifier import os_error_text, emit, KEY_MAX_BYTES, OutputNotWritten, Parser, read_input_text, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -620,7 +620,7 @@ def main(argv=None, prog=None, cmd_name=None) -> int:
             note = read_note_file(a.checkpoint or os.path.join(a.directory, "checkpoint"))
             r = verify_note(note, a.vkey)
         except (NoteError, OSError) as e:
-            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+            emit(json.dumps({"stato": "ERRORE", "motivo": os_error_text(e)}, ensure_ascii=False)); return 2
         out = {"stato": r["stato"], "checkpoint": {k: v for k, v in r.items() if k not in ("text", "stato")}, "tiles": None}
         if r["stato"] == "OK":
             cp = parse_checkpoint(r["text"])
@@ -650,14 +650,14 @@ def main(argv=None, prog=None, cmd_name=None) -> int:
         except OutputNotWritten:
             raise
         except (NoteError, OSError) as e:
-            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+            emit(json.dumps({"stato": "ERRORE", "motivo": os_error_text(e)}, ensure_ascii=False)); return 2
         emit(note.decode("utf-8"), end=""); return 0
     if a.cmd == "verify":
         try:
             note = read_note_file(a.note)
             r = verify_note(note, a.vkey)
         except (NoteError, OSError) as e:   # a malformed vkey or an unreadable file is the caller's error: JSON, exit 2
-            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+            emit(json.dumps({"stato": "ERRORE", "motivo": os_error_text(e)}, ensure_ascii=False)); return 2
         emit(json.dumps({k: (v if k != "text" else None) for k, v in r.items()}, ensure_ascii=False))
         return 0 if r["stato"] == "OK" else 1
     try:
@@ -666,7 +666,7 @@ def main(argv=None, prog=None, cmd_name=None) -> int:
             emit(vkey(a.name, TYPE_MLDSA44, mldsa44_pubkey_from_seed(seed))); return 0
         emit(vkey(a.name, TYPE_COSIG_V1 if a.cosigner else TYPE_ED25519, pubkey_from_seed(seed))); return 0
     except (NoteError, OSError) as e:
-        emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+        emit(json.dumps({"stato": "ERRORE", "motivo": os_error_text(e)}, ensure_ascii=False)); return 2
 
 
 if __name__ == "__main__":

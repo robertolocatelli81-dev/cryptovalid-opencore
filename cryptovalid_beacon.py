@@ -400,7 +400,7 @@ def _read(src: Union[str, bytes, bytearray], what: str, limit: int) -> bytes:
         except verifier.InputNotRegular:
             raise Refused("input_unreadable", f"{what}: not a regular file") from None
         except OSError as e:
-            raise Refused("input_unreadable", f"{what}: {e.strerror or e}") from None
+            raise Refused("input_unreadable", f"{what}: {os.strerror(e.errno) if isinstance(e.errno, int) else e}") from None
     else:
         raise Refused("input_unreadable", f"{what}: a path or bytes")
     if len(b) > limit:
@@ -697,7 +697,7 @@ def _witnessed(checkpoint, log_vkeys: List[str], witness_vkeys: List[str], min_w
     try:
         note = C.read_note_file(checkpoint) if isinstance(checkpoint, str) else bytes(checkpoint)
     except (C.NoteError, OSError, TypeError) as e:
-        raise Refused("checkpoint_malformed", str(e)[:160]) from None
+        raise Refused("checkpoint_malformed", verifier.os_error_text(e)[:160]) from None
     if hashlib.sha256(note).hexdigest() not in set(pack_digests.values()):
         raise Invalid("checkpoint_not_in_pack", "the checkpoint is not a file of the pack: it is not under the token")
     now = int(gen_time_instant(gen_time))   # a cosignature timestamp t (whole seconds) is not after genTime iff t <= floor

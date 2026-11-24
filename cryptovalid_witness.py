@@ -63,7 +63,7 @@ def _load_state(path: str) -> Dict:
     try:
         st = json.loads(read_text_regular(path))   # SPEC §5 step 0: the witness's own state, a regular file
     except (OSError, ValueError) as e:      # unreadable or not JSON: a clear error, not a dead connection
-        raise C.NoteError(f"witness state file unreadable: {e}") from None
+        raise C.NoteError(f"witness state file unreadable: {os_error_text(e)}") from None
     if not isinstance(st, dict) or not isinstance(st.get("origins"), dict):
         raise C.NoteError("witness state file malformed")
     if not isinstance(st.get("pending", {}), dict) or not isinstance(st.get("proofs_seen", []), list) or not isinstance(st.get("refusals", {}), dict):
@@ -595,7 +595,7 @@ class WitnessService:
                 r = witness_cosign(self.state_path, note, vk, self.name, self.seed, proof, timestamp, old_size=old_size,
                                    expected_origin=origin, pq_seed=self.pq_seed)
         except (C.NoteError, OSError) as e:   # state file unreadable, disk full, config error: 500 with the reason, never a dropped connection
-            sys.stderr.write(f"witness: {e}\n")
+            sys.stderr.write(f"witness: {os_error_text(e)}\n")
             return 500, b"witness error\n", "text/plain"
         if r["http_status"] == 409:
             return 409, f"{r['stored_size']}\n".encode(), "text/x.tlog.size"
@@ -713,9 +713,9 @@ def submit_checkpoint(url: str, note: bytes, leaves: List[bytes], witness_vkeys:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import append_line, emit, file_lock, open_regular, OutputNotWritten, Parser, read_input, read_regular, read_text_regular, receipt_cli, refuse_directory, say, write_output
+    from verifier import os_error_text, append_line, emit, file_lock, open_regular, OutputNotWritten, Parser, read_input, read_regular, read_text_regular, receipt_cli, refuse_directory, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import append_line, emit, file_lock, open_regular, OutputNotWritten, Parser, read_input, read_regular, read_text_regular, receipt_cli, refuse_directory, say, write_output
+    from opencore.verifier import os_error_text, append_line, emit, file_lock, open_regular, OutputNotWritten, Parser, read_input, read_regular, read_text_regular, receipt_cli, refuse_directory, say, write_output
 
 
 @receipt_cli
@@ -751,7 +751,7 @@ def main(argv=None) -> int:
             svc = WitnessService(a.state, a.name, C.load_seed_hex(a.key), a.log_vkey, origins,
                                  pq_seed=C.load_seed_hex(a.pq_key) if a.pq_key else None)
         except (C.NoteError, OSError) as e:
-            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+            emit(json.dumps({"stato": "ERRORE", "motivo": os_error_text(e)}, ensure_ascii=False)); return 2
         httpd = serve(svc, a.host, a.port, a.prefix)
         try:
             emit(json.dumps({"listening": f"http://{httpd.server_address[0]}:{httpd.server_address[1]}{a.prefix}/add-checkpoint",
@@ -776,7 +776,7 @@ def main(argv=None) -> int:
         except OutputNotWritten:
             raise
         except (C.NoteError, OSError, ValueError) as e:
-            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+            emit(json.dumps({"stato": "ERRORE", "motivo": os_error_text(e)}, ensure_ascii=False)); return 2
         emit(json.dumps({k: v for k, v in r.items() if k != "note"}, ensure_ascii=False)); return 0 if r["stato"] == "OK" else 1
     if a.cmd == "cosign":
         refuse_directory(a.out)   # 0.20.3: before the state records the cosignature, never after it
@@ -790,7 +790,7 @@ def main(argv=None) -> int:
         except OutputNotWritten:
             raise
         except (C.NoteError, OSError, ValueError) as e:
-            emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+            emit(json.dumps({"stato": "ERRORE", "motivo": os_error_text(e)}, ensure_ascii=False)); return 2
         if r["note"]:
             try:   # 0.20.3: whole at --out, or exit 74 — and the line says the state already records the cosignature
                 write_output(a.out, r["note"])
@@ -803,7 +803,7 @@ def main(argv=None) -> int:
         note = read_regular(a.note)   # SPEC §5 step 0: opened once without blocking
         r = verify_witnessed(note, a.log_vkey, a.witness_vkey, a.min_witnesses, a.max_age, clock_skew_s=a.clock_skew, expected_origin=a.origin)
     except (C.NoteError, OSError) as e:
-        emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+        emit(json.dumps({"stato": "ERRORE", "motivo": os_error_text(e)}, ensure_ascii=False)); return 2
     emit(json.dumps(r, ensure_ascii=False)); return 0 if r["stato"] == "OK" else 1
 
 

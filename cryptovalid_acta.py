@@ -1149,9 +1149,9 @@ def _spki_material(data: bytes) -> Any:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import OutputNotWritten, Parser, emit, receipt_cli, say, write_output
+    from verifier import os_error_text, OutputNotWritten, Parser, emit, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import OutputNotWritten, Parser, emit, receipt_cli, say, write_output
+    from opencore.verifier import os_error_text, OutputNotWritten, Parser, emit, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -1242,7 +1242,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except OutputNotWritten:
         raise
     except (OSError, ValueError, TypeError, KeyError, RecursionError, json.JSONDecodeError) as ex:
-        emit(json.dumps({"ok": False, "error": f"{type(ex).__name__}: {ex}"})); return 2
+        emit(json.dumps({"ok": False, "error": f"{type(ex).__name__}: {os_error_text(ex)}"})); return 2
     except ImportError as ex:
         emit(json.dumps({"ok": False, "error": f"dependency missing: {ex}"})); return 77
     return 2

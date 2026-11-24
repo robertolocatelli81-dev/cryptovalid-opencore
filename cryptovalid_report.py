@@ -420,7 +420,7 @@ def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = 
     except (OSError, ValueError, RecursionError) as e:
         # fail-closed E pulito: un auditor merita un errore leggibile, mai un traceback
         return {"valid": False, "html": None, "pdf": None,
-                "error": f"MANIFEST.json unreadable: {type(e).__name__}: {str(e)[:120]}"}
+                "error": f"MANIFEST.json unreadable: {type(e).__name__}: {os_error_text(e)[:120]}"}
     verification = evidence_pack.verify_pack(pack_dir)           # the ONLY verdict source
     lres = lotl_status(manifest, member_states=lotl_ms) if lotl else \
         {"checked": False, "qualified": None}
@@ -450,9 +450,9 @@ def generate_report(pack_dir: str, out: Optional[str] = None, html_only: bool = 
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, _reject_dup, emit, read_text_regular, receipt_cli, say, write_output
+    from verifier import os_error_text, Parser, _reject_dup, emit, read_text_regular, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, _reject_dup, emit, read_text_regular, receipt_cli, say, write_output
+    from opencore.verifier import os_error_text, Parser, _reject_dup, emit, read_text_regular, receipt_cli, say, write_output
 
 
 @receipt_cli

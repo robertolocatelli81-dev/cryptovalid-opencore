@@ -398,7 +398,7 @@ def _read_pin(path: str, what: str) -> bytes:
     except InputTooLarge:
         raise ValueError(f"{what}: {path!r} is larger than {PIN_MAX_BYTES} bytes") from None
     except OSError as e:
-        raise ValueError(f"{what}: cannot read {path!r}: {e.strerror or e}") from None
+        raise ValueError(f"{what}: cannot read {path!r}: {os.strerror(e.errno) if isinstance(e.errno, int) else e}") from None
 
 
 def _pem_certs(items) -> bytes:

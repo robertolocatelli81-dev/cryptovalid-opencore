@@ -286,6 +286,25 @@ def _write_fd(fd: int, data) -> None:
         data = data[n:]
 
 
+def os_reason(e: BaseException) -> str:
+    """The text of an OSError in a reason: the C library's text for its errno (os.strerror), the same on every system,
+    else its own text. Windows' own text differs ("The system cannot find the file specified" where Linux and macOS
+    say "No such file or directory"), so a reason, and the receipt that carries it, depended on the system."""
+    n = getattr(e, "errno", None)
+    return os.strerror(n) if isinstance(n, int) else str(getattr(e, "strerror", None) or e)
+
+
+def os_error_text(e: BaseException) -> str:
+    """str(e), with an OSError that carries an errno written as POSIX writes it on every system: "[Errno 2] No such file
+    or directory: 'x'" where Windows' own API says "[WinError 2] The system cannot find the file specified: 'x'"."""
+    if isinstance(e, OSError) and isinstance(e.errno, int) and type(e).__str__ is OSError.__str__:
+        text = f"[Errno {e.errno}] {os.strerror(e.errno)}"
+        if e.filename is not None:
+            text += f": {e.filename!r}" + (f" -> {e.filename2!r}" if e.filename2 is not None else "")
+        return text
+    return str(e)
+
+
 def _fchmod(fd: int, path: str, mode: int) -> None:
     """os.fchmod, or os.chmod by name where there is none (Windows before Python 3.13): there a mode only sets or
     clears the read-only attribute"""
@@ -326,7 +345,7 @@ def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = No
     try:
         fd = os.open(tmp, flags, mode)
     except OSError as e:
-        raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+        raise OutputNotWritten(f"{path}: {os_reason(e)}") from None
     try:
         try:
             if exact_mode is not None:
@@ -339,7 +358,7 @@ def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = No
             os.close(fd)
     except OSError as e:
         _unlink_quietly(tmp)
-        raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+        raise OutputNotWritten(f"{path}: {os_reason(e)}") from None
     return tmp
 
 
@@ -358,7 +377,7 @@ def _replace_target(path: str):
         try:
             os.close(os.open(real, os.O_WRONLY | getattr(os, "O_CLOEXEC", 0)))
         except OSError as e:
-            raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+            raise OutputNotWritten(f"{path}: {os_reason(e)}") from None
     return real, st
 
 
@@ -384,7 +403,7 @@ def commit_tmp(tmp: str, path: str) -> None:
         _replace(tmp, path)
     except OSError as e:
         _unlink_quietly(tmp)
-        raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+        raise OutputNotWritten(f"{path}: {os_reason(e)}") from None
 
 
 def refuse_directory(path: str) -> None:
@@ -410,7 +429,7 @@ def write_output(path: str, data, mode: int = 0o666) -> None:
             finally:
                 os.close(fd)
         except OSError as e:
-            raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+            raise OutputNotWritten(f"{path}: {os_reason(e)}") from None
         return
     # an existing file keeps its mode (a caller that asks for a mode, the key files, gets that mode)
     keep = stat.S_IMODE(st.st_mode) if st is not None and mode == 0o666 else None
@@ -429,14 +448,14 @@ def write_new(path: str, data, mode: int = 0o600) -> None:
     except FileExistsError:
         raise
     except OSError as e:
-        raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+        raise OutputNotWritten(f"{path}: {os_reason(e)}") from None
     finally:
         _unlink_quietly(tmp)
     if late:
         try:
             os.chmod(path, mode)
         except OSError as e:
-            raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
+            raise OutputNotWritten(f"{path}: {os_reason(e)}") from None
 
 
 def copy_output(src: str, path: str) -> None:
@@ -451,7 +470,7 @@ def copy_output(src: str, path: str) -> None:
     tmp = f"{path}.{secrets.token_hex(8)}.tmp"
 
     def lost(e):
-        return OutputNotWritten(f"{path}: {e.strerror or e}")
+        return OutputNotWritten(f"{path}: {os_reason(e)}")
     with os.fdopen(open_regular(src, float("inf")), "rb") as f:   # SPEC §5 step 0: a regular file, opened once without blocking
         try:
             fd = os.open(tmp, flags, 0o666)
@@ -566,7 +585,7 @@ def append_line(path: str, line: bytes, *, mode: int = 0o666, opened=None, sync:
                 except OSError:   # the truncation happened; only its flush to the disk failed
                     left = "the ledger was truncated back to the bytes it had (that truncation could not be synced)"
             if isinstance(e, OSError):
-                raise OutputNotWritten(f"ledger {path}: {e.strerror or e}; nothing was recorded, {left}") from None
+                raise OutputNotWritten(f"ledger {path}: {os_reason(e)}; nothing was recorded, {left}") from None
             raise
     finally:
         if own:
@@ -1221,7 +1240,8 @@ def _verify_ledger(path, algo, tip, trusted_pubkey_hex, require_tip, tip_not_bef
                                        trusted_pq_pubkey_b64=trusted_pq_pubkey_b64)
         except (OSError, ValueError, ImportError) as e:   # SPEC §22 rule 2, rows 1-3: load_tip's ValueError carries the text
             tip_check = {"ok": False, "error": (str(e) if str(e).startswith("tip_unreadable:")
-                                                else f"tip_unreadable: {type(e).__name__}: {str(e)[:120]}"), "pq_protected": False}
+                                                else f"tip_unreadable: {type(e).__name__}: {os_error_text(e)[:120]}"),
+                         "pq_protected": False}
         tip_check["tip_path"] = tip_file
         tip_check["checked"] = True
         if not tip_check["ok"]:

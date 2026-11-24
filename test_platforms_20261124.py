@@ -287,5 +287,29 @@ class FileLock(unittest.TestCase):
             self.assertLess(time.monotonic() - t2, 1.0)
 
 
+class ErrorTexts(unittest.TestCase):
+    """Windows' API texts differ from the C library's ("The system cannot find the file specified" for ENOENT), so a
+    reason that carried e.strerror or str(e) depended on the system (test_auto_closed on windows-latest)."""
+
+    WIN = FileNotFoundError(2, "The system cannot find the file specified", "C:\\x\\nope.jsonl")
+
+    def test_the_c_library_text_on_every_system(self):
+        import verifier as V
+        self.assertEqual(V.os_reason(self.WIN), os.strerror(2))
+        self.assertEqual(V.os_error_text(self.WIN), "[Errno 2] %s: 'C:\\\\x\\\\nope.jsonl'" % os.strerror(2))
+        self.assertEqual(V.os_error_text(ValueError("tip_unreadable: x")), "tip_unreadable: x")   # not an OSError: as is
+        self.assertEqual(V.os_error_text(OSError("short write")), "short write")                   # no errno: as is
+
+    def test_verify_auto_names_the_missing_path_as_everywhere(self):
+        from unittest import mock
+        import verify_evidence as VE
+
+        def windows_stat(path, *a, **k):
+            raise ErrorTexts.WIN
+        with mock.patch.object(os, "stat", windows_stat):
+            r = VE.verify_auto("C:\\x\\nope.jsonl")
+        self.assertIn("cannot read the path (FileNotFoundError: %s);" % os.strerror(2), r["layers"][0]["detail"])
+
+
 if __name__ == "__main__":
     unittest.main()

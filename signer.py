@@ -539,7 +539,7 @@ def _main(argv: Optional[List[str]] = None) -> int:
         try:
             r = verify_file(a.ledger, a.pubkey, a.pq_pubkey, require_pq=a.require_pq)
         except OSError as e:   # absent, a FIFO, a device, over the bound: named, exit 1 (until 0.26.0 a traceback or a wait)
-            return _emit(json.dumps({"ok": False, "error": f"unreadable: {type(e).__name__}: {e.strerror or e}"}, indent=1), 1)
+            return _emit(json.dumps({"ok": False, "error": f"unreadable: {type(e).__name__}: {os.strerror(e.errno) if isinstance(e.errno, int) else e}"}, indent=1), 1)
         return _emit(json.dumps(r, indent=1), 0 if (r["ok"] and (r["pq_protected"] is True or not a.pq_pubkey)) else 1)
     p.print_help(); return 2
 

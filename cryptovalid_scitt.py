@@ -317,9 +317,9 @@ def _read_bytes(path: str) -> bytes:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import append_line, emit, file_lock, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
+    from verifier import os_error_text, append_line, emit, file_lock, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import append_line, emit, file_lock, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
+    from opencore.verifier import os_error_text, append_line, emit, file_lock, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
 
 
 @receipt_cli
@@ -361,7 +361,7 @@ def main(argv=None) -> int:
     except OutputNotWritten:
         raise
     except (ScittError, OSError, ValueError) as e:
-        emit(json.dumps({"stato": "ERRORE", "motivo": str(e)}, ensure_ascii=False)); return 2
+        emit(json.dumps({"stato": "ERRORE", "motivo": os_error_text(e)}, ensure_ascii=False)); return 2
 
 
 if __name__ == "__main__":

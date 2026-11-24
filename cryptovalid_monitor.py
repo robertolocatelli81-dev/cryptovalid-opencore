@@ -234,7 +234,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         v = run(a.ledger, a.state, a.keyfile, a.max_silence_h, a.trusted_pubkey, a.sth_file, a.match or None)
     except (ValueError, OSError) as e:   # OSError: SPEC §5 step 0, a path that is not a regular file
-        emit(json.dumps({"ok": False, "error": str(e)})); return 2
+        emit(json.dumps({"ok": False, "error": V.os_error_text(e)})); return 2
     emit(json.dumps(v, indent=1))
     return 0 if v["ok"] else 2
 

@@ -376,9 +376,9 @@ TIP_UNREADABLE_OBJECT = "tip_unreadable: not a JSON object"
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import check_ledger_id_arg, emit, KEY_MAX_BYTES, _Once, Parser, read_input_text, receipt_cli, say, write_output
+    from verifier import os_error_text, check_ledger_id_arg, emit, KEY_MAX_BYTES, _Once, Parser, read_input_text, receipt_cli, say, write_output
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import check_ledger_id_arg, emit, KEY_MAX_BYTES, _Once, Parser, read_input_text, receipt_cli, say, write_output
+    from opencore.verifier import os_error_text, check_ledger_id_arg, emit, KEY_MAX_BYTES, _Once, Parser, read_input_text, receipt_cli, say, write_output
 
 
 @receipt_cli
@@ -416,7 +416,7 @@ def main(argv=None) -> int:
         t = chain_tip(a.ledger)
         tip = load_tip(a.tip or tip_path_for(a.ledger))
     except (OSError, ValueError) as e:      # a missing/malformed file is a JSON error, never a traceback
-        err = str(e) if str(e).startswith("tip_unreadable:") else f"tip_unreadable: {type(e).__name__}: {str(e)[:160]}"
+        err = os_error_text(e) if os_error_text(e).startswith("tip_unreadable:") else f"tip_unreadable: {type(e).__name__}: {os_error_text(e)[:160]}"
         emit(json.dumps({"ok": False, "error": err}, indent=1))
         return 1
     r = check_tip(t["entries"], t["tip_sha256"], tip, a.trusted_pubkey, a.not_before,

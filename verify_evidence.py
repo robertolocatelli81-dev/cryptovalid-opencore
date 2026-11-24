@@ -521,12 +521,12 @@ def verify_auto(path: str) -> dict:
     try:
         mode = os.stat(path).st_mode
     except OSError as e:
-        return _not_recognised(f"cannot read the path ({type(e).__name__}: {e.strerror or e})")
+        return _not_recognised(f"cannot read the path ({type(e).__name__}: {os.strerror(e.errno) if isinstance(e.errno, int) else e})")
     if stat.S_ISDIR(mode):
         try:
             os.listdir(path)
         except OSError as e:   # SPEC §12: a path that cannot be read; without this an unreadable pack "has no MANIFEST.json"
-            return _not_recognised(f"cannot read the directory ({type(e).__name__}: {e.strerror or e})")
+            return _not_recognised(f"cannot read the directory ({type(e).__name__}: {os.strerror(e.errno) if isinstance(e.errno, int) else e})")
         if os.path.exists(os.path.join(path, "MANIFEST.json")):
             return verify_pack(path)
         import glob
@@ -548,7 +548,7 @@ def verify_auto(path: str) -> dict:
     except _NotRecognised as e:
         return _not_recognised(str(e))
     except OSError as e:
-        return _not_recognised(f"cannot read the file ({type(e).__name__}: {e.strerror or e})")
+        return _not_recognised(f"cannot read the file ({type(e).__name__}: {os.strerror(e.errno) if isinstance(e.errno, int) else e})")
     if fmt == "checkpoint":
         cp = found["checkpoint"]
         return _rollup("checkpoint", [_check("auto.checkpoint", "SKIP", (
@@ -719,7 +719,7 @@ def load_profile(path: str) -> dict:
     except verifier.InputTooLarge:
         raise ProfileError(f"larger than {PROFILE_LIMIT} bytes") from None
     except (OSError, ValueError) as e:   # InputNotRegular is an OSError or ValueError there
-        raise ProfileError(f"cannot read it ({type(e).__name__}: {getattr(e, 'strerror', None) or e})") from None
+        raise ProfileError(f"cannot read it ({type(e).__name__}: {os.strerror(e.errno) if isinstance(getattr(e, 'errno', None), int) else e})") from None
     if raw.startswith(b"\xef\xbb\xbf"):
         raise ProfileError("starts with a UTF-8 byte order mark")
     try:
