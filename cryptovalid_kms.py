@@ -817,7 +817,26 @@ class NetHsmBackend:
                                               "Content-Type": "application/json"})
         with _net.open_url(req, 30, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP) as r:
             raw = _net.read_body(r)   # SPEC v0.13 §21 rule 6: bounded
-            return json_loads(raw.decode()) if raw else {}
+        try:
+            return json_loads(raw.decode("utf-8")) if raw else {}
+        except ValueError as e:   # not UTF-8, not JSON, nested too deep: a refusal named, never a traceback
+            raise RuntimeError(f"NetHSM answer to {method} {path} is not JSON: {type(e).__name__}") from None
+
+    @staticmethod
+    def _b64(d, *path) -> bytes:
+        """the base64 string at `path` of a NetHSM answer, decoded strictly; anything else is a named refusal (until
+        0.29.0 a malformed answer was a KeyError or a TypeError: audit of 2026-11-24 from pq-scitt)"""
+        v = d
+        for k in path:
+            if not isinstance(v, dict) or k not in v:
+                raise RuntimeError(f"NetHSM answer malformed: no {'.'.join(path)}")
+            v = v[k]
+        if not isinstance(v, str):
+            raise RuntimeError(f"NetHSM answer malformed: {'.'.join(path)} is not a string")
+        try:
+            return base64.b64decode(v, validate=True)
+        except ValueError:
+            raise RuntimeError(f"NetHSM answer malformed: {'.'.join(path)} is not base64") from None
 
     def keygen(self) -> str:
         """Genera la Ed25519 SULL'HSM (serve il ruolo Administrator)."""
@@ -828,13 +847,16 @@ class NetHsmBackend:
 
     def public_key_hex(self) -> str:
         d = self._req("GET", f"keys/{self._key}")
-        return _raw_from_spki(base64.b64decode(d["public"]["data"])).hex()
+        try:
+            return _raw_from_spki(self._b64(d, "public", "data")).hex()
+        except (ValueError, TypeError) as e:
+            raise RuntimeError(f"NetHSM public key {self._key!r} is not Ed25519: {e}") from None
 
     def sign(self, message: bytes) -> bytes:
         d = self._req("POST", f"keys/{self._key}/sign",
                       {"mode": "EdDSA",
                        "message": base64.b64encode(message).decode()})
-        sig = base64.b64decode(d["signature"])
+        sig = self._b64(d, "signature")
         if len(sig) != 64:
             raise RuntimeError(f"expected 64-byte Ed25519 signature, got {len(sig)}")
         return sig

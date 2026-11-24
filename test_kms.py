@@ -146,6 +146,35 @@ def _nethsm_demo_reachable():
         return False
 
 
+class TestNetHsmMalformedAnswers(unittest.TestCase):
+    """every malformed NetHSM answer is a named RuntimeError (until 0.29.0 a KeyError or a TypeError)"""
+
+    def test_each_shape(self):
+        from unittest import mock
+        import cryptovalid_kms as K
+        with mock.patch.dict(os.environ, {"NETHSM_PASS": "p"}):
+            b = K.NetHsmBackend("http://127.0.0.1:9", "k", "u")
+        answers = [{}, [], None, 5, {"public": None}, {"public": {"data": 5}}, {"public": {"data": "!!"}},
+                   {"public": {"data": "AAAA"}}, {"signature": None}, {"signature": "@@"}, {"signature": "AAAA"}]
+        for a in answers:
+            with mock.patch.object(b, "_req", lambda *x, a=a, **k: a):
+                for call in (b.public_key_hex, lambda: b.sign(b"m")):
+                    with self.assertRaises(RuntimeError, msg=(a, call)):
+                        call()
+        raw = [b"\xff", b"{", b"[" * 600 + b"]" * 600]
+        for body in raw:
+            class R:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *x):
+                    return False
+            with mock.patch.object(K._net, "open_url", lambda *x, **k: R()), \
+                    mock.patch.object(K._net, "read_body", lambda r, *x, body=body: body):
+                with self.assertRaises(RuntimeError, msg=body):
+                    b._req("GET", "keys/k")
+
+
 class TestNetHsmUriAndErrors(unittest.TestCase):
     """Rami senza rete: contratto URI e errori puliti."""
 
