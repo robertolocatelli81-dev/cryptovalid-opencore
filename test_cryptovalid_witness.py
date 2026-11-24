@@ -953,8 +953,13 @@ class TestWitness(unittest.TestCase):
         r = subprocess.run(cmd + [self.tmp + os.sep], capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 74, r.stderr)
         self.assertFalse(os.path.exists(self.st1), "the state recorded a cosignature before --out was refused")
-        r = subprocess.run(["bash", "-c", 'ulimit -f 0; exec "$@"', "_"] + cmd + [os.path.join(self.tmp, "o.note")],
-                           capture_output=True, text=True, encoding="utf-8")
+        from test_platforms_20261124 import BASH, full_sink
+        if os.name == "nt":   # no file-size limit on Windows: --out on a full volume (ENOSPC), its equivalent here
+            r = subprocess.run(cmd + [os.path.join(os.path.dirname(full_sink()), "o.note")], capture_output=True, text=True,
+                               encoding="utf-8")
+        else:
+            r = subprocess.run([BASH, "-c", 'ulimit -f 0; exec "$@"', "_"] + cmd + [os.path.join(self.tmp, "o.note")],
+                               capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 74, r.stdout + r.stderr)
         self.assertEqual(r.stdout, "")
 

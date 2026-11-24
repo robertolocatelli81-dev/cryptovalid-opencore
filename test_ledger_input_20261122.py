@@ -300,7 +300,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
     @unittest.skipUnless(shutil.which("bash"), "needs bash for <(...)")
     def test_process_substitution_is_read_control(self):
         for name, argv in self.bins.items():
-            cp = subprocess.run(["bash", "-c", '"$@" <(cat "$0")', SAMPLE] + argv, capture_output=True, text=True, encoding="utf-8",
+            cp = subprocess.run([__import__("test_platforms_20261124").BASH, "-c", '"$@" <(cat "$0")', SAMPLE] + argv, capture_output=True, text=True, encoding="utf-8",
                                 timeout=60)
             self.assertEqual((cp.returncode, json.loads(cp.stdout)["verdict"]), (0, "PASS"), name)
 

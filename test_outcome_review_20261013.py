@@ -18,10 +18,16 @@
 - library paths: ap2-evidence-pack's Ap2WriteError is 74 in `verify_evidence.py ap2`; the RFC 3161 domain of
   cryptovalid_heterogeneous counts when openssl verifies and lets CheckNotRun through; an evidence pack build whose
   stamp cannot run openssl is 74.
-Linux only (bash ulimit, /proc, O_NONBLOCK pipes; the fsync/write cases need a C compiler for an LD_PRELOAD shim)."""
-import fcntl
+The fsync and write faults: an LD_PRELOAD shim on Linux (C); on macOS and Windows a sitecustomize that wraps os.fsync
+and stdout's raw write, the same failures seen by the same code (os.fsync, FileIO.write). Non-blocking pipes need
+fcntl: skipped on Windows with the reason."""
+try:
+    import fcntl
+except ImportError:   # Windows
+    fcntl = None
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -33,6 +39,40 @@ import unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from test_platforms_20261124 import BASH, full_sink, pipe_capacity  # noqa: E402
+NEEDS_FCNTL = unittest.skipIf(fcntl is None, "a non-blocking pipe through fcntl (O_NONBLOCK, FIONREAD): Windows has the "
+                              "equivalents (PIPE_NOWAIT, PeekNamedPipe) but the writers wait with select, which Windows "
+                              "has for sockets only: not implemented there")
+
+FAULTS_PY = r'''
+import io, os, sys
+if os.environ.get("CV_FSYNC_EIO"):
+    _sub, _paths, _open, _fsync = os.environ.get("CV_SHIM_SUB"), {}, os.open, os.fsync
+
+    def _o(path, *a, **k):
+        fd = _open(path, *a, **k)
+        _paths[fd] = os.fspath(path)
+        return fd
+
+    def _f(fd):
+        n = fd if isinstance(fd, int) else fd.fileno()
+        if _sub is None or _sub in str(_paths.get(n, "")):
+            raise OSError(5, os.strerror(5))
+        return _fsync(fd)
+    os.open, os.fsync = _o, _f
+if os.environ.get("CV_WRITE0_FD") == "1":
+    class _Zero(io.FileIO):
+        done = False
+
+        def write(self, b):
+            if not _Zero.done and len(b):
+                _Zero.done = True
+                return 0
+            return super().write(b)
+    sys.stdout = io.TextIOWrapper(_Zero(1, "wb", closefd=False), encoding=sys.stdout.encoding,
+                                  errors=sys.stdout.errors, write_through=True)
+'''
 sys.path.insert(0, HERE)
 PY = sys.executable
 SAMPLE = os.path.join(HERE, "examples", "sample_ledger.jsonl")
@@ -106,6 +146,17 @@ class _Tmp(unittest.TestCase):
     def run_py(self, args, env=None, **kw):
         p = subprocess.run([PY] + args, capture_output=True, env=env or ENV, timeout=kw.pop("timeout", 120), **kw)
         return p.returncode, p.stdout, p.stderr
+
+    def faults(self, **env):
+        """the environment that makes the child's fsync (CV_FSYNC_EIO, on paths containing CV_SHIM_SUB) or its first
+        write to stdout (CV_WRITE0_FD=1) fail: LD_PRELOAD of the C shim on Linux; elsewhere the Python equivalent"""
+        if sys.platform.startswith("linux") and not os.environ.get("CV_FAULTS_PY"):
+            return dict(ENV, LD_PRELOAD=self.shim(), **env)
+        d = os.path.join(self.d, "faults")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "sitecustomize.py"), "w", encoding="utf-8", newline="") as f:
+            f.write(FAULTS_PY)
+        return dict(ENV, PYTHONPATH=d, **env)
 
     def shim(self):
         cc = shutil.which("cc") or shutil.which("gcc")
@@ -203,7 +254,7 @@ class TestPromisedFileOverExisting(_Tmp):
         with open(priv, "w", encoding="utf-8", newline="") as f:
             f.write("x")
         os.chmod(priv, 0o600)
-        p = subprocess.run(["bash", "-c", 'umask 022; exec "$@"', "_", PY, v, SAMPLE, "--out", priv], capture_output=True, env=ENV)
+        p = subprocess.run([BASH, "-c", 'umask 022; exec "$@"', "_", PY, v, SAMPLE, "--out", priv], capture_output=True, env=ENV)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(stat.S_IMODE(os.stat(priv).st_mode), 0o600, "the receipt's mode was widened")
 
@@ -387,13 +438,12 @@ class TestScittOut(_Tmp):
 
     def test_ledger_fsync_failure_is_74_and_whole(self):
         reg, led = self._setup()
-        so = self.shim()
         rc, _, err = self.run_py(reg + [os.path.join(self.d, "t0.cose")])
         self.assertEqual(rc, 0, err)
         with open(led, "rb") as f:
             before = f.read()
         rc, out, err = self.run_py(reg + [os.path.join(self.d, "t1.cose")],
-                                   env=dict(ENV, LD_PRELOAD=so, CV_FSYNC_EIO="1", CV_SHIM_SUB="l.jsonl"))
+                                   env=self.faults(CV_FSYNC_EIO="1", CV_SHIM_SUB="l.jsonl"))
         self.assertEqual(rc, EX_IOERR, err)
         self.assertIn(b"nothing was recorded", err)
         with open(led, "rb") as f:
@@ -402,20 +452,18 @@ class TestScittOut(_Tmp):
 
 class TestWriter(_Tmp):
     def test_fsync_failure_of_out_is_74(self):
-        so = self.shim()
         out = os.path.join(self.d, "r.json")
         rc, _, err = self.run_py([os.path.join(HERE, "verifier.py"), SAMPLE, "--out", out],
-                                 env=dict(ENV, LD_PRELOAD=so, CV_FSYNC_EIO="1", CV_SHIM_SUB=".tmp"))
+                                 env=self.faults(CV_FSYNC_EIO="1", CV_SHIM_SUB=".tmp"))
         self.assertEqual(rc, EX_IOERR, err)
         self.assertFalse(os.path.exists(out))
         self.assertEqual([n for n in os.listdir(self.d) if n.endswith(".tmp")], [])
 
     def test_write_returning_zero_is_an_error(self):
-        so = self.shim()
         f = os.path.join(self.d, "o.txt")
         with open(f, "wb") as fh:
             p = subprocess.run([PY, os.path.join(HERE, "verifier.py"), SAMPLE], stdout=fh, stderr=subprocess.PIPE,
-                               env=dict(ENV, LD_PRELOAD=so, CV_WRITE0_FD="1", PYTHONUNBUFFERED="1"), timeout=60)
+                               env=self.faults(CV_WRITE0_FD="1", PYTHONUNBUFFERED="1"), timeout=60)
         self.assertEqual(p.returncode, EX_IOERR, p.stderr)
         self.assertIn(b"short write", p.stderr)
 
@@ -427,17 +475,22 @@ class TestWriter(_Tmp):
         return r, p
 
     @NEEDS_CRYPTO
+    @NEEDS_FCNTL
     def test_waits_in_the_kernel_not_spinning(self):
         big = big_unsigned(self.d)
         r, p = self._nonblocking([os.path.join(HERE, "signer.py"), "verify", big])
 
         def cpu():
+            if not os.path.exists(f"/proc/{p.pid}/stat"):   # macOS has no /proc: ps reads the same counters
+                t = subprocess.run(["ps", "-o", "time=", "-p", str(p.pid)], capture_output=True).stdout.decode().strip()
+                parts = [float(x) for x in t.replace("-", ":").split(":")]
+                return sum(v * m for v, m in zip(reversed(parts), (1, 60, 3600, 86400)))
             with open(f"/proc/{p.pid}/stat", encoding="utf-8") as f:
                 fields = f.read().rsplit(")", 1)[1].split()
             return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")
         import array
         import termios
-        cap = fcntl.fcntl(r, getattr(fcntl, "F_GETPIPE_SZ", 1032))
+        cap = pipe_capacity(r)
         t0 = time.time()
         while time.time() - t0 < 60:   # the pipe full: from here on the writer only waits
             n = array.array("i", [0])
@@ -463,6 +516,7 @@ class TestWriter(_Tmp):
         self.assertTrue(json.loads(data))
 
     @NEEDS_CRYPTO
+    @NEEDS_FCNTL
     def test_last_flush_waited_for(self):
         big = big_unsigned(self.d)
         for _ in range(3):
@@ -482,6 +536,7 @@ class TestWriter(_Tmp):
             self.assertEqual(rc, 1, tail)
             self.assertTrue(json.loads(data))
 
+    @NEEDS_FCNTL
     def test_caller_text_first_in_process(self):
         script = r'''
 import fcntl, os, sys, threading, time
@@ -514,7 +569,7 @@ print(rc, b"".join(got).lstrip(b"P").decode())
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stdout.count(b"\xef\xbb\xbf"), 1, p.stdout[:200])
         with open(os.path.join(self.d, "o16"), "wb") as o16:
-            subprocess.run(["bash", "-c", 'printf AB; exec "$@"', "_", PY, os.path.join(HERE, "verifier.py"), "--quiet", SAMPLE],
+            subprocess.run([BASH, "-c", 'printf AB; exec "$@"', "_", PY, os.path.join(HERE, "verifier.py"), "--quiet", SAMPLE],
                            stdout=o16, env=dict(ENV, PYTHONIOENCODING="utf-16"), timeout=60)
         with open(os.path.join(self.d, "o16"), "rb") as f:
             self.assertEqual(f.read(), b"AB" + "PASS\n".encode("utf-16-le"))   # past offset 0: no mark, as the text layer
@@ -524,8 +579,8 @@ class TestTracebackWithStderrLost(_Tmp):
     def test_unexpected_error_keeps_exit_1(self):
         """README: a TSA that cannot be reached is a traceback and exit 1, written by the stderr writer, so a full stderr
         keeps exit 1 (an uncaught traceback on a full stderr is the interpreter's 120)"""
-        for redir in ("2>/dev/full", "2>&-"):
-            p = subprocess.run(["bash", "-c", 'exec "$@" ' + redir, "_", PY, os.path.join(HERE, "cryptovalid_tsa.py"), "ab" * 32,
+        for redir in ("2>" + shlex.quote(full_sink()), "2>&-"):
+            p = subprocess.run([BASH, "-c", 'exec "$@" ' + redir, "_", PY, os.path.join(HERE, "cryptovalid_tsa.py"), "ab" * 32,
                                 "--tsa", "http://127.0.0.1:9/"], capture_output=True, env=ENV, timeout=60)
             self.assertEqual(p.returncode, 1, (redir, p.stdout))
             self.assertEqual(p.stdout, b"")

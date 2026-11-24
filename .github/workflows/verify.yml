@@ -144,14 +144,42 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m pip install cryptography 'ap2-evidence-pack>=1.6.0,<2' 'slh-dsa>=0.2.5' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
+      - name: OpenSSL 3 first on PATH (macOS ships LibreSSL as /usr/bin/openssl, without the `ts` checks the code uses)
+        if: runner.os == 'macOS'
+        run: |
+          brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+          echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+      - name: A full volume, the equivalent of Linux's /dev/full (writes there fail with ENOSPC)
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil create -size 4m -fs HFS+ -volname cvfull "$RUNNER_TEMP/full.dmg"
+          hdiutil attach "$RUNNER_TEMP/full.dmg"
+          : > /Volumes/cvfull/sink
+          dd if=/dev/zero of=/Volumes/cvfull/fill bs=4096 || true
+          echo "CV_FULL_DIR=/Volumes/cvfull" >> "$GITHUB_ENV"
+      - name: A full volume, the equivalent of Linux's /dev/full (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $v = Join-Path $env:RUNNER_TEMP "full.vhdx"
+          $s = Join-Path $env:RUNNER_TEMP "full.txt"
+          Set-Content $s "create vdisk file=`"$v`" maximum=32 type=fixed`r`nselect vdisk file=`"$v`"`r`nattach vdisk`r`ncreate partition primary`r`nformat fs=fat32 quick label=CVFULL`r`nassign letter=Q"
+          diskpart /s $s
+          New-Item -ItemType File Q:\sink | Out-Null
+          try { $f = [IO.File]::OpenWrite("Q:\fill"); $b = New-Object byte[] 65536; while ($true) { $f.Write($b, 0, $b.Length); $f.Flush() } } catch { } finally { if ($f) { $f.Dispose() } }
+          "CV_FULL_DIR=Q:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: The tools the suites call
+        run: openssl version; node --version; java -version 2>&1 | head -1; go version; echo "CV_FULL_DIR=$CV_FULL_DIR"; ls -la "$CV_FULL_DIR"
       - name: Every suite with cryptography
         run: |
           fail=0
           for t in test_*.py; do echo "== $t"; CV_REQUIRE_CRYPTO=1 CV_REQUIRE_SLHDSA=1 python "$t" || { echo "::error::$t"; fail=1; }; done
           exit $fail
       - name: Conformance
+        if: always()
         run: python conformance.py
       - name: Every suite without cryptography
+        if: always()
         run: |
           python -m venv --without-pip "$RUNNER_TEMP/nocrypto"
           py="$RUNNER_TEMP/nocrypto/bin/python"; [ -x "$py" ] || py="$RUNNER_TEMP/nocrypto/Scripts/python.exe"

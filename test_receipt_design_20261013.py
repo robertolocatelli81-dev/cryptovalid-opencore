@@ -21,9 +21,13 @@ the 13/10 bench found still open after the first 0.20.3 commits, and the command
   never a verdict on the input (a valid evidence pack was `valid: false`, exit 1);
 - a command run under a file size limit no longer leaves a cut .pyc that makes every later run exit 1 (CPython 3.9, 3.11).
 Every test here fails on 0.20.2 (c289480). Linux only (bash `ulimit`, O_NONBLOCK pipes); macOS and Windows not measured."""
-import fcntl
+try:
+    import fcntl
+except ImportError:   # Windows
+    fcntl = None
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -32,6 +36,11 @@ import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from test_platforms_20261124 import BASH, full_sink, pipe_capacity  # noqa: E402
+NEEDS_FCNTL = unittest.skipIf(fcntl is None, "a non-blocking pipe through fcntl (O_NONBLOCK, FIONREAD): Windows has the "
+                              "equivalents (PIPE_NOWAIT, PeekNamedPipe) but the writers wait with select, which Windows "
+                              "has for sockets only: not implemented there")
 PY = sys.executable
 SAMPLE = os.path.join(HERE, "examples", "sample_ledger.jsonl")
 TAMPERED = os.path.join(HERE, "examples", "sample_ledger_tampered.jsonl")
@@ -51,7 +60,7 @@ def _crypto():
 
 def sh(script, argv, env=None, timeout=120):
     """bash -c script with "$@" = argv; returns (rc, stdout, stderr)"""
-    p = subprocess.run(["bash", "-c", script, "_"] + list(argv), capture_output=True, timeout=timeout, env=env or ENV)
+    p = subprocess.run([BASH, "-c", script, "_"] + list(argv), capture_output=True, timeout=timeout, env=env or ENV)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -70,7 +79,7 @@ def read_after_full(r, p, timeout=120):
     always exercised (a mutant that gives up on EAGAIN survived 2 runs of 3, 13/10/2026). Returns all the bytes."""
     import array
     import termios
-    cap = fcntl.fcntl(r, getattr(fcntl, "F_GETPIPE_SZ", 1032))   # the pipe's capacity (Linux: F_GETPIPE_SZ = 1032)
+    cap = pipe_capacity(r)
     t0 = time.time()
     while time.time() - t0 < timeout and p.poll() is None:
         n = array.array("i", [0])
@@ -114,6 +123,7 @@ class TestUnbufferedFileSizeLimit(_Tmp):
             self.assertOneLine74(rc, err, f"-u {cmd[-1]}")
 
 
+@NEEDS_FCNTL
 class TestNonBlockingStdout(_Tmp):
     """a non-blocking pipe read only once it is full: the receipt arrives whole and the code is the verdict's"""
 
@@ -136,6 +146,7 @@ class TestNonBlockingStdout(_Tmp):
             self.assertIs(json.loads(data)["ok"], False)
 
 
+@NEEDS_FCNTL
 class TestJavaNonBlocking(_Tmp):
     """CvVerify.java: a non-blocking stdout read once full gets a receipt larger than the pipe buffer whole, exit 1 (it was
     74 with 65 536 bytes in the pipe: FileOutputStream.write threw EAGAIN); stdout opened read-only (EBADF) is 74"""
@@ -172,6 +183,7 @@ class TestJavaNonBlocking(_Tmp):
         self.assertOneLine74(rc, err, "java stdout read-only")
 
 
+@NEEDS_FCNTL
 class TestJavaWaitShape(_Tmp):
     """review of 0.20.3, 13/10: the Java wait is sleeps of 1 to 50 ms, not a spin and not an unbounded back-off: under 0.3 s of CPU
     in 3 s of waiting on a full non-blocking stdout, the receipt whole within 0.6 s of the reader starting, and it ends
@@ -202,7 +214,7 @@ class TestJavaWaitShape(_Tmp):
         fcntl.fcntl(w, fcntl.F_SETFL, fcntl.fcntl(w, fcntl.F_GETFL) | os.O_NONBLOCK)
         p = subprocess.Popen([java, "-cp", cp, "CvVerify", big], stdout=w, stderr=subprocess.DEVNULL, env=ENV)
         os.close(w)
-        cap = fcntl.fcntl(r, getattr(fcntl, "F_GETPIPE_SZ", 1032))
+        cap = pipe_capacity(r)
         t0 = time.time()
         while time.time() - t0 < 120 and p.poll() is None:
             n = array.array("i", [0])
@@ -248,7 +260,7 @@ class TestUsageWithStderrLost(_Tmp):
     def test_usage(self):
         for c in self.CMDS:
             cmd = [PY, os.path.join(HERE, c[0])] + c[1:]
-            for pre in ("exec 2>/dev/full; ", "exec 2>&-; "):
+            for pre in ("exec 2>%s; " % shlex.quote(full_sink()), "exec 2>&-; "):
                 rc, out, err = sh(pre + 'exec "$@"', cmd)
                 self.assertEqual((rc, out), (2, b""), f"{c} {pre}: rc {rc} stdout {out[:200]!r}")
             r, w = os.pipe()
@@ -261,7 +273,7 @@ class TestUsageWithStderrLost(_Tmp):
 
     def test_help_not_written_is_74(self):
         for c in (["verifier.py", "--help"], ["verify_evidence.py", "--help"], ["cryptovalid_merkle.py", "--help"]):
-            rc, _, err = sh('exec "$@" >/dev/full', [PY, os.path.join(HERE, c[0])] + c[1:])
+            rc, _, err = sh('exec "$@" >' + shlex.quote(full_sink()), [PY, os.path.join(HERE, c[0])] + c[1:])
             self.assertOneLine74(rc, err, str(c))
 
 
@@ -453,7 +465,7 @@ class TestModuleCommands(_Tmp):
             rc, out, err = sh('exec "$@"', cmd)
             self.assertEqual(rc, code, f"{name} {args}: {err[-300:]!r}")
             self.assertTrue(out)
-            rc, _, err = sh('exec "$@" >/dev/full', cmd)
+            rc, _, err = sh('exec "$@" >' + shlex.quote(full_sink()), cmd)
             self.assertOneLine74(rc, err, f"{name} {args}")
             rc, _, err = sh('exec "$@" >&-', cmd)
             self.assertOneLine74(rc, err, f"{name} {args} closed")
@@ -472,7 +484,7 @@ class TestModuleCommands(_Tmp):
             cmd = [PY, os.path.join(HERE, name)] + args
             rc, out, err = sh('exec "$@"', cmd)
             self.assertEqual(rc, code, f"{name}: {err[-300:]!r}")
-            rc, _, err = sh('exec "$@" >/dev/full', cmd)
+            rc, _, err = sh('exec "$@" >' + shlex.quote(full_sink()), cmd)
             self.assertOneLine74(rc, err, name)
         self.assertTrue(pub)
 

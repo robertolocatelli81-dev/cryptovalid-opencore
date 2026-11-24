@@ -42,6 +42,49 @@ def assert_private(tc, path, mode=0o600):
     tc.assertEqual(readonly, not mode & 0o200, path)
 
 
+# Windows: CreateProcess looks for "bash" in System32 before PATH, and System32\\bash.exe is the launcher of the Windows
+# Subsystem for Linux ("has no installed distributions", CI of f1e95d5); shutil.which reads PATH: Git's bash there
+BASH = shutil.which("bash") or "bash"
+
+
+def full_sink(tc=None):
+    """A path whose writes fail with ENOSPC: Linux's /dev/full; on macOS and Windows, which have no such device, an
+    empty file on a full volume named by CV_FULL_DIR (the other-os job makes one: hdiutil, diskpart). Skipped with
+    the reason where neither exists."""
+    if os.path.exists("/dev/full") and sys.platform.startswith("linux"):
+        return "/dev/full"
+    d = os.environ.get("CV_FULL_DIR")
+    if d and os.path.isfile(os.path.join(d, "sink")):
+        return os.path.join(d, "sink")
+    raise unittest.SkipTest("no full device here: Linux has /dev/full; elsewhere set CV_FULL_DIR to a full volume with an empty "
+                "file `sink` (the other-os job makes one)")
+
+
+def pipe_capacity(fd):
+    """How many bytes a pipe holds before a writer waits. Linux: F_GETPIPE_SZ (1032, the read end will do). macOS has
+    no such fcntl (1032 there is another operation: EBADF, CI of f1e95d5): measured on a fresh pipe filled by 64 KiB
+    writes, the size the writers use (macOS grows a pipe to 64 KiB under large writes)."""
+    import fcntl
+    if sys.platform.startswith("linux"):
+        return fcntl.fcntl(fd, 1032)
+    return _measured_pipe_capacity()
+
+
+def _measured_pipe_capacity():
+    r, w = os.pipe()
+    try:
+        os.set_blocking(w, False)
+        n = 0
+        try:
+            while True:
+                n += os.write(w, b"\0" * 65536)
+        except BlockingIOError:
+            return n
+    finally:
+        os.close(r)
+        os.close(w)
+
+
 
 def _git(*args):
     return subprocess.run(["git", "-C", _HERE] + list(args), capture_output=True)
@@ -403,6 +446,19 @@ class OneNestingBound(unittest.TestCase):
                         if not (n == "verifier.py" and where in ("_loads_strict", "json_loads_bounded")):
                             bad.append((n, c.lineno, where))
         self.assertEqual(bad, [])
+
+
+class PipeCapacity(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("linux"), "the control needs F_GETPIPE_SZ (Linux)")
+    def test_the_measure_agrees_with_the_kernel(self):
+        """control of the macOS branch: on Linux the measure equals F_GETPIPE_SZ of a fresh pipe"""
+        import fcntl
+        r, w = os.pipe()
+        try:
+            self.assertEqual(_measured_pipe_capacity(), fcntl.fcntl(r, 1032))
+        finally:
+            os.close(r)
+            os.close(w)
 
 
 class ManifestNamesOnWindows(unittest.TestCase):

@@ -31,6 +31,8 @@ if os.environ.get("CV_REQUIRE_CRYPTO") == "1" and not HAVE_CRYPTO:   # the job w
 NEEDS_CRYPTO = unittest.skipUnless(HAVE_CRYPTO, "needs `cryptography` (the `sign` extra)")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from test_platforms_20261124 import BASH, full_sink  # noqa: E402
 PY = sys.executable
 SAMPLE = os.path.join(HERE, "examples", "sample_ledger.jsonl")
 TAMPERED = os.path.join(HERE, "examples", "sample_ledger_tampered.jsonl")
@@ -40,7 +42,7 @@ LOSS_MODES = ("devfull", "epipe", "closed")
 
 def run(cmd, mode, stderr_devfull=False, timeout=120):
     """Run `cmd` with stdout per `mode`; return (rc, stdout bytes or None, stderr bytes)."""
-    err_target = open("/dev/full", "wb") if stderr_devfull else subprocess.PIPE
+    err_target = open(full_sink(), "wb") if stderr_devfull else subprocess.PIPE
     try:
         if mode == "file":
             with tempfile.TemporaryFile() as f:
@@ -48,7 +50,7 @@ def run(cmd, mode, stderr_devfull=False, timeout=120):
                 f.seek(0)
                 return p.returncode, f.read(), p.stderr or b""
         if mode == "devfull":
-            with open("/dev/full", "wb") as f:
+            with open(full_sink(), "wb") as f:
                 p = subprocess.run(cmd, stdout=f, stderr=err_target, timeout=timeout)
             return p.returncode, None, p.stderr or b""
         if mode == "epipe":   # the reader is gone before the first byte: EPIPE, deterministic (no race with `head`)
@@ -60,7 +62,7 @@ def run(cmd, mode, stderr_devfull=False, timeout=120):
                 os.close(w)
             return p.returncode, None, p.stderr or b""
         if mode == "closed":
-            p = subprocess.run(["bash", "-c", 'exec "$@" >&-', "_"] + list(cmd), stderr=err_target, timeout=timeout)
+            p = subprocess.run([BASH, "-c", 'exec "$@" >&-', "_"] + list(cmd), stderr=err_target, timeout=timeout)
             return p.returncode, None, p.stderr or b""
         raise ValueError(mode)
     finally:
@@ -119,7 +121,7 @@ class TestVerifierPy(_Base):
     def test_out_not_writable(self):
         d = tempfile.mkdtemp(prefix="cv74_")
         self.addCleanup(shutil.rmtree, d, True)
-        for target in (os.path.join(d, "no", "such", "dir", "r.json"), "/dev/full", d):
+        for target in (os.path.join(d, "no", "such", "dir", "r.json"), full_sink(), d):
             for path, verdict in ((SAMPLE, "PASS"), (TAMPERED, "FAIL")):
                 rc, out, err = run([PY, os.path.join(HERE, "verifier.py"), path, "--out", target], "file")
                 self.assertEqual(rc, EX_IOERR, f"--out {target}: rc {rc} {err[-300:]!r}")
@@ -144,7 +146,7 @@ class TestVerifierPy(_Base):
         with open(big, "w", encoding="utf-8", newline="") as fh:
             for i in range(3000):
                 fh.write('{"ts":%d,"v":%d,"self_hash":"%s"}\n' % (i, i, z))
-        p = subprocess.run(["bash", "-c", '"$0" "$1" verify "$2" | { sleep 0.5; cat; }; exit "${PIPESTATUS[0]}"',
+        p = subprocess.run([BASH, "-c", '"$0" "$1" verify "$2" | { sleep 0.5; cat; }; exit "${PIPESTATUS[0]}"',
                             PY, os.path.join(HERE, "signer.py"), big], capture_output=True, timeout=120)
         self.assertEqual(p.returncode, 1, p.stderr[-300:])
         self.assertGreater(len(p.stdout), 65536)
