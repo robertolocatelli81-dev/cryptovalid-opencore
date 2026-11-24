@@ -96,7 +96,7 @@ def fifo(tc, path):
     import secrets
     name = r"\\.\pipe\cv-" + secrets.token_hex(8)
     for _ in range(64):
-        h = _winapi.CreateNamedPipe(name, _winapi.PIPE_ACCESS_DUPLEX, _winapi.PIPE_TYPE_BYTE | _winapi.PIPE_WAIT,
+        h = _winapi.CreateNamedPipe(name, _winapi.PIPE_ACCESS_DUPLEX, 0,   # 0: PIPE_TYPE_BYTE | PIPE_WAIT (_winapi has no names)
                                     _winapi.PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, _winapi.NULL)
         tc.addCleanup(_winapi.CloseHandle, h)
     return name
@@ -251,6 +251,48 @@ def run_with_memory_limit(argv, limit, timeout=120):
             return p.returncode, fo.read().decode("utf-8"), fe.read().decode("utf-8", "replace"), ext.PeakProcessMemoryUsed
     finally:
         k32.CloseHandle(job)
+
+
+def _windows_dacl(path, sddl):
+    import ctypes
+    from ctypes import wintypes
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    conv = adv.ConvertStringSecurityDescriptorToSecurityDescriptorW
+    conv.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p)
+    setsec = adv.SetFileSecurityW
+    setsec.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
+    sd = ctypes.c_void_p()
+    if not conv(sddl, 1, ctypes.byref(sd), None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        if not setsec(path, 0x4 | 0x80000000, sd):   # DACL | PROTECTED_DACL_SECURITY_INFORMATION
+            raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        ctypes.WinDLL("kernel32").LocalFree(sd)
+
+
+def make_unreadable(tc, path):
+    """`path` (a file or a directory) that this user cannot read: mode 0 on POSIX (skipped as root, who reads
+    anything); on Windows an empty protected access list (no one may read; the owner may still change the list, which
+    the cleanup does). Restored at cleanup."""
+    if os.name == "nt":
+        import re
+        sysdir = os.path.join(os.environ.get("SystemRoot", r"C:\\Windows"), "System32")
+        who = subprocess.run([os.path.join(sysdir, "whoami.exe"), "/user", "/fo", "csv", "/nh"], capture_output=True)
+        sid = re.findall(rb'"(S-1-[0-9-]+)"', who.stdout)[0].decode("ascii")
+        _windows_dacl(path, "D:P")
+        restore = lambda: _windows_dacl(path, "D:P(A;OICI;FA;;;%s)" % sid)   # noqa: E731
+    else:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            tc.skipTest("root reads any file")
+        mode = os.stat(path).st_mode & 0o777
+        os.chmod(path, 0)
+        restore = lambda: os.chmod(path, mode or 0o700)   # noqa: E731
+
+    def cleanup():   # a tearDown may already have removed it
+        if os.path.lexists(path):
+            restore()
+    tc.addCleanup(cleanup)
 
 
 

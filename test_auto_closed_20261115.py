@@ -221,10 +221,10 @@ class TestAutoPaths(unittest.TestCase):
         for raw, why in cases:
             self._refused(self._write(raw), why)
 
-    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any file")
     def test_unreadable_file(self):
+        from test_platforms_20261124 import make_unreadable   # Windows: an empty access list
         p = self._write(b"{}")
-        os.chmod(p, 0)
+        make_unreadable(self, p)
         self._refused(p, "cannot read the file (PermissionError: Permission denied);")
 
     def test_missing_path(self):
@@ -256,17 +256,14 @@ class TestAutoPaths(unittest.TestCase):
             fh.write("")
         self.assertEqual(VE.verify_auto(d)["kind"], "archive")
 
-    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any directory")
     def test_unreadable_directory(self):
+        from test_platforms_20261124 import make_unreadable   # Windows: an empty access list
         d = os.path.join(self.d, "pack")
         os.mkdir(d)
         with open(os.path.join(d, "MANIFEST.json"), "w", encoding="utf-8", newline="") as fh:
             fh.write("{}")
-        os.chmod(d, 0)
-        try:
-            self._refused(d, "cannot read the directory (PermissionError: Permission denied);")
-        finally:
-            os.chmod(d, 0o700)
+        make_unreadable(self, d)
+        self._refused(d, "cannot read the directory (PermissionError: Permission denied);")
 
     def test_non_utf8_after_the_first_line_is_the_ledger_verifiers(self):
         # SPEC §12: only the lines up to the first non-blank one decide; a later line of a ledger is judged by `ledger`

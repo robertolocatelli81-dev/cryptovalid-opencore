@@ -86,7 +86,7 @@ class Pinned(unittest.TestCase):
             h, name = line.split("  ", 1)
             self.assertEqual(hashlib.sha256(_read(VD, name)).hexdigest(), h, name)
         listed = {line.split("  ", 1)[1][2:] for line in lines}
-        on_disk = {os.path.relpath(os.path.join(dp, f), VD) for dp, _, fs in os.walk(VD) for f in fs}
+        on_disk = {os.path.relpath(os.path.join(dp, f), VD).replace(os.sep, "/") for dp, _, fs in os.walk(VD) for f in fs}
         self.assertEqual(on_disk - listed, {"SHA256SUMS", "README.md"})   # nothing unpinned
 
     def test_every_vector_is_listed_here(self):

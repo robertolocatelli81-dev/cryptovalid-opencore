@@ -15,6 +15,7 @@ import json
 import os
 import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -240,7 +241,7 @@ class TestAutoNamesTheCommand(unittest.TestCase):
                                    (TORCHWOOD, "example.com/mldsa-log", 1)):
             detail = self._skip(VE.verify_auto(path), "checkpoint")
             self.assertEqual(detail, f'C2SP checkpoint (origin "{origin}", size {size}): auto holds no trusted key and '
-                                     f"verifies nothing; run: cryptovalid-verify checkpoint {path} --vkey <vkey of the log>")
+                                     f"verifies nothing; run: cryptovalid-verify checkpoint {shlex.quote(path)} --vkey <vkey of the log>")
 
     @unittest.skipUnless(HAVE_CRYPTO, "signatures need cryptography")
     def test_the_named_command_verifies(self):
@@ -282,7 +283,10 @@ class TestAutoNamesTheCommand(unittest.TestCase):
         with open(ROME, "rb") as fh:
             p = self._write("a b'c", fh.read())
         detail = self._skip(VE.verify_auto(p), "checkpoint")
-        self.assertIn("run: cryptovalid-verify checkpoint '" + self.d + "/a b'\"'\"'c' --vkey", detail)
+        # POSIX shell quoting on every system (Git Bash on Windows runs it; on Linux this is '<dir>/a b'"'"'c')
+        self.assertIn("run: cryptovalid-verify checkpoint " + shlex.quote(os.path.join(self.d, "a b'c")) + " --vkey", detail)
+        if os.sep == "/":
+            self.assertIn("run: cryptovalid-verify checkpoint '" + self.d + "/a b'\"'\"'c' --vkey", detail)
 
     def test_a_path_starting_with_a_dash(self):   # the command named in the receipt must run as written
         with open(ROME, "rb") as fh:
@@ -295,8 +299,8 @@ class TestAutoNamesTheCommand(unittest.TestCase):
             tiles = self._skip(VE.verify_auto("-log"), "tiles")
         finally:
             os.chdir(old)
-        self.assertIn("run: cryptovalid-verify checkpoint ./-cp --vkey", detail)
-        self.assertIn("run: cryptovalid-verify tiles ./-log --vkey", tiles)
+        self.assertIn("run: cryptovalid-verify checkpoint %s --vkey" % shlex.quote(os.path.join(".", "-cp")), detail)
+        self.assertIn("run: cryptovalid-verify tiles %s --vkey" % shlex.quote(os.path.join(".", "-log")), tiles)
         with open(ROME_LOG, encoding="utf-8") as fh:
             key = json.load(fh)["key"]
         _, vkey, _ = _run("verify_evidence.py", ["vkey-rfc6962", "--name", "rome2026h1.example.org", "--key-b64", key])

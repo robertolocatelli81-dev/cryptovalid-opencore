@@ -566,13 +566,11 @@ class Generated(unittest.TestCase):
         with self.assertRaises(M.TileError) as cm:
             M._read_file(p, limit=10)
         self.assertIn("11 bytes, more than the 10", str(cm.exception))
-        if os.geteuid() != 0:
-            os.chmod(p, 0)
-            try:
-                with self.assertRaises(M.TileError):
-                    M._read_file(p)
-            finally:
-                os.chmod(p, 0o600)
+        if not (hasattr(os, "geteuid") and os.geteuid() == 0):   # root reads any file
+            from test_platforms_20261124 import make_unreadable   # Windows: an empty access list
+            make_unreadable(self, p)
+            with self.assertRaises(M.TileError):
+                M._read_file(p)
         with self.assertRaises(M.TileError):
             M._decode(b"x", "br", "p")
         with self.assertRaises(M.TileError):                          # a zlib stream is not gzip
