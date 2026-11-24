@@ -987,5 +987,23 @@ class JavaSourceIsAscii(unittest.TestCase):
                       json.loads(r.stdout)["failures"], r.stdout[-300:])
 
 
+class OpensslByItsPath(unittest.TestCase):
+    """the openssl run is the one shutil.which names (Windows' CreateProcess searches other folders before PATH)"""
+
+    def test_the_path_which_names_is_run(self):
+        import subprocess as sp
+        from unittest import mock
+        import cryptovalid_tsa as T
+        seen = []
+        with mock.patch.object(shutil, "which", lambda n: "/opt/fake/bin/openssl" if n == "openssl" else None), \
+                mock.patch.object(sp, "run", lambda cmd, **kw: (seen.append(cmd), sp.CompletedProcess(cmd, 0))[1]):
+            T._run_openssl(["openssl", "version"], capture_output=True)
+        self.assertEqual(seen, [["/opt/fake/bin/openssl", "version"]])
+        with mock.patch.object(shutil, "which", lambda n: None):
+            from verifier import CheckNotRun
+            with self.assertRaises(CheckNotRun):
+                T._run_openssl(["openssl", "version"], capture_output=True)
+
+
 if __name__ == "__main__":
     unittest.main()

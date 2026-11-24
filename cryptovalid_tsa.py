@@ -347,7 +347,16 @@ def _run_openssl(cmd, **kw):
     `valid: false`, exit 1), as in ap2-evidence-pack 1.5.2. Declared (0.21.0; measured 14/10/2026, the same on 0.20.3):
     openssl that STARTED and then ended by a signal (SIGKILL, SIGSEGV), or a wrapper that exits 127, answered — the token is
     not verified (False), not CheckNotRun: an input that makes openssl crash does not become a check that did not run."""
+    import shutil
     import subprocess
+    if cmd and cmd[0] == "openssl":
+        # the openssl `shutil.which` names, the one the checks above asked for: on Windows CreateProcess looks in the
+        # program's folder, the current folder and System32 before PATH, so a bare "openssl" could start another one
+        # (CI run 45460749218: a stand-in first on PATH was not the one started)
+        exe = shutil.which("openssl")
+        if exe is None:
+            raise _not_run("cannot run openssl here", OSError("openssl is not on PATH"))
+        cmd = [exe] + list(cmd[1:])
     try:
         return subprocess.run(cmd, **kw)
     except subprocess.TimeoutExpired as e:
