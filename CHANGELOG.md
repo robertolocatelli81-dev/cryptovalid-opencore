@@ -284,6 +284,17 @@ the review of 2026-10-01, NEMESIS P2), while on Windows the same name was a path
 (on POSIX some were admitted through the file system's surrogate escapes). The rule is PKWARE's for ZIP (APPNOTE 6.3.10
 §4.4.17.1).
 
+### Fleet audit of 2026-11-24 (the classes found in pq-scitt)
+
+- PKCS#11 (`pkcs11:` backend): public-key reads and signatures run in a child process killed at the time limit
+  (until now a thread that a call blocked in the module kept for good); the child ignores the current folder, keeps
+  its answers off a stdout the module may print on, and is stopped by an answer out of form. The public key is read
+  through the module (`CKA_EC_POINT`, DER or raw), no longer with `pkcs11-tool --output-file` (which fails on
+  Windows and with Homebrew's OpenSC on macOS). The ctypes structures are packed to 1 byte on Windows, as pkcs11.h.
+  The CI runs the SoftHSM2 bench on macOS and Windows too.
+- NetHSM: a malformed answer is a named refusal (it was a `KeyError` or a `TypeError`).
+- `Ingestor` resuming a segment: an `idx` of `true` or `1.0` no longer passes as 1 (the verifier refuses both).
+
 ### Windows and macOS: the same bytes, the same verdict
 
 The first run of the suites on macos-latest and windows-latest (Python 3.13, CI run 45334981283 of 2026-11-24) failed
