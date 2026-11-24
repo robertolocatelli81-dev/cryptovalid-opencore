@@ -43,10 +43,9 @@ _SOFTHSM = os.environ.get("CV_SOFTHSM_MODULE") or next(iter(
     glob.glob("/usr/lib/softhsm/libsofthsm2.so") + glob.glob("/usr/lib/*/softhsm/libsofthsm2.so")
     + glob.glob("/opt/homebrew/lib/softhsm/libsofthsm2.so") + glob.glob("/usr/local/lib/softhsm/libsofthsm2.so")), None)
 if os.environ.get("CV_REQUIRE_SOFTHSM") == "1" and not (_SOFTHSM and os.path.exists(_SOFTHSM)
-                                                         and shutil.which("pkcs11-tool") and shutil.which("softhsm2-util")):
+                                                         and shutil.which("pkcs11-tool")):
     raise RuntimeError(f"CV_REQUIRE_SOFTHSM=1 and SoftHSM2/pkcs11-tool missing ({_SOFTHSM})")
-_HAVE_SOFTHSM = (_SOFTHSM and shutil.which("pkcs11-tool")
-                 and shutil.which("softhsm2-util"))
+_HAVE_SOFTHSM = bool(_SOFTHSM and os.path.exists(_SOFTHSM) and shutil.which("pkcs11-tool"))
 
 
 def _verify_raw(pub_hex, sig, msg):
@@ -244,7 +243,7 @@ class TestNetHsmDemoLive(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAVE_CRYPTO and _HAVE_SOFTHSM,
-                     "requires softhsm2 + opensc (real PKCS#11 bench)")
+                     "requires the SoftHSM2 module + OpenSC pkcs11-tool (real PKCS#11 bench)")
 class TestPkcs11SoftHsm(unittest.TestCase):
     """REAL end-to-end HSM bench: throwaway SoftHSM2 token, non-exportable key,
     ledger signed via PKCS#11, verified by the unchanged stdlib verifier."""
@@ -255,11 +254,16 @@ class TestPkcs11SoftHsm(unittest.TestCase):
         tokens = os.path.join(cls.d, "tokens"); os.makedirs(tokens)
         cls.conf = os.path.join(cls.d, "softhsm2.conf")
         with open(cls.conf, "w", encoding="utf-8", newline="") as f:
-            f.write(f"directories.tokendir = {tokens}\n")
-        cls.env = {**os.environ, "SOFTHSM2_CONF": cls.conf, "CRYPTOVALID_PIN": "1234"}
-        subprocess.run(["softhsm2-util", "--init-token", "--free", "--label", "cvtest",
-                        "--pin", "1234", "--so-pin", "5678"],
-                       env=cls.env, check=True, capture_output=True)
+            f.write(f"directories.tokendir = {tokens}\nobjectstore.backend = file\nlog.level = ERROR\n")
+        cls.env = {**os.environ, "SOFTHSM2_CONF": cls.conf, "CRYPTOVALID_PIN": "1234", "CV_SO_PIN": "5678"}
+        # the token made through the module with pkcs11-tool, on every system (the SoftHSM2 build for Windows has no
+        # softhsm2-util on PATH: CI run 45437498313); a failure names pkcs11-tool's own words
+        for argv in (["--init-token", "--label", "cvtest", "--so-pin", "env:CV_SO_PIN", "--slot-index", "0"],
+                     ["--token-label", "cvtest", "--init-pin", "--login", "--login-type", "so", "--so-pin",
+                      "env:CV_SO_PIN", "--pin", "env:CRYPTOVALID_PIN"]):
+            r = subprocess.run(["pkcs11-tool", "--module", _SOFTHSM] + argv, env=cls.env, capture_output=True, timeout=60)
+            if r.returncode:
+                raise RuntimeError("token initialisation failed: %r" % r.stderr[-300:])
         os.environ.update({"SOFTHSM2_CONF": cls.conf, "CRYPTOVALID_PIN": "1234"})
         cls.be = kms.backend_from_uri(
             f"pkcs11:module={_SOFTHSM};token=cvtest;key=evidence;pin=env:CRYPTOVALID_PIN")

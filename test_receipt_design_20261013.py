@@ -232,7 +232,7 @@ class TestJavaWaitShape(_Tmp):
         late = time.time() - t1
         data = b"".join(chunks)
         self.assertEqual(rc, 1)
-        self.assertTrue(len(data) > 65536 and data.endswith(os.linesep.encode()), len(data))
+        self.assertTrue(len(data) > 65536 and data.endswith(b"}\n"), len(data))   # "\n" on every system (0.29.0)
         self.assertLess(c2 - c1, 0.3, "CPU while waiting")
         self.assertLess(late, 0.6, "seconds from the first read to the end")
 

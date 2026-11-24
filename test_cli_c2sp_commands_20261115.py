@@ -252,7 +252,7 @@ class TestAutoNamesTheCommand(unittest.TestCase):
             rc, out, _ = _run("verify_evidence.py", argv)
             self.assertEqual((rc, json.loads(out)["stato"]), (0, "OK"))
         detail = self._skip(VE.verify_auto(MIRROR), "tiles")
-        self.assertTrue(detail.endswith(f"run: cryptovalid-verify tiles {MIRROR} --vkey <vkey of the log> --profile "
+        self.assertTrue(detail.endswith(f"run: cryptovalid-verify tiles {shlex.quote(MIRROR)} --vkey <vkey of the log> --profile "
                                         "<static-ct-api or tlog-tiles>"), detail)
         argv = (detail.split("; run: cryptovalid-verify ", 1)[1].replace("<vkey of the log>", MIRROR_VKEY)
                 .replace("<static-ct-api or tlog-tiles>", "tlog-tiles").split(" ") + ["--no-entries"])

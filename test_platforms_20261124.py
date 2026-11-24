@@ -285,8 +285,8 @@ def make_unreadable(tc, path):
         # 45377477990); on POSIX a directory without x keeps its entries out of reach
         targets = [path] + ([os.path.join(r, n) for r, ds, fs in os.walk(path) for n in ds + fs]
                             if os.path.isdir(path) else [])
-        for t in reversed(targets):
-            _windows_dacl(t, "D:P")
+        for t in reversed(targets):   # a deny entry for everyone: an empty list still let the runner list the folder
+            _windows_dacl(t, "D:P(D;OICI;FA;;;WD)")   # (run 45437498313); the owner keeps the right to restore the list
         restore = lambda: [_windows_dacl(t, "D:P(A;OICI;FA;;;%s)" % sid) for t in targets]   # noqa: E731
     else:
         if hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -364,6 +364,13 @@ def fake_openssl(tc, bindir, sh_body, py_body):
     with open(os.path.join(site, "sitecustomize.py"), "w", encoding="utf-8", newline="") as f:
         f.write(_FAKE_SITE)
     env.update(PYTHONPATH=site, CV_FAKE_OPENSSL=py_body)
+    # the stand-in must answer as itself before a test relies on it: a launcher that did not start this Python, or a
+    # hook that did not run, fails here with what it printed (not later as an unexplained verdict)
+    probe = subprocess.run([exe, "probe-1", "probe 2"], capture_output=True, timeout=120,
+                           env=dict(os.environ, **dict(env, CV_FAKE_OPENSSL="import sys; print('FAKE', sys.argv)")))
+    if probe.stdout.strip() != b"FAKE ['probe-1', 'probe 2']":
+        tc.fail("the fake openssl.exe did not run its body: rc %s, stdout %r, stderr %r"
+                % (probe.returncode, probe.stdout[-300:], probe.stderr[-300:]))
     return env
 
 
