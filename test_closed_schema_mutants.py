@@ -48,7 +48,9 @@ class TestClosedSchemaMutants(unittest.TestCase):
         lax = src.replace("if (u.length) schemaFailures.push(", "if (false) schemaFailures.push(", 1)
         self.assertNotEqual(lax, src, "the schema rule to switch off was not found: the control is void")
         # the lax copy must sit next to the original so its relative imports (none today) and node resolution behave the same
-        lax_path = os.path.join(HERE, "verifiers", "js", "cvverify_lax_control_tmp.mjs")
+        # a name of its own: two runs in one checkout (two Pythons side by side) removed each other's copy mid-run
+        lax_path = os.path.join(HERE, "verifiers", "js", "cvverify_lax_control_tmp_%d_%s.mjs" % (os.getpid(),
+                                                                                                os.urandom(4).hex()))
         with open(lax_path, "w", encoding="utf-8", newline="") as f:
             f.write(lax)
         self.addCleanup(lambda: os.path.exists(lax_path) and os.remove(lax_path))
