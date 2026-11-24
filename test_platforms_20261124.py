@@ -299,6 +299,15 @@ def make_unreadable(tc, path):
         if os.path.lexists(path):
             restore()
     tc.addCleanup(cleanup)
+    if os.name == "nt":   # measured, not assumed: the account must really be refused
+        try:
+            os.listdir(path) if os.path.isdir(path) else open(path, "rb").close()
+        except OSError:
+            return
+        tc.skipTest("this Windows account still reads %s through an access list that denies it to everyone (CI runs "
+                    "45437498313, 45460009605: an administrator's privilege lists such a folder): no unreadable %s can "
+                    "be made here" % ("the folder" if os.path.isdir(path) else "the file",
+                                      "folder" if os.path.isdir(path) else "file"))
 
 
 def make_private(path):
