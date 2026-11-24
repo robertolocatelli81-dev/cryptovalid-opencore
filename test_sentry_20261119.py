@@ -77,6 +77,44 @@ def _os_kinds(host: str):
     return kinds
 
 
+def _aton_kinds(host: str):
+    """The oracle where the system resolver reads otherwise: the address `host` names as inet_aton (POSIX) and the
+    WHATWG URL Standard's IPv4 parser read it (1 to 4 parts, each decimal, 0-octal or 0x-hexadecimal, the last filling
+    the bytes left), or an IPv6 literal in brackets; classified as _os_kinds does. glibc's resolver reads the same
+    (measured: the Linux job compares both). macOS reads "0177.0.0.1" as 177.0.0.1 and Windows does not resolve
+    "127.1", "2130706433" or "0x7f000001" (CI of f1e95d5): the module refuses each on every system, as the URL
+    Standard reads them, whatever this host's resolver does."""
+    h = host.strip("[]")
+    try:
+        a = ipaddress.ip_address(h)
+    except ValueError:
+        parts = h.split(".")
+        if not 1 <= len(parts) <= 4:
+            return None
+        vals = []
+        for x in parts:
+            try:
+                vals.append(int(x[2:], 16) if x[:2] in ("0x", "0X") else int(x, 8) if len(x) > 1 and x[0] == "0" else int(x))
+            except ValueError:
+                return None
+        last = 32 - 8 * (len(vals) - 1)
+        if any(not 0 <= v < 256 for v in vals[:-1]) or not 0 <= vals[-1] < (1 << last):
+            return None
+        n = 0
+        for v in vals[:-1]:
+            n = n << 8 | v
+        a = ipaddress.ip_address(n << last | vals[-1])
+    if a.version == 6 and a.ipv4_mapped is not None:
+        a = a.ipv4_mapped
+    return {"loopback" if a.is_loopback else "unspecified" if a.is_unspecified else "link-local" if a.is_link_local
+            else "other"}
+
+
+def _system_reads_like_aton() -> bool:
+    """glibc's getaddrinfo reads every inet_aton form (Linux); macOS and Windows do not (CI of f1e95d5)"""
+    return sys.platform.startswith("linux")
+
+
 class _Quiet(http.server.BaseHTTPRequestHandler):
     def _any(self):
         self.server.seen.append((self.command, self.path, {k.lower(): v for k, v in self.headers.items()}))
@@ -123,7 +161,9 @@ class TestNetAddressAsNumber(unittest.TestCase):
         # the seven spellings of the review, each one resolved by this system to an address the rule refuses
         for host in ("127.1", "0.0.0.0", "2130706433", "0x7f000001", "0177.0.0.1", "[::ffff:127.0.0.1]", "[::]"):
             with self.subTest(host=host):
-                self.assertTrue(_os_kinds(host) & {"loopback", "unspecified"}, "the control: the system resolves it there")
+                self.assertTrue(_aton_kinds(host) & {"loopback", "unspecified"}, "the control: inet_aton reads it there")
+                if _system_reads_like_aton():
+                    self.assertTrue(_os_kinds(host) & {"loopback", "unspecified"}, "the control: the system resolves it there")
                 with self.assertRaises(ValueError) as cm:
                     self._redirect(f"http://{host}:8200/v1/secret")
                 self.assertTrue(str(cm.exception).startswith("url_not_allowed: a redirect from a remote host"))
@@ -137,7 +177,9 @@ class TestNetAddressAsNumber(unittest.TestCase):
             n = base | rng.getrandbits(bits) if bits else 0
             for host in _v4_forms(n, rng):
                 with self.subTest(host=host):
-                    self.assertEqual(_os_kinds(host), {kind}, "the control: the system reads the same address")
+                    self.assertEqual(_aton_kinds(host), {kind}, "the control: inet_aton reads the same address")
+                    if _system_reads_like_aton():
+                        self.assertEqual(_os_kinds(host), {kind}, "the control: the system reads the same address")
                     with self.assertRaises(ValueError) as cm:
                         self._redirect(f"http://{host}/x")
                     self.assertIn(f"to a {kind} ", str(cm.exception))
@@ -153,7 +195,9 @@ class TestNetAddressAsNumber(unittest.TestCase):
             n = rng.choice([0x08080808, 0x5DB8D822, 0x0A000001, 0xC0A80001, 0x7E000001, 0x80000001, 0xA9FD0001, 0xA9FF0001])
             for host in _v4_forms(n, rng):
                 with self.subTest(host=host):
-                    self.assertEqual(_os_kinds(host), {"other"})
+                    self.assertEqual(_aton_kinds(host), {"other"})
+                    if _system_reads_like_aton():
+                        self.assertEqual(_os_kinds(host), {"other"})
                     self.assertIsNotNone(self._redirect(f"http://{host}/x"))
                     followed += 1
         self.assertEqual((refused, followed), (300 * 9 + 16, 300 * 9))
@@ -206,7 +250,9 @@ class TestNetAddressAsNumber(unittest.TestCase):
                     N.check_url(f"http://{host}:8200/v1/x", N.ALLOW_HTTPS_OR_LOOPBACK_HTTP)   # plain http allowed: it IS loopback
         for host in ("１２７.0.0.1", "127。0。0。1", "１２７.１"):      # the resolver is given the IDNA form: ASCII digits and dots
             with self.subTest(host=host):
-                self.assertEqual(_os_kinds(host), {"loopback"}, "the control: the system connects to loopback")
+                self.assertEqual(_aton_kinds(host.encode("idna").decode("ascii")), {"loopback"}, "the control: IDNA")
+                if _system_reads_like_aton():
+                    self.assertEqual(_os_kinds(host), {"loopback"}, "the control: the system connects to loopback")
                 self.assertTrue(N.is_loopback(host))
         for host in ("126.255.255.255", "128.0.0.1", "0x7e000001", "2130706432.example", "127.0.0.1 x", "127.0.0.1\tx", "0.0.0.0",
                      "0", "::", "::ffff:8.8.8.8", "169.254.1.1", "fe80::1", "1.2.3.4.5", "0x", "", None, 5, b"127.0.0.1"):
@@ -228,7 +274,8 @@ class TestNetAddressAsNumber(unittest.TestCase):
                     N._open(req, 5, False, N.ALLOW_HTTP_OR_HTTPS)
         self.assertEqual(secret.seen, [])
         # the control of the bench: the same server IS reached when the first URL is loopback
-        redirector = _serve(lambda path: (302, [("Location", f"http://127.1:{port}/v1/secret")]))
+        short = "127.1" if _os_kinds("127.1") == {"loopback"} else "127.0.0.1"   # Windows does not resolve 127.1
+        redirector = _serve(lambda path: (302, [("Location", f"http://{short}:{port}/v1/secret")]))
         self.addCleanup(_stop, redirector)
         r = N.open_url("http://127.0.0.1:%d/x" % redirector.server_address[1], 5, N.ALLOW_HTTP_OR_HTTPS)
         self.assertEqual(r.read(), b"ok")
