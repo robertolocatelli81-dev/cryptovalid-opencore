@@ -193,7 +193,7 @@ class TestJavaWaitShape(_Tmp):
         cp = os.path.join(self.d, "cls")
         subprocess.run([javac, "-d", cp, os.path.join(HERE, "verifiers", "java", "CvVerify.java")], check=True, capture_output=True)
         small = subprocess.run([java, "-cp", cp, "CvVerify", SAMPLE], capture_output=True, env=ENV)
-        self.assertTrue(small.stdout.endswith(os.linesep.encode()), small.stdout[-4:])
+        self.assertTrue(small.stdout.endswith(b"}\n"), small.stdout[-4:])   # "\n" on every system (0.29.0)
         big = os.path.join(self.d, "big_bad.jsonl")
         with open(big, "w", encoding="utf-8", newline="") as f:
             for i in range(20000):

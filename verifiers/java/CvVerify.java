@@ -329,6 +329,9 @@ public class CvVerify {
 
     // ───────────────────────── the verdict ─────────────────────────
     public static void main(String[] args) {
+        // stderr in UTF-8 on every system: on Windows the default is the code page, and "±" of a usage line reached a
+        // UTF-8 reader as a byte it does not take (CI run 45377477990); the receipt itself is ASCII (j() escapes)
+        System.setErr(new java.io.PrintStream(new java.io.FileOutputStream(java.io.FileDescriptor.err), true, StandardCharsets.UTF_8));
         try { run(args); }
         catch (Throwable t) {   // never a stack trace: a JSON FAIL receipt (r5: Path NUL bytes, OOM)
             emit("{\"verdict\":\"FAIL\",\"failures\":[\"internal: " + t.getClass().getSimpleName() + "\"],\"scope\":\"" + SCOPE.replace("\"", "'") + "\"}", 1);
@@ -358,11 +361,12 @@ public class CvVerify {
     // a full disk or a closed stdout). On a stdout that is non-blocking and full (a reader that reads late) the channel
     // returns 0 instead of failing: the JDK's public API cannot poll fd 1, so a 0 is waited out in sleeps of 1 to 50 ms
     // (no spin) and retried, as a blocking write would wait; a reader that goes away makes the next write EPIPE: 74.
-    // The receipt is ASCII (j() escapes everything outside 0x20..0x7e): these are the bytes println wrote, line separator
-    // included (0.20.3, the writer of omega-evidence 0.11.3).
+    // The receipt is ASCII (j() escapes everything outside 0x20..0x7e), ended by "\n" on every system (0.29.0; until then
+    // System.lineSeparator(), "\r\n" on Windows).
     static void emit(String receipt, int code) {
         try {
-            java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap((receipt + System.lineSeparator()).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            // "\n" on every system, as verifier.py since 0.29.0 (System.lineSeparator() wrote "\r\n" on Windows)
+            java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap((receipt + "\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII));
             java.nio.channels.FileChannel fd1 = new java.io.FileOutputStream(java.io.FileDescriptor.out).getChannel();   // unbuffered: no flush to forget
             long nap = 1;
             while (b.hasRemaining()) {
