@@ -49,5 +49,51 @@ class CheckoutBytes(unittest.TestCase):
         self.assertEqual(differ, [])
 
 
+class DirectoryFsync(unittest.TestCase):
+    """Windows cannot open a directory as a file: os.open(dir) is PermissionError (86 errors in the CI of f1e95d5, every
+    Ingestor). There the rename is made with MoveFileExW(MOVEFILE_WRITE_THROUGH) and the directory is not fsynced."""
+
+    def test_no_directory_open_where_the_system_refuses_it(self):
+        import tempfile
+        from unittest import mock
+        import cryptovalid_ingest as I
+        real_open = os.open
+
+        def windows_open(path, flags, *a):
+            if os.path.isdir(path):
+                raise PermissionError(13, "Permission denied", path)
+            return real_open(path, flags, *a)
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        with mock.patch.object(os, "open", windows_open):
+            with self.assertRaises(PermissionError):   # control: this is what Windows answers
+                os.open(d, os.O_RDONLY)
+            with mock.patch.object(os, "name", "nt"):
+                I._fsync_dir(d)
+
+    def test_the_rename_replaces_and_leaves_no_temporary(self):
+        import tempfile
+        import verifier as V
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        p = os.path.join(d, "out.json")
+        for data in (b"first", b"second, longer"):
+            V.write_output(p, data)
+            with open(p, "rb") as f:
+                self.assertEqual(f.read(), data)
+        self.assertEqual(os.listdir(d), ["out.json"])
+
+    @unittest.skipUnless(os.name == "nt", "MoveFileExW is a Windows call: measured by the other-os job on windows-latest")
+    def test_movefileexw_names_the_windows_error(self):
+        import tempfile
+        import verifier as V
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        with self.assertRaises(OSError) as c:
+            V._replace(os.path.join(d, "absent"), os.path.join(d, "x"))
+        self.assertEqual(c.exception.winerror, 2)   # ERROR_FILE_NOT_FOUND
+        self.assertIsInstance(c.exception, FileNotFoundError)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -114,7 +114,12 @@ def _signed_message(doc: Dict, domain: str) -> bytes:
 
 def _fsync_dir(path: str):
     """fsync della DIRECTORY: senza, la voce di directory di un file appena creato
-    può non sopravvivere a un crash anche se il suo contenuto è fsync'd."""
+    può non sopravvivere a un crash anche se il suo contenuto è fsync'd.
+    Windows: a directory cannot be opened as a file (os.open fails with EACCES) nor fsynced; the equivalent is
+    the rename itself, which verifier.commit_tmp makes with MoveFileExW(MOVEFILE_WRITE_THROUGH), and the file's
+    own FlushFileBuffers (os.fsync) for a new segment — SQLite's Windows VFS has no directory sync either."""
+    if os.name == "nt":
+        return
     fd = os.open(path, os.O_RDONLY)
     try:
         os.fsync(fd)

@@ -329,10 +329,26 @@ def _replace_target(path: str):
     return real, st
 
 
+def _replace(tmp: str, path: str) -> None:
+    """os.replace, and on Windows MoveFileExW with MOVEFILE_WRITE_THROUGH: the call returns once the rename is on the
+    disk, the equivalent of the directory fsync POSIX needs after rename (a directory cannot be fsynced there)"""
+    if os.name != "nt":
+        os.replace(tmp, path)
+        return
+    import ctypes
+    from ctypes import wintypes
+    move = ctypes.WinDLL("kernel32", use_last_error=True).MoveFileExW
+    move.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD)
+    move.restype = wintypes.BOOL
+    if not move(os.fspath(tmp), os.fspath(path), 0x1 | 0x8):   # MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+        err = ctypes.get_last_error()
+        raise OSError(None, ctypes.FormatError(err).strip(), os.fspath(tmp), err, os.fspath(path))
+
+
 def commit_tmp(tmp: str, path: str) -> None:
     """rename `tmp` over `path`; on failure remove `tmp` and raise OutputNotWritten"""
     try:
-        os.replace(tmp, path)
+        _replace(tmp, path)
     except OSError as e:
         _unlink_quietly(tmp)
         raise OutputNotWritten(f"{path}: {e.strerror or e}") from None
