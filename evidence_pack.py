@@ -235,6 +235,11 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
     build FAIL (council 16/09: a "hybrid pack" with a broken layer must not be written silently)."""
     if pq_pubkey_b64 and not signer_pubkey_hex:   # asymmetric, like the library: the PQ key sits on top of the Ed25519 key
         raise ValueError("pq_pubkey_b64 needs signer_pubkey_hex: hybrid means both keys are pinned (a classical pack may pin the Ed25519 key alone)")
+    for lp in ledger_paths:   # SPEC §31: before anything is written, a name another system reads as another file
+        why = _manifest_name_problem(os.path.basename(lp))
+        if why:
+            raise ValueError(f"{os.path.basename(lp)!r} cannot name a file of a pack: {why} (SPEC §31); "
+                             "copy the ledger to another name")
     os.makedirs(out_dir, exist_ok=True)
     ledgers_meta: List[Dict] = []
     file_digests: Dict[str, str] = {}
@@ -517,23 +522,35 @@ def _pinned_time_anchor(tsr_b64: str, digest_hex: str, tsa_certs, tsa_crls=None)
     raise ValueError(f"verify_token with pinned certificates gave status {v['status']!r}")   # signature_only: impossible
 
 
-def _manifest_name_inside(name) -> bool:
-    """a file name of a MANIFEST.json that stays inside the pack (SPEC §10): not absolute, rooted or with a drive, no '..'"""
-    # separators of THIS platform only (on POSIX "\\" is an ordinary character, not a separator: NEMESIS P2, 01/10/2026)
-    if not (isinstance(name, str) and name != "" and not os.path.isabs(name) and "\0" not in name):
-        return False
-    # Windows (Python 3.13: "/etc/hostname" is no longer isabs there): a rooted name, a drive ("C:x", "\\\\host\\s")
-    # or a colon (an alternate data stream) names a file outside the pack or another file: refused as on POSIX
-    if name.startswith(("/", os.sep)) or os.path.splitdrive(name)[0] or (os.name == "nt" and ":" in name):
-        return False
+def _manifest_name_problem(name) -> Optional[str]:
+    """Why a file name of a MANIFEST.json is not one (SPEC §31), or None. One rule on every system, so the same
+    manifest names the same file everywhere: a relative path whose components are separated by "/" only (PKWARE
+    APPNOTE 6.3.10 §4.4.17.1, the rule ZIP set for the same reason: no drive or device, no leading slash, forward
+    slashes only). Until 0.29.0 a backslash was an ordinary character on POSIX (NEMESIS P2, 01/10/2026) and a
+    separator on Windows, and a drive was refused only where the system has drives: `a\\..\\b.jsonl` was a file in
+    the pack on Linux and a file beside it on Windows."""
+    if not isinstance(name, str) or name == "":
+        return "not a non-empty string"
+    if "\0" in name:
+        return "a NUL character"
     try:
-        os.fsencode(name)   # a lone surrogate (JSON "\ud800") names no file here: a refusal, never a traceback
+        name.encode("utf-8")   # a lone surrogate (JSON "\ud800") names no file: a refusal, never a traceback
     except UnicodeEncodeError:
-        return False
-    parts = name
-    for sep in {os.sep, os.altsep or os.sep, "/"}:
-        parts = parts.replace(sep, "/")
-    return ".." not in parts.split("/")
+        return "not encodable as UTF-8"
+    if "\\" in name:
+        return "a backslash (the separator is '/')"
+    if ":" in name:
+        return "a colon (a drive or a device, or an alternate data stream on Windows)"
+    if name.startswith("/") or os.path.isabs(name):
+        return "an absolute path"
+    if ".." in name.split("/"):
+        return "a '..' component"
+    return None
+
+
+def _manifest_name_inside(name) -> bool:
+    """a file name of a MANIFEST.json that stays inside the pack on every system (SPEC §31)"""
+    return _manifest_name_problem(name) is None
 
 
 def verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str] = None, signer_pubkey_hex: Optional[str] = None,
@@ -623,10 +640,19 @@ def _verify_pack(pack_dir: str, pq_pubkey_b64: Optional[str], signer_pubkey_hex:
     if unknown:   # SPEC §2.1: the manifest is a closed object — named, never silent
         return _refused("manifest_unknown_field: " + ", ".join(unknown)[:200], "unknown_member")
     digs, leds = man.get("file_digests_sha256", {}), man.get("ledgers", [])
+    def _why(names):   # the first name refused and why (SPEC §31), for the reason
+        for n in names:
+            w = _manifest_name_problem(n)
+            if w:
+                return "; " + json.dumps(n)[:80] + ": " + w
+        return ""
     if not isinstance(digs, dict) or not all(_inside(k) and isinstance(v, str) for k, v in digs.items()):
-        return _refused("manifest_bad_file_digests: an object of file name (inside the pack) -> sha256 hex", "malformed")
+        return _refused("manifest_bad_file_digests: an object of file name (inside the pack) -> sha256 hex"
+                        + (_why(digs) if isinstance(digs, dict) else ""), "malformed")
     if not isinstance(leds, list) or not all(isinstance(lm, dict) and _inside(lm.get("file")) for lm in leds):
-        return _refused("manifest_bad_ledgers: a list of objects with a file name inside the pack", "malformed")
+        return _refused("manifest_bad_ledgers: a list of objects with a file name inside the pack"
+                        + (_why([lm.get("file") for lm in leds if isinstance(lm, dict)]) if isinstance(leds, list) else ""),
+                        "malformed")
     bad = _manifest_type_problem(man)
     if bad:
         return _refused(bad, "malformed")

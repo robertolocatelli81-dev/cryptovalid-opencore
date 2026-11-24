@@ -274,6 +274,16 @@ In 0.28.1 (earlier releases not measured), a `MANIFEST.json` nested deeper than 
 at 1 100 levels under Python 3.9 and 3.11, at 20 000 under 3.13; not at 900); the runs of a profile, new in this
 release, did the same until this change. It is now the refusal of the manifest, like any other unreadable manifest.
 
+### A file name of a pack names one file on every system (SPEC §31): verdict change
+
+A name in `MANIFEST.json` (`file_digests_sha256`, `ledgers[i].file`) with a backslash, a colon, a leading `/` or a `..`
+component is refused on every system (`malformed`, with the name and the reason), and `evidence_pack.py build` refuses
+such a ledger file name before writing anything. Until 0.29.0, on POSIX, a name with `\` was admitted (the choice of
+the review of 2026-10-01, NEMESIS P2), while on Windows the same name was a path that could leave the pack
+(`a\..\b.jsonl`): the same pack had two answers. A name with a lone surrogate is now refused on every system as well
+(on POSIX some were admitted through the file system's surrogate escapes). The rule is PKWARE's for ZIP (APPNOTE 6.3.10
+§4.4.17.1).
+
 ### Windows and macOS: the same bytes, the same verdict
 
 The first run of the suites on macos-latest and windows-latest (Python 3.13, CI run 45334981283 of 2026-11-24) failed

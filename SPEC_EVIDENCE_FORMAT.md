@@ -2734,3 +2734,19 @@ over 512 and on every Python. Until 0.29.0 most readers left the depth to Python
 version (measured on 2026-11-24: a `RecursionError` from 1 100 levels under Python 3.9 and 3.11, 20 000 under 3.13,
 100 000 under 3.14): a text 5 000 levels deep was refused under 3.9 and read under 3.13. A format with a lower bound
 of its own (Cedulon: 500) keeps it.
+
+## 31. A file name of a pack names one file on every system (NORMATIVE since v0.15, 2026-11-24)
+
+A name in `file_digests_sha256` or in `ledgers[i].file` of `MANIFEST.json` is a relative path whose components are
+separated by `/` only. It is refused (`malformed`, the reason naming the first such name and why) when it is empty or
+not a string, contains NUL, is not encodable as UTF-8 (a lone surrogate), contains a backslash `\`, contains a colon `:`
+(a drive or a device, and on Windows an alternate data stream), starts with `/` or is absolute on the system, or has a
+`..` component. `evidence_pack.py build` refuses a ledger whose file name would break the rule, before writing anything.
+The same rule is PKWARE's for ZIP (APPNOTE 6.3.10, 2022-11-01, §4.4.17.1, read on 2026-11-24 at
+https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT: "The path stored MUST NOT contain a drive or device
+letter, or a leading slash. All slashes MUST be forward slashes '/' as opposed to backwards slashes '\'").
+
+Until 0.29.0 the check used the separators of the system running it: `\` was an ordinary character on POSIX (a choice
+of the review of 2026-10-01, NEMESIS P2) and a separator on Windows, and a drive was refused only on Windows, so the same
+pack named a file inside it on Linux (`a\..\b.jsonl`) and a file beside the pack on Windows. That choice is reversed:
+the same manifest now gets the same answer on every system.

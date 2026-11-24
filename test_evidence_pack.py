@@ -80,15 +80,36 @@ class TestEvidencePack(unittest.TestCase):
             self.assertFalse(r["valid"], name)
             self.assertTrue(r.get("error"), name)
 
-    def test_backslash_is_an_ordinary_character_on_posix(self):
-        # NEMESIS V1 P2 (01/10/2026): "\\" was treated as a separator, so a legitimate POSIX name with "\\..\\" failed
-        if os.sep != "/":
-            self.skipTest("POSIX only")
-        odd = os.path.join(self.d, "a\\..\\b.jsonl")
+    def test_a_name_is_one_file_on_every_system(self):
+        """SPEC §31 (0.29.0): a backslash, a colon, a rooted name or a '..' component is refused on EVERY system, by
+        the builder and the verifier, with the reason. This reverses NEMESIS V1 P2 (01/10/2026), which kept "\\" an
+        ordinary character on POSIX: the same pack then named a file inside it on Linux (`a\\..\\b.jsonl`) and a file
+        beside it on Windows. PKWARE APPNOTE 6.3.10 §4.4.17.1 sets the same rule for ZIP."""
         import shutil
+        odd = os.path.join(self.d, "a\\..\\b.jsonl")
         shutil.copy(self.signed, odd)
-        evidence_pack.build_pack([odd], self.pack)
-        self.assertTrue(evidence_pack.verify_pack(self.pack)["valid"])
+        with self.assertRaises(ValueError) as c:
+            evidence_pack.build_pack([odd], self.pack)
+        self.assertIn("backslash", str(c.exception))
+        self.assertFalse(os.path.exists(self.pack))   # nothing written
+        evidence_pack.build_pack([self.signed], self.pack)
+        p = os.path.join(self.pack, "MANIFEST.json")
+        with open(p, encoding="utf-8") as f:
+            man = json.load(f)
+        name = man["ledgers"][0]["file"]
+        for bad, why in (("a\\..\\" + name, "backslash"), ("sub\\" + name, "backslash"), ("C:" + name, "colon"),
+                         (name + ":s", "colon"), ("/" + name, "absolute"), ("x/../" + name, "'..'")):
+            for member in ("ledgers", "file_digests_sha256"):
+                m = json.loads(json.dumps(man))
+                if member == "ledgers":
+                    m["ledgers"][0]["file"] = bad
+                else:
+                    m["file_digests_sha256"][bad] = m["file_digests_sha256"].pop(name)
+                with open(p, "w", encoding="utf-8", newline="") as f:
+                    json.dump(m, f)
+                r = evidence_pack.verify_pack(self.pack)
+                self.assertEqual((r["valid"], r.get("refusal_class")), (False, "malformed"), (bad, member))
+                self.assertIn(why, r["error"], (bad, member))
 
     def test_symlink_out_of_the_pack_is_not_read(self):
         # NEMESIS V1 P3 (01/10/2026): a symlink inside the pack pointing outside counted as a matching file

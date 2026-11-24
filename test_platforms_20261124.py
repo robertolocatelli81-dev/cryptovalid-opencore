@@ -503,13 +503,15 @@ class ManifestNamesOnWindows(unittest.TestCase):
         with mock.patch.object(os, "path", ntpath), mock.patch.object(os, "sep", "\\"), \
                 mock.patch.object(os, "altsep", "/"), mock.patch.object(os, "name", "nt"):
             for bad in ("/etc/hostname", "\\etc\\hostname", "C:x.jsonl", "C:\\x.jsonl", "\\\\host\\share\\x",
-                        "a.jsonl:stream", "..\\x", "a/../../x"):
+                        "a.jsonl:stream", "..\\x", "a/../../x", "dir\\signed.jsonl"):
                 self.assertFalse(E._manifest_name_inside(bad), bad)
-            for good in ("signed.jsonl", "dir\\signed.jsonl", "dir/signed.jsonl"):
+            for good in ("signed.jsonl", "dir/signed.jsonl"):
                 self.assertTrue(E._manifest_name_inside(good), good)
-        for good in ("signed.jsonl", "a\\..\\b.jsonl" if os.sep == "/" else "x.jsonl"):   # POSIX: "\\" is a character
+        # SPEC §31: the same answers on this system, whatever it is
+        for bad in ("/etc/hostname", "\\etc\\hostname", "C:x.jsonl", "a.jsonl:stream", "a\\..\\b.jsonl", "a/../b"):
+            self.assertFalse(E._manifest_name_inside(bad), bad)
+        for good in ("signed.jsonl", "dir/signed.jsonl"):
             self.assertTrue(E._manifest_name_inside(good), good)
-        self.assertFalse(E._manifest_name_inside("/etc/hostname"))
 
 
 if __name__ == "__main__":
