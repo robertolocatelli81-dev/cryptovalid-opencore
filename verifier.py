@@ -247,8 +247,15 @@ def emit(*parts, sep: str = " ", end: str = "\n", flush: bool = True) -> None:
 def say(text: str) -> bool:
     """Write `text` to stderr without ever raising; True when it was written. If stderr is full, closed or its reader
     gone, its descriptor is pointed at the null device (the interpreter's last flush cannot fail again and turn the
-    exit code into 120) and the caller's exit code stands."""
+    exit code into 120) and the caller's exit code stands. Windows: in UTF-8, as stdout (_text_layer_bytes), unless
+    PYTHONIOENCODING chooses another: in the ANSI code page "§" was a byte no UTF-8 reader takes (run 45356889667)."""
     err = sys.stderr
+    if os.name == "nt" and err is not None and not os.environ.get("PYTHONIOENCODING") \
+            and (getattr(err, "encoding", "") or "").lower().replace("-", "") != "utf8":
+        try:
+            err.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (AttributeError, OSError, ValueError):   # not a text stream that can change: written as it is
+            pass
     if err is None:   # started with fd 2 closed
         return False
     try:

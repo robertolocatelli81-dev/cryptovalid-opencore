@@ -397,6 +397,17 @@ class ReceiptBytes(unittest.TestCase):
         text = 'idx_mismatch: expected 1, got "\u00e9" \u200b \U0001f600\nPASS\n'
         self.assertEqual(self._emit(text), text.encode("utf-8"))
 
+    def test_windows_stderr_is_utf8_too(self):
+        import io
+        from unittest import mock
+        import verifier as V
+        raw = io.BytesIO()
+        err = io.TextIOWrapper(raw, encoding="cp1252", errors="backslashreplace", newline="\n")
+        with mock.patch.object(os, "name", "nt"), mock.patch.dict(os.environ), mock.patch.object(sys, "stderr", err):
+            os.environ.pop("PYTHONIOENCODING", None)
+            V.say("check not run here: SPEC \u00a723 \U0001f600\n")
+        self.assertEqual(raw.getvalue(), "check not run here: SPEC \u00a723 \U0001f600\n".encode("utf-8"))
+
     def test_an_encoding_the_user_chose_is_kept(self):
         import verifier as V
         with self.assertRaises(V.ReceiptNotWritten):   # cp1252 chosen on purpose: the receipt cannot be written whole
