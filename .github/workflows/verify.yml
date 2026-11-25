@@ -13,6 +13,10 @@ on:
 # Read-only token for every job (OpenSSF Scorecard Token-Permissions; no job writes to the repository)
 permissions:
   contents: read
+# a push to a trial branch ends the run of the commit it replaces; every other ref runs to the end
+concurrency:
+  group: ${{ startsWith(github.ref, 'refs/heads/ci-prova-') && format('{0} {1}', github.workflow, github.ref) || github.run_id }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/ci-prova-') }}
 jobs:
   verify:
     runs-on: ${{ matrix.python-version == '3.9' && 'ubuntu-24.04' || 'ubuntu-latest' }}   # 3.9 has no build for ubuntu-26.04 (ubuntu-latest from 2026-10-19)

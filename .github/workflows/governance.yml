@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+# a push to a trial branch ends the run of the commit it replaces; every other ref runs to the end
+concurrency:
+  group: ${{ startsWith(github.ref, 'refs/heads/ci-prova-') && format('{0} {1}', github.workflow, github.ref) || github.run_id }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/ci-prova-') }}
 jobs:
   dco:
     # OSPS Baseline LE-01.01: every commit asserts the right to contribute it (Signed-off-by, file DCO)
