@@ -291,6 +291,13 @@ default) or normalises Unicode (macOS) opens `L.jsonl` for `l.jsonl`.
 
 ### Fleet audit of 2026-11-24 (the classes found in pq-scitt)
 
+- **A pipe given by name on Windows (`verifier.py`, `read_input`):** the ledger verifier and the writers read a FIFO
+  with `select`, which on Windows waits on sockets only, so a named pipe there was an error, not its bytes. On Windows
+  the bytes waiting are asked with PeekNamedPipe and only those are read (never a blocking read); the writer gone is
+  the end of file, no byte and no end for 10 s is the same FAIL as on POSIX. `test_input_regular_bounded_20261118.py`
+  now runs on Windows with a named pipe (`test_platforms_20261124.pipe_writer`, `fifo`) and the device NUL; only a FIFO
+  at a name inside a pack has no Windows equivalent and stays skipped there.
+
 - **Temporary names on Windows (the class found in ap2-evidence-pack):** `tempfile.mkstemp`/`mkdtemp` try again
   after a PermissionError on Windows, up to `TMP_MAX` times (read today in the sources: 3.9 and 3.11 while
   `os.access(dir, W_OK)` is true, which reads only the read-only attribute and not the access list; 3.13 without

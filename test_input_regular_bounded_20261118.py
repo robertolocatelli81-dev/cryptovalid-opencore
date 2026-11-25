@@ -8,7 +8,9 @@ Measured on 2026-11-18 on 0.26.0 (external review, re-measured): `evidence_pack.
 certificates and CRLs were checked with `os.stat` and then opened, so a FIFO put in their place between the two blocked
 the program; and, found while auditing the same class here, `verifier.py <a FIFO>`, a pack whose MANIFEST.json is a
 FIFO and `cryptovalid-verify cldma <a FIFO>` blocked outright. Every check that could block runs in a child process with a timeout, so a regression is a
-failure, not a hung suite. Linux (mkfifo, sparse files, ru_maxrss in KiB).
+failure, not a hung suite. Linux, macOS and Windows: a FIFO there is a named pipe given by name, the device NUL, the
+peak memory the peak working set (test_platforms_20261124); only a FIFO at a name inside a pack has no Windows
+equivalent and is skipped there with that reason.
 
 SPEC v0.12 §5 step 0: the ledger verifier reads a FIFO (`verifier.py <(cat ledger)`, the six verifiers since 0.20.2),
 bounded in size and in idle time; a FIFO with no writer is FAIL after 10 s. Positive control: on 4f15a65 10 of the 12
@@ -25,8 +27,7 @@ import unittest
 sys.dont_write_bytecode = True
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-# Linux and macOS have all of it (mkfifo, /dev/zero, ru_maxrss); Windows has no FIFO at a name in a directory
-LINUX = unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO at a name inside a directory and a link to /dev/zero: POSIX only")
+from test_platforms_20261124 import DEVICE, PEAK_RSS_KIB, fifo, fifo_at, pipe_writer  # noqa: E402
 
 
 def child(code: str, *args, timeout: int = 60):
@@ -40,7 +41,6 @@ def child(code: str, *args, timeout: int = 60):
         return 124, "", "timeout"
 
 
-@LINUX
 class Bounded(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.mkdtemp()
@@ -67,13 +67,12 @@ class Bounded(unittest.TestCase):
         with open(m, "w", encoding="utf-8", newline="") as f:
             json.dump(man, f)
 
-    VERIFY_RSS = """
-        import resource, evidence_pack as E
-        r = E.verify_pack(sys.argv[1])
-        print(json.dumps({"valid": r["valid"], "admission": r.get("admission"), "error": r.get("error"),
-                          "maxrss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-                          // (1024 if sys.platform == "darwin" else 1)}))   # macOS counts bytes, Linux KiB
-    """
+    VERIFY_RSS = PEAK_RSS_KIB + """
+import evidence_pack as E
+r = E.verify_pack(sys.argv[1])
+print(json.dumps({"valid": r["valid"], "admission": r.get("admission"), "error": r.get("error"),
+                  "maxrss_kib": peak_rss_kib()}))
+"""
 
     def test_a_listed_file_over_the_bound_is_refused_before_reading(self):
         import verifier
@@ -103,7 +102,7 @@ class Bounded(unittest.TestCase):
     def test_a_fifo_as_manifest_does_not_block(self):
         m = os.path.join(self.pack, "MANIFEST.json")
         os.remove(m)
-        os.mkfifo(m)
+        fifo_at(self, m)
         rc, out, err = child(self.VERIFY_RSS, self.pack, timeout=20)
         self.assertEqual(rc, 0, err[-300:])
         r = json.loads(out)
@@ -116,7 +115,7 @@ class Bounded(unittest.TestCase):
         p = os.path.join(self.pack, "pipe.bin")
         self.add_listed("pipe.bin", 0)
         os.remove(p)
-        os.mkfifo(p)
+        fifo_at(self, p)
         rc, out, err = child("""
             import evidence_pack as E
             real = os.path.isfile
@@ -128,12 +127,10 @@ class Bounded(unittest.TestCase):
         self.assertEqual(json.loads(out), {"valid": False, "file_ok": False, "admission": "admitted"})
 
 
-@LINUX
 class Fifos(unittest.TestCase):
     def setUp(self):
         self.td = tempfile.mkdtemp()
-        self.fifo = os.path.join(self.td, "f")
-        os.mkfifo(self.fifo)
+        self.fifo = fifo(self, os.path.join(self.td, "f"))   # Windows: a named pipe whose server never writes
 
     def tearDown(self):
         shutil.rmtree(self.td)
@@ -149,10 +146,9 @@ class Fifos(unittest.TestCase):
         self.assertEqual(json.loads(out), ["FAIL", "unreadable: FIFO idle for 10 s"])
 
     def run_fed(self, chunks, pause, limit=None):
-        """verify_ledger on the FIFO while a writer process writes `chunks` with `pause` seconds between them"""
-        w = subprocess.Popen([sys.executable, "-c", "import sys, time\nwith open(sys.argv[1], 'wb') as f:\n"
-                              "    for c in sys.argv[3:]:\n        f.write(c.encode()); f.flush(); time.sleep(float(sys.argv[2]))",
-                              self.fifo, str(pause), *chunks])
+        """verify_ledger on a pipe while a writer process writes `chunks` with `pause` seconds between them"""
+        name, w = pipe_writer(self, os.path.join(self.td, "fed%d" % len(os.listdir(self.td))),
+                              [c.encode() for c in chunks], pause)
         try:
             return child("""
                 import verifier as V
@@ -161,7 +157,7 @@ class Fifos(unittest.TestCase):
                     V.MAX_INPUT_BYTES = limit
                 r = V.verify_ledger(sys.argv[1])
                 print(json.dumps([r["verdict"], r.get("entries_count"), [e["error"] for e in r.get("parse_errors", [])]]))
-            """ % (limit,), self.fifo, timeout=30)
+            """ % (limit,), name, timeout=30)
         finally:
             w.wait(10)
 
@@ -186,9 +182,9 @@ class Fifos(unittest.TestCase):
     def test_a_device_is_not_read(self):
         rc, out, err = child("""
             import verifier as V
-            r = V.verify_ledger("/dev/zero")
+            r = V.verify_ledger(sys.argv[1])
             print(json.dumps([r["verdict"], r["parse_errors"][0]["error"]]))
-        """, timeout=20)
+        """, DEVICE, timeout=20)
         self.assertEqual(json.loads(out), ["FAIL", "unreadable: not a regular file"], err[-300:])
 
     def test_cldma_command_on_a_fifo(self):

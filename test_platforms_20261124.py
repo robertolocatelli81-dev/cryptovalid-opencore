@@ -111,6 +111,80 @@ def fifo_at(tc, path):
     return path
 
 
+_PIPE_WRITER = r"""
+import json, os, sys, time
+chunks, pause, delay = [bytes.fromhex(c) for c in json.loads(sys.argv[2])], float(sys.argv[3]), float(sys.argv[4])
+if os.name == "nt":
+    import _winapi
+    h = _winapi.CreateNamedPipe(sys.argv[1], _winapi.PIPE_ACCESS_OUTBOUND, 0, 1, 1 << 16, 1 << 16, 0, _winapi.NULL)
+    print("ready", flush=True)
+    try:
+        _winapi.ConnectNamedPipe(h, False)
+    except OSError:
+        pass   # ERROR_PIPE_CONNECTED: the reader opened it first
+    time.sleep(delay)
+    for c in chunks:
+        if c:
+            _winapi.WriteFile(h, c)
+        time.sleep(pause)
+    try:
+        import ctypes
+        ctypes.WinDLL("kernel32").FlushFileBuffers(h)   # until the reader has read every byte
+    finally:
+        _winapi.CloseHandle(h)
+else:
+    print("ready", flush=True)
+    with open(sys.argv[1], "wb") as f:   # waits for the reader
+        time.sleep(delay)
+        for c in chunks:
+            f.write(c)
+            f.flush()
+            time.sleep(pause)
+"""
+
+
+def pipe_writer(tc, path, chunks, pause=0.0, delay=0.0):
+    """A pipe a reader is given by name, with a writer process that waits `delay` s, writes `chunks` (bytes) with `pause`
+    s between them and leaves (no chunk: it leaves without a byte). POSIX: a FIFO at `path`; Windows: a named pipe
+    \\\\.\\pipe\\cv-<random>, the writer its server. Returns (the name to give the reader, the writer's Popen); the
+    writer is waited for at cleanup."""
+    import json
+    import secrets
+    if hasattr(os, "mkfifo"):
+        os.mkfifo(path)
+        name = path
+    else:
+        name = r"\\.\pipe\cv-" + secrets.token_hex(8)
+    w = subprocess.Popen([sys.executable, "-c", _PIPE_WRITER, name, json.dumps([bytes(c).hex() for c in chunks]),
+                          str(pause), str(delay)], stdout=subprocess.PIPE)
+    tc.addCleanup(lambda: (w.kill() if w.poll() is None else None, w.wait(30), w.stdout.close()))
+    tc.assertEqual(w.stdout.readline().strip(), b"ready")   # on Windows the pipe exists from here on
+    return name, w
+
+
+PEAK_RSS_KIB = """
+def peak_rss_kib():
+    import os, sys
+    if os.name == "nt":   # Windows: the peak working set of this process (GetProcessMemoryInfo), the equivalent of ru_maxrss
+        import ctypes
+        from ctypes import wintypes
+        class C(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+                (n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                                               "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                                               "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+        c = C()
+        c.cb = ctypes.sizeof(c)
+        k = ctypes.WinDLL("kernel32")
+        k.GetCurrentProcess.restype = wintypes.HANDLE
+        if not ctypes.WinDLL("psapi").GetProcessMemoryInfo(k.GetCurrentProcess(), ctypes.byref(c), c.cb):
+            raise OSError("GetProcessMemoryInfo failed")
+        return c.PeakWorkingSetSize // 1024
+    import resource
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // (1024 if sys.platform == "darwin" else 1)
+"""   # source for a child process: the peak memory of that process in KiB on Linux, macOS and Windows
+
+
 # the device a reader must refuse at once: Linux and macOS /dev/zero, Windows NUL (\\.\NUL, a character device)
 DEVICE = r"\\.\NUL" if os.name == "nt" else "/dev/zero"
 

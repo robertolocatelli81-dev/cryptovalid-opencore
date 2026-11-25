@@ -937,6 +937,8 @@ def open_ledger_input(path: str, limit: int = MAX_INPUT_BYTES, idle: float = FIF
         if not stat.S_ISFIFO(st.st_mode):
             raise InputNotRegular(f"{path}: not a regular file")
         data = bytearray()
+        if os.name == "nt":
+            return None, _read_pipe_windows(fd, path, limit, idle, data)
         while True:
             # select, not poll: poll on a FIFO is unreliable on macOS. Linux: no writer yet = not ready (it waits); the
             # writer gone = ready, and read gives b"" (the end)
@@ -954,6 +956,39 @@ def open_ledger_input(path: str, limit: int = MAX_INPUT_BYTES, idle: float = FIF
                 raise InputTooLarge(f"{path}: larger than {limit} bytes")
     finally:
         os.close(fd)
+
+
+def _read_pipe_windows(fd: int, path: str, limit: int, idle: float, data: bytearray) -> bytes:
+    """Windows' equivalent of the select loop of open_ledger_input (select waits on sockets only there): ask the pipe
+    how many bytes wait (PeekNamedPipe) and read only those, so a read never blocks; the writer gone
+    (ERROR_BROKEN_PIPE) is the end of file; no byte and no end for `idle` seconds is InputIdle. Polled every 10 ms,
+    as the JS verifier polls a FIFO."""
+    import ctypes
+    import msvcrt
+    import time
+    from ctypes import wintypes
+    peek = ctypes.WinDLL("kernel32", use_last_error=True).PeekNamedPipe
+    peek.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD),
+                     ctypes.c_void_p)
+    peek.restype = wintypes.BOOL
+    handle = msvcrt.get_osfhandle(fd)
+    last = time.monotonic()
+    while True:
+        n = wintypes.DWORD(0)
+        if not peek(handle, None, 0, None, ctypes.byref(n), None):
+            err = ctypes.get_last_error()
+            if err in (109, 233):   # ERROR_BROKEN_PIPE, ERROR_PIPE_NOT_CONNECTED: the writer is gone, the end
+                return bytes(data)
+            raise ctypes.WinError(err)
+        if n.value:
+            data += os.read(fd, min(n.value, 1 << 16))
+            last = time.monotonic()
+            if len(data) > limit:
+                raise InputTooLarge(f"{path}: larger than {limit} bytes")
+            continue
+        if time.monotonic() - last >= idle:
+            raise InputIdle(f"{path}: FIFO gave no byte and no end of file in {idle:g} s")
+        time.sleep(0.01)
 
 
 def read_regular(path: str, limit: int = MAX_INPUT_BYTES) -> bytes:
