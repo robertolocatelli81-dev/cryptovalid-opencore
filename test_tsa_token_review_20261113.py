@@ -215,11 +215,11 @@ class HandBuiltTokens(unittest.TestCase):
         try:
             from test_platforms_20261124 import fake_calls
             try:
-                T.verify_token(self.token(self.k, self.c, self.tstinfo()), DIGEST, "sha256", [self.pin])
+                got = T.verify_token(self.token(self.k, self.c, self.tstinfo()), DIGEST, "sha256", [self.pin])
             except CheckNotRun:
                 pass
             else:
-                self.fail("CheckNotRun not raised; " + fake_calls(os.path.join(self.d, "binkill")))
+                self.fail("CheckNotRun not raised: %r; %s" % ({k: got.get(k) for k in ("status", "reason", "detail")}, fake_calls(os.path.join(self.d, "binkill"))))
         finally:
             restore()
 

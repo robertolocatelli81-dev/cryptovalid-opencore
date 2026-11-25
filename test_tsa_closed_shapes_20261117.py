@@ -167,11 +167,11 @@ class ClosedShapes(unittest.TestCase):
             from verifier import CheckNotRun
             from test_platforms_20261124 import fake_calls
             try:
-                T.verify_token(self.ski, K.DIGEST, "sha256", [self.lab.j("ca.crt")])
+                got = T.verify_token(self.ski, K.DIGEST, "sha256", [self.lab.j("ca.crt")])
             except CheckNotRun:
                 pass
             else:
-                self.fail("CheckNotRun not raised; " + fake_calls(bindir))
+                self.fail("CheckNotRun not raised: %r; %s" % ({k: got.get(k) for k in ("status", "reason", "detail")}, fake_calls(bindir)))
             v = T.verify_token(self.tok, K.DIGEST, "sha256", [self.lab.j("ca.crt")])   # the other form: no `verify`
             self.assertEqual(v["status"], "verified", v)
         finally:

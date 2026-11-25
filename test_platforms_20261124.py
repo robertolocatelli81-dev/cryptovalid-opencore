@@ -329,9 +329,23 @@ except OSError:
     pass
 _body = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "fake_body.py")
 if os.path.basename(sys.executable).lower() == "openssl.exe" and os.path.isfile(_body):
-    sys.argv = list(sys.orig_argv[1:])   # the arguments openssl was given (sys.argv is not set yet here)
+    # sys.argv as a program sees it: [the program, its arguments] (sys.argv is not set yet here). Until b6de430 it was the
+    # arguments alone, so a body's sys.argv[1:] dropped the first one: `cms -verify ...` passed through as `-verify ...`,
+    # exit 1 (run 45515804628), and a body never saw `ts` or `verify`
+    sys.argv = [sys.executable] + list(sys.orig_argv[1:])
     with open(os.path.join(os.path.dirname(_body), "fake_calls.log"), "a", encoding="utf-8") as _f:
-        _f.write(repr(sys.argv) + "\n")   # what the stand-in was asked, for a failing test to show
+        _f.write(repr(sys.argv[1:]) + "\n")   # what the stand-in was asked, for a failing test to show
+    import subprocess as _sp
+    _call = _sp.call
+
+    def _logged_call(cmd, **kw):   # the binary the body starts and what it says on stderr, in the log, then passed on
+        kw["stderr"] = _sp.PIPE
+        r = _sp.run(cmd, **kw)
+        with open(os.path.join(os.path.dirname(_body), "fake_calls.log"), "a", encoding="utf-8") as _f:
+            _f.write("  ran %r -> %s, stderr %r\n" % (cmd[0], r.returncode, r.stderr[-400:]))
+        os.write(2, r.stderr)
+        return r.returncode
+    _sp.call = _logged_call
     code = 0
     try:
         with open(_body, encoding="utf-8") as _f:
@@ -423,7 +437,7 @@ def fake_openssl(tc, bindir, sh_body, py_body):
     # with the handles the stand-in was given (stdin=0, stdout=1, stderr=2), as the bodies pass through: without them
     # subprocess on Windows (close_fds) gives the child no handle to write to, and openssl ends with 1 (run 45503450377:
     # every `cms -verify` passed through exited 1)
-    _write_fake_body(probe_dir, "import os, subprocess, sys\nprint('FAKE', sys.argv, flush=True)\n"
+    _write_fake_body(probe_dir, "import os, subprocess, sys\nprint('FAKE', sys.argv[1:], flush=True)\n"
                      "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL'], 'version'], stdin=0, stdout=1, stderr=2))", real)
     # the probe is started as the code starts openssl: cryptovalid_tsa._run_openssl, in this process, with the
     # environment the tests set (PATH with the probe's folder first)
@@ -1020,7 +1034,9 @@ class FakeOpensslOnWindows(unittest.TestCase):
             f.write(_FAKE_SITE)
         exe = os.path.join(d, "openssl.exe")
         os.symlink(sys.executable, exe)
-        _write_fake_body(d, "import sys; print('|'.join(sys.argv)); sys.exit(127)", "openssl")
+        # as the bodies read it: sys.argv[0] the program, sys.argv[1:2] the openssl command
+        _write_fake_body(d, "import sys; print('|'.join(sys.argv[1:])); sys.exit(127 if sys.argv[1:2] == ['ts'] else 3)",
+                         "openssl")
         env = dict(os.environ, PYTHONPATH=site)   # here the hook is found through PYTHONPATH (not a venv)
         r = subprocess.run([exe, "ts", "-verify", "-in", "x"], capture_output=True, env=env, timeout=60)
         self.assertEqual((r.returncode, r.stdout.strip()), (127, b"ts|-verify|-in|x"), r.stderr[-300:])
