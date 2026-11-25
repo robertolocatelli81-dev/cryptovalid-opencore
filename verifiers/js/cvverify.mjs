@@ -317,7 +317,8 @@ export function readLedgerInput(p, done, idleMs = FIFO_IDLE_SECONDS * 1000, limi
     finally { closeSync(fd); }
     done(fail, out); return;
   }
-  if (!st.isFIFO()) { closeSync(fd); done({ verdict: "FAIL", error: LEDGER_NOT_REGULAR }, null); return; }
+  // the mode, not st.isFIFO(): on Windows Node answers false there for a named pipe too, whose mode is S_IFIFO
+  if ((st.mode & 0o170000) !== 0o010000) { closeSync(fd); done({ verdict: "FAIL", error: LEDGER_NOT_REGULAR }, null); return; }
   if (process.platform === "win32") { readPipeWindows(fd, done, idleMs, limit); return; }
   // a FIFO: read on the descriptor opened above (O_NONBLOCK), polled every 10 ms: a byte is data; EAGAIN is a writer
   // there with nothing yet; 0 is the end once a writer was seen (a byte or an EAGAIN), and no writer yet before that, as
@@ -356,7 +357,9 @@ export function readLedgerInput(p, done, idleMs = FIFO_IDLE_SECONDS * 1000, limi
 // process until the writer left, measured on Linux through a FIFO opened without O_NONBLOCK.)
 function readPipeWindows(fd, done, idleMs, limit) {
   const parts = []; let n = 0, over = false, timer = null;
-  const sock = new net.Socket({ fd, readable: true, writable: false });
+  let sock;
+  try { sock = new net.Socket({ fd, readable: true, writable: false }); }
+  catch (e) { closeSync(fd); done({ verdict: "FILE_ERROR", error: e.code || e.message }, null); return; }
   const end = (fail, out) => {
     if (over) return;
     over = true; clearTimeout(timer); sock.destroy();

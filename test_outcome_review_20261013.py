@@ -300,12 +300,12 @@ class TestPromisedFileOverExisting(_Tmp):
 
     def _out_named_pipe_written_directly(self):
         """Windows' equivalent: --out names a named pipe (\\\\.\\pipe\\...) whose server is this test; the receipt
-        reaches it whole. Every instance is listening from the start: a look at the path (os.stat) takes one, the
-        write another"""
+        reaches it whole, its bytes as they are. The pipe has one instance: a look at the path (os.stat opens it) would
+        take it from the write"""
         import _winapi
         import secrets
         name = r"\\.\pipe\cv-out-" + secrets.token_hex(8)
-        got, threads = [], []
+        got = []
 
         def serve(h):
             try:
@@ -326,17 +326,14 @@ class TestPromisedFileOverExisting(_Tmp):
                     got.append(data)
             finally:
                 _winapi.CloseHandle(h)
-        for _ in range(4):
-            h = _winapi.CreateNamedPipe(name, _winapi.PIPE_ACCESS_INBOUND, 0, _winapi.PIPE_UNLIMITED_INSTANCES,
-                                        1 << 16, 1 << 16, 0, _winapi.NULL)
-            t = threading.Thread(target=serve, args=(h,), daemon=True)
-            t.start()
-            threads.append(t)
+        h = _winapi.CreateNamedPipe(name, _winapi.PIPE_ACCESS_INBOUND, 0, 1, 1 << 16, 1 << 16, 0, _winapi.NULL)
+        t = threading.Thread(target=serve, args=(h,), daemon=True)
+        t.start()
         rc, _, err = self.run_py([os.path.join(HERE, "verifier.py"), SAMPLE, "--out", name])
-        for t in threads:
-            t.join(0.5)
+        t.join(10)
         self.assertEqual(rc, 0, err)
         self.assertEqual(len(got), 1, got)
+        self.assertNotIn(b"\r", got[0])
         self.assertEqual(json.loads(got[0])["verdict"], "PASS")
 
 

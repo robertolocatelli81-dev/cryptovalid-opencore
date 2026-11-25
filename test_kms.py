@@ -502,14 +502,14 @@ class TestPkcs11ToolByItsPath(unittest.TestCase):
 
     def test_the_path_which_names_is_run(self):
         from unittest import mock
-        seen = []
-        with mock.patch.object(kms.shutil, "which", lambda n: "/opt/opensc/bin/pkcs11-tool" if n == "pkcs11-tool" else None), \
+        seen, exe = [], os.path.abspath("/opt/opensc/bin/pkcs11-tool")   # Windows: on this drive
+        with mock.patch.object(kms.shutil, "which", lambda n: exe if n == "pkcs11-tool" else None), \
                 mock.patch.dict(os.environ, {"CV_TEST_PIN": "1"}):
             b = kms.Pkcs11Backend("m.so", "t", "k", pin="env:CV_TEST_PIN")
             with mock.patch.object(kms.subprocess, "run",
                                    lambda cmd, **kw: (seen.append(cmd[0]), subprocess.CompletedProcess(cmd, 0, b"", b""))[1]):
                 b._run(["--list-objects"])
-        self.assertEqual(seen, ["/opt/opensc/bin/pkcs11-tool"])
+        self.assertEqual(seen, [exe])
 
     def test_without_the_tool_no_backend(self):
         from unittest import mock

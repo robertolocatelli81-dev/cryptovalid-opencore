@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -69,11 +70,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "usage: -expect-ledger-id needs 64 lowercase hex characters, the self_hash of entry 0 (got %q)\n", *lid)
 		os.Exit(2)
 	}
-	if _, err := os.Stat(flag.Arg(0)); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+	// a Windows named pipe is not looked at before it is opened: os.Stat opens it, which takes one of its instances
+	pipe := runtime.GOOS == "windows" && isPipeName(flag.Arg(0))
+	if !pipe {
+		if _, err := os.Stat(flag.Arg(0)); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
 	}
 	v := cv.VerifyLedgerFull(flag.Arg(0), *tip, *pk, *pq, *epk, *epq, *rpq, *req, *nb, *lid)
+	if pipe && len(v.Failures) == 1 && strings.HasPrefix(v.Failures[0], "open: ") { // absent, as os.Stat says of a file
+		fmt.Fprintln(os.Stderr, v.Failures[0])
+		os.Exit(2)
+	}
 	out, _ := json.MarshalIndent(v, "", " ")
 	// 0.20.3: fmt.Println's error was dropped, so a full disk exited with the verdict's code and no receipt. os.Stdout is
 	// unbuffered: Write returning nil means every byte was taken.
@@ -85,4 +94,9 @@ func main() {
 		os.Exit(0)
 	}
 	os.Exit(1)
+}
+
+// isPipeName: a path under \\.\pipe\, where Windows has its named pipes
+func isPipeName(path string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.ReplaceAll(path, "/", `\`)), `\\.\pipe\`)
 }

@@ -2302,7 +2302,11 @@ maintainer, outside this repository.
    to or signs is a regular file (else `<path>: unreadable: not a regular file`; a directory is the system's `is a
    directory` when it is opened to write), and the key file of `-tipkey` (`LoadTipKey`) is read as (c): a regular file
    or a FIFO of at most 1 MiB (`input_too_large: file exceeds 1048576 bytes`), with the same idle bound; a device or a
-   directory is `unreadable: not a regular file`. The data `cvappend` reads from stdin becomes one line: at most 64 MiB
+   directory is `unreadable: not a regular file`. On Windows a FIFO is a named pipe given by name (`\\.\pipe\<name>`),
+   opened once and not looked at before (0.29.0): asking for its attributes opens it and takes one of its instances,
+   so Go's `cvverify` does not `stat` it, Java knows it by its name, and `verifier.write_output` writes to one named by
+   `--out` the same way. JS judges the mode `fstat` gives (Node's `isFIFO()` is false for every file there). A Windows
+   device that has no attributes (`\\.\NUL`) is the last row of the table in Java too. The data `cvappend` reads from stdin becomes one line: at most 64 MiB
    (`MaxLineBytes`), else `data: input_too_large: more than 67108864 bytes`, exit 2, nothing appended (stdin without
    end, `< /dev/zero`, was read until no memory was left: Go's `fatal error: out of memory` under `ulimit -d 524288`).
    The JS verifier's `--conformance <dir>` reads each file of the directory as its tip reader does: one that is not a
@@ -2327,8 +2331,7 @@ maintainer, outside this repository.
    `verifiers/js/test.mjs`.
    Not measured: macOS, where the Go runtime does not poll a FIFO (the Go verifier reads one there with a pause of 10 ms
    between tries, and a FIFO no writer has opened yet reads as empty, `empty_ledger`, where Linux waits for a writer),
-   and where Node and Java were not run; a Go verifier built for a platform that is not Unix opens a path the plain way,
-   as rule 2 declares. The Rust and Swift verifiers read the ledger whole (`std::fs::read`, `FileHandle`): not changed,
+   and where Node and Java were not run. The Rust and Swift verifiers read the ledger whole (`std::fs::read`, `FileHandle`): not changed,
    no toolchain on the bench that measured this rule.
 
 9. **What a ledger may hold is counted before it is parsed** (written on 2026-11-22, while rule 8 was measured; the
@@ -2491,7 +2494,7 @@ its verification only (no key generation, no signing).
    verified the same way); `param` is one of the twelve FIPS 205 parameter sets, written `sha2_128s`, `sha2_128f`,
    `sha2_192s`, `sha2_192f`, `sha2_256s`, `sha2_256f`, `shake_128s`, `shake_128f`, `shake_192s`, `shake_192f`,
    `shake_256s`, `shake_256f`; `root` a non-empty string that has a UTF-8 encoding (a lone surrogate, which JSON can write as `"\ud800"`, has
-   none: refused, `type`); `ts` a finite JSON number (not a boolean); `sig` and `pub`
+   none: refused, `type`); `ts` a finite JSON number (not a boolean; an integer of at most 4300 digits, §30); `sig` and `pub`
    lowercase hexadecimal of a whole number of bytes, `pub` of the parameter set's public key length (2n: 32, 48 or 64
    bytes) and `sig` of its signature length (FIPS 205 Table 2: 7856, 17088, 16224, 35664, 29792, 49856 bytes for 128s,
    128f, 192s, 192f, 256s, 256f, SHA2 and SHAKE alike).
@@ -2736,6 +2739,10 @@ version (the first `RecursionError` of a bare `json.loads`, measured on 2026-11-
 and 3.11, 9 998 under 3.12, 9 999 under 3.13, 65 168 under 3.14; fewer inside a chain of calls): a text 5 000 levels deep was refused under 3.9 and read under 3.13. Bytes are decoded as `json.loads` decodes them (UTF-8, UTF-16 or UTF-32) before
 the scan, which reads characters. A format with a lower bound
 of its own (Cedulon: 500) keeps it.
+
+An integer of more than 4300 digits (the sign not counted) is refused too, in the same texts and as the `ts` of §24 rule
+1: 4300 is the default limit of Python's own conversion since 3.9.14, 3.10.7 and 3.11, and a Python without one (3.9.13)
+read the number and went on. The integers of a ledger line keep the narrower bound of §3.
 
 ## 31. A file name of a pack names one file on every system (NORMATIVE since v0.15, 2026-11-24)
 

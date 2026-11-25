@@ -335,7 +335,7 @@ def read_regular(path: str, limit: int = MAX_INPUT_BYTES) -> bytes:
     """The bytes of a REGULAR file of at most `limit` bytes. Opened without blocking and judged on the OPEN descriptor,
     so a FIFO, a device (/dev/zero) or a directory is refused at once instead of blocking or filling memory (measured
     26/09/2026: a FIFO given as a JSON input blocked the verifier indefinitely). Raises OSError."""
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0))
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):

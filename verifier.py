@@ -426,6 +426,15 @@ def _copy_dacl(src: str, dst: str) -> None:
         raise ctypes.WinError(ctypes.get_last_error())
 
 
+_WINDOWS_ABSOLUTE = re.compile(r"[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]")   # X:\ or \\server\share
+
+
+def _is_absolute(path: str) -> bool:
+    """os.path.isabs, and on Windows one rule on every Python: a drive with its root, or \\\\server\\share (ntpath.isabs
+    called `\\tools`, a folder of the current drive, absolute until Python 3.12)"""
+    return _WINDOWS_ABSOLUTE.match(path) is not None if os.name == "nt" else os.path.isabs(path)
+
+
 def which(name: str) -> Optional[str]:
     """shutil.which, never the current folder. On Windows shutil.which looks in the current folder before PATH (as
     cmd.exe does), and on every system an empty or relative PATH entry is the current folder: a program placed beside
@@ -433,16 +442,24 @@ def which(name: str) -> Optional[str]:
     absolute folders of PATH are searched."""
     import shutil
     exe = shutil.which(name)
-    if exe is None or os.path.isabs(exe):
+    if exe is None or _is_absolute(exe):
         return exe
     exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep) if e] if os.name == "nt" else [""]
     for folder in os.environ.get("PATH", "").split(os.pathsep):
-        if os.path.isabs(folder):
+        if _is_absolute(folder):
             for ext in exts:
                 path = os.path.join(folder, name + ext)
                 if os.path.isfile(path) and os.access(path, os.X_OK):
                     return path
     return None
+
+
+def _refuse_taken(path: str) -> None:
+    """Windows, before a creation that must be exclusive: O_CREAT|O_EXCL there follows a link to nothing and creates its
+    target, and a folder at the name is a PermissionError, not FileExistsError (CI run 45565069144). Anything that
+    stands at the name is FileExistsError, as on POSIX."""
+    if os.name == "nt" and os.path.lexists(path):
+        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), path)
 
 
 def create_private(folder: str, prefix: str, suffix: str = "", directory: bool = False):
@@ -456,6 +473,7 @@ def create_private(folder: str, prefix: str, suffix: str = "", directory: bool =
     for _ in range(64):
         path = os.path.join(folder, prefix + secrets.token_hex(8) + suffix)
         try:
+            _refuse_taken(path)
             if directory:
                 os.mkdir(path, 0o700)
                 return None, path
@@ -476,6 +494,7 @@ def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = No
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     tmp = f"{path}.{secrets.token_hex(8)}.tmp"
     try:
+        _refuse_taken(tmp)
         fd = os.open(tmp, flags, mode)
     except OSError as e:
         raise OutputNotWritten(f"{path}: {os_reason(e)}") from None
@@ -541,8 +560,16 @@ def commit_tmp(tmp: str, path: str) -> None:
         raise OutputNotWritten(f"{path}: {os_reason(e)}") from None
 
 
+def _is_windows_pipe(path) -> bool:
+    """Windows: `path` names a pipe (\\\\.\\pipe\\name), known by its name. Looking at it (isdir, realpath, stat) opens
+    it, which takes one of its instances from the write (CI run 45565069144: exit 74)."""
+    return os.name == "nt" and str(path).replace("/", "\\").lower().startswith("\\\\.\\pipe\\")
+
+
 def refuse_directory(path: str) -> None:
     """a path that names a directory (or ends with a separator) can never receive the file: OutputNotWritten"""
+    if _is_windows_pipe(path):
+        return
     p = str(path)
     if p.endswith(("/", os.sep)) or os.path.isdir(p):
         raise OutputNotWritten(f"{path}: is a directory")
@@ -551,14 +578,16 @@ def refuse_directory(path: str) -> None:
 def write_output(path: str, data, mode: int = 0o666) -> None:
     """The whole `data` at `path`, or nothing new there and OutputNotWritten. A regular file (or a new path) is written
     through a temporary file renamed over it once complete, so a file already at `path` stays intact on failure. A path
-    that exists and is not a regular file (a FIFO, /dev/stdout, a device) is written directly, every byte, in a loop."""
+    that exists and is not a regular file (a FIFO, a Windows named pipe, /dev/stdout, a device) is written directly,
+    every byte as it is, in a loop."""
     import stat
     refuse_directory(path)
-    path, st = _replace_target(path)
-    if st is not None and not stat.S_ISREG(st.st_mode):
+    pipe = _is_windows_pipe(path)
+    path, st = (path, None) if pipe else _replace_target(path)
+    if pipe or (st is not None and not stat.S_ISREG(st.st_mode)):
         raw = data if isinstance(data, (bytes, bytearray)) else data.encode("utf-8")
         try:
-            fd = os.open(path, os.O_WRONLY | getattr(os, "O_NOCTTY", 0))
+            fd = os.open(path, os.O_WRONLY | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
             try:
                 _write_fd(fd, raw)
             finally:
@@ -608,6 +637,7 @@ def copy_output(src: str, path: str) -> None:
         return OutputNotWritten(f"{path}: {os_reason(e)}")
     with os.fdopen(open_regular(src, float("inf")), "rb") as f:   # SPEC §5 step 0: a regular file, opened once without blocking
         try:
+            _refuse_taken(tmp)
             fd = os.open(tmp, flags, 0o666)
         except OSError as e:
             raise lost(e) from None
@@ -789,8 +819,19 @@ def _no_float(x):
     raise ValueError(f"non-portable float {x!r} (use a string; the format forbids floats)")
 
 
+MAX_INT_DIGITS = 4300   # SPEC §30
+
+
+def _portable_int(x: str) -> int:
+    """SPEC §30: an integer of more than 4300 digits is refused on every Python. 4300 is the default limit of the
+    interpreter's own conversion (3.9.14+, 3.10.7+, 3.11+); a Python without one (3.9.13) read such a number."""
+    if len(x) - x.startswith("-") > MAX_INT_DIGITS:
+        raise ValueError(f"integer of more than {MAX_INT_DIGITS} digits")
+    return int(x)
+
+
 def _bounded_int(x):
-    n = int(x)
+    n = _portable_int(x)
     if abs(n) > _SAFE_INT:
         raise ValueError(f"integer {x} outside the portable range +/-(2**53-1)")
     return n
@@ -962,7 +1003,8 @@ def _read_pipe_windows(fd: int, path: str, limit: int, idle: float, data: bytear
     """Windows' equivalent of the select loop of open_ledger_input (select waits on sockets only there): ask the pipe
     how many bytes wait (PeekNamedPipe) and read only those, so a read never blocks; the writer gone
     (ERROR_BROKEN_PIPE) is the end of file; no byte and no end for `idle` seconds is InputIdle. Polled every 10 ms,
-    as the JS verifier polls a FIFO."""
+    as the JS verifier polls a FIFO, and without a pause for the 20 ms after a byte: a pipe of 64 KiB refilled by a
+    fast writer would otherwise give 64 KiB per pause (15.6 ms, the Windows clock before Python 3.11)."""
     import ctypes
     import msvcrt
     import time
@@ -986,9 +1028,10 @@ def _read_pipe_windows(fd: int, path: str, limit: int, idle: float, data: bytear
             if len(data) > limit:
                 raise InputTooLarge(f"{path}: larger than {limit} bytes")
             continue
-        if time.monotonic() - last >= idle:
+        waited = time.monotonic() - last
+        if waited >= idle:
             raise InputIdle(f"{path}: FIFO gave no byte and no end of file in {idle:g} s")
-        time.sleep(0.01)
+        time.sleep(0 if data and waited < 0.02 else 0.01)
 
 
 def read_regular(path: str, limit: int = MAX_INPUT_BYTES) -> bytes:
@@ -1099,7 +1142,7 @@ class JsonTooDeepToRead(JsonTooDeep, RecursionError):
 
 
 def json_loads_bounded(s, **kw):
-    """json.loads, with nesting deeper than MAX_JSON_DEPTH refused first by a linear scan (JsonTooDeepToRead). Bytes
+    """json.loads, with an integer of more than MAX_INT_DIGITS digits refused (ValueError) and nesting deeper than MAX_JSON_DEPTH refused first by a linear scan (JsonTooDeepToRead). Bytes
     are decoded first, as json.loads decodes them (UTF-8, UTF-16 or UTF-32, by json.detect_encoding): the scan reads
     characters. Scanned as bytes, a UTF-16 text hid its brackets behind a code unit with the byte 0x22 or 0x5C (U+2201):
     1 100 levels were read under Python 3.13 and a RecursionError under 3.9."""
@@ -1107,6 +1150,7 @@ def json_loads_bounded(s, **kw):
         s = s.decode(json.detect_encoding(s), "surrogatepass")
     if isinstance(s, str) and json_nesting_depth(s) > MAX_JSON_DEPTH:
         raise JsonTooDeepToRead(f"JSON nested deeper than {MAX_JSON_DEPTH} levels")
+    kw.setdefault("parse_int", _portable_int)
     return json.loads(s, **kw)
 
 

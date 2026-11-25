@@ -113,11 +113,12 @@ def fifo_at(tc, path):
 
 _PIPE_WRITER = r"""
 import json, os, sys, time
-chunks, pause, delay = [bytes.fromhex(c) for c in json.loads(sys.argv[2])], float(sys.argv[3]), float(sys.argv[4])
-chunks = chunks * int(sys.argv[5])
+chunks = [bytes.fromhex(c) for c in json.load(sys.stdin)]   # not an argument: those are 32 767 characters on Windows
+pause, delay = float(sys.argv[2]), float(sys.argv[3])
+chunks = chunks * int(sys.argv[4])
 if os.name == "nt":
     import _winapi
-    h = _winapi.CreateNamedPipe(sys.argv[1], _winapi.PIPE_ACCESS_OUTBOUND, 0, 1, 1 << 16, 1 << 16, 0, _winapi.NULL)
+    h = _winapi.CreateNamedPipe(sys.argv[1], 2, 0, 1, 1 << 16, 1 << 16, 0, _winapi.NULL)   # 2: PIPE_ACCESS_OUTBOUND (_winapi has no name for it)
     print("ready", flush=True)
     try:
         _winapi.ConnectNamedPipe(h, False)
@@ -130,7 +131,7 @@ if os.name == "nt":
                 _winapi.WriteFile(h, c)
             time.sleep(pause)
         import ctypes
-        ctypes.WinDLL("kernel32").FlushFileBuffers(h)   # until the reader has read every byte
+        ctypes.WinDLL("kernel32").FlushFileBuffers(ctypes.c_void_p(h))   # until the reader has read every byte
     except OSError:
         pass   # the reader stopped (at its bound): as a POSIX writer's BrokenPipeError
     finally:
@@ -161,9 +162,11 @@ def pipe_writer(tc, path, chunks, pause=0.0, delay=0.0, times=1):
         name = path
     else:
         name = r"\\.\pipe\cv-" + secrets.token_hex(8)
-    w = subprocess.Popen([sys.executable, "-c", _PIPE_WRITER, name, json.dumps([bytes(c).hex() for c in chunks]),
-                          str(pause), str(delay), str(times)], stdout=subprocess.PIPE)
+    w = subprocess.Popen([sys.executable, "-c", _PIPE_WRITER, name, str(pause), str(delay), str(times)],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     tc.addCleanup(lambda: (w.kill() if w.poll() is None else None, w.wait(30), w.stdout.close()))
+    w.stdin.write(json.dumps([bytes(c).hex() for c in chunks]).encode())
+    w.stdin.close()
     tc.assertEqual(w.stdout.readline().strip(), b"ready")   # on Windows the pipe exists from here on
     return name, w
 
@@ -183,12 +186,32 @@ def peak_rss_kib():
         c.cb = ctypes.sizeof(c)
         k = ctypes.WinDLL("kernel32")
         k.GetCurrentProcess.restype = wintypes.HANDLE
-        if not ctypes.WinDLL("psapi").GetProcessMemoryInfo(k.GetCurrentProcess(), ctypes.byref(c), c.cb):
+        info = ctypes.WinDLL("psapi").GetProcessMemoryInfo
+        info.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD)   # the pseudo-handle -1 has 64 bits: no default int
+        if not info(k.GetCurrentProcess(), ctypes.byref(c), c.cb):
             raise OSError("GetProcessMemoryInfo failed")
         return c.PeakWorkingSetSize // 1024
     import resource
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // (1024 if sys.platform == "darwin" else 1)
 """   # source for a child process: the peak memory of that process in KiB on Linux, macOS and Windows
+
+
+def no_int_limit():
+    """a context where this Python converts an integer of any length, as 3.9.13 does (no limit there at all)"""
+    import contextlib
+
+    @contextlib.contextmanager
+    def ctx():
+        if not hasattr(sys, "set_int_max_str_digits"):
+            yield
+            return
+        old = sys.get_int_max_str_digits()
+        sys.set_int_max_str_digits(0)
+        try:
+            yield
+        finally:
+            sys.set_int_max_str_digits(old)
+    return ctx()
 
 
 # the device a reader must refuse at once: Linux and macOS /dev/zero, Windows NUL (\\.\NUL, a character device)
@@ -1088,7 +1111,7 @@ class CrashedOpenssl(unittest.TestCase):
         import verifier as V
         crash = sp.CompletedProcess(["openssl"], 0xC0000005, "", "")
         with mock.patch.object(os, "name", "nt"), mock.patch.object(T, "_run_openssl", lambda *a, **k: crash), \
-                mock.patch.object(E.shutil, "which", lambda n: os.path.abspath("openssl")):   # a path, as on PATH
+                mock.patch.object(E.shutil, "which", lambda n: r"C:\bin\openssl.exe"):   # a path, as on PATH
             with self.assertRaises(V.CheckNotRun) as c:
                 E._verify_rfc3161("MAA=", "00" * 32)
         self.assertIn("0xC0000005", str(c.exception))
@@ -1177,11 +1200,11 @@ class OpensslByItsPath(unittest.TestCase):
         import subprocess as sp
         from unittest import mock
         import cryptovalid_tsa as T
-        seen = []
-        with mock.patch.object(shutil, "which", lambda n: "/opt/fake/bin/openssl" if n == "openssl" else None), \
+        seen, exe = [], os.path.abspath("/opt/fake/bin/openssl")   # Windows: on this drive ("/opt/..." names no drive there)
+        with mock.patch.object(shutil, "which", lambda n: exe if n == "openssl" else None), \
                 mock.patch.object(sp, "run", lambda cmd, **kw: (seen.append(cmd), sp.CompletedProcess(cmd, 0))[1]):
             T._run_openssl(["openssl", "version"], capture_output=True)
-        self.assertEqual(seen, [["/opt/fake/bin/openssl", "version"]])
+        self.assertEqual(seen, [[exe, "version"]])
         with mock.patch.object(shutil, "which", lambda n: None):
             from verifier import CheckNotRun
             with self.assertRaises(CheckNotRun):
@@ -1365,6 +1388,220 @@ class TemporaryNamesOnWindows(unittest.TestCase):
                 um = os.umask(0)
                 os.umask(um)
                 self.assertEqual((os.stat(p).st_mode & 0o777, os.stat(q).st_mode & 0o777), (0o600 & ~um, 0o700 & ~um))
+
+
+class WindowsRulesMeasuredEverywhere(unittest.TestCase):
+    """CI run 45565069144 (Windows): the code's Windows branches, with what Windows does put in the place of this
+    system's calls, so that a defect found there fails on every system"""
+
+    def test_a_link_to_nothing_at_a_temporary_name_is_taken(self):
+        """O_CREAT|O_EXCL on Windows follows a link to nothing and creates its target"""
+        import tempfile
+        from unittest import mock
+        import secrets
+        import verifier as V
+        real = os.open
+
+        def windows_open(p, flags, mode=0o777, **kw):
+            if os.path.islink(p):
+                flags &= ~(os.O_EXCL | getattr(os, "O_NOFOLLOW", 0))
+            return real(p, flags, mode, **kw)
+        for name, call in (("create_private", lambda d: V.create_private(d, "x-")),
+                           ("write_tmp", lambda d: V.write_tmp(os.path.join(d, "o"), b"data")),
+                           ("copy_output", lambda d: V.copy_output(os.path.join(d, "src"), os.path.join(d, "o")))):
+            with self.subTest(name), tempfile.TemporaryDirectory() as d:
+                target = os.path.join(d, "target")
+                with open(os.path.join(d, "src"), "wb") as f:
+                    f.write(b"src")
+                zeros = "00" * 8
+                try:
+                    for p in ("x-" + zeros, f"o.{zeros}.tmp"):
+                        os.symlink(target, os.path.join(d, p))
+                except OSError as e:
+                    self.skipTest(f"this user may not make links here: {e}")
+                with mock.patch.object(secrets, "token_hex", lambda n: zeros), mock.patch.object(os, "name", "nt"), \
+                        mock.patch.object(os, "open", windows_open):
+                    with self.assertRaises((FileExistsError, V.OutputNotWritten)):
+                        call(d)
+                self.assertFalse(os.path.exists(target))
+                self.assertFalse(os.path.exists(os.path.join(d, "o")))
+
+    def test_one_rule_for_an_absolute_path(self):
+        from unittest import mock
+        import verifier as V
+        with mock.patch.object(os, "name", "nt"):
+            for p in (r"C:\x\openssl.exe", "d:/x/openssl.exe", r"\\server\share\openssl.exe", "//server/share/x"):
+                self.assertTrue(V._is_absolute(p), p)
+            for p in (r"\tools\openssl.exe", "/opt/bin/openssl", r"C:openssl.exe", r".\openssl.exe", "openssl.exe", ""):
+                self.assertFalse(V._is_absolute(p), p)
+            with mock.patch.object(shutil, "which", lambda n: "/opt/bin/openssl"), mock.patch.dict(os.environ, {"PATH": ""}):
+                self.assertIsNone(V.which("openssl"))   # a folder of the current drive: not named
+
+    def test_a_named_pipe_to_write_is_opened_once_and_not_looked_at(self):
+        """each look at a pipe's name (isdir, realpath, stat) opens it and takes one of its instances; and the bytes
+        are written as they are (without O_BINARY Windows writes \\r\\n for \\n)"""
+        import tempfile
+        from unittest import mock
+        import verifier as V
+        opened, looked = [], []
+        with tempfile.TemporaryFile() as sink:
+            def fake_open(p, flags, mode=0o777, **kw):
+                opened.append((p, flags))
+                return os.dup(sink.fileno())
+
+            def look(p, *a, **k):
+                looked.append(p)
+                raise FileNotFoundError(2, "looked at", p)
+            pipe = r"\\.\pipe\cv-out"
+            with mock.patch.object(os, "name", "nt"), mock.patch.object(os, "O_BINARY", 0x8000, create=True), \
+                    mock.patch.object(os, "open", fake_open), mock.patch.object(os, "stat", look), \
+                    mock.patch.object(os, "lstat", look), mock.patch.object(os.path, "realpath", look), \
+                    mock.patch.object(os.path, "isdir", lambda p: looked.append(p) or False):
+                V.refuse_directory(pipe)
+                V.write_output(pipe, "a\nb\n")
+            self.assertEqual(looked, [])
+            self.assertEqual([p for p, _ in opened], [pipe])
+            self.assertTrue(opened[0][1] & 0x8000, "O_BINARY")
+            sink.seek(0)
+            self.assertEqual(sink.read(), b"a\nb\n")
+
+    def test_every_descriptor_for_file_bytes_is_binary(self):
+        """os.open without O_BINARY is a text descriptor on Windows: CRLF read as LF, Ctrl-Z the end. A policy digest of
+        cryptovalid_acta (read_regular) was of other bytes there"""
+        import tempfile
+        from unittest import mock
+        import cryptovalid_acta as A
+        raw = b"permit(principal, action, resource);\r\n// \x1a rest\r\n"
+        real, flags = os.open, []
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "p.cedar")
+            with open(p, "wb") as f:
+                f.write(raw)
+            self.assertEqual(A.read_regular(p), raw)
+
+            def spy(q, fl, *a, **k):
+                flags.append(fl)
+                return real(q, fl & ~0x40000000, *a, **k)
+            with mock.patch.object(os, "O_BINARY", 0x40000000, create=True), mock.patch.object(os, "open", spy):
+                A.read_regular(p)
+        self.assertEqual([bool(f & 0x40000000) for f in flags], [True])
+
+    def test_an_integer_past_4300_digits_is_refused_on_every_python(self):
+        """SPEC §30: the interpreter's own limit came with 3.9.14, 3.10.7 and 3.11; 3.9.13 has none"""
+        import verifier as V
+        with no_int_limit():
+            for text in ('{"n": %s}' % ("9" * 4301), '[-%s]' % ("1" * 4301)):
+                with self.assertRaisesRegex(ValueError, "more than 4300 digits"):
+                    V.json_loads_bounded(text)
+                with self.assertRaisesRegex(ValueError, "more than 4300 digits"):
+                    V._loads_strict(text)
+            self.assertEqual(V.json_loads_bounded("[-%s]" % ("9" * 4300)), [1 - 10 ** 4300])
+        self.assertEqual(V.json_loads_bounded('[1, -2, "%s"]' % ("9" * 5000)), [1, -2, "9" * 5000])
+
+    @unittest.skipUnless(shutil.which("node") and hasattr(os, "mkfifo"), "needs node and a FIFO; on Windows "
+                         "test_ledger_input_20261122 reads a real named pipe with the JS verifier")
+    def test_js_knows_a_pipe_by_its_mode(self):
+        """Node on Windows: Stats.isFIFO() is false for every file, the mode of a pipe is S_IFIFO"""
+        import tempfile
+        mjs = os.path.join(_HERE, "verifiers", "js", "cvverify.mjs")
+        code = ("import fs from 'node:fs'; fs.Stats.prototype.isFIFO = () => false;"
+                "Object.defineProperty(process, 'platform', {value: 'win32'});"
+                "const m = await import(process.argv[1]);"
+                "m.readLedgerInput(process.argv[2], (f, b) => { console.log(JSON.stringify([f, b && b.toString()])); }, 5000);"
+                "console.log('open');")
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "f")
+            os.mkfifo(p)
+            fd = os.open(p, os.O_RDWR | os.O_NONBLOCK)
+            os.write(fd, b"one line\n")
+            import pathlib
+            n = subprocess.Popen(["node", "--input-type=module", "-e", code, pathlib.Path(mjs).as_uri(), p],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                first = n.stdout.readline()
+                os.close(fd)   # opened by the reader: the writer may leave
+                rest, err = n.communicate(timeout=60)
+            finally:
+                n.kill()
+                n.wait(30)
+            self.assertEqual(first + rest, b'open\n[null,"one line\\n"]\n', err[-300:])
+
+    @unittest.skipUnless(shutil.which("javac") and shutil.which("java"), "needs a JDK")
+    def test_java_knows_the_name_of_a_device(self):
+        import tempfile
+        yes = [r"\\.\NUL", r"\\.\PhysicalDrive0", "NUL", r"C:\x\nul", "con", "Aux.txt", "COM1", r"d\LPT9"]
+        no = ["ledger.jsonl", r"C:\x\NULL", r"C:\nul\ledger.jsonl", "COM", "CONSOLE.txt"]
+        with tempfile.TemporaryDirectory() as d:
+            t = os.path.join(d, "T.java")
+            with open(t, "w", encoding="utf-8", newline="") as f:
+                f.write("public class T { public static void main(String[] a) { for (String s : a) "
+                        "System.out.print(CvVerify.windowsDevice(s) ? 'y' : 'n'); } }")
+            subprocess.run(["javac", "-encoding", "utf-8", "-d", d, t, os.path.join(_HERE, "verifiers", "java", "CvVerify.java")],
+                           check=True, capture_output=True, timeout=300)
+            out = subprocess.run(["java", "-cp", d, "T"] + yes + no, capture_output=True, timeout=120).stdout
+        self.assertEqual(out, b"y" * len(yes) + b"n" * len(no))
+
+
+class TheTestToolsOnWindows(unittest.TestCase):
+    """pipe_writer and PEAK_RSS_KIB, with Windows' own limits put in the place of this system's"""
+
+    def test_a_chunk_larger_than_a_command_line(self):
+        import verifier as V
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            name, w = pipe_writer(self, os.path.join(d, "big"), [b"\0" * (1 << 20), b"1"], times=2)
+            fd, data = V.open_ledger_input(name, idle=30)
+            w.wait(30)
+        self.assertIsNone(fd)
+        self.assertEqual(data, (b"\0" * (1 << 20) + b"1") * 2)
+
+    def test_the_writer_uses_only_what_winapi_has(self):
+        """_winapi has PIPE_ACCESS_DUPLEX and PIPE_ACCESS_INBOUND, not PIPE_ACCESS_OUTBOUND"""
+        import ctypes
+        import io
+        import json
+        import types
+        from unittest import mock
+        made, written, closed = [], [], []
+        fake = types.SimpleNamespace(
+            NULL=0, PIPE_ACCESS_DUPLEX=3, PIPE_ACCESS_INBOUND=1, PIPE_UNLIMITED_INSTANCES=255, PIPE_WAIT=0,
+            PIPE_READMODE_MESSAGE=2, PIPE_TYPE_MESSAGE=4,
+            CreateNamedPipe=lambda *a: made.append(a) or 77, ConnectNamedPipe=lambda h, o: None,
+            WriteFile=lambda h, b: written.append(bytes(b)), CloseHandle=closed.append)
+        dll = types.SimpleNamespace(FlushFileBuffers=lambda h: 1)
+        with mock.patch.dict(sys.modules, {"_winapi": fake}), mock.patch.object(os, "name", "nt"), \
+                mock.patch.object(ctypes, "WinDLL", lambda n: dll, create=True), \
+                mock.patch.object(sys, "argv", ["-c", r"\\.\pipe\x", "0", "0", "2"]), \
+                mock.patch.object(sys, "stdin", io.StringIO(json.dumps([b"ab".hex()]))), \
+                mock.patch.object(sys, "stdout", io.StringIO()) as out:
+            exec(compile(_PIPE_WRITER, "writer", "exec"), {})
+        self.assertEqual((out.getvalue(), written, closed), ("ready\n", [b"ab", b"ab"], [77]))
+        self.assertEqual(made[0][:2], (r"\\.\pipe\x", 2))
+
+    def test_the_peak_memory_is_asked_with_a_64_bit_handle(self):
+        """GetCurrentProcess is the pseudo-handle -1, 64 bits: an argument with no declared type is a C int"""
+        import ctypes
+        import types
+        from unittest import mock
+
+        class Info:
+            argtypes = None
+
+            def __call__(self, handle, ref, size):
+                if self.argtypes is None and isinstance(handle, int) and handle >= 1 << 32:
+                    raise ctypes.ArgumentError("argument 1: OverflowError: int too long to convert")
+                ref._obj.PeakWorkingSetSize = 5 << 20
+                return 1
+
+        class Current:
+            def __call__(self):
+                return 0xFFFFFFFFFFFFFFFF
+        dlls = {"kernel32": types.SimpleNamespace(GetCurrentProcess=Current()),
+                "psapi": types.SimpleNamespace(GetProcessMemoryInfo=Info())}
+        ns = {}
+        with mock.patch.object(os, "name", "nt"), mock.patch.object(ctypes, "WinDLL", dlls.__getitem__, create=True):
+            exec(PEAK_RSS_KIB, ns)
+            self.assertEqual(ns["peak_rss_kib"](), 5 << 10)
 
 
 if __name__ == "__main__":

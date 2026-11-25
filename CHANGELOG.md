@@ -188,10 +188,11 @@ Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those 
 
 - `verify.yml`: the suites, the conformance vectors and the steps without `cryptography` run on Python 3.9, 3.10, 3.11,
   3.12, 3.13 and 3.14 (before: 3.9 and 3.11); a new job `other-os` runs every `test_*.py` with and without
-  `cryptography`, and `conformance.py`, on macOS and Windows with Python 3.13.
+  `cryptography`, and `conformance.py`, on macOS and Windows with the same six.
 - `codeql.yml` and `governance.yml` run on a push to any branch, not only to master; on a push of a branch other than
   master the DCO job checks every commit not on master (before, only on pull requests). The OpenSSF Scorecard stays
-  on master: it rates the default branch.
+  on master: it rates the default branch. On a trial branch (`ci-prova-*`) a push ends the run it replaces; every
+  other run goes to its end.
 
 ### CodeQL and a weekly fuzz run (SPEC v0.15 §26)
 
@@ -312,7 +313,10 @@ default) or normalises Unicode (macOS) opens `L.jsonl` for `l.jsonl`.
   that condition), so a temporary folder an access list denies was a loop of up to `TMP_MAX` creations. The private folder for
   openssl (`cryptovalid_tsa`) and the private copy of a ledger (`cryptovalid_beacon`) now come from
   `verifier.create_private`: a random name with O_CREAT|O_EXCL|O_NOFOLLOW (mkdir 0o700 for a folder), tried again
-  only when the name is taken (at most 64 times); any other error is a check not run (exit 74) at the first try.
+  only when the name is taken (at most 64 times); any other error is a check not run (exit 74) at the first try. On
+  Windows O_CREAT|O_EXCL follows a link to nothing and creates its target, and a folder at the name is a
+  PermissionError (CI run 45565069144): there a name at which anything stands counts as taken before the creation, here
+  and in the temporary file of `write_tmp` and `copy_output`.
   `test_platforms_20261124.TemporaryNamesOnWindows` simulates the Windows conditions; its control counts 10000 tries
   of `mkstemp` (TMP_MAX bounded for the test), and the two callers failed it before.
 
@@ -323,7 +327,8 @@ default) or normalises Unicode (macOS) opens `L.jsonl` for `l.jsonl`.
   absolute path found on PATH (`verifier.which`): `shutil.which` alone looks in the current folder first on Windows,
   and at an empty or relative `PATH` entry on every system, so a program placed beside the evidence would have been
   the one it named; an answer that is not an absolute path is dropped and the absolute folders of `PATH` are
-  searched. `openssl` gone from PATH is a check not run. Tests that failed before:
+  searched. On Windows absolute is a drive with its root or `\\server\share` on every Python (`ntpath.isabs` called
+  `\tools`, a folder of the current drive, absolute until 3.12). `openssl` gone from PATH is a check not run. Tests that failed before:
   `test_platforms_20261124.OpensslByItsPath`, `test_platforms_20261124.NeverTheProgramOfTheCurrentFolder`,
   `test_kms.TestPkcs11ToolByItsPath`. Audit of the same class in this
   package: no other production module starts a program by a bare name (`mutation_runner.py` runs the command its
@@ -379,10 +384,21 @@ pausing between full reads; the Java verifier writes stderr in UTF-8 and its rec
 The Go verifier read a FIFO in quadratic time (bufio.ScanLines searched the pending line again at each 64 KiB read:
 257 MiB without a line feed took 56.6 s against 0.4 s for verifier.py, measured 2026-11-24); its line splitter now
 searches each byte once: 2.9 s. The Java verifier's source is ASCII (javac before JDK 18 read it in the code page). Not fixed here: ap2-evidence-pack writes its evidence file in text mode (`os.fdopen(fd, "w")`), so on Windows
-it gets CRLF and its own digest no longer matches; the fix belongs to that package.
+it gets CRLF and its own digest no longer matches; the fix belongs to that package. Nor does ap2-evidence-pack 1.10.0
+sign there before Python 3.13 (`os.fchmod`, AttributeError).
+After the run on every Python (45565069144, 2026-11-25; red on Windows, and on macOS with 3.9): the JS verifier knows a
+named pipe by the mode of the open descriptor (Node's `isFIFO()` is false for every file on Windows: a pipe was "not a
+regular file"); Go's `cvverify` no longer looks at a pipe's name before it opens it (a look opens the pipe, which takes
+one of its instances), and neither does `--out`, which ended there in exit 74 and now also writes its bytes as they are
+(a descriptor without O_BINARY is a text one on Windows); `cryptovalid_acta` reads its files with O_BINARY, so the
+digest of a policy file is of its bytes there too; the Java verifier answers `\\.\NUL` with "not a
+regular file" (it was `open: FileSystemException`); an integer of more than 4300 digits is refused on every Python (SPEC
+§30: Python 3.9.13, the 3.9 of the macOS and Windows runners, has no limit of its own, and the `ts` of an SLH-DSA anchor
+was judged on its signature there). Each has a case that runs on Linux too, in `test_platforms_20261124.py`,
+`test_slhdsa_20261123.py` or `verifiers/go/cmd/cvverify/main_test.go`.
 Whether the other-os job is green with these changes is measured by the CI of the release branch, not here.
 
-Final run on the release tree (CI run 45534951368 of 2026-11-25, 11 jobs out of 11 green): on macOS and on Windows,
+An earlier run, with Python 3.13 (CI run 45534951368 of 2026-11-25, 11 jobs out of 11 green): on macOS and on Windows,
 the 117 `test_*.py` files with and without `cryptography` (234 runs, 3 297 tests, none failed; skipped: 759 on macOS,
 818 on Windows, each with its reason).
 

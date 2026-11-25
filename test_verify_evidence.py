@@ -149,7 +149,11 @@ class TestAp2Layer(unittest.TestCase):
     def test_ap2_firma_producer_presente_rotta_invalido(self):
         # audit V1 #2 (30/09/2026): one byte of the producer signature changed -> ap2_evidence says invalid; so must this front-end
         import ap2_evidence
-        ap2_evidence.sign_evidence(self.out)
+        from unittest import mock
+        # ap2-evidence-pack 1.10.0 calls os.fchmod, which Python has on Windows only from 3.13 (that package's defect); the
+        # mode it copies there is no more than the read-only attribute, and the pack is not read-only
+        with mock.patch.object(os, "fchmod", getattr(os, "fchmod", lambda fd, mode: None), create=True):
+            ap2_evidence.sign_evidence(self.out)
         self.assertTrue(VE.verify_ap2(self.out)["valid"])          # control: the signed pack passes
         ev = json.load(open(self.out, encoding="utf-8"))
         s0 = ev["producer_signatures"]["signatures"][0]

@@ -585,6 +585,14 @@ public class CvVerify {
     static final class InputRefused extends IOException { InputRefused(String why) { super(why); } }
     interface Sink { void write(byte[] b, int n) throws IOException; }
 
+    /** a name that may be a Windows device: under \\.\, or a DOS device name (CON, NUL, COM1...), an extension or not */
+    static boolean windowsDevice(String p) {
+        String n = p.substring(p.lastIndexOf('\\') + 1);
+        int dot = n.indexOf('.');
+        return p.startsWith("\\\\.\\")
+            || (dot < 0 ? n : n.substring(0, dot)).trim().matches("(?i)(CON|PRN|AUX|NUL|(COM|LPT)[0-9])");
+    }
+
     /** 0 a regular file, 1 a FIFO, 2 anything else (a directory, a device, a socket) */
     static int inputKind(Path p) throws IOException {
         // Windows: a named pipe (\\.\pipe\name), its FIFO, is known by its name; reading its attributes would take one
@@ -593,7 +601,12 @@ public class CvVerify {
         Object mode;
         try { mode = Files.getAttribute(p, "unix:mode"); }
         catch (UnsupportedOperationException | IllegalArgumentException e) {
-            return Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class).isRegularFile() ? 0 : 2;
+            try { return Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes.class).isRegularFile() ? 0 : 2; }
+            catch (java.nio.file.NoSuchFileException | java.nio.file.AccessDeniedException x) { throw x; }
+            catch (java.nio.file.FileSystemException x) {   // a device (\\.\NUL, NUL) has no attributes on Windows
+                if (windowsDevice(p.toString())) return 2;
+                throw x;
+            }
         }
         int fmt = ((Integer) mode) & 0170000;
         return fmt == 0100000 ? 0 : fmt == 0010000 ? 1 : 2;

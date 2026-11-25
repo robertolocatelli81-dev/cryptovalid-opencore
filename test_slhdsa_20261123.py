@@ -261,7 +261,9 @@ class Closed(unittest.TestCase):
 class TsBeyondTheIntToStrLimit(unittest.TestCase):
     """caccia1 2026-11-23: a ts that is an int past the interpreter's int-to-str limit (4300 digits by default on
     3.9.14+, 3.11+) made signed_message raise ValueError out of verify_anchor; the message of rule 2 has no bytes for it,
-    as for a lone surrogate in root: code `type`. (Such a dict does not come from json.loads, which refuses the number.)"""
+    as for a lone surrogate in root: code `type`. (Such a dict does not come from json.loads, which refuses the number.)
+    Python 3.9.13 (Windows and macOS runners) has no such limit: there the answer was `signature` (CI run 45565069144);
+    SPEC §30 now has the bound, and the limit switched off must not change it."""
 
     def test_huge_int_ts_is_type(self):
         a = anchors()[0]
@@ -269,6 +271,16 @@ class TsBeyondTheIntToStrLimit(unittest.TestCase):
         self.assertEqual(out["code"], "type", out)
         with no_lib():
             self.assertEqual(S.verify_anchor(dict(a, ts=10 ** 5000))["code"], "type")
+
+    def test_the_bound_is_the_format_s_not_the_interpreter_s(self):
+        a = anchors()[0]
+        from test_platforms_20261124 import no_int_limit
+        with no_int_limit(), no_lib():
+            for ts in (10 ** 4300, -10 ** 4300, 10 ** 5000):
+                self.assertEqual(S.verify_anchor(dict(a, ts=ts))["code"], "type")
+            for ts in (10 ** 4300 - 1, 1 - 10 ** 4300):   # 4300 digits: the signature's business
+                with self.assertRaises(verifier.CheckNotRun):
+                    S.verify_anchor(dict(a, ts=ts))
 
 if __name__ == "__main__":
     unittest.main()

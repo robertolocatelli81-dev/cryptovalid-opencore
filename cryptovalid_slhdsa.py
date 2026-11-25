@@ -92,9 +92,11 @@ def verify_anchor(anchor: Any, pub: Optional[Union[str, bytes]] = None) -> Dict[
         return _out("type", "root has no UTF-8 encoding (a lone surrogate)")
     if isinstance(ts, bool) or not isinstance(ts, (int, float)) or (isinstance(ts, float) and not math.isfinite(ts)):
         return _out("type", "ts is not a finite JSON number")
+    if isinstance(ts, int) and abs(ts) >= 10 ** verifier.MAX_INT_DIGITS:   # on every Python, 3.9.13 (no limit of its own) too
+        return _out("type", f"ts is an integer of more than {verifier.MAX_INT_DIGITS} digits (SPEC §30)")
     try:
         message = signed_message(param, root, ts)
-    except ValueError:              # an integer past the interpreter's int-to-str limit: the message of rule 2 has no bytes here
+    except ValueError:              # an integer past a lower int-to-str limit of this interpreter: no bytes for rule 2 here
         return _out("type", "ts cannot be written in decimal here (an integer beyond the int-to-str limit)")
     if not isinstance(sig, str) or not isinstance(pk, str):
         return _out("type", "sig and pub are not strings")

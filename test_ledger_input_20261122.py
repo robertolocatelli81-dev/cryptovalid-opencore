@@ -122,8 +122,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
         return p
 
     def assertAll(self, got, want, what):
-        for name, (rc, verdict, reason, _) in got.items():
-            self.assertEqual((rc, verdict, reason), want, (what, name))
+        self.assertEqual({n: g[:3] for n, g in got.items()}, {n: want for n in got}, what)   # every verifier, not the first wrong one
 
     def test_a_regular_file_is_verified_control(self):
         self.assertAll(_all(self.bins, SAMPLE), (0, "PASS", None), "the example ledger")
@@ -170,8 +169,8 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             threads.append(th)
         for th in threads:
             th.join(90)
-        for name, (rc, verdict, reason, dt) in out.items():
-            self.assertEqual((rc, verdict, reason), (1, "FAIL", IDLE), name)
+        self.assertAll(out, (1, "FAIL", IDLE), "no writer")
+        for name, (_, _, _, dt) in out.items():
             self.assertGreaterEqual(dt, 9.5, name)
             self.assertLess(dt, 18, name)   # one wait of 10 s, not two
 
@@ -188,8 +187,8 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
                 time.sleep(20)
                 os.close(fd)
             got = _all(self.bins, fifo, hold)
-        for name, (rc, verdict, reason, dt) in got.items():
-            self.assertEqual((rc, verdict, reason), (1, "FAIL", IDLE), name)
+        self.assertAll(got, (1, "FAIL", IDLE), "a writer that holds it")
+        for name, (_, _, _, dt) in got.items():
             self.assertLess(dt, 15, name)   # it ends at the first 10 s, not when the writer goes
 
     def test_a_fifo_whose_writer_leaves_without_a_byte_is_empty_at_once(self):

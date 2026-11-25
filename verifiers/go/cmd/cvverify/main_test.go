@@ -92,3 +92,12 @@ func TestReceiptNotWrittenIsExit74(t *testing.T) {
 		}
 	}
 }
+
+func TestIsPipeName(t *testing.T) {
+	for path, want := range map[string]bool{`\\.\pipe\x`: true, `\\.\PIPE\x`: true, `//./pipe/x`: true, `\\.\pipexx`: false,
+		`\\.\NUL`: false, `C:\pipe\x`: false, "ledger.jsonl": false} {
+		if isPipeName(path) != want {
+			t.Errorf("isPipeName(%q) = %v", path, !want)
+		}
+	}
+}
