@@ -1,0 +1,73 @@
+# Trial branch only: the test files touched by the Windows and Python 3.9.13 corrections, before the full run.
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: diag
+on:
+  push:
+    branches: ["ci-prova-diag-*"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: diag ${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  touched:
+    name: ${{ matrix.os }} ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, python: "3.9"}
+          - {os: windows-latest, python: "3.13"}
+          - {os: macos-latest, python: "3.9"}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install cryptography 'ap2-evidence-pack>=1.6.0,<2' 'slh-dsa>=0.2.5' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
+        with:
+          go-version: "1.27"
+      - name: The touched suites, with cryptography
+        run: |
+          $env:CV_REQUIRE_CRYPTO = "1"
+          $env:CV_REQUIRE_SLHDSA = "1"
+          $fail = @()
+          foreach ($t in "test_platforms_20261124", "test_slhdsa_20261123", "test_verify_evidence", "test_kms",
+                         "test_outcome_review_20261013", "test_every_open_is_bounded_20261118",
+                         "test_input_regular_bounded_20261118", "test_ledger_input_20261122") {
+            Write-Output "== $t"
+            python -W ignore "$t.py" -v
+            if ($LASTEXITCODE -ne 0) { $fail += $t }
+          }
+          if ($fail) { Write-Output "::error::red: $fail"; exit 1 }
+          exit 0
+      - name: The suites where Python 3.9.13 differed, without cryptography
+        if: always()
+        run: |
+          python -m venv --without-pip nocrypto
+          $py = if ($IsWindows) { "nocrypto\Scripts\python.exe" } else { "nocrypto/bin/python" }
+          $fail = 0
+          foreach ($t in "test_slhdsa_20261123.py", "test_platforms_20261124.py") {
+            & $py -W ignore $t
+            if ($LASTEXITCODE -ne 0) { $fail = 1 }
+          }
+          exit $fail
+      - name: "Windows: are the cases of an unreadable file skipped in pwsh, and in Git's bash?"
+        if: always() && runner.os == 'Windows'
+        run: |
+          Write-Output "== pwsh"
+          foreach ($t in "test_auto_closed_20261115", "test_c2sp_tiles_20261115") {
+            cmd /c "python -W ignore -m unittest -v $t 2>&1" | Select-String -Pattern "skipped|^FAIL|^ERROR|^Ran|^OK|^FAILED"
+          }
+          Write-Output "== bash"
+          & "C:\Program Files\Git\bin\bash.exe" -c 'for t in test_auto_closed_20261115 test_c2sp_tiles_20261115; do python -W ignore -m unittest -v $t 2>&1 | grep -E "skipped|^FAIL|^ERROR|^Ran|^OK|^FAILED"; done; true'
+          exit 0
