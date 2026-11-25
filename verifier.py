@@ -1037,7 +1037,7 @@ def _read_pipe_windows(fd: int, path: str, limit: int, idle: float, data: bytear
 def read_bounded(f, limit: int) -> bytes:
     """At most `limit` + 1 bytes of the open file `f`, with a buffer of its size, not of the bound: f.read(limit + 1)
     asked for 256 MiB to read a file of 7 bytes (MemoryError under a data limit of 100 MB on Linux, measured
-    2026-11-25; a peak working set of 270 MiB on Windows, where the system touches the whole buffer)."""
+    2026-11-25; a peak working set of 270 MiB on Windows, CI run 45600805721)."""
     parts, n, want = [], 0, os.fstat(f.fileno()).st_size + 1   # one more than the size: the end, or a file that grew
     while n <= limit:
         b = f.read(min(want, limit + 1 - n))

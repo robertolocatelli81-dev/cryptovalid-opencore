@@ -302,8 +302,10 @@ default) or normalises Unicode (macOS) opens `L.jsonl` for `l.jsonl`.
   a `net.Socket` (libuv's pipe, cancelled when destroyed) with a timer reset at each byte; Java knows a named pipe by
   its name (`\\.\pipe\`) instead of reading its attributes, which would take the pipe's one instance. JS on
   Windows also answered a directory with `FILE_ERROR EISDIR`: it is now `unreadable: not a regular file`, as in the
-  other three. `test_ledger_input_20261122.py` runs on Windows with named pipes (each verifier its own) and NUL; only
-  the process substitution `<(...)` stays POSIX (a `/dev/fd` path a native Windows program cannot open).
+  other three. `test_ledger_input_20261122.py` runs on Windows with named pipes (each verifier its own) and NUL. Still
+  POSIX only there: the process substitution `<(...)` (a `/dev/fd` path a native Windows program cannot open) and the
+  two cases of the Go writer `cvappend` (`TestTheGoWriterInputs`: a FIFO and a link to `/dev/zero` at a name), which
+  have no Windows route yet.
 - **A pipe given by name on Windows (`verifier.py`, `read_input`):** the ledger verifier and the writers read a FIFO
   with `select`, which on Windows waits on sockets only, so a named pipe there was an error, not its bytes. On Windows
   the bytes waiting are asked with PeekNamedPipe and only those are read (never a blocking read); the writer gone is
@@ -387,7 +389,7 @@ loop tried next never saw the writer there, CI run 45460009605); the JS verifier
 pausing between full reads; the Java verifier writes stderr in UTF-8 and its receipt with "\n" on every system.
 The Go verifier read a FIFO in quadratic time (bufio.ScanLines searched the pending line again at each 64 KiB read:
 257 MiB without a line feed took 56.6 s against 0.4 s for verifier.py, measured 2026-11-24); its line splitter now
-searches each byte once: 2.9 s. The Java verifier's source is ASCII (javac before JDK 18 read it in the code page). Not fixed here: ap2-evidence-pack writes its evidence file in text mode (`os.fdopen(fd, "w")`), so on Windows
+searches each byte once: 2.9 s. The Java verifier's source is ASCII (javac before JDK 18 read it in the code page). Not fixed here: ap2-evidence-pack 1.10.0 writes its evidence file in text mode (`os.fdopen(fd, "w")`), so on Windows
 it gets CRLF and its own digest no longer matches; the fix belongs to that package. Nor does ap2-evidence-pack 1.10.0
 sign there before Python 3.13 (`os.fchmod`, AttributeError).
 After the run on every Python (45565069144, 2026-11-25; red on Windows, and on macOS with 3.9): the JS verifier knows a
@@ -400,7 +402,9 @@ regular file" (it was `open: FileSystemException`); an integer of more than 4300
 §30: Python 3.9.13, the 3.9 of the macOS and Windows runners, has no limit of its own, and the `ts` of an SLH-DSA anchor
 was judged on its signature there); a file is read with a buffer of its size, not of the bound (`read(256 MiB + 1)` of
 a file of 7 bytes was a MemoryError under a data limit of 100 MB on Linux; on Windows the verification of a pack peaked
-at 276 MiB). Each has a case that runs on Linux too, in `test_platforms_20261124.py`,
+at 276 744 KiB with Python 3.9 and 279 712 KiB with 3.13, 270 and 273 MiB). The reader of a named pipe on Windows
+(`verifier._read_pipe_windows`) has cases that run on every system, the pipe played by the test
+(`test_platforms_20261124.TheWindowsPipeReader`). Each has a case that runs on Linux too, in `test_platforms_20261124.py`,
 `test_slhdsa_20261123.py` or `verifiers/go/cmd/cvverify/main_test.go`.
 Whether the other-os job is green with these changes is measured by the CI of the release branch, not here.
 

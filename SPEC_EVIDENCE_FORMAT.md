@@ -2742,7 +2742,13 @@ of its own (Cedulon: 500) keeps it.
 
 An integer of more than 4300 digits (the sign not counted) is refused too, in the same texts and as the `ts` of §24 rule
 1: 4300 is the default limit of Python's own conversion since 3.9.14, 3.10.7 and 3.11, and a Python without one (3.9.13)
-read the number and went on. The integers of a ledger line keep the narrower bound of §3.
+read the number and went on. The integers of a ledger line and of a tip keep the narrower bound of §3: such a line is
+refused by the six verifiers at any length (measured on 2026-11-25 with 4300 and 4301 digits, positive and negative:
+verifier.py, JS, Go, Java and Rust on a ledger, the JSON reader of the Swift verifier alone; verifier.py, JS, Go and
+Java on a tip), and past 4300 digits verifier.py names this bound as the reason of a ledger line, the others the
+range of §3. An outcome changes only under a Python without the limit (3.9.0 to 3.9.13, 3.10.0 to 3.10.6, or one
+started with `PYTHONINTMAXSTRDIGITS=0`), where such a text was read before this rule; under the others the refusal
+was already there, with the interpreter's own words.
 
 ## 31. A file name of a pack names one file on every system (NORMATIVE since v0.15, 2026-11-24)
 

@@ -1433,10 +1433,34 @@ class WindowsRulesMeasuredEverywhere(unittest.TestCase):
         with mock.patch.object(os, "name", "nt"):
             for p in (r"C:\x\openssl.exe", "d:/x/openssl.exe", r"\\server\share\openssl.exe", "//server/share/x"):
                 self.assertTrue(V._is_absolute(p), p)
-            for p in (r"\tools\openssl.exe", "/opt/bin/openssl", r"C:openssl.exe", r".\openssl.exe", "openssl.exe", ""):
+            for p in (r"\tools\openssl.exe", "/opt/bin/openssl", r"C:openssl.exe", r".\openssl.exe", "openssl.exe", "",
+                      r"\\server", "\\\\server\\", r"bin\C:\openssl.exe", r"bin\\server\share\openssl.exe"):
                 self.assertFalse(V._is_absolute(p), p)
             with mock.patch.object(shutil, "which", lambda n: "/opt/bin/openssl"), mock.patch.dict(os.environ, {"PATH": ""}):
                 self.assertIsNone(V.which("openssl"))   # a folder of the current drive: not named
+            # the folders of PATH are judged by the same rule (shutil.which answered the program of the current folder):
+            # a share is searched, a folder of the current drive is not
+            share, here = r"\\server\share\bin", "/tools"
+            found = os.path.join(share, "openssl.EXE")
+            for path, want in ((share, found), (here, None), (os.pathsep.join([here, share]), found)):
+                with mock.patch.object(shutil, "which", lambda n: r".\openssl.EXE"), \
+                        mock.patch.dict(os.environ, {"PATH": path, "PATHEXT": ".EXE"}), \
+                        mock.patch.object(os.path, "isfile", lambda p: True), mock.patch.object(os, "access", lambda p, m: True):
+                    self.assertEqual(V.which("openssl"), want, path)
+
+    def test_the_name_of_a_pipe(self):
+        """\\\\.\\pipe\\<name>, either separator, any case; on Windows only (elsewhere it is a file name like another)"""
+        from unittest import mock
+        import verifier as V
+        names = (r"\\.\pipe\x", r"\\.\PIPE\x", r"\\.\Pipe\a\b", "//./pipe/x", r"\\./pipe\x")
+        with mock.patch.object(os, "name", "nt"):
+            for p in names:
+                self.assertTrue(V._is_windows_pipe(p), p)
+            for p in (r"\\.\pipexx", r"\\.\pipe", r"\\.\NUL", r"C:\pipe\x", r"\\server\pipe\x", "pipe", "ledger.jsonl", ""):
+                self.assertFalse(V._is_windows_pipe(p), p)
+        with mock.patch.object(os, "name", "posix"):
+            for p in names:
+                self.assertFalse(V._is_windows_pipe(p), p)
 
     def test_a_named_pipe_to_write_is_opened_once_and_not_looked_at(self):
         """each look at a pipe's name (isdir, realpath, stat) opens it and takes one of its instances; and the bytes
@@ -1520,6 +1544,31 @@ class WindowsRulesMeasuredEverywhere(unittest.TestCase):
             if sys.platform != "darwin":
                 self.assertIn("MemoryError", err)
 
+    def test_auto_reads_a_small_file_in_a_small_memory(self):
+        """verify_evidence._file_format: its bound is 64 MiB, under the limit of the test above; here what Python
+        allocated is counted (tracemalloc), on every system"""
+        import tempfile
+        import tracemalloc
+        import verify_evidence as VE
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "small.json")
+            with open(p, "wb") as f:
+                f.write(b'{"a":1}')
+            tracemalloc.start()
+            try:
+                try:
+                    VE._file_format(p)
+                except VE._NotRecognised:
+                    pass
+                peak = tracemalloc.get_traced_memory()[1]
+                with open(p, "rb") as f:   # control: the read as it was is seen by this measure
+                    f.read(VE._AUTO_JSON_LIMIT + 1)
+                seen = tracemalloc.get_traced_memory()[1]
+            finally:
+                tracemalloc.stop()
+        self.assertLess(peak, 8 << 20)
+        self.assertGreater(seen, VE._AUTO_JSON_LIMIT)
+
     def test_a_bounded_read_is_the_file_or_one_byte_past_the_bound(self):
         import tempfile
         from unittest import mock
@@ -1540,38 +1589,66 @@ class WindowsRulesMeasuredEverywhere(unittest.TestCase):
         runs of f1e95d5 and 45600805721), so there the POSIX reader is the one after the same decision"""
         for platform in (sys.platform,) + (("win32",) if sys.platform.startswith("linux") else ()):
             with self.subTest(platform):
-                self._js_reads_a_pipe(platform)
+                self.assertEqual(self._js_reads_a_pipe(platform), [None, "one line\n"])
 
-    def _js_reads_a_pipe(self, platform):
+    @unittest.skipUnless(shutil.which("node") and sys.platform.startswith("linux"), "needs node and Linux: the Windows "
+                         "reader is a net.Socket, which reads a FIFO on Linux and not on macOS; on Windows "
+                         "test_ledger_input_20261122 reads real named pipes with it")
+    def test_js_windows_reader_has_its_bound_and_its_idle_time(self):
+        """readPipeWindows on a Linux FIFO in the place of a named pipe: the bound to the byte, and the idle time with a
+        writer that stays and gives nothing (no outcome depends on how long the machine takes)"""
+        self.assertEqual(self._js_reads_a_pipe("win32", limit=9), [None, "one line\n"])
+        self.assertEqual(self._js_reads_a_pipe("win32", limit=8),
+                         [{"verdict": "FAIL", "error": "input_too_large: file exceeds 268435456 bytes"}, None])
+        self.assertEqual(self._js_reads_a_pipe("win32", data=b"", idle=300),
+                         [{"verdict": "FAIL", "error": "unreadable: FIFO idle for 10 s"}, None])
+
+    def _js_reads_a_pipe(self, platform, data=b"one line\n", idle=5000, limit="undefined"):
+        """what the JS reader answers on a FIFO that holds `data` and whose writer then leaves (no data: the writer
+        stays and gives nothing)"""
+        import json
         import tempfile
+        import threading
         mjs = os.path.join(_HERE, "verifiers", "js", "cvverify.mjs")
         code = ("import fs from 'node:fs'; fs.Stats.prototype.isFIFO = () => false;"
                 "Object.defineProperty(process, 'platform', {value: process.argv[3]});"
                 "const m = await import(process.argv[1]);"
-                "m.readLedgerInput(process.argv[2], (f, b) => { console.log(JSON.stringify([f, b && b.toString()])); }, 5000);"
-                "console.log('open');")
+                "m.readLedgerInput(process.argv[2], (f, b) => { console.log(JSON.stringify([f, b && b.toString()])); }, %d, %s);"
+                % (idle, limit) + "console.log('open');")
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "f")
             os.mkfifo(p)
             fd = os.open(p, os.O_RDWR | os.O_NONBLOCK)
-            os.write(fd, b"one line\n")
+            os.write(fd, data)
             import pathlib
             n = subprocess.Popen(["node", "--input-type=module", "-e", code, pathlib.Path(mjs).as_uri(), p, platform],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            watch = threading.Timer(60, n.kill)   # the reads below end when node does: at most a minute
+            watch.start()
             try:
                 first = n.stdout.readline()
-                os.close(fd)   # opened by the reader: the writer may leave
-                rest, err = n.communicate(timeout=60)
+                if data:
+                    os.close(fd)   # opened by the reader: the writer may leave
+                # the reader of the line above: communicate() reads the descriptor and misses what readline already
+                # holds (an answer given at once, as the bound's, was lost in 14 runs of 200)
+                rest, err = n.stdout.read(), n.stderr.read()
             finally:
+                watch.cancel()
                 n.kill()
                 n.wait(30)
-            self.assertEqual(first + rest, b'open\n[null,"one line\\n"]\n', err[-300:])
+                n.stdout.close()
+                n.stderr.close()
+                if not data:
+                    os.close(fd)
+            self.assertEqual(first, b"open\n", err[-300:])
+            return json.loads(rest)
 
     @unittest.skipUnless(shutil.which("javac") and shutil.which("java"), "needs a JDK")
     def test_java_knows_the_name_of_a_device(self):
         import tempfile
-        yes = [r"\\.\NUL", r"\\.\PhysicalDrive0", "NUL", r"C:\x\nul", "con", "Aux.txt", "COM1", r"d\LPT9"]
-        no = ["ledger.jsonl", r"C:\x\NULL", r"C:\nul\ledger.jsonl", "COM", "CONSOLE.txt"]
+        yes = [r"\\.\NUL", r"\\.\PhysicalDrive0", "NUL", r"C:\x\nul", "con", "Aux.txt", "COM1", r"d\LPT9", "nul.tar.gz",
+               "NUL .txt"]
+        no = ["ledger.jsonl", r"C:\x\NULL", r"C:\nul\ledger.jsonl", "COM", "CONSOLE.txt", "ledger.nul.jsonl"]
         with tempfile.TemporaryDirectory() as d:
             t = os.path.join(d, "T.java")
             with open(t, "w", encoding="utf-8", newline="") as f:
@@ -1581,6 +1658,134 @@ class WindowsRulesMeasuredEverywhere(unittest.TestCase):
                            check=True, capture_output=True, timeout=300)
             out = subprocess.run(["java", "-cp", d, "T"] + yes + no, capture_output=True, timeout=120).stdout
         self.assertEqual(out, b"y" * len(yes) + b"n" * len(no))
+
+
+class TheWindowsPipeReader(unittest.TestCase):
+    """verifier._read_pipe_windows with a pipe played by this test in the place of PeekNamedPipe and os.read: bytes that
+    arrive at given times and a writer that leaves, on a clock of the test's own (time.sleep moves it: no outcome
+    depends on the load of the machine). On Windows test_input_regular_bounded_20261118 reads real pipes."""
+
+    FD = 987654
+
+    def _run(self, events, limit=1 << 20, idle=0.4, end_error=109):
+        """events: (seconds from the start, bytes) and (seconds, None) for the writer gone. Returns (result or the
+        exception, the sizes asked of os.read, seconds)."""
+        import ctypes
+        import time
+        import types
+        from unittest import mock
+        import verifier as V
+        waiting, asked, state = bytearray(), [], {"gone": False, "err": 0, "now": 1000.0, "polls": 0}
+        todo = sorted(events, key=lambda e: e[0])
+
+        def now():
+            return state["now"]
+
+        def sleep(seconds):
+            self.assertGreaterEqual(seconds, 0)
+            state["now"] += max(seconds, 0.0001)   # sleep(0) yields: a little time passes
+
+        def arrive():
+            state["polls"] += 1
+            self.assertLess(state["polls"], 1000000, "the reader never ends")
+            while todo and now() - 1000.0 >= todo[0][0]:
+                _, b = todo.pop(0)
+                if b is None:
+                    state["gone"] = True
+                else:
+                    waiting.extend(b)
+
+        def peek(handle, buf, size, read, avail, left):
+            self.assertEqual(handle, self.FD + 1)
+            arrive()
+            if not waiting and state["gone"]:
+                state["err"] = end_error
+                return 0
+            avail._obj.value = len(waiting)
+            return 1
+
+        def read(fd, n):
+            self.assertEqual(fd, self.FD)
+            self.assertTrue(waiting, "a read with no byte waiting: on a pipe it waits without end")
+            asked.append(n)
+            b = bytes(waiting[:n])
+            del waiting[:n]
+            return b
+        k32 = types.SimpleNamespace(PeekNamedPipe=peek)
+        peek.argtypes = peek.restype = None
+        msvcrt = types.SimpleNamespace(get_osfhandle=lambda fd: fd + 1)
+        with mock.patch.dict(sys.modules, {"msvcrt": msvcrt}), \
+                mock.patch.object(ctypes, "WinDLL", lambda name, use_last_error=False: k32, create=True), \
+                mock.patch.object(ctypes, "get_last_error", lambda: state["err"], create=True), \
+                mock.patch.object(ctypes, "WinError", lambda code: OSError(22, "WinError %d" % code), create=True), \
+                mock.patch.object(time, "monotonic", now), mock.patch.object(time, "sleep", sleep), \
+                mock.patch.object(V.os, "read", read):
+            try:
+                out = V._read_pipe_windows(self.FD, "pipe", limit, idle, bytearray())
+            except OSError as e:
+                out = e
+        return out, asked, state["now"] - 1000.0
+
+    def test_bytes_then_the_writer_gone(self):
+        big = bytes(range(256)) * 1000   # 256 000 bytes at once: read 64 KiB at a time
+        for err in (109, 233):   # ERROR_BROKEN_PIPE, ERROR_PIPE_NOT_CONNECTED
+            out, asked, dt = self._run([(0, b"one"), (0.05, big), (0.1, b"two"), (0.15, None)], end_error=err)
+            self.assertEqual(out, b"one" + big + b"two")
+            self.assertLessEqual(max(asked), 1 << 16)
+            self.assertLess(dt, 5)
+
+    def test_a_writer_gone_without_a_byte_is_an_empty_input(self):
+        out, asked, dt = self._run([(0, None)])
+        self.assertEqual((out, asked), (b"", []))
+
+    def test_another_error_of_the_pipe_is_an_error(self):
+        import verifier as V
+        out, _, _ = self._run([(0, b"x"), (0.05, None)], end_error=5)
+        self.assertIsInstance(out, OSError)
+        self.assertNotIsInstance(out, (V.InputIdle, V.InputTooLarge))
+
+    def test_no_byte_and_no_end_is_idle(self):
+        import verifier as V
+        out, asked, dt = self._run([], idle=0.3)
+        self.assertIsInstance(out, V.InputIdle)
+        self.assertIn("in 0.3 s", str(out))
+        self.assertGreaterEqual(dt, 0.3)
+        self.assertEqual(asked, [])
+
+    def test_the_idle_time_counts_from_the_last_byte(self):
+        import verifier as V
+        out, _, dt = self._run([(0.25, b"a"), (0.5, b"b"), (0.75, None)], idle=0.4)   # never 0.4 s without a byte
+        self.assertEqual(out, b"ab")
+        out, _, dt = self._run([(0.1, b"a")], idle=0.3)   # a byte, then silence
+        self.assertIsInstance(out, V.InputIdle)
+        self.assertGreaterEqual(dt, 0.4)
+
+    def test_the_bound(self):
+        import verifier as V
+        out, _, _ = self._run([(0, b"x" * 100), (0.02, None)], limit=100)
+        self.assertEqual(out, b"x" * 100)
+        out, _, dt = self._run([(0, b"x" * 101)], limit=100, idle=5)   # refused when read, not after the idle time
+        self.assertIsInstance(out, V.InputTooLarge)
+        self.assertLess(dt, 2)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "the route is taken on Windows by a real named pipe "
+                         "(test_input_regular_bounded_20261118); here a FIFO with os.name in its place")
+    def test_open_ledger_input_takes_this_route_on_windows(self):
+        import tempfile
+        from unittest import mock
+        import verifier as V
+        seen = []
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "f")
+            os.mkfifo(p)
+
+            def reader(fd, path, limit, idle, data):
+                seen.append((path, limit, idle, bytes(data), os.fstat(fd).st_ino))
+                return b"bytes"
+            with mock.patch.object(V, "_read_pipe_windows", reader), mock.patch.object(os, "name", "nt"):
+                out = V.open_ledger_input(p, 77, 3)
+            self.assertEqual(out, (None, b"bytes"))
+            self.assertEqual(seen, [(p, 77, 3, b"", os.stat(p).st_ino)])
 
 
 class TheTestToolsOnWindows(unittest.TestCase):
