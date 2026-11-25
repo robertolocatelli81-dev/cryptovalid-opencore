@@ -413,11 +413,14 @@ at 276 744 KiB with Python 3.9 and 279 712 KiB with 3.13, 270 and 273 MiB). The 
 (`verifier._read_pipe_windows`) has cases that run on every system, the pipe played by the test
 (`test_platforms_20261124.TheWindowsPipeReader`). Each has a case that runs on Linux too, in `test_platforms_20261124.py`,
 `test_slhdsa_20261123.py` or `verifiers/go/cmd/cvverify/main_test.go`.
-Whether the other-os job is green with these changes is measured by the CI of the release branch, not here.
+The run on the code of this release (e600525, CI run 45644104447 of 2026-11-25, 21 jobs out of 21 green; three macOS jobs
+for which no runner was free, so that no step of theirs had run, were started again): Linux with Python 3.9 to 3.14;
+macOS and Windows with Python 3.9 to 3.14, the 117 `test_*.py` files with and without `cryptography` (in each of the 12
+jobs 234 runs and 3 364 unittest cases, none failed; skipped: 701 to 711 on macOS, 744 to 765 on Windows). The commits
+after it change this file and the conditions of four CI steps, not the code.
 
 An earlier run, with Python 3.13 (CI run 45534951368 of 2026-11-25, 11 jobs out of 11 green): on macOS and on Windows,
-the 117 `test_*.py` files with and without `cryptography` (234 runs, 3 297 tests, none failed; skipped: 759 on macOS,
-818 on Windows, each with its reason).
+234 runs, 3 297 tests, none failed; skipped: 759 on macOS, 818 on Windows.
 
 ### One nesting bound for every JSON text, on every Python (SPEC §30)
 

@@ -234,10 +234,10 @@ jobs:
       # list, and the case of an unreadable folder was skipped (run 45600805721: skipped in bash, run in pwsh). They keep
       # its PATH, where its own bash and openssl come first
       - name: The PATH of Git's bash, for the suites (Windows)
-        if: always() && runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
         run: echo "SUITE_PATH=$(cygpath -wp "$PATH")" >> "$GITHUB_ENV"
       - name: Every suite with cryptography
-        if: always()
+        if: ${{ !cancelled() }}
         shell: pwsh
         env:
           CV_REQUIRE_CRYPTO: "1"
@@ -249,10 +249,10 @@ jobs:
           foreach ($t in Get-ChildItem test_*.py -Name) { Write-Output "== $t"; python $t; if ($LASTEXITCODE -ne 0) { Write-Output "::error::$t"; $fail = 1 } }
           exit $fail
       - name: Conformance
-        if: always()
+        if: ${{ !cancelled() }}
         run: python conformance.py
       - name: Every suite without cryptography
-        if: always()
+        if: ${{ !cancelled() }}
         shell: pwsh
         env:
           CV_REQUIRE_UNREADABLE: "1"
