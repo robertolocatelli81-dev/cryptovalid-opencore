@@ -86,13 +86,21 @@ print(json.dumps({"valid": r["valid"], "admission": r.get("admission"), "error":
 
     def test_a_listed_file_under_the_bound_is_hashed_in_blocks(self):
         """64 MiB of zeros, listed with another digest: contradicted as before (digest_mismatch), the peak memory far
-        below the file (0.26.0: the whole file in memory). Control: the same file listed with its real digest."""
+        below the file (0.26.0: the whole file in memory). Controls: the same verification with the file read whole is seen
+        by the measure, and the digest is the file's."""
         import hashlib
         self.add_listed("mid.bin", 64 * 1024 * 1024)
         rc, out, err = child(self.VERIFY_RSS, self.pack, timeout=300)
+        self.assertEqual(rc, 0, err[-500:])
         r = json.loads(out)
         self.assertEqual((r["valid"], r["admission"]), (False, "admitted"), r)
         self.assertLess(r["maxrss_kib"], 60 * 1024, r)
+        rc, out, err = child("""
+import evidence_pack as E, hashlib
+E._sha256_file = lambda p, limit=None: hashlib.sha256(open(p, "rb").read()).hexdigest()   # 0.26.0: the whole file
+""" + self.VERIFY_RSS, self.pack, timeout=300)
+        self.assertEqual(rc, 0, err[-500:])
+        self.assertGreater(json.loads(out)["maxrss_kib"], r["maxrss_kib"] + 40 * 1024, (r, out))
         rc, out, err = child("""
             import evidence_pack as E
             print(E._sha256_file(sys.argv[1]))

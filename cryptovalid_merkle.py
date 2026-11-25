@@ -32,9 +32,9 @@ import stat
 import struct
 import zlib
 try:   # SPEC §30: one nesting bound for every JSON text, on every Python
-    from verifier import json_loads_bounded as json_loads
+    from verifier import json_loads_bounded as json_loads, read_bounded
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import json_loads_bounded as json_loads
+    from opencore.verifier import json_loads_bounded as json_loads, read_bounded
 
 
 def leaf_hash(data: bytes) -> bytes:
@@ -348,7 +348,7 @@ def _read_file(path: str, limit: int = MAX_TILE_FILE):
         with os.fdopen(fd, "rb") as f:
             if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
                 raise TileError(f"{path}: not a regular file (links are not followed)")
-            return f.read(limit + 1)
+            return read_bounded(f, limit)
     except OSError as e:
         raise TileError(f"{path}: {os.strerror(e.errno) if isinstance(e.errno, int) else e.strerror}") from None
 

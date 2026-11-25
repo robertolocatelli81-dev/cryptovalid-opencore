@@ -193,6 +193,10 @@ Not run: `@veritasacta/verify` itself (its vectors' expected outcomes are those 
   master the DCO job checks every commit not on master (before, only on pull requests). The OpenSSF Scorecard stays
   on master: it rates the default branch. On a trial branch (`ci-prova-*`) a push ends the run it replaces; every
   other run goes to its end.
+- The suites of `other-os` are started by PowerShell, not by Git's bash (with bash's PATH on Windows): under Git's bash
+  the case of a folder an access list denies was skipped on Windows (run 45600805721), and a skip of it is now a
+  failure there. The jobs that run the suites install setuptools, so the three wheel tests of `test_declared_api.py`
+  run on every Python and system with the extras (they were skipped where it was absent).
 
 ### CodeQL and a weekly fuzz run (SPEC v0.15 §26)
 
@@ -394,7 +398,9 @@ one of its instances), and neither does `--out`, which ended there in exit 74 an
 digest of a policy file is of its bytes there too; the Java verifier answers `\\.\NUL` with "not a
 regular file" (it was `open: FileSystemException`); an integer of more than 4300 digits is refused on every Python (SPEC
 §30: Python 3.9.13, the 3.9 of the macOS and Windows runners, has no limit of its own, and the `ts` of an SLH-DSA anchor
-was judged on its signature there). Each has a case that runs on Linux too, in `test_platforms_20261124.py`,
+was judged on its signature there); a file is read with a buffer of its size, not of the bound (`read(256 MiB + 1)` of
+a file of 7 bytes was a MemoryError under a data limit of 100 MB on Linux; on Windows the verification of a pack peaked
+at 276 MiB). Each has a case that runs on Linux too, in `test_platforms_20261124.py`,
 `test_slhdsa_20261123.py` or `verifiers/go/cmd/cvverify/main_test.go`.
 Whether the other-os job is green with these changes is measured by the CI of the release branch, not here.
 

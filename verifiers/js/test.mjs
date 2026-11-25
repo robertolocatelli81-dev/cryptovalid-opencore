@@ -46,9 +46,11 @@ ok("negative: bad idx FAIL", verifyLedger(reidx.map((e) => JSON.stringify(e)).jo
 ok("negative: wrong algo FAIL", verifyLedger(valid, { algo: "sha3_256" }).verdict === "FAIL");
 
 // 4) Ed25519 signature round-trip (build a signed entry the way the reference does)
-const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-const pubRaw = publicKey.export({ type: "spki", format: "der" }).subarray(-32);
-const signerHex = Buffer.from(pubRaw).toString("hex");
+let publicKey, privateKey, signerHex, sig;
+function newKey() {
+  ({ publicKey, privateKey } = generateKeyPairSync("ed25519"));
+  signerHex = Buffer.from(publicKey.export({ type: "spki", format: "der" }).subarray(-32)).toString("hex");
+}
 function canonHash(entry) {
   const d = {}; for (const k of Object.keys(entry).sort()) if (!["self_hash", "signature", "signer", "signature_pq", "signer_pq", "tsa_token"].includes(k)) d[k] = entry[k];
   // reuse the module's canonical by re-verifying a whole ledger below instead of duplicating here
@@ -61,7 +63,9 @@ const probe = verifyLedger(JSON.stringify({ ...base, self_hash: "x" }));   // FA
 const canonical = JSON.stringify(Object.fromEntries(Object.keys(base).sort().map((k) => [k, base[k]])));
 const selfHash = createHash("sha256").update(Buffer.from(
   "{" + Object.keys(base).sort().map((k) => JSON.stringify(k) + ":" + JSON.stringify(base[k])).join(",") + "}", "utf-8")).digest("hex");
-const sig = edSign(null, Buffer.from(selfHash, "utf-8"), privateKey).toString("base64");
+// a key whose signature has a "+" or a "/": without one (about 1 key in 15) the URL-safe case of 4b was not a case and
+// the count was 214 instead of 215
+do { newKey(); sig = edSign(null, Buffer.from(selfHash, "utf-8"), privateKey).toString("base64"); } while (!/[+/]/.test(sig));
 const signed = { ...base, self_hash: selfHash, signature: sig, signer: signerHex };
 const rSig = verifyLedger(JSON.stringify(signed));
 ok("signature: valid signed ledger PASS + all_verified", rSig.verdict === "PASS" && rSig.signatures && rSig.signatures.all_verified, JSON.stringify(rSig.signatures));
@@ -90,7 +94,6 @@ ok("signature: pubkey pin mismatch flagged", !verifyLedger(JSON.stringify(signed
     "URL-safe alphabet": sig.replace(/\+/g, "-").replace(/\//g, "_"),
   };
   for (const [name, s] of Object.entries(variants)) {
-    if (s === sig) continue;   // this signature happens not to contain the character the variant changes
     const r = verifyLedger(JSON.stringify({ ...signed, signature: s }));
     ok(`strict b64: ${name} not all_verified`, r.signatures && !r.signatures.all_verified && r.signatures.failures[0].reason === "malformed_signature_field");
   }

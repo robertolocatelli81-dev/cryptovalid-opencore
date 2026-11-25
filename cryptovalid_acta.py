@@ -85,9 +85,9 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 try:   # SPEC §30: one nesting bound for every JSON text, on every Python
-    from verifier import json_loads_bounded as json_loads
+    from verifier import json_loads_bounded as json_loads, read_bounded
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import json_loads_bounded as json_loads
+    from opencore.verifier import json_loads_bounded as json_loads, read_bounded
 
 DRAFT = "draft-farley-acta-signed-receipts-04 (2026-11-22, expires 2027-05-26; individual Internet-Draft)"
 DECISIONS = ("allow", "deny", "rate_limit", "require_approval")
@@ -343,7 +343,7 @@ def read_regular(path: str, limit: int = MAX_INPUT_BYTES) -> bytes:
         if st.st_size > limit:
             raise OSError(f"{path} is larger than {limit} bytes")
         with os.fdopen(os.dup(fd), "rb") as f:
-            data = f.read(limit + 1)
+            data = read_bounded(f, limit)
         if len(data) > limit:
             raise OSError(f"{path} is larger than {limit} bytes")
         return data

@@ -32,7 +32,7 @@ jobs:
 
       - name: Install optional deps (hash verifier itself is stdlib-only) + a REAL PKCS#11 HSM bench
         run: |
-          pip install cryptography 'ap2-evidence-pack>=1.6.0,<2' 'slh-dsa>=0.2.5' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
+          pip install cryptography 'ap2-evidence-pack>=1.6.0,<2' 'slh-dsa>=0.2.5' 'setuptools>=77' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
           sudo apt-get update -qq && sudo apt-get install -y -qq softhsm2 opensc
 
       - name: Unit tests — every suite in the repo (signer, evidence pack, merkle, TSA, LOTL, KMS/HSM)
@@ -148,7 +148,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install cryptography 'ap2-evidence-pack>=1.6.0,<2' 'slh-dsa>=0.2.5' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
+      - run: python -m pip install cryptography 'ap2-evidence-pack>=1.6.0,<2' 'slh-dsa>=0.2.5' 'setuptools>=77' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: "1.27"   # the Go verifier the cross-language suites build, as in independent-verifiers
@@ -230,23 +230,40 @@ jobs:
         run: |
           for t in openssl node java go pkcs11-tool; do printf '%s: ' "$t"; command -v "$t" || echo "not on PATH"; done
           openssl version; echo "CV_FULL_DIR=$CV_FULL_DIR"; ls -la "$CV_FULL_DIR"
+      # the suites are not started by Git's bash on Windows: what it starts holds privileges that read through an access
+      # list, and the case of an unreadable folder was skipped (run 45600805721: skipped in bash, run in pwsh). They keep
+      # its PATH, where its own bash and openssl come first
+      - name: The PATH of Git's bash, for the suites (Windows)
+        if: always() && runner.os == 'Windows'
+        run: echo "SUITE_PATH=$(cygpath -wp "$PATH")" >> "$GITHUB_ENV"
       - name: Every suite with cryptography
         if: always()
+        shell: pwsh
+        env:
+          CV_REQUIRE_CRYPTO: "1"
+          CV_REQUIRE_SLHDSA: "1"
+          CV_REQUIRE_UNREADABLE: "1"
         run: |
-          fail=0
-          for t in test_*.py; do echo "== $t"; CV_REQUIRE_CRYPTO=1 CV_REQUIRE_SLHDSA=1 python "$t" || { echo "::error::$t"; fail=1; }; done
+          if ($env:SUITE_PATH) { $env:PATH = $env:SUITE_PATH }
+          $fail = 0
+          foreach ($t in Get-ChildItem test_*.py -Name) { Write-Output "== $t"; python $t; if ($LASTEXITCODE -ne 0) { Write-Output "::error::$t"; $fail = 1 } }
           exit $fail
       - name: Conformance
         if: always()
         run: python conformance.py
       - name: Every suite without cryptography
         if: always()
+        shell: pwsh
+        env:
+          CV_REQUIRE_UNREADABLE: "1"
         run: |
-          python -m venv --without-pip "$RUNNER_TEMP/nocrypto"
-          py="$RUNNER_TEMP/nocrypto/bin/python"; [ -x "$py" ] || py="$RUNNER_TEMP/nocrypto/Scripts/python.exe"
-          if "$py" -c "import cryptography" 2>/dev/null; then echo "::error::venv has cryptography"; exit 1; fi
-          fail=0
-          for t in test_*.py; do echo "== $t"; "$py" "$t" || { echo "::error::$t is red without cryptography"; fail=1; }; done
+          if ($env:SUITE_PATH) { $env:PATH = $env:SUITE_PATH }
+          python -m venv --without-pip "$env:RUNNER_TEMP/nocrypto"
+          $py = if ($IsWindows) { "$env:RUNNER_TEMP/nocrypto/Scripts/python.exe" } else { "$env:RUNNER_TEMP/nocrypto/bin/python" }
+          & $py -c "import cryptography" 2>$null
+          if ($LASTEXITCODE -eq 0) { Write-Output "::error::venv has cryptography"; exit 1 }
+          $fail = 0
+          foreach ($t in Get-ChildItem test_*.py -Name) { Write-Output "== $t"; & $py $t; if ($LASTEXITCODE -ne 0) { Write-Output "::error::$t is red without cryptography"; $fail = 1 } }
           exit $fail
 
   floor:
@@ -258,7 +275,7 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.11"
-      - run: pip install "cryptography==48.0.0" 'ap2-evidence-pack==1.6.0' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
+      - run: pip install "cryptography==48.0.0" 'ap2-evidence-pack==1.6.0' 'setuptools>=77' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
       - name: Every suite with the declared floor
         run: |
           set -e
