@@ -620,6 +620,12 @@ def serve(service: WitnessService, host: str = "127.0.0.1", port: int = 0, prefi
         def log_message(self, *a):   # quiet
             pass
 
+        def handle(self):
+            try:
+                super().handle()
+            except ConnectionError:      # the client reset the connection: no one to answer (it was a traceback on
+                self.close_connection = True   # stderr for each such client, 30 of 30 on 2026-11-25)
+
         def _refuse(self, code):
             """Answer without reading the body, then read what the client is still sending, at most 8 MiB and 5 s: a close
             with bytes unread resets the connection and the client loses the answer (RFC 9112 §9.6)."""

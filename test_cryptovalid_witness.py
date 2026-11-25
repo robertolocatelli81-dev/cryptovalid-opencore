@@ -1030,6 +1030,83 @@ class TestTlogWitnessHTTP(unittest.TestCase):
             with self.assertRaises(C.NoteError, msg=repr(bad[:20])):
                 W.parse_add_checkpoint_body(bad)
 
+    def _refuse_with(self, recv, step=0.0, shutdown=None):
+        """the handler's _refuse on a connection played by the test: recv(k) answers the k-th read, each read takes
+        `step` seconds of a clock of the test's own. Returns what was called, in order."""
+        import socket
+        import types
+        from unittest import mock
+        calls, now, reads = [], [1000.0], [0]
+
+        class Conn:
+            def shutdown(self, how):
+                calls.append(("shutdown", how))
+                if shutdown:
+                    raise shutdown
+
+            def settimeout(self, t):
+                calls.append(("settimeout", t))
+
+            def recv(self, n):
+                calls.append(("recv", n))
+                reads[0] += 1
+                if reads[0] > 100000:
+                    raise AssertionError("the read after a refusal has no end")
+                now[0] += step
+                return recv(reads[0])
+        me = types.SimpleNamespace(connection=Conn(), wfile=types.SimpleNamespace(flush=lambda: None),
+                                   send_response=lambda code: calls.append(("status", code)),
+                                   send_header=lambda k, v: calls.append(("header", k, v)),
+                                   end_headers=lambda: calls.append(("end",)))
+        with mock.patch.object(W.time, "monotonic", lambda: now[0]):
+            self.httpd.RequestHandlerClass._refuse(me, 413)
+        self.assertEqual(calls[:6], [("status", 413), ("header", "Content-Length", "0"), ("header", "Connection", "close"),
+                                     ("end",), ("shutdown", socket.SHUT_WR)] + ([] if shutdown else [("settimeout", 1)]))
+        return [c for c in calls[5:] if c[0] != "settimeout"]
+
+    def test_a_refused_request_is_read_within_its_bounds(self):
+        """after the answer: at most 8 MiB, at most 5 s, a wait of at most 1 s for each read, and the end of the client's
+        bytes ends it at once (a clock and a connection of the test's own: no outcome depends on the machine)"""
+        import socket
+        block = b"x" * (1 << 16)
+        self.assertEqual(self._refuse_with(lambda k: block), [("recv", 1 << 16)] * 128)             # 8 MiB and no more
+        self.assertEqual(len(self._refuse_with(lambda k: b"x", step=0.5)), 10)                      # 5 s and no more
+        self.assertEqual(len(self._refuse_with(lambda k: b"x" if k < 3 else b"")), 3)               # the client ended
+        for gone in (socket.timeout("timed out"), ConnectionResetError(104, "reset"), BrokenPipeError(32, "pipe")):
+            def raises(k, gone=gone):
+                raise gone
+            self.assertEqual(len(self._refuse_with(raises)), 1)                                     # silent, or gone
+        self.assertEqual(self._refuse_with(lambda k: block, shutdown=OSError(107, "not connected")), [])
+
+    def test_a_client_that_resets_the_connection_leaves_no_traceback(self):
+        """socketserver prints a traceback on stderr for an exception of a handler: one for each client that reset the
+        connection, before its answer or while its body was awaited"""
+        import http.client
+        import io
+        import socket
+        import struct
+        import threading
+        from unittest import mock
+        port = self.httpd.server_address[1]
+        heads = (b"POST /w/nope HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\n" + b"x" * 50000,
+                 b"POST /w/add-checkpoint HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\n" + b"x" * 50000,
+                 b"POST /w/add-checkpoint HTTP/1.1\r\nHost: x\r\nContent-Len")
+        before = threading.active_count()
+        with mock.patch.object(sys, "stderr", io.StringIO()) as err:
+            for head in heads * 10:
+                s = socket.create_connection(("127.0.0.1", port), timeout=10)
+                s.sendall(head)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))   # close = reset
+                s.close()
+            end = time.monotonic() + 60
+            while threading.active_count() > before and time.monotonic() < end:   # the handlers end (a wait, not a verdict)
+                time.sleep(0.05)
+            printed = err.getvalue()
+        self.assertNotIn("Traceback", printed)
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)   # and the server still answers
+        c.request("POST", "/w/nope", body=b"")
+        self.assertEqual(c.getresponse().status, 404); c.close()
+
     def test_status_codes_and_client(self):
         n5, l5 = self._note(self.l5); n8, l8 = self._note(self.l8); nf, lf = self._note(self.fork)
         # 400: malformed body / old size > size; 404 unknown origin; 403 untrusted signature
@@ -1103,11 +1180,16 @@ class TestTlogWitnessHTTP(unittest.TestCase):
         resp = c.getresponse(); self.assertEqual((resp.status, resp.getheader("Content-Length"), resp.getheader("Connection")), (413, "0", "close")); c.close()
         # the same answers to a client that sends its whole body: up to 0.28.1 the close with bytes unread reset the
         # connection and a 3 MiB body never saw its 413 (RFC 9112 §9.6)
-        for path, size, code in (("/w/nope", 1 << 20, 404), ("/w/add-checkpoint", 3 << 20, 413), ("/w/add-checkpoint", 7 << 20, 413)):
+        for path, size, code in (("/w/nope", 3 << 20, 404), ("/w/add-checkpoint", 3 << 20, 413), ("/w/add-checkpoint", 7 << 20, 413)):
             for _ in range(5):
                 c = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
                 c.request("POST", path, body=b"x" * size)
                 self.assertEqual(c.getresponse().status, code, (path, size)); c.close()
+        for _ in range(5):   # and the 400: a body of 3 MiB sent in chunks (Transfer-Encoding is refused)
+            c = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
+            c.request("POST", "/w/add-checkpoint", body=iter([b"x" * (1 << 20)] * 3), encode_chunked=True,
+                      headers={"Transfer-Encoding": "chunked"})
+            self.assertEqual(c.getresponse().status, 400); c.close()
         # the client helper: 409 → resubmit with the answered size; verifies the cosignature with trusted keys only
         r = W.submit_checkpoint(self.url, n8, l8, [self.WV], self.LV)
         self.assertEqual((r["stato"], r["status"], r["witnesses"]), ("OK", 200, ["witness.example/w1"]))
