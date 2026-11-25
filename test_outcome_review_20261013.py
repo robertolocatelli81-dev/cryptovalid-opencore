@@ -277,7 +277,9 @@ class TestPromisedFileOverExisting(_Tmp):
                 copy_output(src, dst)
 
     def test_out_fifo_written_directly(self):
-        from test_platforms_20261124 import fifo_at   # a FIFO at a name in a directory: POSIX only
+        if os.name == "nt":
+            return self._out_named_pipe_written_directly()
+        from test_platforms_20261124 import fifo_at
         fifo = fifo_at(self, os.path.join(self.d, "f"))
         got = []
 
@@ -294,6 +296,47 @@ class TestPromisedFileOverExisting(_Tmp):
         self.assertEqual(rc, 0, err)
         self.assertTrue(got, "the FIFO got nothing")
         self.assertTrue(stat.S_ISFIFO(os.stat(fifo).st_mode), "the FIFO was replaced by a file")
+        self.assertEqual(json.loads(got[0])["verdict"], "PASS")
+
+    def _out_named_pipe_written_directly(self):
+        """Windows' equivalent: --out names a named pipe (\\\\.\\pipe\\...) whose server is this test; the receipt
+        reaches it whole. Every instance is listening from the start: a look at the path (os.stat) takes one, the
+        write another"""
+        import _winapi
+        import secrets
+        name = r"\\.\pipe\cv-out-" + secrets.token_hex(8)
+        got, threads = [], []
+
+        def serve(h):
+            try:
+                try:
+                    _winapi.ConnectNamedPipe(h, False)
+                except OSError:
+                    pass   # ERROR_PIPE_CONNECTED
+                data = b""
+                while True:
+                    try:
+                        b, _ = _winapi.ReadFile(h, 1 << 16)
+                    except OSError:   # ERROR_BROKEN_PIPE: the writer closed
+                        break
+                    if not b:
+                        break
+                    data += b
+                if data:
+                    got.append(data)
+            finally:
+                _winapi.CloseHandle(h)
+        for _ in range(4):
+            h = _winapi.CreateNamedPipe(name, _winapi.PIPE_ACCESS_INBOUND, 0, _winapi.PIPE_UNLIMITED_INSTANCES,
+                                        1 << 16, 1 << 16, 0, _winapi.NULL)
+            t = threading.Thread(target=serve, args=(h,), daemon=True)
+            t.start()
+            threads.append(t)
+        rc, _, err = self.run_py([os.path.join(HERE, "verifier.py"), SAMPLE, "--out", name])
+        for t in threads:
+            t.join(0.5)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(len(got), 1, got)
         self.assertEqual(json.loads(got[0])["verdict"], "PASS")
 
 

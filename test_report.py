@@ -378,11 +378,11 @@ class SolanaDigestCli(unittest.TestCase):
             self.assertIn(why, r.stderr, m[:20] if m else m)
             self.assertEqual(r.stdout, "")
 
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "needs a FIFO")
     def test_a_fifo_is_refused_without_waiting(self):
         import subprocess
         with tempfile.TemporaryDirectory() as d:
-            os.mkfifo(os.path.join(d, "MANIFEST.json"))
+            from test_platforms_20261124 import fifo_at   # a pack member: no Windows equivalent (skipped with that reason)
+            fifo_at(self, os.path.join(d, "MANIFEST.json"))
             r = subprocess.run([sys.executable, report.__file__, d, "--solana-digest"],
                                capture_output=True, text=True, encoding="utf-8", timeout=60)
         self.assertEqual(r.returncode, 2, r.stderr[-200:])

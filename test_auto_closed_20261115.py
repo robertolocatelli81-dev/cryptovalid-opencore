@@ -243,10 +243,8 @@ class TestAutoPaths(unittest.TestCase):
         self._refused(self.d, "a directory with neither MANIFEST.json")
 
     def test_pipe(self):
-        if not hasattr(os, "mkfifo"):
-            self.skipTest("no mkfifo")
-        p = os.path.join(self.d, "fifo")
-        os.mkfifo(p)
+        from test_platforms_20261124 import fifo   # Windows: a named pipe given by name
+        p = fifo(self, os.path.join(self.d, "fifo"))
         self._refused(p, "neither a directory nor a regular file")
 
     def test_directory_with_glob_characters(self):

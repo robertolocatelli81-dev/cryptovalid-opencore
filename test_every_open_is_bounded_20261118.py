@@ -38,9 +38,9 @@ import unittest
 sys.dont_write_bytecode = True
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-# Linux and macOS have all of it (mkfifo, /dev/zero, ru_maxrss); Windows has no FIFO at a name in a directory
-LINUX = unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO at a name inside a directory and a link to /dev/zero: POSIX only")
 ENV = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from test_platforms_20261124 import DEVICE, fifo, pipe_writer  # noqa: E402  (Windows: named pipes given by name, NUL)
 
 # (file, the text of the call's first argument): the closed list of reads that are not of a path the caller gives
 ALLOWED = {
@@ -173,16 +173,18 @@ class ClosedList(unittest.TestCase):
             shutil.rmtree(td)
 
 
-@LINUX
 class NotReachedFromACommandLine(unittest.TestCase):
-    """each reader is given a FIFO with no writer and a link to /dev/zero: an OSError at once, never a wait"""
+    """each reader is given a FIFO with no writer and a link to /dev/zero (Windows: a named pipe whose server never
+    writes, and NUL): an OSError at once, never a wait"""
 
     def setUp(self):
         self.td = tempfile.mkdtemp()
-        self.fifo = os.path.join(self.td, "fifo")
-        os.mkfifo(self.fifo)
-        self.zero = os.path.join(self.td, "zero")
-        os.symlink("/dev/zero", self.zero)
+        self.fifo = fifo(self, os.path.join(self.td, "fifo"))
+        if os.name == "nt":
+            self.zero = DEVICE
+        else:
+            self.zero = os.path.join(self.td, "zero")
+            os.symlink("/dev/zero", self.zero)
 
     def tearDown(self):
         shutil.rmtree(self.td)
@@ -190,7 +192,7 @@ class NotReachedFromACommandLine(unittest.TestCase):
     CALLS = {
         "monitor --match": "import cryptovalid_monitor as M; M.find_matches(sys.argv[1], ['x'])",
         "tip check": "import cryptovalid_tip as T; T.chain_tip(sys.argv[1])",
-        "worm get": "import cryptovalid_worm as W; s = W.LocalWormStore(os.path.dirname(sys.argv[1])); "
+        "worm get": "import cryptovalid_worm as W; s = W.LocalWormStore(sys.argv[2]); "
                     "s._path = lambda key: sys.argv[1]; s.get('k')",
         "qeas receipt": "import cryptovalid_qeas as Q; Q._read_text(sys.argv[1])",
         "fundcert csv": "import fundcert_crosssource as F; F._load(sys.argv[1], 'csv')",
@@ -214,7 +216,7 @@ class NotReachedFromACommandLine(unittest.TestCase):
                         print("OSError", type(e).__name__)
                     except Exception as e:
                         print("other", type(e).__name__, str(e)[:80])
-                """ % code, bad)
+                """ % code, bad, self.td)
                 where = (name, os.path.basename(bad), out[-300:])
                 self.assertNotEqual(rc, 124, where)
                 self.assertNotIn("READ", out, where)
@@ -235,12 +237,12 @@ class NotReachedFromACommandLine(unittest.TestCase):
         self.assertEqual(rc, 0, out[-400:])
 
 
-@LINUX
 class WhatAWriterReads(unittest.TestCase):
+    """Windows: the pipes are named pipes given by name (test_platforms_20261124.fifo, pipe_writer), the device NUL"""
+
     def setUp(self):
         self.td = tempfile.mkdtemp()
-        self.fifo = os.path.join(self.td, "fifo")
-        os.mkfifo(self.fifo)
+        self.fifo = fifo(self, os.path.join(self.td, "fifo"))
 
     def tearDown(self):
         shutil.rmtree(self.td)
@@ -254,32 +256,29 @@ class WhatAWriterReads(unittest.TestCase):
         self.assertEqual(verifier.read_input_text(reg), "abc\ndef")          # as open(path, encoding="utf-8") reads it
         with self.assertRaises(verifier.InputTooLarge):
             verifier.read_input(reg, 3)
-        for dev in ("/dev/zero", "/dev/null", self.td):
+        for dev in (DEVICE, self.td) + (() if os.name == "nt" else ("/dev/null",)):
             with self.assertRaises(verifier.InputNotRegular):
                 verifier.read_input(dev)
         with self.assertRaises(FileNotFoundError):
             verifier.read_input(os.path.join(self.td, "absent"))
 
     def test_a_pipe_with_a_writer_is_read_and_one_without_is_an_error(self):
+        slow, _ = pipe_writer(self, os.path.join(self.td, "slow"), [b"12", b"34"], 0.5)
+        big, _ = pipe_writer(self, os.path.join(self.td, "big"), [b"12345"])
         rc, out = child("""
-            import subprocess, time, verifier
-            w = subprocess.Popen([sys.executable, "-c", "import sys, time; f = open(sys.argv[1], 'wb'); f.write(b'12'); "
-                                  "f.flush(); time.sleep(0.5); f.write(b'34'); f.close()", sys.argv[1]])
+            import verifier
             got = verifier.read_input(sys.argv[1]).decode()
-            w.wait()
             try:
-                verifier.read_input(sys.argv[1], 3, 1)
+                verifier.read_input(sys.argv[2], 3, 1)
             except verifier.InputIdle:
                 idle = True
-            w = subprocess.Popen([sys.executable, "-c", "import sys; f = open(sys.argv[1], 'wb'); f.write(b'12345'); f.close()", sys.argv[1]])
             try:
-                verifier.read_input(sys.argv[1], 3)
+                verifier.read_input(sys.argv[3], 3)
                 big = False
             except verifier.InputTooLarge:
                 big = True
-            w.wait()
             print(json.dumps([got, idle, big]))
-        """, self.fifo)
+        """, slow, self.fifo, big)
         self.assertEqual(rc, 0, out[-400:])
         self.assertEqual(json.loads(out), ["1234", True, True])
 
@@ -295,17 +294,17 @@ class WhatAWriterReads(unittest.TestCase):
         signer = os.path.join(ROOT, "signer.py")
         subprocess.run([sys.executable, signer, "keygen", key], check=True, capture_output=True, env=ENV)
         subprocess.run([sys.executable, signer, "sign", led, out1, key], check=True, capture_output=True, env=ENV)
-        feeder = subprocess.Popen([sys.executable, "-c", "import sys; d = open(sys.argv[1], 'rb').read(); "
-                                   "f = open(sys.argv[2], 'wb'); f.write(d); f.close()", key, self.fifo])
+        with open(key, "rb") as f:
+            fed, feeder = pipe_writer(self, os.path.join(self.td, "keypipe"), [f.read()])
         out2 = os.path.join(self.td, "o2.jsonl")
-        p = subprocess.run([sys.executable, signer, "sign", led, out2, self.fifo], capture_output=True, text=True, encoding="utf-8", env=ENV,
+        p = subprocess.run([sys.executable, signer, "sign", led, out2, fed], capture_output=True, text=True, encoding="utf-8", env=ENV,
                            timeout=30)
-        feeder.wait()
+        feeder.wait(30)
         self.assertEqual(p.returncode, 0, p.stderr[-300:])
         with open(out1, "rb") as a, open(out2, "rb") as b:
             self.assertEqual(a.read(), b.read())                 # Ed25519 is deterministic: the same signed ledger
         import time
-        for bad, least in ((self.fifo, 9), ("/dev/zero", 0)):
+        for bad, least in ((self.fifo, 9), (DEVICE, 0)):
             t = time.monotonic()
             try:
                 p = subprocess.run([sys.executable, signer, "sign", led, os.path.join(self.td, "o3.jsonl"), bad],
@@ -317,7 +316,6 @@ class WhatAWriterReads(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(self.td, "o3.jsonl")), bad)
 
 
-@LINUX
 class Pkcs11Module(unittest.TestCase):
     def test_module_path_fifo_is_refused_not_loaded(self):
         """review of 55e2e3f: ctypes.CDLL of a FIFO blocks in dlopen holding the GIL, so Pkcs11Backend.sign's own timeout
@@ -325,15 +323,14 @@ class Pkcs11Module(unittest.TestCase):
         descriptor opened without blocking before it is loaded."""
         td = tempfile.mkdtemp()
         try:
-            fifo = os.path.join(td, "m.so")
-            os.mkfifo(fifo)
+            pipe = fifo(self, os.path.join(td, "m.so"))   # Windows: a named pipe whose server never writes
             rc, out = child("""
                 import cryptovalid_kms as K
                 try:
                     K._p11_sign_direct(sys.argv[1], "t", "k", b"1", b"x")
                 except RuntimeError as e:
                     print("refused:", e)
-                """, fifo, timeout=15)
+                """, pipe, timeout=15)
             self.assertEqual(rc, 0, out)
             self.assertIn("cannot be loaded", out)
         finally:

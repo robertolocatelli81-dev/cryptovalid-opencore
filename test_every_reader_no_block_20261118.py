@@ -30,6 +30,7 @@ sys.path.insert(0, ROOT)
 LINUX = unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO at a name inside a directory and a link to /dev/zero: POSIX only")
 ENV = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
 KINDS = ("fifo", "devzero", "dir")
+from test_platforms_20261124 import DEVICE, fifo  # noqa: E402  (Windows: a named pipe given by name, NUL)
 
 
 def run(argv, timeout=40):
@@ -151,12 +152,12 @@ class InsideADirectory(unittest.TestCase):
             self.assertTrue(fails[0]["detail"].startswith("unreadable: "), fails)
 
 
-@LINUX
 class OnePath(unittest.TestCase):
+    """one path given to a reader: on Windows a named pipe whose server never writes and the device NUL"""
+
     def setUp(self):
         self.td = tempfile.mkdtemp()
-        self.fifo = os.path.join(self.td, "fifo")
-        os.mkfifo(self.fifo)
+        self.fifo = fifo(self, os.path.join(self.td, "fifo"))
         self.ledger = os.path.join(ROOT, "examples", "sample_ledger.jsonl")
 
     def tearDown(self):
@@ -165,7 +166,7 @@ class OnePath(unittest.TestCase):
     def test_signer_verify(self):
         """`signer.py verify`: a FIFO, a device, a directory, an absent path are named, exit 1 (0.26.0: a wait or a
         traceback); a regular ledger is read as before"""
-        for path in (self.fifo, "/dev/zero", self.td, os.path.join(self.td, "absent")):
+        for path in (self.fifo, DEVICE, self.td, os.path.join(self.td, "absent")):
             rc, out = run([os.path.join(ROOT, "signer.py"), "verify", path])
             self.assertEqual(rc, 1, (path, out[-300:]))
             self.assertNotIn("Traceback", out, path)
@@ -182,7 +183,7 @@ class OnePath(unittest.TestCase):
 
     def test_tip(self):
         """--tip <a FIFO> with a trusted key: tip_unreadable, FAIL (0.26.0: a wait)"""
-        for path in (self.fifo, "/dev/zero", self.td):
+        for path in (self.fifo, DEVICE, self.td):
             rc, out = run([os.path.join(ROOT, "verifier.py"), self.ledger, "--tip", path, "--trusted-pubkey", "ab" * 32])
             self.assertEqual(rc, 1, (path, out[-300:]))
             self.assertNotIn("Traceback", out, path)
