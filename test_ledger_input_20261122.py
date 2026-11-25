@@ -95,7 +95,14 @@ def _all(bins, path, feed=None):
     return out
 
 
-_POSIX = unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO at a name in a directory, /dev/zero, process substitution: POSIX only")
+_POSIX = unittest.skipUnless(hasattr(os, "mkfifo"), "process substitution <(...) gives a /dev/fd path, which a native "
+                             "Windows program cannot open; the named-pipe cases of this file are its equivalent there")
+NT = os.name == "nt"   # Windows: a FIFO is a named pipe given by name (test_platforms_20261124: fifo, pipe_writer), the device NUL
+
+
+def _each(bins, make):
+    """each verifier on a path of its own, made by `make()` (Windows: a named pipe whose server serves one reader)"""
+    return {name: _verify(name, argv, make()) for name, argv in bins.items()}
 
 
 class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
@@ -153,10 +160,9 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
                 f.write(json.dumps(e, ensure_ascii=ensure_ascii) + "\n")
             self.assertAll(_all(self.bins, p), (0, "PASS", None), "every character below 0x80")
 
-    @_POSIX
     def test_a_fifo_with_no_writer_is_idle_after_10_s(self):
-        fifo = self.path("idle.fifo")
-        os.mkfifo(fifo)
+        from test_platforms_20261124 import fifo as make_fifo   # Windows: a named pipe whose server never writes
+        fifo = make_fifo(self, self.path("idle.fifo"))
         out, threads = {}, []
         for name, argv in self.bins.items():   # side by side: each waits its 10 s
             th = threading.Thread(target=lambda n=name, a=argv: out.__setitem__(n, _verify(n, a, fifo)))
@@ -169,40 +175,52 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             self.assertGreaterEqual(dt, 9.5, name)
             self.assertLess(dt, 18, name)   # one wait of 10 s, not two
 
-    @_POSIX
     def test_a_fifo_whose_writer_holds_it_without_a_byte_is_idle(self):
-        fifo = self.path("held.fifo")
-        os.mkfifo(fifo)
+        if NT:   # a server that connects the verifier, gives nothing for 20 s, then leaves
+            from test_platforms_20261124 import pipe_writer
+            got = _each(self.bins, lambda: pipe_writer(self, self.path("held.fifo"), [], delay=20)[0])
+        else:
+            fifo = self.path("held.fifo")
+            os.mkfifo(fifo)
 
-        def hold(p):
-            fd = os.open(p, os.O_WRONLY)   # waits for the verifier, then gives nothing for 20 s
-            time.sleep(20)
-            os.close(fd)
-        for name, (rc, verdict, reason, dt) in _all(self.bins, fifo, hold).items():
+            def hold(p):
+                fd = os.open(p, os.O_WRONLY)   # waits for the verifier, then gives nothing for 20 s
+                time.sleep(20)
+                os.close(fd)
+            got = _all(self.bins, fifo, hold)
+        for name, (rc, verdict, reason, dt) in got.items():
             self.assertEqual((rc, verdict, reason), (1, "FAIL", IDLE), name)
             self.assertLess(dt, 15, name)   # it ends at the first 10 s, not when the writer goes
 
-    @_POSIX
     def test_a_fifo_whose_writer_leaves_without_a_byte_is_empty_at_once(self):
-        fifo = self.path("empty.fifo")
-        os.mkfifo(fifo)
+        if NT:   # a server that connects the verifier, gives nothing, leaves after 2 s
+            from test_platforms_20261124 import pipe_writer
+            got = _each(self.bins, lambda: pipe_writer(self, self.path("empty.fifo"), [], delay=2)[0])
+        else:
+            fifo = self.path("empty.fifo")
+            os.mkfifo(fifo)
 
-        def leave(p):   # opens the FIFO after the verifier, gives nothing, closes after 2 s: the end, not an idle FIFO
-            fd = os.open(p, os.O_WRONLY)
-            time.sleep(2)
-            os.close(fd)
-        for name, (rc, verdict, reason, dt) in _all(self.bins, fifo, leave).items():
+            def leave(p):   # opens the FIFO after the verifier, gives nothing, closes after 2 s: the end, not idle
+                fd = os.open(p, os.O_WRONLY)
+                time.sleep(2)
+                os.close(fd)
+            got = _all(self.bins, fifo, leave)
+        for name, (rc, verdict, reason, dt) in got.items():
             self.assertEqual((rc, verdict), (1, "FAIL"), name)
             self.assertNotEqual(reason, IDLE, name)
             self.assertLess(dt, 8, name)
 
-    @_POSIX
     def test_a_device_or_a_directory_is_not_read(self):
+        from test_platforms_20261124 import DEVICE
         d = self.path("dir")
         os.mkdir(d)
-        z = self.path("zero")
-        os.symlink("/dev/zero", z)
-        for p in ("/dev/null", z, d):
+        if NT:
+            paths = (DEVICE, d)
+        else:
+            z = self.path("zero")
+            os.symlink("/dev/zero", z)
+            paths = ("/dev/null", z, d)
+        for p in paths:
             if os.path.exists(p):
                 self.assertAll(_all(self.bins, p), (1, "FAIL", NOT_REGULAR), p)
 
@@ -214,8 +232,12 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             self.assertEqual((rc, verdict, reason), (1, "FAIL", TOO_LARGE), name)
             self.assertLess(dt, 4, name)   # judged on its size, not read (Java read it through in 6.8 s when it was not)
 
-    @_POSIX
     def test_a_fifo_larger_than_the_bound(self):
+        if NT:   # 257 MiB through a named pipe, one per verifier
+            from test_platforms_20261124 import pipe_writer
+            got = _each(self.bins, lambda: pipe_writer(self, self.path("big.fifo"), [b"\0" * (1 << 20)], times=257)[0])
+            self.assertAll(got, (1, "FAIL", TOO_LARGE), "a named pipe of 257 MiB")
+            return
         fifo = self.path("big.fifo")
         os.mkfifo(fifo)
 
@@ -229,7 +251,6 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
                 pass
         self.assertAll(_all(self.bins, fifo, feed), (1, "FAIL", TOO_LARGE), "a FIFO of 257 MiB")
 
-    @_POSIX
     def test_exactly_the_bound_is_within_it(self):
         """256 MiB exactly is read, as a file and through a FIFO, and fails at §5 step 1 (it holds no entry). The file is
         given to the four: before rule 8 Go stopped at its line bound (`token too long`). The FIFO only to Java: its bound
@@ -243,29 +264,38 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             self.assertNotIn(reason, (TOO_LARGE, "read: bufio.Scanner: token too long"), name)
         if "java" not in self.bins:
             self.skipTest("the FIFO needs the Java toolchain")
-        fifo = self.path("at.fifo")
-        os.mkfifo(fifo)
-
-        def feed(p):
-            try:
-                with open(p, "wb") as w:
-                    block = b"\0" * (1 << 20)
-                    for _ in range(256):
-                        w.write(block)
-            except OSError:
-                pass
         java = {"java": self.bins["java"]}
-        for what, got in (("a file", _all(java, at)), ("a FIFO", _all(java, fifo, feed))):
+        if NT:   # a named pipe of exactly 256 MiB
+            from test_platforms_20261124 import pipe_writer
+            piped = _each(java, lambda: pipe_writer(self, self.path("at.fifo"), [b"\0" * (1 << 20)], times=256)[0])
+        else:
+            fifo = self.path("at.fifo")
+            os.mkfifo(fifo)
+
+            def feed(p):
+                try:
+                    with open(p, "wb") as w:
+                        block = b"\0" * (1 << 20)
+                        for _ in range(256):
+                            w.write(block)
+                except OSError:
+                    pass
+            piped = _all(java, fifo, feed)
+        for what, got in (("a file", _all(java, at)), ("a FIFO", piped)):
             rc, verdict, reason, _ = got["java"]
             self.assertEqual((rc, verdict), (1, "FAIL"), what)
             self.assertNotEqual(reason, TOO_LARGE, what)
 
-    @_POSIX
     def test_a_fifo_whose_writer_comes_late_is_read_control(self):
-        fifo = self.path("late.fifo")
-        os.mkfifo(fifo)
         with open(SAMPLE, "rb") as f:
             data = f.read()
+        if NT:   # Windows has no pipe without its server: the server connects the verifier, writes 2 s later
+            from test_platforms_20261124 import pipe_writer
+            self.assertAll(_each(self.bins, lambda: pipe_writer(self, self.path("late.fifo"), [data], delay=2)[0]),
+                           (0, "PASS", None), "a writer 2 s late")
+            return
+        fifo = self.path("late.fifo")
+        os.mkfifo(fifo)
 
         def late(p):
             time.sleep(2)   # the verifier has opened the FIFO and waits: on Linux it reads as its end until a writer comes
@@ -273,12 +303,17 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
                 w.write(data)
         self.assertAll(_all(self.bins, fifo, late), (0, "PASS", None), "a writer 2 s late")
 
-    @_POSIX
     def test_a_fifo_whose_writer_is_slow_is_read_control(self):
-        fifo = self.path("slow.fifo")
-        os.mkfifo(fifo)
         with open(SAMPLE, "rb") as f:
             lines = f.read().splitlines(keepends=True)
+        if NT:   # a line every 6 s through a named pipe
+            from test_platforms_20261124 import pipe_writer
+            chunks = [b"".join(lines[:1]), b"".join(lines[1:2]), b"".join(lines[2:])]
+            self.assertAll(_each(self.bins, lambda: pipe_writer(self, self.path("slow.fifo"), chunks, pause=6)[0]),
+                           (0, "PASS", None), "a writer that gives a line every 6 s")
+            return
+        fifo = self.path("slow.fifo")
+        os.mkfifo(fifo)
 
         def slow(p):   # a line every 6 s, 12 s in all: only the wait for a byte is bounded
             with open(p, "wb", buffering=0) as w:
@@ -289,18 +324,21 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
         self.assertGreaterEqual(len(lines), 3)
         self.assertAll(_all(self.bins, fifo, slow), (0, "PASS", None), "a writer that gives a line every 6 s")
 
-    @_POSIX
     def test_a_tip_that_is_a_fifo_is_refused_at_once(self):
         """SPEC §22 rule 2 row 1: a tip is a regular file; a FIFO is refused without a wait, in Java too (its reader
-        takes a FIFO for the ledger only)"""
+        takes a FIFO for the ledger only). POSIX: the FIFO beside the ledger; Windows, where no pipe stands at a name
+        in a folder: a named pipe given with --tip (-tip)"""
         led = self.path("t.jsonl")
         shutil.copyfile(SAMPLE, led)
         tip = self.path("t.jsonl.tip.json")
-        os.mkfifo(tip)
+        from test_platforms_20261124 import fifo as make_fifo
+        named = make_fifo(self, tip)
         key = "58" + "66" * 31   # any key: row 1 comes before the signature
         for name, argv in self.bins.items():
-            flag = "--trusted-pubkey" if name in ("python", "js") else "-trusted-pubkey"
-            args = argv + ([led, flag, key] if name in ("python", "js") else [flag, key, led])
+            py = name in ("python", "js")
+            flag = "--trusted-pubkey" if py else "-trusted-pubkey"
+            given = ([("--tip" if py else "-tip"), named] if NT else [])
+            args = argv + ([led, flag, key] + given if py else [flag, key] + given + [led])
             t0 = time.monotonic()
             cp = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", timeout=60, stdin=subprocess.DEVNULL)
             doc = json.loads(cp.stdout).get("tip") or {}

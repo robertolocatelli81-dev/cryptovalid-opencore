@@ -114,6 +114,7 @@ def fifo_at(tc, path):
 _PIPE_WRITER = r"""
 import json, os, sys, time
 chunks, pause, delay = [bytes.fromhex(c) for c in json.loads(sys.argv[2])], float(sys.argv[3]), float(sys.argv[4])
+chunks = chunks * int(sys.argv[5])
 if os.name == "nt":
     import _winapi
     h = _winapi.CreateNamedPipe(sys.argv[1], _winapi.PIPE_ACCESS_OUTBOUND, 0, 1, 1 << 16, 1 << 16, 0, _winapi.NULL)
@@ -123,29 +124,34 @@ if os.name == "nt":
     except OSError:
         pass   # ERROR_PIPE_CONNECTED: the reader opened it first
     time.sleep(delay)
-    for c in chunks:
-        if c:
-            _winapi.WriteFile(h, c)
-        time.sleep(pause)
     try:
+        for c in chunks:
+            if c:
+                _winapi.WriteFile(h, c)
+            time.sleep(pause)
         import ctypes
         ctypes.WinDLL("kernel32").FlushFileBuffers(h)   # until the reader has read every byte
+    except OSError:
+        pass   # the reader stopped (at its bound): as a POSIX writer's BrokenPipeError
     finally:
         _winapi.CloseHandle(h)
 else:
     print("ready", flush=True)
-    with open(sys.argv[1], "wb") as f:   # waits for the reader
-        time.sleep(delay)
-        for c in chunks:
-            f.write(c)
-            f.flush()
-            time.sleep(pause)
+    try:
+        with open(sys.argv[1], "wb") as f:   # waits for the reader
+            time.sleep(delay)
+            for c in chunks:
+                f.write(c)
+                f.flush()
+                time.sleep(pause)
+    except OSError:
+        pass   # BrokenPipeError: the reader stopped (at its bound)
 """
 
 
-def pipe_writer(tc, path, chunks, pause=0.0, delay=0.0):
+def pipe_writer(tc, path, chunks, pause=0.0, delay=0.0, times=1):
     """A pipe a reader is given by name, with a writer process that waits `delay` s, writes `chunks` (bytes) with `pause`
-    s between them and leaves (no chunk: it leaves without a byte). POSIX: a FIFO at `path`; Windows: a named pipe
+    s between them (the list `times` times over) and leaves (no chunk: it leaves without a byte). POSIX: a FIFO at `path`; Windows: a named pipe
     \\\\.\\pipe\\cv-<random>, the writer its server. Returns (the name to give the reader, the writer's Popen); the
     writer is waited for at cleanup."""
     import json
@@ -156,7 +162,7 @@ def pipe_writer(tc, path, chunks, pause=0.0, delay=0.0):
     else:
         name = r"\\.\pipe\cv-" + secrets.token_hex(8)
     w = subprocess.Popen([sys.executable, "-c", _PIPE_WRITER, name, json.dumps([bytes(c).hex() for c in chunks]),
-                          str(pause), str(delay)], stdout=subprocess.PIPE)
+                          str(pause), str(delay), str(times)], stdout=subprocess.PIPE)
     tc.addCleanup(lambda: (w.kill() if w.poll() is None else None, w.wait(30), w.stdout.close()))
     tc.assertEqual(w.stdout.readline().strip(), b"ready")   # on Windows the pipe exists from here on
     return name, w

@@ -291,6 +291,14 @@ default) or normalises Unicode (macOS) opens `L.jsonl` for `l.jsonl`.
 
 ### Fleet audit of 2026-11-24 (the classes found in pq-scitt)
 
+- **A named pipe on Windows in the Go, JS and Java verifiers (SPEC §22 rule 8):** the Go verifier read a pipe there
+  without an idle bound (declared in `input_other.go`), and a JS `readSync` on a named pipe, which has no O_NONBLOCK on
+  Windows, waits without end. Go now reads in a goroutine and waits for it at most 10 s; JS hands the descriptor to
+  a `net.Socket` (libuv's pipe, cancelled when destroyed) with a timer reset at each byte; Java knows a named pipe by
+  its name (`\\.\pipe\`) instead of reading its attributes, which would take the pipe's one instance. JS on
+  Windows also answered a directory with `FILE_ERROR EISDIR`: it is now `unreadable: not a regular file`, as in the
+  other three. `test_ledger_input_20261122.py` runs on Windows with named pipes (each verifier its own) and NUL; only
+  the process substitution `<(...)` stays POSIX (a `/dev/fd` path a native Windows program cannot open).
 - **A pipe given by name on Windows (`verifier.py`, `read_input`):** the ledger verifier and the writers read a FIFO
   with `select`, which on Windows waits on sockets only, so a named pipe there was an error, not its bytes. On Windows
   the bytes waiting are asked with PeekNamedPipe and only those are read (never a blocking read); the writer gone is

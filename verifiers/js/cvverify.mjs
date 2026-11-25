@@ -10,7 +10,8 @@
 // and — when present — Ed25519 signatures over self_hash. stdlib crypto only.
 // Honest scope: proves integrity/linkage/signature, NOT the truth of recorded facts.
 import { createHash, verify as edVerify, createPublicKey } from "node:crypto";
-import { readdirSync, existsSync, fstatSync, writeSync, openSync, closeSync, readSync, constants as fsc } from "node:fs";
+import { readdirSync, existsSync, fstatSync, statSync, writeSync, openSync, closeSync, readSync, constants as fsc } from "node:fs";
+import net from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -287,7 +288,14 @@ export const LEDGER_FIFO_IDLE = `unreadable: FIFO idle for ${FIFO_IDLE_SECONDS} 
 export function readLedgerInput(p, done, idleMs = FIFO_IDLE_SECONDS * 1000, limit = LEDGER_MAX_BYTES) {
   let fd;
   try { fd = openSync(p, fsc.O_RDONLY | (fsc.O_NONBLOCK ?? 0)); }
-  catch (e) { done({ verdict: "FILE_ERROR", error: e.code || e.message }, null); return; }
+  catch (e) {
+    // Windows cannot open a directory as a file (EISDIR, EPERM): a directory there is "not a regular file", as the
+    // fstat says on POSIX (verifier.py's _open_input, 0.29.0)
+    let dir = false;
+    if (e.code === "EISDIR" || e.code === "EPERM") { try { dir = statSync(p).isDirectory(); } catch { dir = false; } }
+    done(dir ? { verdict: "FAIL", error: LEDGER_NOT_REGULAR } : { verdict: "FILE_ERROR", error: e.code || e.message }, null);
+    return;
+  }
   let st;
   try { st = fstatSync(fd); } catch (e) { closeSync(fd); done({ verdict: "FILE_ERROR", error: e.code || e.message }, null); return; }
   if (st.isFile()) {
@@ -310,6 +318,7 @@ export function readLedgerInput(p, done, idleMs = FIFO_IDLE_SECONDS * 1000, limi
     done(fail, out); return;
   }
   if (!st.isFIFO()) { closeSync(fd); done({ verdict: "FAIL", error: LEDGER_NOT_REGULAR }, null); return; }
+  if (process.platform === "win32") { readPipeWindows(fd, done, idleMs, limit); return; }
   // a FIFO: read on the descriptor opened above (O_NONBLOCK), polled every 10 ms: a byte is data; EAGAIN is a writer
   // there with nothing yet; 0 is the end once a writer was seen (a byte or an EAGAIN), and no writer yet before that, as
   // verifier.py's select tells them apart. The idle time counts from the last byte. Until 0.29.0 a net.Socket on the
@@ -339,6 +348,31 @@ export function readLedgerInput(p, done, idleMs = FIFO_IDLE_SECONDS * 1000, limi
     if (got) setImmediate(step); else setTimeout(step, 10);
   };
   setTimeout(step, 0);
+}
+// Windows' equivalent of the FIFO loop above: a named pipe has no O_NONBLOCK there and a readSync would wait without
+// end. The descriptor is handed to a net.Socket, libuv's own pipe on Windows (a thread that reads it and is cancelled
+// when the socket is destroyed): each byte resets a timer of idleMs, which ends with "FIFO idle" as on POSIX; the
+// writer gone is the end. (An asynchronous fs.read was tried first: the read left waiting in the thread pool kept the
+// process until the writer left, measured on Linux through a FIFO opened without O_NONBLOCK.)
+function readPipeWindows(fd, done, idleMs, limit) {
+  const parts = []; let n = 0, over = false, timer = null;
+  const sock = new net.Socket({ fd, readable: true, writable: false });
+  const end = (fail, out) => {
+    if (over) return;
+    over = true; clearTimeout(timer); sock.destroy();
+    done(fail, out);
+  };
+  const arm = () => { clearTimeout(timer); timer = setTimeout(() => end({ verdict: "FAIL", error: LEDGER_FIFO_IDLE }, null), idleMs); };
+  sock.on("data", (b) => {
+    if (over) return;
+    n += b.length;
+    if (n > limit) { end({ verdict: "FAIL", error: LEDGER_TOO_LARGE }, null); return; }
+    parts.push(b); arm();
+  });
+  sock.on("end", () => end(null, Buffer.concat(parts, n)));
+  sock.on("error", (e) => end(e.code === "EOF" || e.code === "EPIPE" ? null : { verdict: "FILE_ERROR", error: e.code || e.message },
+                              e.code === "EOF" || e.code === "EPIPE" ? Buffer.concat(parts, n) : null));
+  arm();
 }
 export function checkTip(entriesCount, lastSelfHash, tip, trustedPubkeyHex = null, notBefore = null, firstSelfHash = null, expectLedgerId = null) {
   if (tip && tip[TIP_UNREADABLE]) return { ok: false, pq_protected: false, error: tip[TIP_UNREADABLE] };

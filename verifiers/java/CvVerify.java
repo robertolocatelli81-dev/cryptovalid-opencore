@@ -587,6 +587,9 @@ public class CvVerify {
 
     /** 0 a regular file, 1 a FIFO, 2 anything else (a directory, a device, a socket) */
     static int inputKind(Path p) throws IOException {
+        // Windows: a named pipe (\\.\pipe\name), its FIFO, is known by its name; reading its attributes would take one
+        // of its instances (an open), and the read needs the one there is
+        if (File.separatorChar == '\\' && p.toString().toLowerCase(java.util.Locale.ROOT).startsWith("\\\\.\\pipe\\")) return 1;
         Object mode;
         try { mode = Files.getAttribute(p, "unix:mode"); }
         catch (UnsupportedOperationException | IllegalArgumentException e) {
