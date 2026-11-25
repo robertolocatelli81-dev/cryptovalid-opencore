@@ -154,7 +154,7 @@ class ClosedShapes(unittest.TestCase):
                            f"exec {shutil.which('openssl')} \"$@\"\n",
                            "import os, subprocess, sys\n"
                            "if sys.argv[1:2] == ['verify']:\n    sys.stderr.write('verify: Unknown option: -no-CAstore\\n'); sys.exit(1)\n"
-                           "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:]))")
+                           "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:], stdin=0, stdout=1, stderr=2))")
         fake = shutil.which("openssl", path=bindir)
         old = {k: os.environ.get(k) for k in env}
         os.environ.update(env)

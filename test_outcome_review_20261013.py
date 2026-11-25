@@ -319,7 +319,7 @@ class TestCheckNotRunMore(_Tmp):
     _WINDOWS_FAKES = {
         "#!/bin/sh\nsleep 25\nexec /usr/bin/env -i openssl \"$@\"\n":
             "import os, subprocess, sys, time; time.sleep(25); "
-            "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:]))",
+            "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:], stdin=0, stdout=1, stderr=2))",
         "#!/nonexistent/interpreter\n": None,
         "#!/bin/sh\nkill -KILL $$\n": "import os; os._exit(-1073741819)",
         "#!/bin/sh\nkill -SEGV $$\n": "import os; os._exit(-1073741819)",

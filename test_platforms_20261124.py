@@ -420,8 +420,11 @@ def fake_openssl(tc, bindir, sh_body, py_body):
             shutil.copy(os.path.join(bindir, n), os.path.join(probe_dir, n))
     shutil.copytree(os.path.join(bindir, "Lib"), os.path.join(probe_dir, "Lib"))
     # the probe also goes through to the real openssl, as the bodies do
-    _write_fake_body(probe_dir, "import os, subprocess, sys\nr = subprocess.run([os.environ['CV_REAL_OPENSSL'], 'version'], "
-                     "capture_output=True)\nprint('FAKE', sys.argv, r.returncode, r.stderr[-200:])", real)
+    # with the handles the stand-in was given (stdin=0, stdout=1, stderr=2), as the bodies pass through: without them
+    # subprocess on Windows (close_fds) gives the child no handle to write to, and openssl ends with 1 (run 45503450377:
+    # every `cms -verify` passed through exited 1)
+    _write_fake_body(probe_dir, "import os, subprocess, sys\nprint('FAKE', sys.argv, flush=True)\n"
+                     "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL'], 'version'], stdin=0, stdout=1, stderr=2))", real)
     # the probe is started as the code starts openssl: cryptovalid_tsa._run_openssl, in this process, with the
     # environment the tests set (PATH with the probe's folder first)
     import cryptovalid_tsa
@@ -433,7 +436,8 @@ def fake_openssl(tc, bindir, sh_body, py_body):
     finally:
         for k, v in old.items():
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
-    if probe.stdout.strip() != b"FAKE ['probe-1', 'probe 2'] 0 b''":
+    if probe.returncode != 0 or probe.stdout.splitlines()[:1] != [b"FAKE ['probe-1', 'probe 2']"] \
+            or not probe.stdout.splitlines()[1:2] or not probe.stdout.splitlines()[1].startswith(b"OpenSSL"):
         tc.fail("the fake openssl.exe did not run its body: rc %s, stdout %r, stderr %r, %s"
                 % (probe.returncode, probe.stdout[-300:], probe.stderr[-300:], fake_calls(probe_dir)))
     return env

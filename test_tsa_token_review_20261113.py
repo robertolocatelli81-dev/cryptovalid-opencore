@@ -211,7 +211,7 @@ class HandBuiltTokens(unittest.TestCase):
         real = shutil.which("openssl")
         restore = self._with_fake("binkill", '#!/bin/sh\nif [ "$1" = ts ]; then kill -9 $$; fi\nexec "%s" "$@"\n' % real,
                                   "import os, subprocess, sys\nif sys.argv[1:2] == ['ts']:\n    os._exit(-1073741819)\n"
-                                  "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:]))")
+                                  "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:], stdin=0, stdout=1, stderr=2))")
         try:
             from test_platforms_20261124 import fake_calls
             try:
@@ -245,7 +245,7 @@ class HandBuiltTokens(unittest.TestCase):
         real = shutil.which("openssl")
         restore = self._with_fake("bin", '#!/bin/sh\nif [ "$1" = ts ]; then exit 0; fi\nexec "%s" "$@"\n' % real,
                                   "import os, subprocess, sys\nif sys.argv[1:2] == ['ts']:\n    sys.exit(0)\n"
-                                  "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:]))")
+                                  "sys.exit(subprocess.call([os.environ['CV_REAL_OPENSSL']] + sys.argv[1:], stdin=0, stdout=1, stderr=2))")
         try:
             from test_platforms_20261124 import fake_calls
             self.assertEqual(self.outcome(tok, self.pin), ("invalid", "not_issued_by_pinned_tsa"),
