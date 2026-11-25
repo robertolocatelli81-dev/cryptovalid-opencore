@@ -33,6 +33,7 @@ SEED = 20261120
 def _serve(answer):
     class H(http.server.BaseHTTPRequestHandler):
         def _any(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))   # a close with it unread can reset the connection
             code, headers = answer(self.path)
             self.server.seen.append(self.path)
             self.send_response(code)

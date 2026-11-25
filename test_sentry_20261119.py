@@ -117,6 +117,7 @@ def _system_reads_like_aton() -> bool:
 
 class _Quiet(http.server.BaseHTTPRequestHandler):
     def _any(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))   # a close with it unread can reset the connection
         self.server.seen.append((self.command, self.path, {k.lower(): v for k, v in self.headers.items()}))
         code, headers = self.server.answer(self.path)
         self.send_response(code)

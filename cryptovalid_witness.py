@@ -46,6 +46,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import time
@@ -619,9 +620,24 @@ def serve(service: WitnessService, host: str = "127.0.0.1", port: int = 0, prefi
         def log_message(self, *a):   # quiet
             pass
 
+        def _refuse(self, code):
+            """Answer without reading the body, then read what the client is still sending, at most 8 MiB and 5 s: a close
+            with bytes unread resets the connection and the client loses the answer (RFC 9112 §9.6)."""
+            self.send_response(code); self.send_header("Content-Length", "0"); self.send_header("Connection", "close"); self.end_headers()
+            try:
+                self.wfile.flush(); self.connection.shutdown(socket.SHUT_WR); self.connection.settimeout(1)
+                left, end = 8 << 20, time.monotonic() + 5
+                while left > 0 and time.monotonic() < end:
+                    got = len(self.connection.recv(1 << 16))
+                    if not got:
+                        break
+                    left -= got
+            except OSError:
+                pass                     # the client went away or stopped sending: closed as before
+
         def do_POST(self):
             if self.path != prefix + "/add-checkpoint":
-                self.send_response(404); self.send_header("Content-Length", "0"); self.send_header("Connection", "close"); self.end_headers(); return
+                return self._refuse(404)
             try:
                 cls = self.headers.get_all("Content-Length") or []
                 if len(set(cls)) != 1 or "Transfer-Encoding" in self.headers:   # RFC 9112 §6.3: one length, no chunked
@@ -631,11 +647,11 @@ def serve(service: WitnessService, host: str = "127.0.0.1", port: int = 0, prefi
                     raise ValueError(cl)
                 n = int(cl)
             except ValueError:
-                self.send_response(400); self.send_header("Content-Length", "0"); self.send_header("Connection", "close"); self.end_headers(); return
+                return self._refuse(400)
             if n < 0:
-                self.send_response(400); self.send_header("Content-Length", "0"); self.send_header("Connection", "close"); self.end_headers(); return
+                return self._refuse(400)
             if n > 2 << 20:                  # 2 MiB: room for a note with 100 lines of 8 KiB plus the proof
-                self.send_response(413); self.send_header("Content-Length", "0"); self.send_header("Connection", "close"); self.end_headers(); return
+                return self._refuse(413)
             try:
                 status, body, ctype = service.add_checkpoint(self.rfile.read(n))
             except Exception as e:           # noqa: BLE001 — the spec wants a status for every outcome

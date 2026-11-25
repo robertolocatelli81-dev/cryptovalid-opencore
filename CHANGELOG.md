@@ -348,6 +348,11 @@ default) or normalises Unicode (macOS) opens `L.jsonl` for `l.jsonl`.
   Windows and with Homebrew's OpenSC on macOS). The ctypes structures are packed to 1 byte on Windows, as pkcs11.h.
   The CI runs the SoftHSM2 bench on macOS and Windows too.
 - NetHSM: a malformed answer is a named refusal (it was a `KeyError` or a `TypeError`).
+- Witness server (`cryptovalid_witness.serve`): a request refused without reading its body (404, 400, 413) is answered
+  and what the client is still sending is read, at most 8 MiB and 5 s, before the close: with bytes unread the close
+  resets the connection and the client loses the answer (RFC 9112 §9.6). Up to 0.28.1 a body of 3 MiB or 7 MiB, sent
+  whole, never saw its 413 (100 of 100 requests, Linux, Python 3.13); now it does (100 of 100). Found from CI run
+  45624574668, where a test's own server did the same on Windows.
 - `Ingestor` resuming a segment: an `idx` of `true` or `1.0` no longer passes as 1 (the verifier refuses both).
 
 ### Windows and macOS: the same bytes, the same verdict

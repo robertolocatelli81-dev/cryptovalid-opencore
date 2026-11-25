@@ -1101,6 +1101,13 @@ class TestTlogWitnessHTTP(unittest.TestCase):
         c = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
         c.putrequest("POST", "/w/add-checkpoint"); c.putheader("Content-Length", str((2 << 20) + 1)); c.endheaders()
         resp = c.getresponse(); self.assertEqual((resp.status, resp.getheader("Content-Length"), resp.getheader("Connection")), (413, "0", "close")); c.close()
+        # the same answers to a client that sends its whole body: up to 0.28.1 the close with bytes unread reset the
+        # connection and a 3 MiB body never saw its 413 (RFC 9112 §9.6)
+        for path, size, code in (("/w/nope", 1 << 20, 404), ("/w/add-checkpoint", 3 << 20, 413), ("/w/add-checkpoint", 7 << 20, 413)):
+            for _ in range(5):
+                c = http.client.HTTPConnection("127.0.0.1", self.httpd.server_address[1], timeout=10)
+                c.request("POST", path, body=b"x" * size)
+                self.assertEqual(c.getresponse().status, code, (path, size)); c.close()
         # the client helper: 409 → resubmit with the answered size; verifies the cosignature with trusted keys only
         r = W.submit_checkpoint(self.url, n8, l8, [self.WV], self.LV)
         self.assertEqual((r["stato"], r["status"], r["witnesses"]), ("OK", 200, ["witness.example/w1"]))

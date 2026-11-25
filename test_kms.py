@@ -329,10 +329,11 @@ class TestVaultTransitStub(unittest.TestCase):
                 self._json(404, {"errors": []})
 
             def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))   # a close with it unread can reset the connection
                 if self.headers.get("X-Vault-Token") != "test-token":
                     return self._json(403, {"errors": ["permission denied"]})
                 if self.path == "/v1/transit/sign/cv":
-                    body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                    body = json.loads(body)
                     msg = base64.b64decode(body["input"])
                     sig = base64.b64encode(sk.sign(msg)).decode()
                     return self._json(200, {"data": {"signature": f"vault:v1:{sig}"}})
