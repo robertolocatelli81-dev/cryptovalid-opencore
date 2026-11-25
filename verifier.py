@@ -1034,11 +1034,25 @@ def _read_pipe_windows(fd: int, path: str, limit: int, idle: float, data: bytear
         time.sleep(0 if data and waited < 0.02 else 0.01)
 
 
+def read_bounded(f, limit: int) -> bytes:
+    """At most `limit` + 1 bytes of the open file `f`, with a buffer of its size, not of the bound: f.read(limit + 1)
+    asked for 256 MiB to read a file of 7 bytes (MemoryError under a data limit of 100 MB on Linux, measured
+    2026-11-25; a peak working set of 270 MiB on Windows, where the system touches the whole buffer)."""
+    parts, n, want = [], 0, os.fstat(f.fileno()).st_size + 1   # one more than the size: the end, or a file that grew
+    while n <= limit:
+        b = f.read(min(want, limit + 1 - n))
+        if not b:
+            break
+        parts.append(b)
+        n, want = n + len(b), 1 << 20
+    return b"".join(parts)
+
+
 def read_regular(path: str, limit: int = MAX_INPUT_BYTES) -> bytes:
     """the bytes of a regular file of at most `limit` bytes (open_regular), read bounded: a file that grew past the
     bound after the fstat is InputTooLarge too"""
     with os.fdopen(open_regular(path, limit), "rb") as f:
-        data = f.read(limit + 1)
+        data = read_bounded(f, limit)
     if len(data) > limit:
         raise InputTooLarge(f"{path}: larger than {limit} bytes")
     return data
@@ -1079,7 +1093,7 @@ def read_input(path: str, limit: int = MAX_INPUT_BYTES, idle: float = FIFO_IDLE_
     if piped is not None:
         return piped
     with os.fdopen(fd, "rb") as f:
-        data = f.read(limit + 1)
+        data = read_bounded(f, limit)
     if len(data) > limit:
         raise InputTooLarge(f"{path}: larger than {limit} bytes")
     return data

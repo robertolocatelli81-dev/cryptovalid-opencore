@@ -396,7 +396,7 @@ def _read(src: Union[str, bytes, bytearray], what: str, limit: int) -> bytes:
     elif isinstance(src, str) and src:
         try:   # opened once without blocking, judged on the open descriptor (SPEC §5 step 0; until 0.26.0 stat then open)
             with os.fdopen(verifier.open_regular(src, sys.maxsize), "rb") as f:
-                b = f.read(limit + 1)
+                b = verifier.read_bounded(f, limit)
         except verifier.InputNotRegular:
             raise Refused("input_unreadable", f"{what}: not a regular file") from None
         except OSError as e:

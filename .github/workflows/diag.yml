@@ -1,4 +1,4 @@
-# Trial branch only: the test files touched by the Windows and Python 3.9.13 corrections, before the full run.
+# Trial branch only: the test files still red in run 45600805721, an access-list check, the wheel tests, and the suites that use bash.
 # SPDX-License-Identifier: AGPL-3.0-or-later
 name: diag
 on:
@@ -24,7 +24,7 @@ jobs:
           - {os: macos-latest, python: "3.9"}
     defaults:
       run:
-        shell: pwsh
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -32,42 +32,67 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install cryptography 'ap2-evidence-pack>=1.6.0,<2' 'slh-dsa>=0.2.5' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
+      - run: python -m pip install cryptography 'ap2-evidence-pack>=1.6.0,<2' 'slh-dsa>=0.2.5' 'setuptools>=77' --extra-index-url https://robertolocatelli81-dev.github.io/pypi/
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: "1.27"
-      - name: The touched suites, with cryptography
+      - name: The PATH of Git's bash, for the suites (Windows)
+        if: runner.os == 'Windows'
+        run: echo "SUITE_PATH=$(cygpath -wp "$PATH")" >> "$GITHUB_ENV"
+      - name: The red suites, the wheel tests, the access lists (pwsh, bash's PATH), with cryptography
+        shell: pwsh
+        env:
+          CV_REQUIRE_CRYPTO: "1"
+          CV_REQUIRE_SLHDSA: "1"
+          CV_REQUIRE_UNREADABLE: "1"
         run: |
-          $env:CV_REQUIRE_CRYPTO = "1"
-          $env:CV_REQUIRE_SLHDSA = "1"
-          $fail = @()
-          foreach ($t in "test_platforms_20261124", "test_slhdsa_20261123", "test_verify_evidence", "test_kms",
-                         "test_outcome_review_20261013", "test_every_open_is_bounded_20261118",
-                         "test_input_regular_bounded_20261118", "test_ledger_input_20261122") {
-            Write-Output "== $t"
-            python -W ignore "$t.py" -v
-            if ($LASTEXITCODE -ne 0) { $fail += $t }
-          }
-          if ($fail) { Write-Output "::error::red: $fail"; exit 1 }
-          exit 0
-      - name: The suites where Python 3.9.13 differed, without cryptography
-        if: always()
-        run: |
-          python -m venv --without-pip nocrypto
-          $py = if ($IsWindows) { "nocrypto\Scripts\python.exe" } else { "nocrypto/bin/python" }
+          if ($env:SUITE_PATH) { $env:PATH = $env:SUITE_PATH }
+          python -c "import shutil; print(shutil.which('bash'), shutil.which('openssl'))"
           $fail = 0
-          foreach ($t in "test_slhdsa_20261123.py", "test_platforms_20261124.py") {
-            & $py -W ignore $t
-            if ($LASTEXITCODE -ne 0) { $fail = 1 }
+          foreach ($t in "test_input_regular_bounded_20261118.py", "test_platforms_20261124.py", "test_declared_api.py",
+                         "test_auto_closed_20261115.py", "test_receipt_not_written.py", "test_receipt_design_20261013.py",
+                         "test_outcome_review_20261013.py", "test_action_20261123.py") {
+            Write-Output "== $t"
+            python -W ignore $t -v
+            if ($LASTEXITCODE -ne 0) { Write-Output "::error::$t"; $fail = 1 }
           }
           exit $fail
-      - name: "Windows: are the cases of an unreadable file skipped in pwsh, and in Git's bash?"
-        if: always() && runner.os == 'Windows'
+      - name: The same without cryptography
+        if: always()
+        shell: pwsh
+        env:
+          CV_REQUIRE_UNREADABLE: "1"
         run: |
-          Write-Output "== pwsh"
-          foreach ($t in "test_auto_closed_20261115", "test_c2sp_tiles_20261115") {
-            cmd /c "python -W ignore -m unittest -v $t 2>&1" | Select-String -Pattern "skipped|^FAIL|^ERROR|^Ran|^OK|^FAILED"
+          if ($env:SUITE_PATH) { $env:PATH = $env:SUITE_PATH }
+          python -m venv --without-pip "$env:RUNNER_TEMP/nocrypto"
+          $py = if ($IsWindows) { "$env:RUNNER_TEMP/nocrypto/Scripts/python.exe" } else { "$env:RUNNER_TEMP/nocrypto/bin/python" }
+          & $py -c "import cryptography" 2>$null
+          if ($LASTEXITCODE -eq 0) { Write-Output "::error::venv has cryptography"; exit 1 }
+          $fail = 0
+          foreach ($t in "test_input_regular_bounded_20261118.py", "test_platforms_20261124.py", "test_auto_closed_20261115.py") {
+            & $py -W ignore $t
+            if ($LASTEXITCODE -ne 0) { Write-Output "::error::$t without cryptography"; $fail = 1 }
           }
-          Write-Output "== bash"
-          & "C:\Program Files\Git\bin\bash.exe" -c 'for t in test_auto_closed_20261115 test_c2sp_tiles_20261115; do python -W ignore -m unittest -v $t 2>&1 | grep -E "skipped|^FAIL|^ERROR|^Ran|^OK|^FAILED"; done; true'
-          exit 0
+          exit $fail
+      - name: "The memory of the two tests of run 45600805721, before and after (printed)"
+        if: always()
+        run: |
+          cat > "$RUNNER_TEMP/mem.py" <<'PY'
+          import os, sys, tempfile
+          sys.path.insert(0, os.getcwd())
+          import test_platforms_20261124 as T
+          ns = {}
+          exec(T.PEAK_RSS_KIB, ns)
+          peak = ns["peak_rss_kib"]
+          print("imports", peak())
+          p = os.path.join(tempfile.mkdtemp(), "small")
+          with open(p, "wb") as f:
+              f.write(b"1234567")
+          import verifier
+          verifier.read_regular(p)
+          print("read_regular of 7 bytes", peak())
+          with open(p, "rb") as f:
+              f.read((256 << 20) + 1)
+          print("read(256 MiB + 1) of 7 bytes", peak())
+          PY
+          python "$RUNNER_TEMP/mem.py"

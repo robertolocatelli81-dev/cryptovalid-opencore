@@ -407,10 +407,11 @@ def make_unreadable(tc, path):
             os.listdir(path) if os.path.isdir(path) else open(path, "rb").close()
         except OSError:
             return
-        tc.skipTest("this Windows account still reads %s through an access list that denies it to everyone (CI runs "
-                    "45437498313, 45460009605: an administrator's privilege lists such a folder): no unreadable %s can "
-                    "be made here" % ("the folder" if os.path.isdir(path) else "the file",
-                                      "folder" if os.path.isdir(path) else "file"))
+        stop = tc.fail if os.environ.get("CV_REQUIRE_UNREADABLE") else tc.skipTest   # the CI does not skip it: pwsh, not Git's bash
+        stop("this process still reads %s through an access list that denies it to everyone (CI runs 45437498313, "
+             "45460009605: a process started by Git's bash does, 45600805721: one started by PowerShell does not): no "
+             "unreadable %s can be made here" % ("the folder" if os.path.isdir(path) else "the file",
+                                                 "folder" if os.path.isdir(path) else "file"))
 
 
 def make_private(path):
@@ -1498,14 +1499,54 @@ class WindowsRulesMeasuredEverywhere(unittest.TestCase):
             self.assertEqual(V.json_loads_bounded("[-%s]" % ("9" * 4300)), [1 - 10 ** 4300])
         self.assertEqual(V.json_loads_bounded('[1, -2, "%s"]' % ("9" * 5000)), [1, -2, "9" * 5000])
 
+    def test_a_small_file_is_read_in_a_small_memory(self):
+        """f.read(256 MiB + 1) takes a buffer of 256 MiB for a file of 7 bytes: MemoryError under a limit (Linux
+        RLIMIT_DATA, Windows Job Object; macOS has neither), a peak of 276 MiB on Windows (CI run 45600805721)"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "small.json")
+            with open(p, "wb") as f:
+                f.write(b'{"a":1}')
+            pre = "import os, sys; sys.path.insert(0, sys.argv[1]); import verifier as V; p = sys.argv[2]\n"
+            for code in ("print(len(V.read_regular(p)), len(V.read_input(p)))",
+                         "import cryptovalid_merkle as M; print(len(M._read_file(p)), len(M._read_file(p, 1 << 28)))",
+                         "import cryptovalid_acta as A; print(len(A.read_regular(p)), len(A.read_regular(p, 1 << 28)))",
+                         "import cryptovalid_beacon as B; print(len(B._read(p, 'x', 1 << 28)), len(B._read(p, 'x', 1 << 28)))"):
+                with self.subTest(code):
+                    rc, out, err, _ = run_with_memory_limit([sys.executable, "-B", "-c", pre + code, _HERE, p], 150 << 20)
+                    self.assertEqual((rc, out.split()), (0, ["7", "7"]), err[-400:])
+            control = pre + "print(len(open(p, 'rb').read((256 << 20) + 1)))"   # the read as it was
+            rc, out, err, _ = run_with_memory_limit([sys.executable, "-B", "-c", control, _HERE, p], 150 << 20)
+            if sys.platform != "darwin":
+                self.assertIn("MemoryError", err)
+
+    def test_a_bounded_read_is_the_file_or_one_byte_past_the_bound(self):
+        import tempfile
+        from unittest import mock
+        import verifier as V
+        with tempfile.TemporaryFile() as f:
+            f.write(b"0123456789")
+            for limit, n in ((11, 10), (10, 10), (9, 10), (4, 5), (0, 1)):
+                for said in (0, 3, 10, 1 << 40):   # what fstat says: /proc says 0; a file that grew, or shrank
+                    f.seek(0)
+                    with mock.patch.object(os, "fstat", lambda fd: os.stat_result((0o100600, 0, 0, 1, 0, 0, said, 0, 0, 0))):
+                        self.assertEqual(V.read_bounded(f, limit), b"0123456789"[:n], (limit, said))
+
     @unittest.skipUnless(shutil.which("node") and hasattr(os, "mkfifo"), "needs node and a FIFO; on Windows "
                          "test_ledger_input_20261122 reads a real named pipe with the JS verifier")
     def test_js_knows_a_pipe_by_its_mode(self):
-        """Node on Windows: Stats.isFIFO() is false for every file, the mode of a pipe is S_IFIFO"""
+        """Node on Windows: Stats.isFIFO() is false for every file, the mode of a pipe is S_IFIFO. On Linux the Windows
+        reader (net.Socket) reads a FIFO too; on macOS a socket on a FIFO reports no byte and no end (measured in the CI
+        runs of f1e95d5 and 45600805721), so there the POSIX reader is the one after the same decision"""
+        for platform in (sys.platform,) + (("win32",) if sys.platform.startswith("linux") else ()):
+            with self.subTest(platform):
+                self._js_reads_a_pipe(platform)
+
+    def _js_reads_a_pipe(self, platform):
         import tempfile
         mjs = os.path.join(_HERE, "verifiers", "js", "cvverify.mjs")
         code = ("import fs from 'node:fs'; fs.Stats.prototype.isFIFO = () => false;"
-                "Object.defineProperty(process, 'platform', {value: 'win32'});"
+                "Object.defineProperty(process, 'platform', {value: process.argv[3]});"
                 "const m = await import(process.argv[1]);"
                 "m.readLedgerInput(process.argv[2], (f, b) => { console.log(JSON.stringify([f, b && b.toString()])); }, 5000);"
                 "console.log('open');")
@@ -1515,7 +1556,7 @@ class WindowsRulesMeasuredEverywhere(unittest.TestCase):
             fd = os.open(p, os.O_RDWR | os.O_NONBLOCK)
             os.write(fd, b"one line\n")
             import pathlib
-            n = subprocess.Popen(["node", "--input-type=module", "-e", code, pathlib.Path(mjs).as_uri(), p],
+            n = subprocess.Popen(["node", "--input-type=module", "-e", code, pathlib.Path(mjs).as_uri(), p, platform],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
                 first = n.stdout.readline()

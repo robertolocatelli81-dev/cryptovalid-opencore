@@ -57,9 +57,9 @@ import re
 import sys
 from datetime import datetime, timezone
 try:   # SPEC §30: one nesting bound for every JSON text, on every Python
-    from verifier import json_loads_bounded as json_loads
+    from verifier import json_loads_bounded as json_loads, read_bounded
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import json_loads_bounded as json_loads
+    from opencore.verifier import json_loads_bounded as json_loads, read_bounded
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 # i verificatori di riferimento (verifier.py, evidence_pack.py…) possono stare:
@@ -448,7 +448,7 @@ def _file_format(path: str, found: dict = None) -> str:
     """'ap2', 'cldma', 'ledger' or 'checkpoint' for a regular file (SPEC §12), else _NotRecognised with the reason;
     `found` receives the parsed checkpoint"""
     with os.fdopen(_open_regular(path), "rb") as fh:   # SPEC §5 step 0: judged on the open descriptor
-        raw = fh.read(_AUTO_JSON_LIMIT + 1)
+        raw = read_bounded(fh, _AUTO_JSON_LIMIT)
     whole_read = len(raw) <= _AUTO_JSON_LIMIT
     rows, whole, doc = [], _NO_JSON, None
     if whole_read and len(raw) <= _NOTE_LIMIT and not raw.startswith(b"\xef\xbb\xbf"):
