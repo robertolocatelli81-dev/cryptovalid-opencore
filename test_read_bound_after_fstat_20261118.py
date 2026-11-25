@@ -3,7 +3,8 @@
 """SPEC §5 step 0: `read_regular` and `sha256_regular` bound what they READ, not only the size `fstat` gave (a file that
 grows after the fstat). Review of 18/11/2026: both checks survived the suite as mutants. A Linux /proc file is a
 regular file whose st_size is 0 and whose read gives bytes: the case of a file larger than its fstat, made without a
-race. Positive control, measured: with the check after the read removed, both tests fail."""
+race. Positive control, measured: with the check after the read removed, both tests fail. macOS and Windows have no such
+file: there a regular file of 4096 bytes is given, with os.fstat answering size 0 for it (the same case, made by hand)."""
 import os
 import sys
 import unittest
@@ -14,11 +15,32 @@ sys.path.insert(0, ROOT)
 import verifier  # noqa: E402
 
 PROC = "/proc/self/status"
-NEEDS = unittest.skipUnless(os.path.exists(PROC) and os.stat(PROC).st_size == 0, "needs a Linux /proc file of size 0")
+HAS_PROC = os.path.exists(PROC) and os.stat(PROC).st_size == 0
 
 
-@NEEDS
 class BoundAfterFstat(unittest.TestCase):
+    def setUp(self):
+        global PROC
+        if HAS_PROC:
+            return
+        import tempfile
+        from unittest import mock
+        fd, PROC = tempfile.mkstemp()
+        os.write(fd, b"x" * 4096)
+        os.close(fd)
+        self.addCleanup(os.remove, PROC)
+        real = os.fstat
+        ino = os.stat(PROC).st_ino
+
+        def fstat(n):   # the size of that file is 0 to fstat, as a /proc file's is
+            st = real(n)
+            if st.st_ino != ino:
+                return st
+            return os.stat_result(st[:6] + (0,) + st[7:10])
+        p = mock.patch.object(os, "fstat", fstat)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_read_regular(self):
         with self.assertRaises(verifier.InputTooLarge):
             verifier.read_regular(PROC, 10)
