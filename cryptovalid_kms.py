@@ -78,9 +78,9 @@ import urllib.parse
 import urllib.request
 from typing import Dict, Optional
 try:   # SPEC §30: one nesting bound for every JSON text, on every Python
-    from verifier import json_loads_bounded as json_loads
+    from verifier import json_loads_bounded as json_loads, which as _which
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import json_loads_bounded as json_loads
+    from opencore.verifier import json_loads_bounded as json_loads, which as _which
 
 import cryptovalid_net as _net
 
@@ -480,7 +480,7 @@ class Pkcs11Backend:
     def __init__(self, module: str, token: str, key: str, pin: str = "env:CRYPTOVALID_PIN", timeout: float = 60.0):
         # the tool is run by the path which names: on Windows a bare name is looked up in the program's folder, the
         # current folder and System32 before PATH (the class of cryptovalid_tsa._run_openssl, 0.29.0)
-        self._tool = shutil.which("pkcs11-tool")
+        self._tool = _which("pkcs11-tool")   # never the current folder (verifier.which)
         if self._tool is None:
             raise RuntimeError("pkcs11-tool not found (install opensc)")
         if not pin.startswith("env:"):

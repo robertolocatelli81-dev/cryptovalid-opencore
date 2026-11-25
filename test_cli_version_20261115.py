@@ -42,10 +42,11 @@ class TestVersion(unittest.TestCase):
         self.assertNotIn("verify_evidence", r.stdout)
         self.assertIn("--version", r.stdout)
 
-    @unittest.skipUnless(os.path.exists("/dev/full"), "needs /dev/full")
     def test_a_version_not_written_is_exit_74(self):
+        from test_platforms_20261124 import full_sink   # /dev/full; macOS and Windows: a file on a full volume
+        sink = full_sink()
         for script in ("verify_evidence.py", "verifier.py"):
-            with open("/dev/full", "w", encoding="utf-8", newline="") as full:
+            with open(sink, "w", encoding="utf-8", newline="") as full:
                 r = _run([os.path.join(HERE, script), "--version"], stdout=full)
             self.assertEqual(r.returncode, 74, (script, r.stderr))
             self.assertIn("receipt not written", r.stderr)

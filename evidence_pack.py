@@ -122,7 +122,7 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15) -
     Chiude il buco 'token spazzatura creduto ancorato'. Se openssl assente: verified=None (onesto:
     'registrato ma NON verificato'), mai un falso True. openssl presente ma non avviabile qui, o nessun file
     temporaneo: CheckNotRun (exit 74), mai `verified: false` (0.20.3: con fork negato un pack valido era `valid: false`)."""
-    exe = shutil.which("openssl")
+    exe = verifier.which("openssl")
     if not exe:
         return {"verified": None, "note": "openssl absent — token recorded but NOT verified"}
     import cryptovalid_tsa as _T
@@ -130,7 +130,7 @@ def _verify_rfc3161(tsr_b64: str, expected_digest_hex: str, timeout: int = 15) -
     try:
         tsr = os.path.join(d, "t.tsr")
         _T._tmp_write(tsr, base64.b64decode(tsr_b64))
-        r = _T._run_openssl(  # nosec B603 - exe da shutil.which('openssl'), args FISSI, no shell
+        r = _T._run_openssl(  # nosec B603 - exe da verifier.which('openssl'), args FISSI, no shell
             [exe, "ts", "-reply", "-in", tsr, "-text"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
         if _T._crashed(r.returncode):   # 0.22.0 — SPEC §10, as ap2-evidence-pack 1.6.0 §6.10: a crashed tool is a check not run here
             raise CheckNotRun(f"cannot run openssl here: {_T._crash_text(r.returncode)}")
@@ -172,7 +172,7 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
         _net.check_url(tsa_url, _net.ALLOW_HTTP_OR_HTTPS)   # no file:// etc.
     except ValueError:
         return {"anchored": False, "note": "TSA URL scheme not allowed (http/https only)"}
-    exe = shutil.which("openssl")
+    exe = verifier.which("openssl")
     if not exe:
         return {"anchored": False, "note": "openssl absent (RFC 3161 optional)"}
     import urllib.request
@@ -180,7 +180,7 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
     d = _T._openssl_tmpdir()
     try:
         tsq = os.path.join(d, "q.tsq")
-        r = _T._run_openssl(  # nosec B603 - exe da shutil.which('openssl'), argomenti list FISSI, no shell
+        r = _T._run_openssl(  # nosec B603 - exe da verifier.which('openssl'), argomenti list FISSI, no shell
             [exe, "ts", "-query", "-digest", digest_hex, "-sha256", "-cert", "-out", tsq],
             capture_output=True, timeout=timeout)
         if r.returncode != 0 or not os.path.exists(tsq):
@@ -522,6 +522,12 @@ def _pinned_time_anchor(tsr_b64: str, digest_hex: str, tsa_certs, tsa_crls=None)
     raise ValueError(f"verify_token with pinned certificates gave status {v['status']!r}")   # signature_only: impossible
 
 
+# names that are a device in every folder on Windows, whatever follows the first dot (Microsoft, "Naming Files, Paths,
+# and Namespaces"; the same list as ntpath.isreserved of Python 3.13)
+_DOS_DEVICES = frozenset(["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+                         + [p + d for p in ("COM", "LPT") for d in "123456789\u00b9\u00b2\u00b3"])
+
+
 def _manifest_name_problem(name) -> Optional[str]:
     """Why a file name of a MANIFEST.json is not one (SPEC §31), or None. One rule on every system, so the same
     manifest names the same file everywhere: a relative path whose components are separated by "/" only (PKWARE
@@ -545,6 +551,13 @@ def _manifest_name_problem(name) -> Optional[str]:
         return "an absolute path"
     if ".." in name.split("/"):
         return "a '..' component"
+    if any(ord(c) < 32 or c in '*?"<>|' for c in name):
+        return "a control character or one of * ? \" < > | (no file name on Windows holds them)"
+    for part in name.split("/"):
+        if part not in ("", ".") and part[-1] in ". ":   # "l.jsonl." and "l.jsonl " open l.jsonl on Windows
+            return "a component ending in a dot or a space (Windows drops them: it names another file there)"
+        if part.split(".")[0].rstrip(" ").upper() in _DOS_DEVICES:   # "NUL.jsonl" is the null device on Windows
+            return "a DOS device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9: a device on Windows)"
     if name.split("/")[-1] in ("", "."):   # "l.jsonl/" fails on POSIX, "l.jsonl/." opens the file on Windows
         return "a trailing '/' or '/.' (it names no file the same way on every system)"
     return None

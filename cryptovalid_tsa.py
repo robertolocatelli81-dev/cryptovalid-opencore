@@ -354,10 +354,11 @@ def _run_openssl(cmd, **kw):
     import shutil
     import subprocess
     if cmd and cmd[0] == "openssl":
-        # the openssl `shutil.which` names, the one the checks above asked for: on Windows CreateProcess looks in the
-        # program's folder, the current folder and System32 before PATH, so a bare "openssl" could start another one
-        # (CI run 45460749218: a stand-in first on PATH was not the one started)
-        exe = shutil.which("openssl")
+        # the openssl of PATH (verifier.which), the one the checks above asked for: on Windows CreateProcess looks in
+        # the program's folder, the current folder and System32 before PATH, so a bare "openssl" could start another
+        # one (CI run 45460749218: a stand-in first on PATH was not the one started); and shutil.which alone looks in
+        # the current folder first there, so an openssl.exe beside the evidence was the one it named
+        exe = _which("openssl")
         if exe is None:
             raise _not_run("cannot run openssl here", OSError("openssl is not on PATH"))
         cmd = [exe] + list(cmd[1:])
@@ -1104,7 +1105,7 @@ def _token_signer(token_der: bytes, pins_pem: bytes = None):
         tok = parse_token(token_der)["token_der"]
     except TokenError as e:
         return "invalid", None, str(e)
-    if not shutil.which("openssl"):
+    if not _which("openssl"):
         return "not_evaluated", None, "openssl absent"
     d = _openssl_tmpdir()
     try:
@@ -1136,7 +1137,7 @@ def verify_cms_signature(token_der: bytes):
     Not a token check: any CMS blob signed with a key made on the spot passes (measured 2026-11-13). No caller in this
     repository uses it since v0.6 of the spec; `verify_token` (SPEC §11) is the check. Kept for callers outside it."""
     import shutil
-    if not shutil.which("openssl"):
+    if not _which("openssl"):
         return None
     d = _openssl_tmpdir()
     try:
@@ -1167,7 +1168,7 @@ def verify_with_openssl(token_der: bytes, digest_data: bytes):
     None of SPEC §11's closed structure checks are made. For a verdict that does not depend on the day or the machine,
     use `verify_token` with pinned `tsa_certs`."""
     import shutil
-    if not shutil.which("openssl"):
+    if not _which("openssl"):
         return None
     d = _openssl_tmpdir()
     try:
@@ -1195,9 +1196,9 @@ def timestamp_sth(root_hex: str, tsa_url: str, timeout: int = 30):
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import Parser, emit, receipt_cli, say
+    from verifier import Parser, emit, receipt_cli, say, which as _which
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import Parser, emit, receipt_cli, say
+    from opencore.verifier import Parser, emit, receipt_cli, say, which as _which
 
 
 @receipt_cli

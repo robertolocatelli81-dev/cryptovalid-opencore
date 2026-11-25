@@ -332,7 +332,9 @@ if os.path.basename(sys.executable).lower() == "openssl.exe" and os.path.isfile(
     # sys.argv as a program sees it: [the program, its arguments] (sys.argv is not set yet here). Until b6de430 it was the
     # arguments alone, so a body's sys.argv[1:] dropped the first one: `cms -verify ...` passed through as `-verify ...`,
     # exit 1 (run 45515804628), and a body never saw `ts` or `verify`
-    sys.argv = [sys.executable] + list(sys.orig_argv[1:])
+    # sys.orig_argv is new in Python 3.10; under 3.9 sys.argv is already [the first argument, the rest] when this hook
+    # runs (the interpreter took the openssl command for a script name): the same list for every command openssl has
+    sys.argv = [sys.executable] + list(sys.orig_argv[1:] if hasattr(sys, "orig_argv") else sys.argv)
     with open(os.path.join(os.path.dirname(_body), "fake_calls.log"), "a", encoding="utf-8") as _f:
         _f.write(repr(sys.argv[1:]) + "\n")   # what the stand-in was asked, for a failing test to show
     import subprocess as _sp
@@ -402,8 +404,6 @@ def fake_openssl(tc, bindir, sh_body, py_body):
         os.chmod(p, 0o755)
         return env
     exe = os.path.join(bindir, "openssl.exe")
-    if py_body is not None and sys.version_info < (3, 10):
-        tc.skipTest("the Windows fake openssl reads sys.orig_argv, new in Python 3.10")
     if py_body is None:
         with open(exe, "wb") as f:
             f.write(b"not a program\r\n")
@@ -758,8 +758,8 @@ class ErrorTexts(unittest.TestCase):
 
 
 class OneNestingBound(unittest.TestCase):
-    """Python's JSON parser recurses once per level and its limit moved with the version (measured 24/11/2026: a
-    RecursionError from 1 100 levels under 3.9 and 3.11, 20 000 under 3.13, 100 000 under 3.14), so a reader that
+    """Python's JSON parser recurses once per level and its limit moved with the version (measured 25/11/2026: a bare
+    json.loads gives up at 995 levels under 3.9 and 3.11, 9 999 under 3.13, 65 168 under 3.14), so a reader that
     relied on it answered a text 5 000 deep one way on 3.9 and another on 3.13. SPEC §30: past 512 every reader
     refuses before parsing, the same answer at every depth and on every Python."""
 
@@ -777,6 +777,25 @@ class OneNestingBound(unittest.TestCase):
             V.json_loads_bounded(self._deep(513))
         with self.assertRaises(ValueError):
             V.json_loads_bounded(self._deep(513).encode())
+
+    def test_bytes_in_utf16_or_utf32_are_bounded_too(self):
+        """json.loads reads UTF-16 and UTF-32 bytes too. Scanned as bytes, the code unit U+2201 (a byte 0x22) closed
+        the scan's string and the brackets after it were not counted: the same JWS payload 1 100 levels deep was read
+        under 3.13 and a RecursionError under 3.9 (review of 2026-11-25)."""
+        import verifier as V
+        for enc in ("utf-8", "utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-32-le", "utf-32-be"):
+            for odd in ("\u2201", "\u5c01", "\u2222", "a"):
+                def doc(d):
+                    return ('["%s",%s]' % (odd, "[" * (d - 1) + "]" * (d - 1))).encode(enc)
+                self.assertEqual(V.json_loads_bounded(doc(2)), [odd, []], (enc, odd))   # control: read as json.loads reads it
+                V.json_loads_bounded(doc(512))
+                for d in self.DEPTHS:
+                    with self.assertRaises(V.JsonTooDeepToRead, msg=(enc, odd, d)):
+                        V.json_loads_bounded(doc(d))
+        self.assertEqual(V.json_loads_bounded(b"\xef\xbb\xbf[1]"), [1])   # a UTF-8 signature in bytes: as json.loads
+        import json
+        cesu = b'"\xed\xa0\x80"'                                             # an encoded surrogate: as json.loads
+        self.assertEqual(V.json_loads_bounded(cesu), json.loads(cesu))
 
     def _same_everywhere(self, outcome):
         got = {d: outcome(self._deep(d)) for d in self.DEPTHS}
@@ -989,7 +1008,7 @@ class CrashedOpenssl(unittest.TestCase):
         import verifier as V
         crash = sp.CompletedProcess(["openssl"], 0xC0000005, "", "")
         with mock.patch.object(os, "name", "nt"), mock.patch.object(T, "_run_openssl", lambda *a, **k: crash), \
-                mock.patch.object(E.shutil, "which", lambda n: "openssl"):
+                mock.patch.object(E.shutil, "which", lambda n: os.path.abspath("openssl")):   # a path, as on PATH
             with self.assertRaises(V.CheckNotRun) as c:
                 E._verify_rfc3161("MAA=", "00" * 32)
         self.assertIn("0xC0000005", str(c.exception))
@@ -1023,7 +1042,6 @@ class FakeOpensslOnWindows(unittest.TestCase):
     Measured here through a link named openssl.exe to this Python (the launcher itself runs on Windows only)."""
 
     @unittest.skipIf(os.name == "nt", "the launcher route is measured by the tests that use it on Windows")
-    @unittest.skipIf(sys.version_info < (3, 10), "the hook reads sys.orig_argv, new in Python 3.10")
     def test_the_site_hook_runs_the_body_with_the_arguments(self):
         import tempfile
         d = tempfile.mkdtemp()
@@ -1088,6 +1106,68 @@ class OpensslByItsPath(unittest.TestCase):
             from verifier import CheckNotRun
             with self.assertRaises(CheckNotRun):
                 T._run_openssl(["openssl", "version"], capture_output=True)
+
+
+class NeverTheProgramOfTheCurrentFolder(unittest.TestCase):
+    """shutil.which looks in the current folder first on Windows, and at an empty PATH entry everywhere: a program
+    placed beside the evidence was the one named, and the one run (review of 2026-11-25). verifier.which drops an
+    answer that is not an absolute path and searches the absolute folders of PATH."""
+
+    def _program(self, folder, name):
+        os.makedirs(folder, exist_ok=True)
+        if os.name == "nt":
+            p = os.path.join(folder, name + ".exe")
+            shutil.copy(sys.executable, p)
+        else:
+            p = os.path.join(folder, name)
+            with open(p, "w", encoding="utf-8", newline="") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+            os.chmod(p, 0o755)
+        return p
+
+    def test_the_one_on_path_is_named_not_the_one_beside_the_evidence(self):
+        import tempfile
+        from unittest import mock
+        import cryptovalid_tsa as T
+        import verifier as V
+        d = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        here, there = os.path.join(d, "evidence"), os.path.join(d, "bin")
+        self._program(here, "openssl")
+        good = self._program(there, "openssl")
+        # Windows: the current folder comes first by itself; POSIX: an empty PATH entry is the current folder, and a
+        # file that is not executable, in a folder before the good one, is not a program; nor is a folder of that name
+        dirf = os.path.join(d, "dirf")
+        os.makedirs(os.path.join(dirf, "openssl.exe" if os.name == "nt" else "openssl"))
+        path = dirf + os.pathsep + there
+        if os.name != "nt":
+            nox = os.path.join(d, "nox")
+            os.chmod(self._program(nox, "openssl"), 0o644)
+            path = os.pathsep + nox + os.pathsep + path
+        cwd = os.getcwd()
+        os.chdir(here)
+        try:
+            with mock.patch.dict(os.environ, {"PATH": path}):
+                planted = shutil.which("openssl")
+                self.assertFalse(os.path.isabs(planted), planted)   # control: shutil.which names the planted one
+                self.assertEqual(os.path.normcase(V.which("openssl")), os.path.normcase(good))
+                seen = []
+                with mock.patch.object(subprocess, "run",
+                                       lambda cmd, **kw: (seen.append(cmd[0]), subprocess.CompletedProcess(cmd, 0))[1]):
+                    T._run_openssl(["openssl", "version"], capture_output=True)
+                self.assertEqual([os.path.normcase(x) for x in seen], [os.path.normcase(good)])
+            with mock.patch.dict(os.environ, {"PATH": "" if os.name == "nt" else os.pathsep}):
+                self.assertIsNone(V.which("openssl"))   # only the planted one: none
+                with self.assertRaises(V.CheckNotRun):
+                    T._run_openssl(["openssl", "version"], capture_output=True)
+        finally:
+            os.chdir(cwd)
+
+    def test_no_production_module_asks_shutil_which(self):
+        for name in sorted(os.listdir(_HERE)):
+            if name.endswith(".py") and not name.startswith("test_") and name != "verifier.py":
+                with open(os.path.join(_HERE, name), encoding="utf-8") as f:
+                    self.assertNotIn("shutil.which(", f.read(), name)
 
 
 class TemporaryNamesOnWindows(unittest.TestCase):
@@ -1155,6 +1235,42 @@ class TemporaryNamesOnWindows(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 verifier.create_private(d, "x-")
         self.assertEqual(len(n), 64)
+
+    def test_what_stands_at_the_name_is_never_opened(self):
+        """O_EXCL: a file, a link (to a file, to nothing) or a folder already at the name is not opened, not followed
+        and not written: the name counts as taken (review of 2026-11-25: without O_EXCL the suite stayed green)"""
+        import tempfile
+        from unittest import mock
+        import secrets
+        import verifier
+        for kind in ("file", "link", "dangling", "folder"):
+            for directory in (False, True):
+                with tempfile.TemporaryDirectory() as d:
+                    p, target = os.path.join(d, "x-" + "00" * 8), os.path.join(d, "target")
+                    if kind == "file":
+                        with open(p, "wb") as f:
+                            f.write(b"kept")
+                    elif kind == "folder":
+                        os.mkdir(p)
+                    else:
+                        if kind == "link":
+                            with open(target, "wb") as f:
+                                f.write(b"kept")
+                        try:
+                            os.symlink(target, p)
+                        except OSError:   # Windows without the right to make links
+                            continue
+                    with mock.patch.object(secrets, "token_hex", lambda n: "00" * n):
+                        with self.assertRaises(FileExistsError, msg=(kind, directory)):
+                            verifier.create_private(d, "x-", directory=directory)
+                    if kind == "link":
+                        with open(target, "rb") as f:
+                            self.assertEqual(f.read(), b"kept")
+                    if kind == "dangling":
+                        self.assertFalse(os.path.exists(target))
+                    if kind == "file":
+                        with open(p, "rb") as f:
+                            self.assertEqual(f.read(), b"kept")
 
     def test_a_real_private_file_and_folder(self):
         import tempfile

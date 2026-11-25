@@ -2732,8 +2732,9 @@ profiles, state files, MCP messages, documents of other formats — is refused w
 (`MAX_JSON_DEPTH`, the bound §3 already set for a ledger line), measured by a linear scan before it is parsed. Each
 reader answers such a text as it answers a text too deep to parse (the same reason and the same outcome), at every depth
 over 512 and on every Python. Until 0.29.0 most readers left the depth to Python's parser, whose limit moved with the
-version (measured on 2026-11-24: a `RecursionError` from 1 100 levels under Python 3.9 and 3.11, 20 000 under 3.13,
-100 000 under 3.14): a text 5 000 levels deep was refused under 3.9 and read under 3.13. A format with a lower bound
+version (the first `RecursionError` of a bare `json.loads`, measured on 2026-11-25 on Linux: at 995 levels under Python 3.9
+and 3.11, 9 998 under 3.12, 9 999 under 3.13, 65 168 under 3.14; fewer inside a chain of calls): a text 5 000 levels deep was refused under 3.9 and read under 3.13. Bytes are decoded as `json.loads` decodes them (UTF-8, UTF-16 or UTF-32) before
+the scan, which reads characters. A format with a lower bound
 of its own (Cedulon: 500) keeps it.
 
 ## 31. A file name of a pack names one file on every system (NORMATIVE since v0.15, 2026-11-24)
@@ -2743,7 +2744,14 @@ separated by `/` only. It is refused (`malformed`, the reason naming the first s
 not a string, contains NUL, is not encodable as UTF-8 (a lone surrogate), contains a backslash `\`, contains a colon `:`
 (a drive or a device, and on Windows an alternate data stream), starts with `/` or is absolute on the system, has a
 `..` component, or ends with `/` or `/.` (`l.jsonl/` fails on POSIX, `l.jsonl/.` opens the file on Windows; `./l.jsonl`
-is admitted: it names the same file everywhere). `evidence_pack.py build` refuses a ledger whose file name would break the rule, before writing anything.
+is admitted: it names the same file everywhere), contains a control character (U+0001 to U+001F) or one of
+`* ? " < > |` (no file name on Windows holds them), has a component that ends with a dot or a space (Windows drops
+them: `l.jsonl.` opens `l.jsonl` there), or has a component whose part before the first dot, less trailing spaces, is
+a DOS device name in any case: `CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM1` to `COM9`, `LPT1` to `LPT9`, and
+`COM`/`LPT` followed by `¹`, `²` or `³` (`NUL.jsonl` is the null device on Windows; Microsoft, "Naming Files, Paths, and
+Namespaces"). Not covered by this rule, and declared: a file system that folds case (the default on Windows and macOS)
+or normalises Unicode (macOS) opens `L.jsonl` for `l.jsonl`; there the same manifest can name a file that another
+system does not find. `evidence_pack.py build` refuses a ledger whose file name would break the rule, before writing anything.
 The same rule is PKWARE's for ZIP (APPNOTE 6.3.10, 2022-11-01, §4.4.17.1, read on 2026-11-24 at
 https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT: "The path stored MUST NOT contain a drive or device
 letter, or a leading slash. All slashes MUST be forward slashes '/' as opposed to backwards slashes '\'").

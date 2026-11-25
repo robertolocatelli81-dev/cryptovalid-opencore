@@ -426,6 +426,25 @@ def _copy_dacl(src: str, dst: str) -> None:
         raise ctypes.WinError(ctypes.get_last_error())
 
 
+def which(name: str) -> Optional[str]:
+    """shutil.which, never the current folder. On Windows shutil.which looks in the current folder before PATH (as
+    cmd.exe does), and on every system an empty or relative PATH entry is the current folder: a program placed beside
+    the evidence would be the one found, and the one run. An answer that is not an absolute path is dropped, and the
+    absolute folders of PATH are searched."""
+    import shutil
+    exe = shutil.which(name)
+    if exe is None or os.path.isabs(exe):
+        return exe
+    exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep) if e] if os.name == "nt" else [""]
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        if os.path.isabs(folder):
+            for ext in exts:
+                path = os.path.join(folder, name + ext)
+                if os.path.isfile(path) and os.access(path, os.X_OK):
+                    return path
+    return None
+
+
 def create_private(folder: str, prefix: str, suffix: str = "", directory: bool = False):
     """A new file (fd, path) or folder (None, path) under `folder`, private to this user (0o600 / 0o700), at a random
     name made with O_CREAT|O_EXCL|O_NOFOLLOW (mkdir for a folder). Only a name already taken is tried again, at most 64
@@ -1041,14 +1060,17 @@ class JsonTooDeep(ValueError):
 class JsonTooDeepToRead(JsonTooDeep, RecursionError):
     """A JSON text nested deeper than MAX_JSON_DEPTH, refused before the parser (SPEC §30). Both a ValueError and a
     RecursionError: each reader keeps the answer it gave when Python's parser ran out of stack, now at one depth on
-    every Python (the parser's own limit: 1 100 levels under 3.9 and 3.11, 20 000 under 3.13, 100 000 under 3.14)."""
+    every Python (a bare json.loads gives up at 995 levels under 3.9 and 3.11, 9 999 under 3.13, 65 168 under 3.14)."""
 
 
 def json_loads_bounded(s, **kw):
     """json.loads, with nesting deeper than MAX_JSON_DEPTH refused first by a linear scan (JsonTooDeepToRead). Bytes
-    are scanned as Latin-1: brackets, quotes and backslashes are ASCII and no byte of a multi-byte UTF-8 sequence is."""
-    text = s.decode("latin-1") if isinstance(s, (bytes, bytearray)) else s
-    if isinstance(text, str) and json_nesting_depth(text) > MAX_JSON_DEPTH:
+    are decoded first, as json.loads decodes them (UTF-8, UTF-16 or UTF-32, by json.detect_encoding): the scan reads
+    characters. Scanned as bytes, a UTF-16 text hid its brackets behind a code unit with the byte 0x22 or 0x5C (U+2201):
+    1 100 levels were read under Python 3.13 and a RecursionError under 3.9."""
+    if isinstance(s, (bytes, bytearray)):
+        s = s.decode(json.detect_encoding(s), "surrogatepass")
+    if isinstance(s, str) and json_nesting_depth(s) > MAX_JSON_DEPTH:
         raise JsonTooDeepToRead(f"JSON nested deeper than {MAX_JSON_DEPTH} levels")
     return json.loads(s, **kw)
 

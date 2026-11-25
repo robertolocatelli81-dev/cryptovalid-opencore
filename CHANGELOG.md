@@ -7,7 +7,7 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
-## 0.29.0 (2026-11-23): verdicts change
+## 0.29.0 (2026-11-25): verdicts change
 
 ### `cryptovalid-verify --list-checks` and `--profile` (SPEC v0.15 §23)
 
@@ -282,7 +282,12 @@ such a ledger file name before writing anything. Until 0.29.0, on POSIX, a name 
 the review of 2026-10-01, NEMESIS P2), while on Windows the same name was a path that could leave the pack
 (`a\..\b.jsonl`): the same pack had two answers. A name with a lone surrogate is now refused on every system as well
 (on POSIX some were admitted through the file system's surrogate escapes). The rule is PKWARE's for ZIP (APPNOTE 6.3.10
-§4.4.17.1).
+§4.4.17.1). Refused as well, on every system, because Windows reads them as another file, as a device, or cannot hold
+them (Microsoft, "Naming Files, Paths, and Namespaces"; found by a generated hunt of 200 000 names against
+`ntpath.isreserved` of Python 3.13, review of 2026-11-25): a component ending in a dot or a space (`l.jsonl.` opens
+`l.jsonl` there), a DOS device name whatever follows its first dot (`NUL.jsonl`, `COM1`, `aux .x`), a control
+character and `* ? " < > |`. Not covered, and declared in SPEC §31: a file system that folds case (Windows, macOS by
+default) or normalises Unicode (macOS) opens `L.jsonl` for `l.jsonl`.
 
 ### Fleet audit of 2026-11-24 (the classes found in pq-scitt)
 
@@ -299,9 +304,13 @@ the review of 2026-10-01, NEMESIS P2), while on Windows the same name was a path
 - **Security, choice of the binary:** `openssl` (RFC 3161 checks) and `pkcs11-tool` were started by their bare name.
   On Windows CreateProcess looks in the program's folder, the current folder and System32 before PATH, so the binary
   started could be another than the one `shutil.which` had found, for instance one placed in the current folder (CI
-  runs 45460009605 and 45460749218: a stand-in first on PATH was not the one that ran). Both are now run by the
-  path `shutil.which` names; `openssl` gone from PATH is a check not run. Tests that failed before:
-  `test_platforms_20261124.OpensslByItsPath`, `test_kms.TestPkcs11ToolByItsPath`. Audit of the same class in this
+  runs 45460009605 and 45460749218: a stand-in first on PATH was not the one that ran). Both are now run by an
+  absolute path found on PATH (`verifier.which`): `shutil.which` alone looks in the current folder first on Windows,
+  and at an empty or relative `PATH` entry on every system, so a program placed beside the evidence would have been
+  the one it named; an answer that is not an absolute path is dropped and the absolute folders of `PATH` are
+  searched. `openssl` gone from PATH is a check not run. Tests that failed before:
+  `test_platforms_20261124.OpensslByItsPath`, `test_platforms_20261124.NeverTheProgramOfTheCurrentFolder`,
+  `test_kms.TestPkcs11ToolByItsPath`. Audit of the same class in this
   package: no other production module starts a program by a bare name (`mutation_runner.py` runs the command its
   caller gives; the benches in `verifiers/` and `tools/` start git, go, cargo, swift, node and openssl by name, as
   developer tools run from the repository).
@@ -364,14 +373,17 @@ the 117 `test_*.py` files with and without `cryptography` (234 runs, 3 297 tests
 
 ### One nesting bound for every JSON text, on every Python (SPEC §30)
 
-The depth at which Python's JSON parser gives up moved with the version (measured on 2026-11-24: a `RecursionError`
-from 1 100 levels under Python 3.9 and 3.11, 20 000 under 3.13, 100 000 under 3.14), and most readers left the depth to
+The depth at which Python's JSON parser gives up moved with the version (the first `RecursionError` of a bare `json.loads`, measured on 2026-11-25 on Linux: at 995 levels under Python 3.9
+and 3.11, 9 998 under 3.12, 9 999 under 3.13, 65 168 under 3.14; fewer inside a chain of calls), and most readers left the depth to
 it, so the same bytes had two answers: `auto` answered a file 1 100 levels deep "nested deeper than the parser allows"
 under 3.9 and read it under 3.13, and the MCP server answered a message 1 100 levels deep with a parse error under 3.9
 and with a result under 3.13. Every JSON text the code reads now goes through `verifier.json_loads_bounded`: past 512
 levels (the bound §3 already set for a ledger line) it is refused before parsing, and each reader gives the answer it
-gave a text too deep to parse, at every depth and on every Python. Texts 513 to 1 099 levels deep, read until 0.29.0,
-are refused. `test_platforms_20261124.py` checks four readers at 513, 1 100, 5 000 and 30 000 levels (each failed under
+gave a text too deep to parse, at every depth and on every Python. Texts more than 512 levels deep that were read until 0.29.0 (up to 994 levels
+under Python 3.9 and 3.11, more under later versions) are refused. Bytes are decoded as `json.loads` decodes them
+(UTF-8, UTF-16, UTF-32) before the scan: scanned as bytes, a UTF-16 text with the code unit U+2201 in a string hid its
+brackets, and a JWS payload 1 100 levels deep was read under 3.13 and a `RecursionError` under 3.9
+(`OneNestingBound.test_bytes_in_utf16_or_utf32_are_bounded_too`, which failed before). `test_platforms_20261124.py` checks four readers at 513, 1 100, 5 000 and 30 000 levels (each failed under
 3.9 and 3.13 before the change) and that no module calls `json.loads` or `json.load` outside the bounded reader.
 
 ## 0.28.1 (2026-11-23): verdicts change

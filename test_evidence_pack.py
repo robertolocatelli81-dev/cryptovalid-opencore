@@ -102,7 +102,13 @@ class TestEvidencePack(unittest.TestCase):
             man = json.load(f)
         name = man["ledgers"][0]["file"]
         for bad, why in (("a\\..\\" + name, "backslash"), ("sub\\" + name, "backslash"), ("C:" + name, "colon"),
-                         (name + ":s", "colon"), ("/" + name, "absolute"), ("x/../" + name, "'..'")):
+                         (name + ":s", "colon"), ("/" + name, "absolute"), ("x/../" + name, "'..'"),
+                         # review of 2026-11-25: names Windows reads as another file, a device, or cannot hold
+                         (name + ".", "ending in a dot or a space"), (name + " ", "ending in a dot or a space"),
+                         ("sub./" + name, "ending in a dot or a space"), ("NUL", "DOS device"),
+                         ("nul.jsonl", "DOS device"), ("sub/Com1.x.jsonl", "DOS device"), ("LPT\u00b9", "DOS device"),
+                         ("aux .jsonl", "DOS device"), ("a?.jsonl", "control character"), ("a\n.jsonl", "control character"),
+                         ("a|b", "control character"), ('a".jsonl', "control character")):
             for member in ("ledgers", "file_digests_sha256"):
                 m = json.loads(json.dumps(man))
                 if member == "ledgers":
@@ -114,6 +120,27 @@ class TestEvidencePack(unittest.TestCase):
                 r = evidence_pack.verify_pack(self.pack)
                 self.assertEqual((r["valid"], r.get("refusal_class")), (False, "malformed"), (bad, member))
                 self.assertIn(why, r["error"], (bad, member))
+
+    def test_every_device_name_and_every_refused_character(self):
+        """SPEC §31: the whole closed list, not a sample of it"""
+        P = evidence_pack._manifest_name_problem
+        devices = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"] + [p + d for p in ("COM", "LPT")
+                                                                        for d in "123456789\u00b9\u00b2\u00b3"]
+        self.assertEqual(len(devices), 30)
+        for dev in devices:
+            for name in (dev, dev.lower(), dev + ".jsonl", "sub/" + dev.capitalize() + ".a.b", dev + " .x", dev + "/l.jsonl"):
+                self.assertIn("DOS device", P(name) or "", name)
+        for c in [chr(i) for i in range(1, 32)] + list('*?"<>|'):
+            self.assertIn("control character", P("a" + c + "b") or "", repr(c))
+        for tail in (".", " ", "..", " .", ". "):
+            for name in ("l.jsonl" + tail, "sub" + tail + "/l.jsonl"):
+                self.assertIsNotNone(P(name), name)
+
+    def test_names_close_to_the_refused_ones_are_admitted(self):
+        """control of SPEC §31: the rule refuses the names above and not their neighbours"""
+        for ok in ("l.jsonl", "./l.jsonl", "sub/l.jsonl", ".hidden", "..a", "a..b", "null.jsonl", "com.jsonl", "COM10",
+                   "lpt0", "con1", "a b.jsonl", "a.b.c", "caf\u00e9.jsonl", "sub//l.jsonl", "aux1.jsonl", "nul_.x"):
+            self.assertIsNone(evidence_pack._manifest_name_problem(ok), ok)
 
     def test_symlink_out_of_the_pack_is_not_read(self):
         # NEMESIS V1 P3 (01/10/2026): a symlink inside the pack pointing outside counted as a matching file

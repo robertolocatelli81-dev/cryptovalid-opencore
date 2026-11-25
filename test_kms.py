@@ -511,6 +511,13 @@ class TestPkcs11ToolByItsPath(unittest.TestCase):
                 b._run(["--list-objects"])
         self.assertEqual(seen, ["/opt/opensc/bin/pkcs11-tool"])
 
+    def test_without_the_tool_no_backend(self):
+        from unittest import mock
+        with mock.patch.object(kms.shutil, "which", lambda n: None), mock.patch.dict(os.environ, {"CV_TEST_PIN": "1"}):
+            with self.assertRaises(RuntimeError) as c:
+                kms.Pkcs11Backend("m.so", "t", "k", pin="env:CV_TEST_PIN")
+        self.assertIn("pkcs11-tool not found", str(c.exception))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
