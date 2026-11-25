@@ -358,6 +358,10 @@ searches each byte once: 2.9 s. The Java verifier's source is ASCII (javac befor
 it gets CRLF and its own digest no longer matches; the fix belongs to that package.
 Whether the other-os job is green with these changes is measured by the CI of the release branch, not here.
 
+Final run on the release tree (CI run 45534951368 of 2026-11-25, 11 jobs out of 11 green): on macOS and on Windows,
+the 117 `test_*.py` files with and without `cryptography` (234 runs, 3 297 tests, none failed; skipped: 759 on macOS,
+818 on Windows, each with its reason).
+
 ### One nesting bound for every JSON text, on every Python (SPEC §30)
 
 The depth at which Python's JSON parser gives up moved with the version (measured on 2026-11-24: a `RecursionError`
