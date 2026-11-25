@@ -25,7 +25,8 @@ import unittest
 sys.dont_write_bytecode = True
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-LINUX = unittest.skipUnless(sys.platform.startswith("linux") and hasattr(os, "mkfifo"), "Linux: mkfifo, ru_maxrss")
+# Linux and macOS have all of it (mkfifo, /dev/zero, ru_maxrss); Windows has no FIFO at a name in a directory
+LINUX = unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO at a name inside a directory and a link to /dev/zero: POSIX only")
 
 
 def child(code: str, *args, timeout: int = 60):
@@ -70,7 +71,8 @@ class Bounded(unittest.TestCase):
         import resource, evidence_pack as E
         r = E.verify_pack(sys.argv[1])
         print(json.dumps({"valid": r["valid"], "admission": r.get("admission"), "error": r.get("error"),
-                          "maxrss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}))
+                          "maxrss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                          // (1024 if sys.platform == "darwin" else 1)}))   # macOS counts bytes, Linux KiB
     """
 
     def test_a_listed_file_over_the_bound_is_refused_before_reading(self):

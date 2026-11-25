@@ -95,7 +95,9 @@ def _all(bins, path, feed=None):
     return out
 
 
-@unittest.skipUnless(hasattr(os, "mkfifo"), "no FIFOs on this platform")
+_POSIX = unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO at a name in a directory, /dev/zero, process substitution: POSIX only")
+
+
 class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -151,6 +153,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
                 f.write(json.dumps(e, ensure_ascii=ensure_ascii) + "\n")
             self.assertAll(_all(self.bins, p), (0, "PASS", None), "every character below 0x80")
 
+    @_POSIX
     def test_a_fifo_with_no_writer_is_idle_after_10_s(self):
         fifo = self.path("idle.fifo")
         os.mkfifo(fifo)
@@ -166,6 +169,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             self.assertGreaterEqual(dt, 9.5, name)
             self.assertLess(dt, 18, name)   # one wait of 10 s, not two
 
+    @_POSIX
     def test_a_fifo_whose_writer_holds_it_without_a_byte_is_idle(self):
         fifo = self.path("held.fifo")
         os.mkfifo(fifo)
@@ -178,6 +182,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             self.assertEqual((rc, verdict, reason), (1, "FAIL", IDLE), name)
             self.assertLess(dt, 15, name)   # it ends at the first 10 s, not when the writer goes
 
+    @_POSIX
     def test_a_fifo_whose_writer_leaves_without_a_byte_is_empty_at_once(self):
         fifo = self.path("empty.fifo")
         os.mkfifo(fifo)
@@ -191,6 +196,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             self.assertNotEqual(reason, IDLE, name)
             self.assertLess(dt, 8, name)
 
+    @_POSIX
     def test_a_device_or_a_directory_is_not_read(self):
         d = self.path("dir")
         os.mkdir(d)
@@ -208,6 +214,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             self.assertEqual((rc, verdict, reason), (1, "FAIL", TOO_LARGE), name)
             self.assertLess(dt, 4, name)   # judged on its size, not read (Java read it through in 6.8 s when it was not)
 
+    @_POSIX
     def test_a_fifo_larger_than_the_bound(self):
         fifo = self.path("big.fifo")
         os.mkfifo(fifo)
@@ -222,6 +229,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
                 pass
         self.assertAll(_all(self.bins, fifo, feed), (1, "FAIL", TOO_LARGE), "a FIFO of 257 MiB")
 
+    @_POSIX
     def test_exactly_the_bound_is_within_it(self):
         """256 MiB exactly is read, as a file and through a FIFO, and fails at §5 step 1 (it holds no entry). The file is
         given to the four: before rule 8 Go stopped at its line bound (`token too long`). The FIFO only to Java: its bound
@@ -252,6 +260,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             self.assertEqual((rc, verdict), (1, "FAIL"), what)
             self.assertNotEqual(reason, TOO_LARGE, what)
 
+    @_POSIX
     def test_a_fifo_whose_writer_comes_late_is_read_control(self):
         fifo = self.path("late.fifo")
         os.mkfifo(fifo)
@@ -264,6 +273,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
                 w.write(data)
         self.assertAll(_all(self.bins, fifo, late), (0, "PASS", None), "a writer 2 s late")
 
+    @_POSIX
     def test_a_fifo_whose_writer_is_slow_is_read_control(self):
         fifo = self.path("slow.fifo")
         os.mkfifo(fifo)
@@ -279,6 +289,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
         self.assertGreaterEqual(len(lines), 3)
         self.assertAll(_all(self.bins, fifo, slow), (0, "PASS", None), "a writer that gives a line every 6 s")
 
+    @_POSIX
     def test_a_tip_that_is_a_fifo_is_refused_at_once(self):
         """SPEC §22 rule 2 row 1: a tip is a regular file; a FIFO is refused without a wait, in Java too (its reader
         takes a FIFO for the ledger only)"""
@@ -298,6 +309,7 @@ class TestTheLedgerInputInTheFourVerifiers(unittest.TestCase):
             self.assertLess(time.monotonic() - t0, 8, name)
 
     @unittest.skipUnless(shutil.which("bash"), "needs bash for <(...)")
+    @_POSIX
     def test_process_substitution_is_read_control(self):
         for name, argv in self.bins.items():
             cp = subprocess.run([__import__("test_platforms_20261124").BASH, "-c", '"$@" <(cat "$0")', SAMPLE] + argv, capture_output=True, text=True, encoding="utf-8",

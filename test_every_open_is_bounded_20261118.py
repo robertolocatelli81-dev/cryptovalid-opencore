@@ -38,7 +38,8 @@ import unittest
 sys.dont_write_bytecode = True
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
-LINUX = unittest.skipUnless(sys.platform.startswith("linux") and hasattr(os, "mkfifo"), "Linux: mkfifo, /dev/zero")
+# Linux and macOS have all of it (mkfifo, /dev/zero, ru_maxrss); Windows has no FIFO at a name in a directory
+LINUX = unittest.skipUnless(hasattr(os, "mkfifo"), "a FIFO at a name inside a directory and a link to /dev/zero: POSIX only")
 ENV = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
 
 # (file, the text of the call's first argument): the closed list of reads that are not of a path the caller gives
