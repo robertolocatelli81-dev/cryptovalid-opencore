@@ -67,7 +67,7 @@ func main() {
 		}
 	})
 	if *lid != "" && !cv.ValidLedgerID(*lid) { // SPEC v0.9 §17: a value that can match no ledger is a usage error
-		fmt.Fprintf(os.Stderr, "usage: -expect-ledger-id needs 64 lowercase hex characters, the self_hash of entry 0 (got %q)\n", *lid)
+		fmt.Fprintf(os.Stderr, "usage: -expect-ledger-id needs 64 lowercase hex characters, the self_hash of entry 0 (the value given is not repeated)\n")
 		os.Exit(2)
 	}
 	// a Windows named pipe is not looked at before it is opened: os.Stat opens it, which takes one of its instances

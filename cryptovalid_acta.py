@@ -85,9 +85,9 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 try:   # SPEC §30: one nesting bound for every JSON text, on every Python
-    from verifier import json_loads_bounded as json_loads, read_bounded
+    from verifier import json_loads_bounded as json_loads, read_bounded, read_key_text, redact, seed_of
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import json_loads_bounded as json_loads, read_bounded
+    from opencore.verifier import json_loads_bounded as json_loads, read_bounded, read_key_text, redact, seed_of
 
 DRAFT = "draft-farley-acta-signed-receipts-04 (2026-11-22, expires 2027-05-26; individual Internet-Draft)"
 DECISIONS = ("allow", "deny", "rate_limit", "require_approval")
@@ -1108,10 +1108,10 @@ def _cli_key(spec: str) -> Tuple[str, Any]:
     """`--key kid=<64 hex | file>` → (kid, material). The material is checked here, at load: a keyfile the verifier
     cannot read as a key is a usage error (exit 2), never a verdict on the receipt."""
     if "=" not in spec:
-        raise ValueError(f"--key expects kid=<64 hex Ed25519 public key | file>, got {spec!r} (no '=')")
+        raise ValueError(f"--key expects kid=<64 hex Ed25519 public key | file>, got {redact(spec)!r} (no '=')")
     kid, val = spec.split("=", 1)
     if not kid or not val:
-        raise ValueError(f"--key expects kid=<64 hex Ed25519 public key | file>, got {spec!r} (empty kid or value)")
+        raise ValueError(f"--key expects kid=<64 hex Ed25519 public key | file>, got {redact(spec)!r} (empty kid or value)")
     if _HEX64_ANYCASE.match(val):
         problem = _ed25519_problem(bytes.fromhex(val))
         if problem:
@@ -1192,7 +1192,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if a.cmd == "policy-digest":
             emit(policy_digest_from_dir(a.policy_dir, a.engine, a.ext)); return 0
         if a.cmd == "sign":
-            seed = read_regular(a.key, 4096).decode("utf-8").strip()      # a FIFO/device seed file no longer blocks
+            seed = seed_of(read_key_text(a.key, lambda p: read_regular(p, 4096))).hex()      # a FIFO/device seed file no longer blocks
             pub = pubkey_from_seed(seed); kid = issuer_kid(pub)
             prev = None
             if a.previous:

@@ -7,6 +7,47 @@ one level down), under the release that shipped them. Dates in the moved heading
 next to each version is the date of its git tag. Where these sections call a review or a red-team "independent", it was
 run by the same author, not by a third party.
 
+## 0.29.1 (2026-11-26): a secret that comes in never goes out (SPEC v0.16 §32)
+
+0.29.0 was tagged and not released: a review of the whole product for one class (a secret given to a command or to the
+library must not appear in what it writes), made after its tag, found the cases below. They are in 0.28.1 too (measured on
+0.28.1 from PyPI on 2026-11-25: the pack, the output over a key, the URL, the name of the variable), so this release
+replaces it. The section 0.29.0 below is part of this release.
+
+**If you built evidence packs with 0.28.1 or earlier:** list the files of each pack. Only the ledgers, `MANIFEST.json` and
+`SUMMARY.md` belong there. If a key file is among them and the pack left your machine, replace that key.
+
+- **`evidence_pack.py build` takes only files that have the form of a ledger** (§32 rules 1 and 2). Until 0.29.0 any file
+  given as a ledger was copied into the pack with `hash_verdict: FAIL` and exit 0, a private key included. Now anything
+  that is not a ledger is refused before anything is written, exit 2, one line, its content not repeated. A tampered,
+  damaged or empty ledger is still packed with its FAIL: the 139 ledgers among the `.jsonl` files of this repository
+  have the form, the 6 files that are not ledgers do not. The `--sign-key` file is read first: a key that
+  cannot sign leaves no half-made pack.
+- **An output never replaces a key file** (§32 rule 3): `--out signer.key` and the output argument of the other commands
+  wrote over the key, exit 0. Now exit 74, the key intact. 64 hexadecimal digits are also a digest: such a file is taken
+  for a key when the command read it, when it is private to its owner, or when its name ends in `.key` or `.seed`;
+  otherwise it is replaced as before. The test runs 16 commands twice on their own outputs, with umask 022 and 077: none
+  is refused by this rule.
+- **A key that cannot be used** (§32 rule 4) is one line and exit 2 or 1; `signer.py sign`, `cryptovalid_tip sign`,
+  `cryptovalid_receipt`, `cryptovalid_jws sign` and `evidence_pack.py build` gave a traceback.
+- **Errors do not repeat a long value of the command line** (§32 rule 5), nor a key given in the place of the path of its
+  file (`--pq-key <seed>`, `acta verify --key <seed>`).
+- **`cryptovalid_scitt sign`** refuses a statement that contains its own signing key, **`cryptovalid_jws sign`** a private
+  key as an `x5c` certificate (§32 rule 6).
+- **A witness does not cosign with the key of a log it trusts** (§32 rule 7): until 0.29.0 the same Ed25519 key could sign
+  as the log and as the witness, as two keys.
+- **Credentials in a URL** (§32 rule 8). `https://user:password@host/` was never usable (urllib looked the whole of it up
+  as a host name), but the URL came back in error messages, and `Ingestor(tsa_url=...)` wrote it into the
+  `<segment>.sth.tsr.json` of every sealed segment. `cryptovalid_net.check_url` refuses such a URL without repeating
+  it. The URL written into a record (`tsa_url` of the Ingestor and of `cryptovalid_tsa.timestamp_sth`, `tsa` of a pack
+  manifest, of a receipt and of the `cryptovalid_tsa` command) is now scheme, host, port and path: no query, no
+  fragment (`cryptovalid_net.url_for_record`).
+- **The secret given where the name of its variable goes** (§32 rule 9). `vault:...;token_env=`, `nethsm:...;pass_env=`,
+  `pkcs11:...;pin=env:` and `HttpQeasBackend(token_env=...)` repeated the name given when the variable was empty or unset:
+  on stderr, and through the MCP server in the answer to the client. The name given is no longer repeated.
+- `test_secrets_20261125.py` runs the commands with a key in the place of every input and every output, on every system of
+  the CI, and searches what they print and write for eleven forms of the seed; its control shows that the search finds one.
+
 ## 0.29.0 (2026-11-25): verdicts change
 
 ### `cryptovalid-verify --list-checks` and `--profile` (SPEC v0.15 §23)

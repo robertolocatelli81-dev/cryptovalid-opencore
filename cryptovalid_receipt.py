@@ -189,7 +189,7 @@ def _order_problem(pub: bytes, sig: bytes):
 
 def _load_sk(keyfile: str):
     Ed25519PrivateKey, _, ser = _ed()
-    sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(read_input_text(keyfile, KEY_MAX_BYTES).strip()))   # SPEC §5 step 0
+    sk = Ed25519PrivateKey.from_private_bytes(read_seed(keyfile))   # SPEC §5 step 0
     pk = sk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
     return sk, pk
 
@@ -392,7 +392,7 @@ def _stamp(digest_hex: str, tsa_url: str, tsa_certs=None) -> Dict:
         if not granted or not tok:
             return {"anchored": False, "note": "TSA did not grant the timestamp"}
         chk = T.verify_token(tok, bytes.fromhex(digest_hex), "sha256", tsa_certs)
-        r = {"anchored": chk["status"] == "verified", "tsa": tsa_url, "status": chk["status"],
+        r = {"anchored": chk["status"] == "verified", "tsa": T._net.url_for_record(tsa_url), "status": chk["status"],
              "imprint_ok": chk["imprint_ok"], "gen_time": (chk["tst_info"] or {}).get("gen_time"),
              "signer_sha256": chk["signer_sha256"],
              "note": {"verified": "RFC 3161 token over the signed root, verified against the pinned TSA certificate; "
@@ -520,9 +520,9 @@ def verify_cose(cose: bytes, trusted_pubkey_hex: str, leaf_hash_hex: Optional[st
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, read_text_regular, receipt_cli, say, write_output
+    from verifier import emit, Parser, read_input_text, read_text_regular, receipt_cli, say, write_output, read_seed
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, read_text_regular, receipt_cli, say, write_output
+    from opencore.verifier import emit, Parser, read_input_text, read_text_regular, receipt_cli, say, write_output, read_seed
 
 
 @receipt_cli

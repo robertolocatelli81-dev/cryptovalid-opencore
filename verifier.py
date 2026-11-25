@@ -399,10 +399,8 @@ def owner_only(path: str) -> None:
         ctypes.WinDLL("kernel32").LocalFree(sd)
 
 
-def _copy_dacl(src: str, dst: str) -> None:
-    """Windows: `dst` gets the access list of `src` (GetFileSecurityW / SetFileSecurityW, DACL and its protection): the
-    equivalent of keeping the mode of the file a temporary replaces (a private receipt replaced by a rename was given
-    the folder's inherited list: run 45356889667, test_outcome_review "the receipt's mode was widened")."""
+def _dacl(src: str):
+    """Windows: (security descriptor holding the access list of `src`, its control word)"""
     import ctypes
     from ctypes import wintypes
     adv = ctypes.WinDLL("advapi32", use_last_error=True)
@@ -411,9 +409,6 @@ def _copy_dacl(src: str, dst: str) -> None:
     get.restype = wintypes.BOOL
     ctl = adv.GetSecurityDescriptorControl
     ctl.argtypes = (ctypes.c_void_p, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD))
-    setsec = adv.SetFileSecurityW
-    setsec.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
-    setsec.restype = wintypes.BOOL
     need = wintypes.DWORD(0)
     get(os.fspath(src), 0x4, None, 0, ctypes.byref(need))   # DACL_SECURITY_INFORMATION: the size first
     buf = ctypes.create_string_buffer(need.value or 1)
@@ -421,7 +416,20 @@ def _copy_dacl(src: str, dst: str) -> None:
         raise ctypes.WinError(ctypes.get_last_error())
     c, rev = wintypes.WORD(0), wintypes.DWORD(0)
     ctl(buf, ctypes.byref(c), ctypes.byref(rev))
-    info = 0x4 | (0x80000000 if c.value & 0x1000 else 0x20000000)   # SE_DACL_PROTECTED: PROTECTED_ / UNPROTECTED_DACL
+    return buf, c.value
+
+
+def _copy_dacl(src: str, dst: str) -> None:
+    """Windows: `dst` gets the access list of `src` (GetFileSecurityW / SetFileSecurityW, DACL and its protection): the
+    equivalent of keeping the mode of the file a temporary replaces (a private receipt replaced by a rename was given
+    the folder's inherited list: run 45356889667, test_outcome_review "the receipt's mode was widened")."""
+    import ctypes
+    from ctypes import wintypes
+    buf, control = _dacl(src)
+    setsec = ctypes.WinDLL("advapi32", use_last_error=True).SetFileSecurityW
+    setsec.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
+    setsec.restype = wintypes.BOOL
+    info = 0x4 | (0x80000000 if control & 0x1000 else 0x20000000)   # SE_DACL_PROTECTED: PROTECTED_ / UNPROTECTED_DACL
     if not setsec(os.fspath(dst), info, buf):
         raise ctypes.WinError(ctypes.get_last_error())
 
@@ -516,6 +524,107 @@ def write_tmp(path: str, data, mode: int = 0o666, exact_mode: Optional[int] = No
     return tmp
 
 
+_HEX_SEED = re.compile(r"[0-9A-Fa-f]{64}\Z")
+_PEM_KEY = re.compile(rb"^[ \t]*-----BEGIN [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----", re.M)   # at a line start: not inside a JSON string
+_KEYS_READ = set()   # SHA-256 of the key files this process read (read_key_text): what an output never replaces
+HEX_SEED = "a 32-byte hex seed (the key file of signer.py keygen)"
+
+
+def _der_private_key(der: bytes) -> Optional[str]:
+    """SEQUENCE { version INTEGER, ... } of a private key, or None. The OID after the second tag of PKCS#8 tells it from
+    an RFC 3161 request, which is SEQUENCE { INTEGER 1, SEQUENCE { SEQUENCE ... too."""
+    if len(der) < 16 or der[0] != 0x30:
+        return None
+
+    def content(k):   # the offset of the content of the element at k
+        return k + 2 + (der[k + 1] & 0x7F if der[k + 1] & 0x80 else 0)
+    k = content(0)
+    if der[k:k + 2] != b"\x02\x01" or k + 5 >= len(der):
+        return None
+    version, tag, inner = der[k + 2], der[k + 3], content(k + 3)
+    if tag == 0x30 and der[inner:inner + 1] == b"\x06" and version in (0, 1, 3):
+        return "a PKCS#12 file" if version == 3 else "a PKCS#8 private key"
+    if tag == 0x02 and version == 0 and len(der) > 100:
+        return "a PKCS#1 private key"
+    return "an EC private key (SEC 1)" if tag == 0x04 and version == 1 else None
+
+
+def private_key_shape(data: bytes) -> Optional[str]:
+    """What private key `data` holds, or None: the 32-byte hex seed of `signer.py keygen` (the whole file, white space
+    around it), a PEM, OpenSSH or OpenPGP armoured private key, a private key in DER or in base64 (`keygen --pq`), a JWK
+    or JWKS with a private member `d`. SPEC §32 rules 2 and 3."""
+    if _PEM_KEY.search(data):
+        return "a PEM private key"
+    try:
+        text = data.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return _der_private_key(data)
+    if _HEX_SEED.match(text):
+        return HEX_SEED
+    if text[:1] == "{":
+        try:
+            doc = json_loads_bounded(text)   # SPEC §30: one nesting bound for every JSON text
+        except (ValueError, RecursionError):
+            return None
+        keys = doc.get("keys") if isinstance(doc.get("keys"), list) else [doc]
+        return "a JWK with the private member d" if any(isinstance(k, dict) and "kty" in k and "d" in k for k in keys) else None
+    try:
+        import base64 as _b64
+        return _der_private_key(_b64.b64decode("".join(text.split()), validate=True)) if text else None
+    except ValueError:
+        return None
+
+
+def _key_bytes(path: str) -> Optional[bytes]:
+    """The bytes of the regular file at `path` when it is at most KEY_MAX_BYTES; None for anything else (absent, not
+    regular, larger, unreadable): never blocks, never raises."""
+    if _is_windows_pipe(path):
+        return None
+    try:
+        return read_regular(path, KEY_MAX_BYTES)
+    except (OSError, ValueError):   # ValueError: a NUL in the path
+        return None
+
+
+def private_key_file(path: str) -> Optional[str]:
+    """private_key_shape of a file (None when it is not a regular file of at most KEY_MAX_BYTES)"""
+    data = _key_bytes(path)
+    return private_key_shape(data) if data else None
+
+
+def _owner_alone(path: str) -> bool:
+    """whether the file is private to its owner, as keygen makes a key: no mode bit for group or others; on Windows an
+    access list that inherits nothing (owner_only)"""
+    try:
+        if os.name != "nt":
+            return os.stat(path).st_mode & 0o077 == 0
+        return bool(_dacl(path)[1] & 0x1000)   # SE_DACL_PROTECTED
+    except OSError:
+        return False
+
+
+def refuse_key_file(path: str, *key_inputs) -> None:
+    """SPEC §32 rule 3: OutputNotWritten when the file already at `path` is a private key. `key_inputs`: key paths of the
+    same command, for a check before they are read."""
+    for k in key_inputs:
+        try:
+            if k and os.path.samefile(path, k):   # links, hard links, letter case where the system ignores it
+                raise OutputNotWritten(f"{path}: is the key file this command signs with; nothing written over it")
+        except (OSError, ValueError) as e:
+            if isinstance(e, OutputNotWritten):
+                raise
+    data = _key_bytes(path)
+    if not data:
+        return
+    if hashlib.sha256(data).digest() in _KEYS_READ:
+        raise OutputNotWritten(f"{path}: is a key file this command read; nothing written over it")
+    shape = private_key_shape(data)
+    # 64 hex digits are a seed or a digest: a seed when kept as one (private to its owner, or named as a key)
+    if shape and (shape != HEX_SEED or _owner_alone(path) or str(path).lower().endswith((".key", ".seed"))):
+        raise OutputNotWritten(f"{path}: holds {shape}; an output never replaces a key file (choose another path, or "
+                               "move the key away first)")
+
+
 def _replace_target(path: str):
     """Where a promised file goes and the mode it keeps, as 0.20.2's open(path, "w") had it: a symlink at `path` is
     followed (its target gets the file, the link stays); an existing file this process may not write (chmod 444 / 400)
@@ -532,6 +641,7 @@ def _replace_target(path: str):
             os.close(os.open(real, os.O_WRONLY | getattr(os, "O_CLOEXEC", 0)))
         except OSError as e:
             raise OutputNotWritten(f"{path}: {os_reason(e)}") from None
+        refuse_key_file(real)   # SPEC §32 rule 3
     return real, st
 
 
@@ -566,10 +676,13 @@ def _is_windows_pipe(path) -> bool:
     return os.name == "nt" and str(path).replace("/", "\\").lower().startswith("\\\\.\\pipe\\")
 
 
-def refuse_directory(path: str) -> None:
-    """a path that names a directory (or ends with a separator) can never receive the file: OutputNotWritten"""
+def refuse_directory(path: str, *key_inputs) -> None:
+    """a path that names a directory (or ends with a separator) can never receive the file: OutputNotWritten. With the
+    key paths of the command, also a path that is one of them (refuse_key_file), before anything is done."""
     if _is_windows_pipe(path):
         return
+    if key_inputs:
+        refuse_key_file(path, *key_inputs)
     p = str(path)
     if p.endswith(("/", os.sep)) or os.path.isdir(p):
         raise OutputNotWritten(f"{path}: is a directory")
@@ -759,6 +872,15 @@ def append_line(path: str, line: bytes, *, mode: int = 0o666, opened=None, sync:
             os.close(fd)
 
 
+_LONG_TOKEN = re.compile(r"[A-Za-z0-9+_=-]{43,}")   # 32 bytes in base64 (43 digits) or hexadecimal, and longer
+
+
+def redact(text: str) -> str:
+    """`text` with every run of 43 or more hexadecimal or base64 digits replaced: what a command line repeats of its
+    own arguments in an error (SPEC §32 rule 5)"""
+    return _LONG_TOKEN.sub("<long value, not repeated>", text)
+
+
 class Parser(argparse.ArgumentParser):
     """argparse with its output through the writers above: usage and error lines (exit 2) go to stderr with a write that
     never raises (argparse's own exited 120 with stderr full, and with stderr closed it printed the usage to STDOUT);
@@ -771,6 +893,9 @@ class Parser(argparse.ArgumentParser):
             write_all(self.format_help())
         except ReceiptNotWritten as e:
             raise SystemExit(receipt_lost(str(e)))
+
+    def error(self, message):   # SPEC §32 rule 5: a secret given where a public value or a path goes is not repeated
+        super().error(redact(message))
 
     def _print_message(self, message, file=None):   # argparse's only writer: error() and exit() print through it
         if not message:
@@ -794,6 +919,9 @@ def receipt_cli(main_fn):
             return receipt_lost(str(e))
         except OutputNotWritten as e:
             return receipt_lost(str(e), stdout_failed=False)
+        except KeyNotUsable as e:   # SPEC §32 rule 4: an error of use, one line, never the content
+            say(f"{e}\n")
+            return 2
         except Exception:
             import traceback
             say(traceback.format_exc())
@@ -1097,6 +1225,55 @@ def read_input(path: str, limit: int = MAX_INPUT_BYTES, idle: float = FIFO_IDLE_
     if len(data) > limit:
         raise InputTooLarge(f"{path}: larger than {limit} bytes")
     return data
+
+
+class KeyNotUsable(ValueError):
+    """SPEC §32 rule 4: a key argument that names no key file this package can use; the message never holds the content
+    of the file, nor the argument when it can be the key itself"""
+
+
+def read_key_text(path: str, read=None) -> str:
+    """The text of a key file (read_input of at most KEY_MAX_BYTES, or the caller's `read`), its SHA-256 kept for refuse_key_file. A path that
+    cannot be read stays the OSError, unless the argument looks like the key itself (KeyNotUsable, not repeated)."""
+    try:
+        data = read(path) if read else read_input(path, KEY_MAX_BYTES)
+    except (OSError, ValueError):
+        if redact(str(path)) != str(path) or private_key_shape(str(path).encode("utf-8", "surrogateescape")):
+            raise KeyNotUsable("the key argument is the path of a file, never the key itself (not repeated here)") from None
+        raise
+    if data:
+        _KEYS_READ.add(hashlib.sha256(data).digest())
+    try:
+        return data.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise KeyNotUsable("the key file is not text: a 32-byte hex seed (signer.py keygen) or the base64 of keygen --pq") from None
+
+
+def seed_of(text: str) -> bytes:
+    """the 32 bytes of the text of a key file of `signer.py keygen` (KeyNotUsable when it holds anything else)"""
+    try:
+        seed = bytes.fromhex(text)
+    except ValueError:
+        seed = b""
+    if len(seed) != 32:
+        raise KeyNotUsable("the key file does not hold a 32-byte hex seed (signer.py keygen)")
+    return seed
+
+
+def read_seed(path: str) -> bytes:
+    """seed_of the key file at `path`, a regular file or a pipe (SPEC §5 step 0)"""
+    return seed_of(read_key_text(path))
+
+
+def read_pq_key(path: str):
+    """The private key of a `signer.py keygen --pq` file (base64 PKCS#8); KeyNotUsable when it holds anything else"""
+    import base64
+    from cryptography.hazmat.primitives import serialization as ser
+    text = read_key_text(path)
+    try:
+        return ser.load_der_private_key(base64.b64decode(text), password=None)
+    except Exception:   # noqa: BLE001 - whatever the library says, its message may describe the bytes it read
+        raise KeyNotUsable("the key file does not hold a base64 PKCS#8 private key (signer.py keygen --pq)") from None
 
 
 def read_input_text(path: str, limit: int = MAX_INPUT_BYTES, idle: float = FIFO_IDLE_SECONDS) -> str:

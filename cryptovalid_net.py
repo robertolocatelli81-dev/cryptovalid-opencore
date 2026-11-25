@@ -43,6 +43,11 @@ The rule, closed by construction:
    a request that goes through a proxy with credentials and puts it again on the redirected one when that goes
    through the proxy too; copied by the redirect, it reached a host of `no_proxy` directly.
 
+7. (0.29.1) a URL with credentials before the host (`user:password@host`) is refused, and the refusal does not repeat
+   it: urllib never sent them (it looked the whole of it up as a host name), the callers repeated the URL in their
+   errors and wrote it into timestamp records. `url_for_record` gives the URL a record may carry: scheme, host, port
+   and path, without the query (an API key in `?key=` would be sealed with the evidence) and the fragment.
+
 Not closed here, stated: a name is resolved when the redirect is judged and again when the connection is made (an
 answer that changes in between is not seen), and when the name does not resolve here the redirect is left to urllib
 (through a proxy of the environment the proxy resolves it; without one the connection fails on the same lookup).
@@ -136,6 +141,18 @@ def _origin(u: urllib.parse.SplitResult):
     return scheme, (str(a) if a is not None else (u.hostname or "").rstrip(".").lower()), u.port or _DEFAULT_PORT.get(scheme)
 
 
+def url_for_record(url) -> str:
+    """The URL as a record or a message may carry it: scheme, host, port and path. Credentials before the host, the
+    query and the fragment are left out (an API key in `?key=...` works with a TSA and would be sealed with the evidence);
+    "<url>" for what is not a URL string."""
+    try:
+        u = urllib.parse.urlsplit(url)
+        netloc = u.netloc.rpartition("@")[2]
+        return urllib.parse.urlunsplit((u.scheme, netloc, u.path, "", "")) if u.scheme and netloc else "<url>"
+    except (ValueError, TypeError, AttributeError):
+        return "<url>"
+
+
 def check_url(url, allow: str) -> urllib.parse.SplitResult:
     """The URL split, or ValueError("url_not_allowed: <reason>") if the rule of this module refuses it."""
     if allow not in _POLICIES:
@@ -157,6 +174,10 @@ def check_url(url, allow: str) -> urllib.parse.SplitResult:
                             " or http to a loopback host" if allow == ALLOW_HTTPS_OR_LOOPBACK_HTTP else "") + ")")
     if not host:
         raise ValueError("url_not_allowed: no host")
+    if "@" in u.netloc:   # 0.29.1: urllib never sent them (it looked up "user:password@host" as a name), and the callers
+        # repeated the URL in their error and wrote it into the timestamp record of an archive. Never repeated here.
+        raise ValueError("url_not_allowed: credentials in the URL (user:password@host); this client does not send "
+                         "them, and a URL is written into records and error messages")
     if "%" in host:   # SPEC v0.12 §20 rule 1: urllib decodes %XX in the host before it connects (Request.host is unquoted);
         # no zone either: RFC 9844 (2025) obsoleted RFC 6874 and with it the "%25" zone of an IPv6 literal in a URI
         raise ValueError("url_not_allowed: a percent sign in the host (urllib decodes %XX before it connects: the address "

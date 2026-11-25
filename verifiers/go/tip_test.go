@@ -284,3 +284,13 @@ func mustOpen(t *testing.T, p string) *os.File {
 	t.Cleanup(func() { f.Close() })
 	return f
 }
+
+func TestTipKeyItselfIsNotRepeated(t *testing.T) {
+	seed := strings.Repeat("07", 32)
+	if _, err := LoadTipKey(seed); err == nil || strings.Contains(err.Error(), seed) {
+		t.Fatalf("a seed given as the path: %v", err)
+	}
+	if _, err := LoadTipKey("absent.key"); err == nil || !strings.Contains(err.Error(), "absent.key") {
+		t.Fatalf("an absent file keeps its name: %v", err)
+	}
+}

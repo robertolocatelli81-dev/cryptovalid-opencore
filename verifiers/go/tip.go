@@ -133,10 +133,15 @@ func parseInstant(s string) (time.Time, error) {
 	return time.Date(y, time.Month(mo), d, h, mi, sec, nanos, time.FixedZone("", offSec)), nil
 }
 
+var longToken = regexp.MustCompile(`[A-Za-z0-9+_=-]{43,}`) // 32 bytes in base64 or hexadecimal, and longer (verifier.py redact)
+
 // LoadTipKey reads the 32-byte Ed25519 seed (hex) used by signer.py / cryptovalid_tip.py.
 func LoadTipKey(keyfile string) (ed25519.PrivateKey, error) {
 	raw, err := readInput(keyfile, keyMaxBytes) // SPEC §22 rule 8: a regular file or a FIFO of at most 1 MiB, never a wait without end
 	if err != nil {
+		if longToken.MatchString(keyfile) { // SPEC §32 rule 5: the key itself in the place of its path is not repeated
+			return nil, errors.New("tip key: the argument is the path of a file, never the key itself (not repeated here)")
+		}
 		return nil, err
 	}
 	seed, err := hex.DecodeString(strings.TrimSpace(string(raw)))

@@ -185,21 +185,24 @@ def load_pq_key(path: str):
     m = _mldsa()
     if m is None:
         raise RuntimeError("ML-DSA-65 needs cryptography >= 50.0.1")
-    from cryptography.hazmat.primitives import serialization as ser
-    sk = ser.load_der_private_key(base64.b64decode(_read_input_text(path, key=True).strip()), password=None)
+    sk = _verifier().read_pq_key(path)
     if not isinstance(sk, m.MLDSA65PrivateKey):
         raise ValueError("not an ML-DSA-65 private key")
     return sk, base64.b64encode(sk.public_key().public_bytes_raw()).decode()
 
 
-def _read_input_text(path: str, key: bool = False) -> str:
-    """SPEC §5 step 0 (v0.12): the ledger to sign or a key file, a regular file or a pipe read bounded in size and in
-    idle time (verifier.read_input): a FIFO with no writer is an OSError after 10 s, a device is refused"""
+def _verifier():
     try:
-        from verifier import KEY_MAX_BYTES, MAX_INPUT_BYTES, read_input_text
+        import verifier
     except ImportError:   # python3 -m opencore.<module> from the parent directory
-        from opencore.verifier import KEY_MAX_BYTES, MAX_INPUT_BYTES, read_input_text
-    return read_input_text(path, KEY_MAX_BYTES if key else MAX_INPUT_BYTES)
+        from opencore import verifier
+    return verifier
+
+
+def _read_input_text(path: str) -> str:
+    """SPEC §5 step 0 (v0.12): the ledger to sign, a regular file or a pipe read bounded in size and in idle time
+    (verifier.read_input): a FIFO with no writer is an OSError after 10 s, a device is refused"""
+    return _verifier().read_input_text(path)
 
 
 class _InlineFileBackend:
@@ -207,7 +210,7 @@ class _InlineFileBackend:
 
     def __init__(self, keyfile: str):
         Ed25519PrivateKey, _, _ = _ed()
-        self._sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(_read_input_text(keyfile, key=True).strip()))
+        self._sk = Ed25519PrivateKey.from_private_bytes(_verifier().read_seed(keyfile))
 
     def public_key_hex(self) -> str:
         from cryptography.hazmat.primitives import serialization as ser

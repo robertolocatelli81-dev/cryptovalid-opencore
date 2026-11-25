@@ -196,8 +196,8 @@ def _rfc3161_stamp(digest_hex: str, tsa_url: str, timeout: int = 20) -> Dict:
         # for another digest — was recorded as anchored: True)
         chk = _verify_rfc3161(tsr_b64, digest_hex, timeout)
         if not chk.get("imprint_ok"):     # a token exists only on a granted status: openssl refuses a non-granted reply carrying one
-            return {"anchored": False, "tsa": tsa_url, "note": "TSA reply carries no token for this digest"}
-        return {"anchored": True, "tsa": tsa_url, "tsr_b64": tsr_b64}
+            return {"anchored": False, "tsa": _net.url_for_record(tsa_url), "note": "TSA reply carries no token for this digest"}
+        return {"anchored": True, "tsa": _net.url_for_record(tsa_url), "tsr_b64": tsr_b64}
     except CheckNotRun:
         raise
     except Exception as e:  # noqa: BLE001
@@ -226,6 +226,49 @@ def _summary_md(m: Dict) -> str:
         "**Honest scope:** proves what/when/order/who-signed + non-alteration — not the truth of the facts.\n")
 
 
+class PackInputRefused(ValueError):
+    """build_pack: a file given as a ledger that cannot go into a pack (SPEC §31, §32)"""
+
+
+def _ledger_form(path: str):
+    """SPEC §32 rule 1: (why the file has not the form of a ledger, or None; the SHA-256 of its bytes). The content is
+    never in the reason."""
+    h, blank, entry = hashlib.sha256(), True, False
+    with os.fdopen(verifier.open_regular(path, float("inf")), "rb") as f:
+        n = 0
+        while True:
+            line = f.readline(verifier.MAX_INPUT_BYTES)
+            if not line:
+                break
+            h.update(line)
+            n += 1
+            s = (line[3:] if n == 1 and line[:3] == b"\xef\xbb\xbf" else line).strip(b" \t\r\n")
+            whole = line.endswith(b"\n") or len(line) < verifier.MAX_INPUT_BYTES
+            if not whole:   # a line longer than any ledger: its verdict says so; not parsed here
+                while True:
+                    rest = f.readline(1 << 20)
+                    h.update(rest)
+                    if not rest or rest.endswith(b"\n"):
+                        break
+            if not s:
+                continue
+            blank = False
+            if s[:1] != b"{":
+                return f"line {n} is not a JSON object", None
+            if not whole or sum(s.count(c) for c in (b"{", b"[", b",", b":")) > verifier.MAX_JSON_TOKENS:   # SPEC §22 rule 9
+                continue
+            try:
+                o = verifier.json_loads_bounded(s.decode("utf-8", "surrogateescape"))
+            except (ValueError, RecursionError):
+                continue   # a damaged line of a ledger stays evidence
+            if not ("prev_hash" in o or "self_hash" in o):
+                return f"line {n} has neither prev_hash nor self_hash", None
+            entry = True
+    if blank or entry:
+        return None, h.hexdigest()
+    return "no line of it is a ledger entry", None
+
+
 def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance evidence",
                tsa_url: Optional[str] = None, sign_key: Optional[str] = None,
                pq_pubkey_b64: Optional[str] = None, signer_pubkey_hex: Optional[str] = None) -> Dict:
@@ -238,17 +281,40 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
     for lp in ledger_paths:   # SPEC §31: before anything is written, a name another system reads as another file
         why = _manifest_name_problem(os.path.basename(lp))
         if why:
-            raise ValueError(f"{os.path.basename(lp)!r} cannot name a file of a pack: {why} (SPEC §31); "
+            raise PackInputRefused(f"{os.path.basename(lp)!r} cannot name a file of a pack: {why} (SPEC §31); "
                              "copy the ledger to another name")
+    digests = []
+    for lp in ledger_paths:   # SPEC §32 rules 1 and 2, before anything is written
+        why = verifier.private_key_file(lp)
+        if why is None and sign_key:
+            try:
+                why = "the --sign-key file" if os.path.samefile(lp, sign_key) else None
+            except OSError:
+                pass
+        why, digest = (f"it holds {why}", None) if why else _ledger_form(lp)
+        if why:
+            raise PackInputRefused(f"{os.path.basename(lp)!r} is not a ledger: {why} (SPEC §32); nothing written")
+        digests.append(digest)
+    seed = None   # read before anything is written: a key that cannot sign leaves no half-made pack
+    if sign_key:
+        try:
+            seed = verifier.read_seed(sign_key)
+        except OSError as e:
+            raise RuntimeError(f"manifest signing failed: {e}") from None
     os.makedirs(out_dir, exist_ok=True)
     ledgers_meta: List[Dict] = []
     file_digests: Dict[str, str] = {}
     signers = set()
-    for lp in ledger_paths:
+    for lp, judged in zip(ledger_paths, digests):
         name = os.path.basename(lp)
         dst = os.path.join(out_dir, name)
         copy_output(lp, dst)   # 0.20.3: whole (temporary + rename) or nothing new; the digest is of the bytes at dst
         file_digests[name] = _sha256_file(dst)
+        if file_digests[name] != judged:   # it changed after it was judged (a ledger that grows, or another file)
+            why = _ledger_form(dst)[0]
+            if why:
+                os.unlink(dst)
+                raise PackInputRefused(f"{name!r} changed while it was read and is not a ledger: {why} (SPEC §32)")
         rec = verifier.verify_ledger(dst)
         n_entries, head = _entries_and_head(dst)
         entry = {"file": name, "entries": n_entries, "head_self_hash": head,   # commit vs TRONCAMENTO
@@ -286,8 +352,7 @@ def build_pack(ledger_paths: List[str], out_dir: str, subject: str = "compliance
         try:
             from cryptography.hazmat.primitives import serialization as _ser
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey as _Sk
-            sk = _Sk.from_private_bytes(bytes.fromhex(   # SPEC §5 step 0: a regular file or a pipe, bounded
-                verifier.read_input_text(sign_key, verifier.KEY_MAX_BYTES).strip()))
+            sk = _Sk.from_private_bytes(seed)
             manifest["manifest_signer"] = sk.public_key().public_bytes(
                 _ser.Encoding.Raw, _ser.PublicFormat.Raw).hex()
             manifest["manifest_signature"] = base64.b64encode(   # SPEC §22 rule 3: the tagged message of format 1.2
@@ -888,8 +953,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "v0.8; repeat for several)")
     a = p.parse_args(argv)
     if a.cmd == "build":
-        emit(json.dumps(build_pack(a.ledgers, a.out_dir, subject=a.subject, tsa_url=a.tsa,
-                                    sign_key=a.sign_key), indent=1))
+        try:
+            r = build_pack(a.ledgers, a.out_dir, subject=a.subject, tsa_url=a.tsa, sign_key=a.sign_key)
+        except PackInputRefused as e:
+            say(f"build: {e}\n")
+            return 2
+        emit(json.dumps(r, indent=1))
         return 0
     if a.cmd == "verify":
         try:

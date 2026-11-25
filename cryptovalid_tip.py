@@ -100,7 +100,7 @@ def _load_sk(keyfile):
     if isinstance(keyfile, tuple):
         return keyfile
     Ed25519PrivateKey, _, ser = _ed()
-    sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(read_input_text(keyfile, KEY_MAX_BYTES).strip()))   # SPEC §5 step 0
+    sk = Ed25519PrivateKey.from_private_bytes(read_seed(keyfile))   # SPEC §5 step 0
     return sk, sk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
 
 
@@ -175,9 +175,8 @@ def load_pq_key(keyfile):
     """(ml-dsa-65 private key, public raw base64) from a `signer.py keygen --pq` file, or an already loaded pair."""
     if isinstance(keyfile, tuple):
         return keyfile
-    from cryptography.hazmat.primitives import serialization as ser
     from cryptography.hazmat.primitives.asymmetric import mldsa
-    sk = ser.load_der_private_key(base64.b64decode(read_input_text(keyfile, KEY_MAX_BYTES).strip()), password=None)   # SPEC §5 step 0
+    sk = read_pq_key(keyfile)   # SPEC §5 step 0
     if not isinstance(sk, mldsa.MLDSA65PrivateKey):
         raise ValueError("not an ML-DSA-65 private key")
     return sk, base64.b64encode(sk.public_key().public_bytes_raw()).decode()
@@ -380,9 +379,9 @@ TIP_UNREADABLE_OBJECT = "tip_unreadable: not a JSON object"
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import os_error_text, check_ledger_id_arg, emit, KEY_MAX_BYTES, _Once, Parser, read_input_text, receipt_cli, say, write_output
+    from verifier import os_error_text, check_ledger_id_arg, emit, _Once, Parser, receipt_cli, say, write_output, read_seed, read_pq_key
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import os_error_text, check_ledger_id_arg, emit, KEY_MAX_BYTES, _Once, Parser, read_input_text, receipt_cli, say, write_output
+    from opencore.verifier import os_error_text, check_ledger_id_arg, emit, _Once, Parser, receipt_cli, say, write_output, read_seed, read_pq_key
 
 
 @receipt_cli

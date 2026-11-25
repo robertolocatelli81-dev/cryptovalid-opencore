@@ -120,7 +120,8 @@ class HttpQeasBackend:
         self._url = base_url.rstrip("/")
         self._token = os.environ.get(token_env, "")
         if not self._token:
-            raise RuntimeError(f"QEAS auth token env {token_env!r} is empty/unset")
+            raise RuntimeError("the environment variable named by token_env is empty/unset (the NAME of a variable, never "
+                               "the token itself; the name given is not repeated here)")
         self._timeout = timeout
 
     def _req(self, method: str, path: str, body: Optional[Dict] = None) -> Dict:

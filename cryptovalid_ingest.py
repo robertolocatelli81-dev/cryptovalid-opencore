@@ -73,6 +73,7 @@ except ImportError:   # python3 -m opencore.<module> from the parent directory
     from opencore.verifier import json_loads_bounded as json_loads
 
 import cryptovalid_merkle as merkle
+from cryptovalid_net import url_for_record as _url_for_record
 
 GENESIS_PREV = "0" * 64
 # SPEC v0.14 §22 rule 2: a tree head (<segment>.sth.json) and the HEAD (<prefix>.head.json) are CLOSED objects, these
@@ -400,7 +401,7 @@ class Ingestor:
     def _anchor(self, seg_path: str, sth: Dict):
         """Timestamp RFC 3161 automatico dell'STH canonico (l'ancora di tempo TERZA).
         Best-effort: qualunque errore finisce nei metadata, mai sull'ingestione."""
-        meta: Dict = {"tsa_url": self._tsa_url, "requested_utc": _utc_now(),
+        meta: Dict = {"tsa_url": _url_for_record(self._tsa_url), "requested_utc": _utc_now(),   # 0.29.1: no credentials, no query
                       "sth_canonical_sha256": _sth_canonical_hash(sth)}
         try:
             import cryptovalid_tsa as tsa_mod

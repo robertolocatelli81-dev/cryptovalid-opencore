@@ -88,7 +88,7 @@ def statement_id(cose: bytes) -> str:
 
 def _load_sk(keyfile: str):
     Ed, _, ser, _ = _ed()
-    sk = Ed.from_private_bytes(bytes.fromhex(read_input_text(keyfile, KEY_MAX_BYTES).strip()))   # SPEC §5 step 0
+    sk = Ed.from_private_bytes(read_seed(keyfile))   # SPEC §5 step 0
     return sk, sk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw)
 
 
@@ -100,6 +100,12 @@ def _check_claims(iss: str, sub: str) -> None:
 
 
 # ── Signed Statement ─────────────────────────────────────────────────────────────────────────────────────────────
+def _holds_key(data: bytes, sk) -> bool:
+    _, _, ser, _ = _ed()
+    raw = sk.private_bytes(ser.Encoding.Raw, ser.PrivateFormat.Raw, ser.NoEncryption())
+    return raw in data or raw.hex().encode() in data.lower()
+
+
 def signed_statement(payload: bytes, content_type: str, iss: str, sub: str, keyfile: str, detached: bool = False,
                      iat: Optional[int] = None) -> bytes:
     """COSE_Sign1 (tag 18): protected {alg EdDSA, content type, kid = Ed25519 public key, CWT {iss, sub, iat}};
@@ -110,6 +116,8 @@ def signed_statement(payload: bytes, content_type: str, iss: str, sub: str, keyf
     if not isinstance(content_type, str) or not content_type or "\n" in content_type:
         raise ScittError("content_type must be a media type string")
     sk, pk = _load_sk(keyfile)
+    if not detached and _holds_key(bytes(payload), sk):
+        raise ScittError("the statement holds the key it is to be signed with (SPEC §32 rule 6)")
     claims = {CWT_ISS: iss, CWT_SUB: sub}
     if iat is not None:
         claims[CWT_IAT] = int(iat)
@@ -321,9 +329,9 @@ def _read_bytes(path: str) -> bytes:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import os_error_text, append_line, emit, file_lock, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
+    from verifier import os_error_text, append_line, emit, file_lock, open_regular, OutputNotWritten, Parser, read_input, read_regular, receipt_cli, refuse_directory, say, write_output, read_seed
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import os_error_text, append_line, emit, file_lock, KEY_MAX_BYTES, open_regular, OutputNotWritten, Parser, read_input, read_input_text, read_regular, receipt_cli, refuse_directory, say, write_output
+    from opencore.verifier import os_error_text, append_line, emit, file_lock, open_regular, OutputNotWritten, Parser, read_input, read_regular, receipt_cli, refuse_directory, say, write_output, read_seed
 
 
 @receipt_cli
@@ -341,12 +349,13 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     try:
         if a.cmd == "sign":
+            refuse_directory(a.out, a.key)
             pl = _read_bytes(a.statement)
             cose = signed_statement(pl, a.cty, a.iss, a.sub, a.key, detached=a.detached)
             write_output(a.out, cose)   # 0.20.3: whole at --out, or exit 74
             emit(json.dumps({"stato": "OK", "bytes": len(cose), "sha256": hashlib.sha256(cose).hexdigest()})); return 0
         if a.cmd == "register":
-            refuse_directory(a.out)   # 0.20.3: before the ledger line, never after it
+            refuse_directory(a.out, a.ts_key)   # 0.20.3: before the ledger line, never after it
             cose = _read_bytes(a.signed)
             pl = _read_bytes(a.statement) if a.statement else None
             reg = register(cose, a.ledger, a.issuer_pubkey, pl)

@@ -154,6 +154,18 @@ def _one_role(log_vkeys: List[str], witness_keys) -> None:
         raise C.NoteError(f"a key cannot be both a log key and a witness key: {', '.join(both)}")
 
 
+def _not_a_log_key(log_vkeys: List[str], own_public: List[bytes]) -> None:
+    """SPEC §32 rule 7: a witness never cosigns with the key of a log it trusts (the same public key, whatever the name
+    and the type byte): the cosignature would witness nothing but the log itself"""
+    logs = {bytes(C.parse_vkey(k)[3]) for k in log_vkeys}
+    if any(p in logs for p in own_public):
+        raise C.NoteError("the witness key is the key of a log it trusts: a log does not witness itself")
+
+
+def _own_public(seed: bytes, pq_seed: Optional[bytes]) -> List[bytes]:
+    return [C.pubkey_from_seed(seed)] + ([C.mldsa44_pubkey_from_seed(pq_seed)] if pq_seed is not None else [])
+
+
 def _unsigned_extensions(log_verified: List[Dict], cp: Dict) -> bool:
     """SPEC §16 rule 5: extension lines that no verified log signature covers (every one of them ML-DSA-44)."""
     return bool(cp["extensions"]) and all(s["type"] == C.TYPE_MLDSA44 for s in log_verified)
@@ -228,6 +240,7 @@ def witness_cosign(state_path: str, note: bytes, log_vkey: Union[str, List[str]]
     if pq_seed is not None:
         own_kids.add(C.key_id(witness_name, C.TYPE_MLDSA44, C.mldsa44_pubkey_from_seed(pq_seed)))
     _one_role(log_vkeys, [(witness_name, k) for k in own_kids])   # our own line must never be read as the log's
+    _not_a_log_key(log_vkeys, _own_public(witness_seed, pq_seed))
     kept = [l for l, (name, raw) in zip(lines, sigs) if not (name == witness_name and raw[:4] in own_kids)]
     if pq_seed is not None and len(cp["origin"].encode("utf-8")) > 255:
         out["motivo"] = "an ML-DSA-44 cosignature cannot cover an origin longer than 255 bytes (tlog-cosignature)"; return out
@@ -567,12 +580,17 @@ class WitnessService:
                 own = [(name, C.key_id(name, C.TYPE_MLDSA44, C.mldsa44_pubkey_from_seed(pq_seed)))]
             except C.NoteError:
                 pass
+        try:
+            own_public = _own_public(seed, pq_seed)
+        except C.NoteError:
+            own_public = []   # as above: witness_cosign checks again on every request
 
         def _log_key(v):
             name_, _, typ, _ = C.parse_vkey(v)
             if typ not in LOG_KEY_TYPES:
                 raise C.NoteError(f"{name_}: {_LOG_KEY_ERR}")
             _one_role([v], own)
+            _not_a_log_key([v], own_public)
             return name_
         for v in log_vkeys:
             self.logs.setdefault(_log_key(v), []).append(v)
@@ -751,14 +769,14 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("cosign"); c.add_argument("note"); c.add_argument("--state", required=True); c.add_argument("--log-vkey", required=True)
     c.add_argument("--name", required=True); c.add_argument("--key", required=True); c.add_argument("--proof", help="JSON list of base64 hashes")
-    c.add_argument("--pq-key", help="32-byte hex seed of an ML-DSA-44 cosigner key: adds a type-0x06 line beside the Ed25519 one")
+    c.add_argument("--pq-key", help="FILE holding the 32-byte hex seed of an ML-DSA-44 cosigner key (a path, as --key: never the seed itself on the command line): adds a type-0x06 line beside the Ed25519 one")
     c.add_argument("--out", required=True)
     w = sub.add_parser("verify"); w.add_argument("note"); w.add_argument("--log-vkey", required=True); w.add_argument("--witness-vkey", action="append", default=[])
     w.add_argument("--min-witnesses", type=int, default=1); w.add_argument("--max-age", type=int)
     w.add_argument("--clock-skew", type=int, default=0); w.add_argument("--origin", help="expected origin when it differs from the log key name")
     sv = sub.add_parser("serve", help="tlog-witness HTTP witness: POST <prefix>/add-checkpoint")
     sv.add_argument("--state", required=True); sv.add_argument("--name", required=True); sv.add_argument("--key", required=True)
-    sv.add_argument("--pq-key", help="32-byte hex seed of an ML-DSA-44 cosigner key (the cosignature type the witness spec recommends)")
+    sv.add_argument("--pq-key", help="FILE holding the 32-byte hex seed of an ML-DSA-44 cosigner key (a path, as --key; the cosignature type the witness spec recommends)")
     sv.add_argument("--log-vkey", action="append", default=[], help="trusted log key whose name is the origin")
     sv.add_argument("--log-origin", action="append", nargs=2, default=[], metavar=("ORIGIN", "VKEY"), help="trusted log key for an origin that differs from the key name (repeatable: key rotation)")
     sv.add_argument("--host", default="127.0.0.1")
@@ -805,7 +823,7 @@ def main(argv=None) -> int:
             emit(json.dumps({"stato": "ERRORE", "motivo": os_error_text(e)}, ensure_ascii=False)); return 2
         emit(json.dumps({k: v for k, v in r.items() if k != "note"}, ensure_ascii=False)); return 0 if r["stato"] == "OK" else 1
     if a.cmd == "cosign":
-        refuse_directory(a.out)   # 0.20.3: before the state records the cosignature, never after it
+        refuse_directory(a.out, a.key, a.pq_key)   # 0.20.3: before the state records the cosignature, never after it
         try:
             note = read_input(a.note)   # SPEC §5 step 0: a regular file or a pipe, bounded
             proof = json_loads(a.proof) if a.proof else None

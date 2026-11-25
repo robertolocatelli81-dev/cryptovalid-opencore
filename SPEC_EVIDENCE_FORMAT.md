@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!-- Copyright (C) 2026 Roberto Locatelli -->
 
-# CryptoValid Evidence Format — candidate standard v0.15 (2026-11-23; v0.14 2026-11-22, v0.13 2026-11-20, v0.12 2026-11-18, v0.11 2026-11-18, v0.10 2026-11-16, v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
+# CryptoValid Evidence Format — candidate standard v0.16 (2026-11-26; v0.15 2026-11-23, v0.14 2026-11-22, v0.13 2026-11-20, v0.12 2026-11-18, v0.11 2026-11-18, v0.10 2026-11-16, v0.9 2026-11-16, v0.8 2026-11-15, v0.7 2026-11-15, v0.6 2026-11-13, v0.5 2026-10-19)
 
 License: AGPL-3.0-or-later (see LICENSE). Status: **candidate standard** — defined by CONFORMANCE
 TEST VECTORS (see `CONFORMANCE.md` + `spec/vectors/`), so any implementation in any language can prove
@@ -413,6 +413,10 @@ v0.15 also adds §28, the COSE Receipts of an MMR (vds 3, draft-ietf-scitt-recei
 `cryptovalid_cose_receipts.py`: additive, a receipt with vds 3 was `UNSUPPORTED_VDS` before. And §29, the verification of a
 composite ML-DSA signature of RFC 10073 (three ML-DSA-65 algorithms) in the new experimental `cryptovalid_composite.py`:
 additive.
+v0.16 (2026-11-26, cryptovalid-opencore 0.29.1) adds §32, nine rules: a secret given to a command or to the library does
+not appear in what it writes. No verdict on a ledger, a pack, an archive or a receipt changes; what changes is what the
+writers accept (a file given as a ledger to `evidence_pack.py build`, an output over a key file, a URL with credentials, a
+witness that cosigns with a log's own key) and what their errors repeat.
 
 ## 7. Conformance (normative)
 
@@ -1080,7 +1084,8 @@ Rules (NORMATIVE since v0.8):
    one of the witness's own keys is refused the same way (`WitnessService` at start-up, `witness_cosign` before it
    cosigns or writes its state). Only a 0x06 key can be in both lists. An Ed25519 key used under one name as a 0x01 log
    key and as a 0x04 witness key is two keys (two key ids, two signed messages): its 0x01 line counts only for the log
-   and its 0x04 line only for the witness, as before v0.8.
+   and its 0x04 line only for the witness, as before v0.8. Since v0.16 a witness does not make such a line (§32 rule 7);
+   the relying party still reads one as two keys.
 5. **Extension lines must be signed by the log**: when every trusted log signature that verified is ML-DSA-44 (0x06),
    no log signature covers the extension lines; a checkpoint with extension lines is then refused — by the witness,
    which would otherwise sign them under its Ed25519 cosignature (HTTP 400), and by the relying party (`NON_VALIDA`).
@@ -2773,3 +2778,59 @@ Until 0.29.0 the check used the separators of the system running it: `\` was an 
 of the review of 2026-10-01, NEMESIS P2) and a separator on Windows, and a drive was refused only on Windows, so the same
 pack named a file inside it on Linux (`a\..\b.jsonl`) and a file beside the pack on Windows. That choice is reversed:
 the same manifest now gets the same answer on every system.
+
+## 32. A secret that comes in never goes out (NORMATIVE since v0.16, 2026-11-26)
+
+A private key, a PIN, a token or a password given to a command or to the library of the reference implementation does
+not appear in what it writes: standard output, standard error, files, the answers of the MCP server. Written after a
+review of 0.29.0 for this one class.
+
+1. **A pack holds ledgers.** `evidence_pack.py build` takes as a ledger only a file that has the form of one. Read as
+   bytes, after a UTF-8 byte order mark if there is one, and divided at LF: every line that is not blank (spaces, tabs,
+   CR) begins with `{`; a line that parses as JSON (§30) has the member `prev_hash` or `self_hash`; and at least one
+   line so parses. A file with nothing but blank lines has the form too (the empty ledger). A line that begins with `{`
+   and does not parse, or is past the bounds of §5 and §22 rule 9, is admitted: a damaged ledger is evidence, and its
+   verdict in the pack is FAIL as before. Anything else is refused before anything is written, with the number of the
+   first line at fault and never its content. A file whose bytes changed between the judgement and the copy is judged
+   again on the copy, which is removed if it has not the form. Every line of a ledger that verifies is an object with
+   both members, so no ledger that passes is refused. Measured on 2026-11-25 on the 145 `.jsonl` files of the
+   repository: the 139 ledgers (tampered, broken and empty ones included) have the form, the 6 that are not ledgers
+   (one benchmark result, five Acta receipt sequences) do not.
+2. **A key is not a ledger.** Before rule 1, a file of at most 1 MiB that is a private key is refused as one, and so is
+   the `--sign-key` file itself under any name. The forms: 64 hexadecimal digits alone (the seed of `signer.py keygen`);
+   a line `-----BEGIN ... PRIVATE KEY-----` or `... PRIVATE KEY BLOCK-----`; PKCS#8, PKCS#1, SEC 1 or PKCS#12 in DER, or
+   their base64; a JWK or JWKS with a member `d` beside `kty`. The key given with `--sign-key` is read before anything is
+   written.
+3. **An output never replaces a key.** An output path at which a file stands is refused (exit 74, the file intact) when
+   the file is, byte for byte, a key file the process has read (whatever its name: a link, a hard link, another letter
+   case, a copy), or has one of the forms of rule 2. 64 hexadecimal digits are a seed or a digest, which have the same form: they
+   are taken as a seed when the file is private to its owner (no permission bit for group or others; on Windows an
+   access list that inherits nothing, as `keygen` sets it) or its name ends in `.key` or `.seed`; otherwise the file is
+   replaced. So a digest file that is not private is still rewritten, and a seed that is neither private nor named as a
+   key nor read by the command is not recognised. `cryptovalid_scitt register` and `cryptovalid_witness cosign` compare their
+   output with their key files before they change the ledger or the state.
+4. **A key that cannot be used is an error of use.** A key file that is not what the command reads (not text, not a
+   32-byte hexadecimal seed, not the base64 of a PKCS#8 key) ends in a one-line refusal without a traceback, and the
+   message does not hold the content.
+5. **An argument that can be a secret is not repeated.** Where an error names an argument of the command line, a run of 43
+   or more hexadecimal or base64 digits (32 bytes or more) is replaced by a fixed text; a key given in the place of the
+   path of its file is refused without repeating it. An argument of a command line is visible to other processes of
+   the machine whatever the command does with it.
+6. **What is signed is not the key.** `cryptovalid_scitt sign` refuses an attached statement that contains the key it is
+   to be signed with (32 bytes, or their hexadecimal digits); `cryptovalid_jws sign` refuses a private key as an `x5c`
+   certificate. Otherwise `scitt sign` and `cryptovalid_worm put` take any bytes, by contract: another secret given to them
+   as the data is kept as the data.
+7. **A witness is not the log.** `cryptovalid_witness` (`cosign`, `serve`, `witness_cosign`, `WitnessService`) refuses to
+   cosign when its own public key is the public key of a log it is told to trust, whatever the name and the type byte
+   (`NoteError`, before any state is written). §16 rule 4 compares (name, key id) pairs; this rule compares the keys.
+8. **A URL in a record has no credentials.** A URL with `user:password@` before the host is refused by the network rule of
+   §20 without being repeated. The URL of a time-stamp authority written into a record is its scheme, host, port and path,
+   without query and fragment.
+9. **The name of a variable is not repeated.** Where an option takes the NAME of an environment variable (`token_env=`,
+   `pass_env=`, `pin=env:`), the error for an empty or unset variable does not repeat the name given, which can be the
+   secret itself.
+
+Held by `test_secrets_20261125.py`, which also runs the commands with a key in the place of every input and every output
+and searches what they print and write for eleven forms of the seed. Not covered: what a process is made to keep in
+memory, in a core dump or in swap; the arguments of other programs; a key already in the folder a pack is built in (the
+manifest does not list it, but it is in the folder).

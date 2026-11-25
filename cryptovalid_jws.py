@@ -73,13 +73,15 @@ def sign_entry(entry: Dict, keyfile: str, x5c: Optional[List[str]] = None) -> st
     """JWS compact of the record's CANONICAL form (same bytes the ledger hashes). x5c: list of base64 DER
     certificates (leaf first), passed through untouched — a qualified certificate makes it JAdES-relevant."""
     Ed25519PrivateKey, _, ser = _ed()
-    sk = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(read_input_text(keyfile, KEY_MAX_BYTES).strip()))   # SPEC §5 step 0
+    sk = Ed25519PrivateKey.from_private_bytes(read_seed(keyfile))   # SPEC §5 step 0
     pk = sk.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
     header = {"alg": "EdDSA", "typ": "JOSE", "kid": pk, "cty": "application/cryptovalid-record+json"}
     if x5c:
         if not isinstance(x5c, list) or not all(isinstance(c, str) for c in x5c):
             raise ValueError("x5c: a list of base64 DER certificates")
         for c in x5c:
+            if private_key_shape(c.encode("utf-8")):   # SPEC §32 rule 6: the header is public
+                raise ValueError("x5c: a private key where a certificate goes")
             base64.b64decode(c, validate=True)     # must be standard base64 (RFC 7515 §4.1.6), not base64url
         header["x5c"] = x5c
     h = _b64u(json.dumps(header, sort_keys=True, separators=(",", ":")).encode())
@@ -152,9 +154,9 @@ def verify(jws: str, trusted_pubkey_hex: Optional[str] = None) -> Dict:
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, read_text_regular, receipt_cli, say
+    from verifier import emit, Parser, private_key_shape, read_input_text, read_text_regular, receipt_cli, say, read_seed
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, read_text_regular, receipt_cli, say
+    from opencore.verifier import emit, Parser, private_key_shape, read_input_text, read_text_regular, receipt_cli, say, read_seed
 
 
 @receipt_cli

@@ -12,7 +12,7 @@ branding:
 # with --no-deps into a new virtual environment, and `cryptovalid-verify` runs there with the arguments, split on
 # whitespace (no shell). Modelled on the action of omega-cra-evol (same author), which verifies a container image the
 # same way. Usage:
-#   - uses: robertolocatelli81-dev/cryptovalid-opencore@v0.29.0
+#   - uses: robertolocatelli81-dev/cryptovalid-opencore@v0.29.1
 #     with:
 #       args: auto evidence/
 inputs:
@@ -22,7 +22,7 @@ inputs:
   version:
     description: "cryptovalid-opencore version (default: the version of this action's release); releases before 0.25.0 carry no build provenance"
     required: false
-    default: "0.29.0"
+    default: "0.29.1"
   cryptography:
     description: "`true` (default) also installs cryptography >= 48 from PyPI (signatures, ML-DSA, DSSE); `false` keeps the stdlib-only hash verifier"
     required: false

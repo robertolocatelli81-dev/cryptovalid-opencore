@@ -1192,7 +1192,7 @@ def timestamp_sth(root_hex: str, tsa_url: str, timeout: int = 30):
     import base64
     return {"root_sha256": root_hex, "granted": granted,
             "tsa_token": base64.b64encode(token).decode() if token else None,
-            "tsa_url": tsa_url}
+            "tsa_url": _net.url_for_record(tsa_url)}
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
@@ -1223,7 +1223,7 @@ def main(argv=None):
                      "gen_time": (chk["tst_info"] or {}).get("gen_time") if chk else None,
                      "counts_as_timestamp": bool(chk and chk["counts_as_timestamp"]),
                      "token_b64_len": len(base64.b64encode(token)) if token else 0,
-                     "tsa": a.tsa}, indent=2))
+                     "tsa": _net.url_for_record(a.tsa)}, indent=2))
     return 0 if ok else 1
 
 if __name__ == "__main__":

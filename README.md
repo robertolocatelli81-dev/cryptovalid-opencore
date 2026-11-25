@@ -19,7 +19,7 @@ public time-stamping services, see [NOTICE](NOTICE)), offline once installed and
 `openssl`:
 
 ```bash
-pip install 'cryptovalid-opencore[sign]==0.29.0'
+pip install 'cryptovalid-opencore[sign]==0.29.1'
 git clone --depth 1 https://github.com/robertolocatelli81-dev/cryptovalid-opencore && cd cryptovalid-opencore/spec/vectors/beacon/nist
 cryptovalid-verify beacon ../payment_ledger.jsonl --entry 1 --pulse pulse_2030303.json --previous pulse_2030302.json --certificate certificate_5b6386e6ac8a993b.pem | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['status'], r['bounds']['not_before'], r['entry']['payment'])"
 cryptovalid-verify beacon ../payment_ledger.jsonl --entry 1 --pulse pulse_2030302.json --previous pulse_2030301.json --certificate certificate_5b6386e6ac8a993b.pem | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['status'], r['reason'])"
@@ -110,7 +110,7 @@ there should know:
 ## Proofs
 
 - **CI on every push and weekly** ([verify.yml](.github/workflows/verify.yml)): every `test_*.py` suite on Python 3.9
-  to 3.14 on Linux and 3.13 on macOS and Windows (there, a case the system cannot run is skipped with its reason),
+  to 3.14 on Linux, macOS and Windows (there, a case the system cannot run is skipped with its reason),
   with and without `cryptography`, the conformance vectors, a real
   PKCS#11 token (SoftHSM2) signing a ledger end to end, a tampered ledger
   that must be refused, the declared dependency floors, and the verifiers in the other languages.
@@ -238,7 +238,7 @@ python3 evidence_pack.py verify pack_dir/          # or: cryptovalid-verify pack
 python3 evidence_pack.py verify pack_dir/ --tsa-cert tsa.pem   # also check the RFC 3161 token against a TSA you trust
 ```
 
-The pack holds the ledgers, a MANIFEST with per-file SHA-256, per-ledger hash and signature verdicts, signer keys,
+The pack holds the ledgers (only files that have the form of one go in: SPEC §32), a MANIFEST with per-file SHA-256, per-ledger hash and signature verdicts, signer keys,
 entry count and head hash, an optional RFC 3161 token, and a human `SUMMARY.md`. `verify` returns `valid: true` only
 if every digest matches, the manifest is self-consistent, every ledger passes its chain and its signatures, and a
 claimed RFC 3161 token is not refuted; with `--sign-key` the manifest is authenticated (`manifest_authenticated`) and
@@ -334,7 +334,7 @@ listed in its `SHA256SUMS`; earlier releases are on GitHub and the index below o
 ### In a GitHub Actions workflow
 
 ```yaml
-- uses: robertolocatelli81-dev/cryptovalid-opencore@v0.29.0
+- uses: robertolocatelli81-dev/cryptovalid-opencore@v0.29.1
   with:
     args: auto evidence/
 ```

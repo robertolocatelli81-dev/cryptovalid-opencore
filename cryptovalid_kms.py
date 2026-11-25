@@ -85,6 +85,11 @@ except ImportError:   # python3 -m opencore.<module> from the parent directory
 import cryptovalid_net as _net
 
 ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")  # RFC 8410 SPKI header
+# 0.29.1: the NAME given is not repeated. Until 0.29.0 `token_env=<the token>`, `pass_env=<the passphrase>` or
+# `pin=env:<the PIN>` (the secret where the name of its variable goes) came back in this message: on stderr, and
+# through the MCP server in the answer to the client.
+_ENV_UNSET = ("the environment variable named by %s is empty/unset (the option takes the NAME of a variable, never the "
+              "secret itself; the name given is not repeated here)")
 
 
 def _raw_from_spki(der_or_pem: bytes) -> bytes:
@@ -114,7 +119,7 @@ class FileKeyBackend:
         if self._cached is None:
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
             self._cached = Ed25519PrivateKey.from_private_bytes(   # SPEC §5 step 0: a regular file or a pipe, bounded
-                bytes.fromhex(read_input_text(self._path, KEY_MAX_BYTES).strip()))
+                read_seed(self._path))
         return self._cached
 
     def public_key_hex(self) -> str:
@@ -367,7 +372,7 @@ def _p11_worker() -> None:
             elif r["op"] == "sign":
                 pin = os.environ.get(r["pin_env"], "")
                 if not pin:
-                    raise RuntimeError(f"PIN environment variable {r['pin_env']!r} is empty/unset")
+                    raise RuntimeError(_ENV_UNSET % "pin=env:")
                 res = _p11_sign_direct(r["module"], r["token"], r["key"], pin.encode(), bytes.fromhex(r["msg"]))
             else:
                 raise RuntimeError("unknown request")
@@ -486,7 +491,7 @@ class Pkcs11Backend:
         if not pin.startswith("env:"):
             raise ValueError("pin must be 'env:VARNAME' (argv PINs leak via ps)")
         if not os.environ.get(pin[4:]):
-            raise RuntimeError(f"PIN environment variable {pin[4:]!r} is empty/unset")
+            raise RuntimeError(_ENV_UNSET % "pin=env:")
         self._module, self._token, self._key, self._pin = module, token, key, pin
         self._timeout = timeout
         self._child = _Pkcs11Child(timeout)
@@ -546,7 +551,7 @@ class Pkcs11Backend:
 
     def sign(self, message: bytes) -> bytes:
         if not os.environ.get(self._pin[4:], ""):
-            raise RuntimeError(f"PIN environment variable {self._pin[4:]!r} is empty/unset")
+            raise RuntimeError(_ENV_UNSET % "pin=env:")
         try:
             sig = self._child.call({"op": "sign", "module": self._module, "token": self._token, "key": self._key,
                                     "pin_env": self._pin[4:], "msg": bytes(message).hex()}, "sign")
@@ -869,11 +874,11 @@ class VaultTransitBackend:
                  token_env: str = "VAULT_TOKEN", timeout: float = 30.0):
         token = os.environ.get(token_env, "")
         if not token:
-            raise RuntimeError(f"Vault token env var {token_env!r} is empty/unset")
+            raise RuntimeError(_ENV_UNSET % "token_env=")
         try:
             _net.check_url(url, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP)
         except ValueError as e:
-            if isinstance(url, str) and url[:5].lower() == "http:":
+            if isinstance(url, str) and url[:5].lower() == "http:" and "not loopback" in str(e):   # 0.29.1: only for that refusal
                 raise RuntimeError("refusing plain http:// to a non-loopback Vault: "
                                    "the token would travel in cleartext (use https)") from None
             raise ValueError(f"Vault url must start with https:// (or http:// to a loopback host): {e}") from None
@@ -1005,11 +1010,11 @@ class NetHsmBackend:
                  pass_env: str = "NETHSM_PASS"):
         passphrase = os.environ.get(pass_env, "")
         if not passphrase:
-            raise RuntimeError(f"NetHSM passphrase env var {pass_env!r} is empty/unset")
+            raise RuntimeError(_ENV_UNSET % "pass_env=")
         try:   # 15/11/2026: until 0.24.0 any other scheme (file:, ftp:) reached urlopen
             _net.check_url(url, _net.ALLOW_HTTPS_OR_LOOPBACK_HTTP)
         except ValueError as e:
-            if isinstance(url, str) and url[:5].lower() == "http:":
+            if isinstance(url, str) and url[:5].lower() == "http:" and "not loopback" in str(e):   # 0.29.1: only for that refusal
                 raise RuntimeError("refusing plain http:// to a non-loopback NetHSM: "
                                    "credentials would travel in cleartext (use https)") from None
             raise ValueError(f"NetHSM url must start with https:// (or http:// to a loopback host): {e}") from None
@@ -1116,9 +1121,9 @@ def backend_from_uri(uri: str, **extra):
 
 
 try:   # 0.20.3: the one writer of every command (verifier.py): an outcome is written whole, or exit 74
-    from verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, receipt_cli, say
+    from verifier import emit, Parser, receipt_cli, say, read_seed
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import emit, KEY_MAX_BYTES, Parser, read_input_text, receipt_cli, say
+    from opencore.verifier import emit, Parser, receipt_cli, say, read_seed
 
 
 @receipt_cli
