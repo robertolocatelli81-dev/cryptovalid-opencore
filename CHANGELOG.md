@@ -12,7 +12,8 @@ run by the same author, not by a third party.
 0.29.0 was tagged and not released: a review of the whole product for one class (a secret given to a command or to the
 library must not appear in what it writes), made after its tag, found the cases below. They are in 0.28.1 too (measured on
 0.28.1 from PyPI on 2026-11-25: the pack, the output over a key, the URL, the name of the variable), so this release
-replaces it. The section 0.29.0 below is part of this release.
+replaces it. The section 0.29.0 below is part of this release. The GitHub Action at the tag `v0.29.0` installs version 0.29.0, which is
+not on PyPI: use `@v0.29.1`.
 
 **If you built evidence packs with 0.28.1 or earlier:** read the list `ledgers` of each `MANIFEST.json`. Every file given
 to `build` was copied into the pack under its own name and is listed there; one that is not a ledger has
