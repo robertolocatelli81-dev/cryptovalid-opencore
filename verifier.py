@@ -873,12 +873,22 @@ def append_line(path: str, line: bytes, *, mode: int = 0o666, opened=None, sync:
 
 
 _LONG_TOKEN = re.compile(r"[A-Za-z0-9+_=-]{43,}")   # 32 bytes in base64 (43 digits) or hexadecimal, and longer
+_B64_STD = re.compile(r"[A-Za-z0-9+/=]{43,}")   # standard base64: its "/" ends a run of the pattern above
+_WORD = re.compile(r"[^\s'\"(),]+")
+NOT_REPEATED = "<long value, not repeated>"
 
 
 def redact(text: str) -> str:
     """`text` with every run of 43 or more hexadecimal or base64 digits replaced: what a command line repeats of its
-    own arguments in an error (SPEC §32 rule 5)"""
-    return _LONG_TOKEN.sub("<long value, not repeated>", text)
+    own arguments in an error (SPEC §32 rule 5). A run with "/" in it is a path when the folder it names is there, and
+    is kept; else it is standard base64 (32 random bytes have a "/" in their base64 one time in two)."""
+    def word(m):
+        w = m.group(0)
+        folder = os.path.dirname(w)
+        if "/" in w and not (folder.strip("/") and os.path.isdir(folder)):   # "//" + 42 digits is not a file of the root
+            w = _B64_STD.sub(NOT_REPEATED, w)
+        return _LONG_TOKEN.sub(NOT_REPEATED, w)
+    return _WORD.sub(word, text)
 
 
 class Parser(argparse.ArgumentParser):

@@ -293,4 +293,14 @@ func TestTipKeyItselfIsNotRepeated(t *testing.T) {
 	if _, err := LoadTipKey("absent.key"); err == nil || !strings.Contains(err.Error(), "absent.key") {
 		t.Fatalf("an absent file keeps its name: %v", err)
 	}
+	// standard base64 has "/" in it: 32 bytes, one "/" in the middle, at the start, doubled at the start
+	for _, b64 := range []string{"q83vq83vq83vq83vq83v/83vq83vq83vq83vq83vq80=", "/83vq83vq83vq83vq83vq83vq83vq83vq83vq83vq80=", "//3vq83vq83vq83vq83vq83vq83vq83vq83vq83vq80="} {
+		if _, err := LoadTipKey(b64); err == nil || strings.Contains(err.Error(), b64[2:30]) {
+			t.Fatalf("a base64 key given as the path: %v", err)
+		}
+	}
+	long := t.TempDir() + "/a-key-file-that-is-absent"
+	if _, err := LoadTipKey(long); err == nil || !strings.Contains(err.Error(), "a-key-file-that-is-absent") {
+		t.Fatalf("an absent file in a folder that is there keeps its name: %v", err)
+	}
 }

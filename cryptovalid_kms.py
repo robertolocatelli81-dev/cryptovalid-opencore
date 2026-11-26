@@ -78,9 +78,9 @@ import urllib.parse
 import urllib.request
 from typing import Dict, Optional
 try:   # SPEC §30: one nesting bound for every JSON text, on every Python
-    from verifier import json_loads_bounded as json_loads, which as _which
+    from verifier import json_loads_bounded as json_loads, redact as _redact, which as _which
 except ImportError:   # python3 -m opencore.<module> from the parent directory
-    from opencore.verifier import json_loads_bounded as json_loads, which as _which
+    from opencore.verifier import json_loads_bounded as json_loads, redact as _redact, which as _which
 
 import cryptovalid_net as _net
 
@@ -965,13 +965,13 @@ def _parse_kv(spec: str, allowed=None) -> Dict[str, str]:
         k, sep, v = part.partition("=")
         k, v = k.strip(), v.strip()
         if not sep or not k:
-            raise ValueError(f"backend URI: segment {part[:40]!r} is not key=value")
+            raise ValueError(f"backend URI: segment {_redact(part)[:40]!r} is not key=value")   # SPEC §32 rule 5
         if not v:
-            raise ValueError(f"backend URI: empty value for {k!r}")
+            raise ValueError(f"backend URI: empty value for {_redact(k)!r}")
         if k in out:
             raise ValueError(f"backend URI: key {k!r} given twice")
         if allowed is not None and k not in allowed:
-            raise ValueError(f"backend URI: unknown key {k!r} (allowed: {', '.join(sorted(allowed))})")
+            raise ValueError(f"backend URI: unknown key {_redact(k)!r} (allowed: {', '.join(sorted(allowed))})")
         out[k] = v
     return out
 
@@ -1090,7 +1090,7 @@ def backend_from_uri(uri: str, **extra):
     if scheme == "file":
         return FileKeyBackend(rest)
     if scheme not in _ALLOWED_KEYS or scheme == "awskms-mldsa65":
-        raise ValueError(f"unknown backend scheme {scheme!r} "
+        raise ValueError(f"unknown backend scheme {_redact(scheme)!r} "   # SPEC §32 rule 5: a key given in the place of the selector
                          "(expected file: | pkcs11: | awskms: | awskms-http: | vault: | nethsm:)")
     kv = _parse_kv(rest, _ALLOWED_KEYS[scheme])
     missing = [k for k in _REQUIRED_KEYS.get(scheme, ()) if not kv.get(k)]

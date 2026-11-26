@@ -76,6 +76,8 @@ class Shape(unittest.TestCase):
         for name, data in KEY_FORMS.items():
             with self.subTest(name):
                 self.assertIsNotNone(verifier.private_key_shape(data))
+        # as openssl pkcs12 writes it: lines of text before the BEGIN line
+        self.assertEqual(verifier.private_key_shape(b"Bag Attributes\n    friendlyName: k\n" + _pem(b"PRIVATE KEY")), "a PEM private key")
 
     def test_what_is_not_a_private_key_is_not_named(self):
         pub_jwk = {"kty": "OKP", "crv": "Ed25519", "x": "AA"}
@@ -443,9 +445,39 @@ class KeysThatCannotBeUsed(_Tmp):
 
     def test_a_usage_error_repeats_no_long_value(self):
         self.assertEqual(verifier.redact("got '" + SEED.hex() + "'"), "got '<long value, not repeated>'")
-        self.assertEqual(verifier.redact("a" * 43 + "/" + "b" * 42), "<long value, not repeated>/" + "b" * 42)
-        for short in ("--pubkey needs a value (got '-x')", "a" * 42, "/home/user/some/very/long/path/that/is/not/a/secret/ledger.jsonl"):
+        self.assertEqual(verifier.redact("a" * 43 + "/" + "b" * 42), "<long value, not repeated>")
+        there = os.path.join(self.d, "a", "folder", "that", "is", "there")
+        os.makedirs(there)
+        for short in ("--pubkey needs a value (got '-x')", "a" * 42, "argument --alg: invalid choice: 'x/y' (choose from 'sha256', 'sha3-256')",
+                      "unrecognized arguments: " + there + "/ledger.jsonl", "(got '" + there + "/absent')"):
             self.assertEqual(verifier.redact(short), short)
+        # a path with a name of 43 digits or more loses the name only; with no folder that is there, it is not a path
+        self.assertEqual(verifier.redact(there + "/" + "n" * 43 + ".jsonl"), there + "/<long value, not repeated>.jsonl")
+        gone = verifier.redact(self.d.replace(os.sep, "/") + "/not/there/" + "x" * 36)
+        self.assertIn("not repeated", gone)
+        self.assertNotIn("x" * 36, gone)
+        # standard base64 has "/" among its digits: 32 random bytes hold one in their 44 digits one time in two
+        import random
+        rnd = random.Random(20261126)
+        for n in [32] * 300 + [46, 48, 64, 4032]:
+            b64 = base64.b64encode(bytes(rnd.randrange(256) for _ in range(n))).decode()
+            for text in ("unrecognized arguments: --pqkey " + b64, "(got '" + b64 + "')"):
+                self.assertEqual(verifier.redact(text), text.replace(b64, "<long value, not repeated>"), b64)
+        for b64 in ("/" + "A" * 42 + "=", "//" + "A" * 41 + "=", "A" * 21 + "/" + "A" * 21 + "=", "A" * 42 + "/="):
+            self.assertEqual(verifier.redact(b64), "<long value, not repeated>", b64)
+        import cryptovalid_kms
+        h = SEED.hex()   # the key where the selector of a backend goes: as the scheme, as a segment, as the name of a key
+        for uri in (h, h + ":x", "vault:" + h, "vault:" + h + "=x", "vault:" + h + "=", "nethsm:url=https://h.example;" + h):
+            with self.assertRaises(ValueError) as c:
+                cryptovalid_kms.backend_from_uri(uri)
+            self.assertNotIn(h[:16], str(c.exception), uri[:12])
+        with self.assertRaises(ValueError) as c:   # what is not long is still named
+            cryptovalid_kms.backend_from_uri("vault:tokn=x")
+        self.assertIn("'tokn'", str(c.exception))
+        r = subprocess.run([sys.executable, os.path.join(HERE, "verifier.py"), LEDGER, "--nonesuch", "A" * 21 + "/" + "A" * 21 + "="],
+                           capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 2)
+        self.assertNotIn("A" * 21, r.stderr)
         r = subprocess.run([sys.executable, os.path.join(HERE, "verifier.py"), LEDGER, "--expect-ledger-id", SEED.hex().upper()],
                            capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(r.returncode, 2)

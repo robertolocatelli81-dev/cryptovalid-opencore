@@ -14,15 +14,18 @@ library must not appear in what it writes), made after its tag, found the cases 
 0.28.1 from PyPI on 2026-11-25: the pack, the output over a key, the URL, the name of the variable), so this release
 replaces it. The section 0.29.0 below is part of this release.
 
-**If you built evidence packs with 0.28.1 or earlier:** list the files of each pack. Only the ledgers, `MANIFEST.json` and
-`SUMMARY.md` belong there. If a key file is among them and the pack left your machine, replace that key.
+**If you built evidence packs with 0.28.1 or earlier:** read the list `ledgers` of each `MANIFEST.json`. Every file given
+to `build` was copied into the pack under its own name and is listed there; one that is not a ledger has
+`hash_verdict: FAIL`. If a key file is among them and the pack left your machine, replace that key.
 
 - **`evidence_pack.py build` takes only files that have the form of a ledger** (§32 rules 1 and 2). Until 0.29.0 any file
   given as a ledger was copied into the pack with `hash_verdict: FAIL` and exit 0, a private key included. Now anything
   that is not a ledger is refused before anything is written, exit 2, one line, its content not repeated. A tampered,
-  damaged or empty ledger is still packed with its FAIL: the 139 ledgers among the `.jsonl` files of this repository
-  have the form, the 6 files that are not ledgers do not. The `--sign-key` file is read first: a key that
-  cannot sign leaves no half-made pack.
+  cut or empty ledger is still packed with its FAIL, as long as every line of it that is not blank begins with `{`:
+  the 139 ledgers among the `.jsonl` files of this repository have the form, the 6 files that are not ledgers do not.
+  A ledger damaged in another way (a line that is an array or plain text, zero bytes after its last line, CR alone
+  between the lines, UTF-16) was packed with FAIL until 0.29.0 and is now refused: it stays evidence outside the pack.
+  The `--sign-key` file is read first: a key that cannot sign leaves no half-made pack.
 - **An output never replaces a key file** (§32 rule 3): `--out signer.key` and the output argument of the other commands
   wrote over the key, exit 0. Now exit 74, the key intact. 64 hexadecimal digits are also a digest: such a file is taken
   for a key when the command read it, when it is private to its owner, or when its name ends in `.key` or `.seed`;
@@ -30,8 +33,10 @@ replaces it. The section 0.29.0 below is part of this release.
   is refused by this rule.
 - **A key that cannot be used** (§32 rule 4) is one line and exit 2 or 1; `signer.py sign`, `cryptovalid_tip sign`,
   `cryptovalid_receipt`, `cryptovalid_jws sign` and `evidence_pack.py build` gave a traceback.
-- **Errors do not repeat a long value of the command line** (§32 rule 5), nor a key given in the place of the path of its
-  file (`--pq-key <seed>`, `acta verify --key <seed>`).
+- **Usage errors do not repeat a long value of the command line** (§32 rule 5: hexadecimal, base64 and standard
+  base64 with its `/`), nor a key given in the place of the path of its file (`--pq-key <seed>`,
+  `acta verify --key <seed>`) or of the selector of a backend (`cryptovalid_kms --backend <seed>`). The error for a
+  ledger or a statement that does not exist still names the path given.
 - **`cryptovalid_scitt sign`** refuses a statement that contains its own signing key, **`cryptovalid_jws sign`** a private
   key as an `x5c` certificate (§32 rule 6).
 - **A witness does not cosign with the key of a log it trusts** (§32 rule 7): until 0.29.0 the same Ed25519 key could sign

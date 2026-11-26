@@ -2791,14 +2791,15 @@ review of 0.29.0 for this one class.
    line so parses. A file with nothing but blank lines has the form too (the empty ledger). A line that begins with `{`
    and does not parse, or is past the bounds of §5 and §22 rule 9, is admitted: a damaged ledger is evidence, and its
    verdict in the pack is FAIL as before. Anything else is refused before anything is written, with the number of the
-   first line at fault and never its content. A file whose bytes changed between the judgement and the copy is judged
+   first line at fault and never its content: so also a ledger damaged in another way (a line that is an array or
+   plain text, zero bytes after its last line, CR alone between the lines, UTF-16), which 0.29.0 packed with FAIL. A file whose bytes changed between the judgement and the copy is judged
    again on the copy, which is removed if it has not the form. Every line of a ledger that verifies is an object with
    both members, so no ledger that passes is refused. Measured on 2026-11-25 on the 145 `.jsonl` files of the
    repository: the 139 ledgers (tampered, broken and empty ones included) have the form, the 6 that are not ledgers
    (one benchmark result, five Acta receipt sequences) do not.
 2. **A key is not a ledger.** Before rule 1, a file of at most 1 MiB that is a private key is refused as one, and so is
    the `--sign-key` file itself under any name. The forms: 64 hexadecimal digits alone (the seed of `signer.py keygen`);
-   a line `-----BEGIN ... PRIVATE KEY-----` or `... PRIVATE KEY BLOCK-----`; PKCS#8, PKCS#1, SEC 1 or PKCS#12 in DER, or
+   a line `-----BEGIN ... PRIVATE KEY-----` or `... PRIVATE KEY BLOCK-----`; PKCS#8 (not encrypted), PKCS#1, SEC 1 or PKCS#12 in DER, or
    their base64; a JWK or JWKS with a member `d` beside `kty`. The key given with `--sign-key` is read before anything is
    written.
 3. **An output never replaces a key.** An output path at which a file stands is refused (exit 74, the file intact) when
@@ -2812,10 +2813,13 @@ review of 0.29.0 for this one class.
 4. **A key that cannot be used is an error of use.** A key file that is not what the command reads (not text, not a
    32-byte hexadecimal seed, not the base64 of a PKCS#8 key) ends in a one-line refusal without a traceback, and the
    message does not hold the content.
-5. **An argument that can be a secret is not repeated.** Where an error names an argument of the command line, a run of 43
-   or more hexadecimal or base64 digits (32 bytes or more) is replaced by a fixed text; a key given in the place of the
-   path of its file is refused without repeating it. An argument of a command line is visible to other processes of
-   the machine whatever the command does with it.
+5. **An argument that can be a secret is not repeated.** Where a usage error (exit 2: an option that does not exist, a
+   value that is not accepted) repeats an argument of the command line, a run of 43 or more hexadecimal or base64 digits
+   (32 bytes or more) is replaced by a fixed text. `/` is a digit of standard base64 and the separator of a path: a run
+   with `/` in it is kept when the folder it names exists, and replaced otherwise. A key given in the place of the path
+   of its file, or of the selector of a signing backend, is refused without repeating it. The error for another path
+   that names no file (a ledger, a statement) still names the path as given. An argument of a command line is visible
+   to other processes of the machine whatever the command does with it.
 6. **What is signed is not the key.** `cryptovalid_scitt sign` refuses an attached statement that contains the key it is
    to be signed with (32 bytes, or their hexadecimal digits); `cryptovalid_jws sign` refuses a private key as an `x5c`
    certificate. Otherwise `scitt sign` and `cryptovalid_worm put` take any bytes, by contract: another secret given to them
